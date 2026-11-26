@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """``search_signals`` — Postgres full-text search over ``signals``.
 
-Extracted from :mod:`legba.runtime.substrate_query_port` (lane E0) when the
+Extracted from :mod:`legba.runtime.substrate_query_port` when the
 raw readers gained the ``known_at`` record-time cut and the port sat at its
 module-size ceiling. The port's method delegates here; the SQL is byte-identical
 to before when ``known_at`` is None.
@@ -21,7 +21,7 @@ from . import substrate_known_at as _known_at
 logger = logging.getLogger("legba.runtime.substrate_query_port")
 
 #: SQLSTATE 54000 program_limit_exceeded - what Postgres raises for "string is
-#: too long for tsvector" (W11-F135).
+#: too long for tsvector".
 _PROGRAM_LIMIT_SQLSTATE = "54000"
 
 __all__ = ["search_signals"]
@@ -79,7 +79,7 @@ async def search_signals(
     residual): no live signal carries the payload key, so the filter
     could only turn every query into an honest-looking empty result.
 
-    ``known_at`` (lane E0, evaluation harness only): only rows whose
+    ``known_at`` (evaluation harness only): only rows whose
     ``created_at`` is before that instant; the result says so in
     ``known_at_cut``. Absent, the statement is unchanged.
     """
@@ -96,7 +96,7 @@ async def search_signals(
             "note": "empty_query",
         }
 
-    # W11-F135: the summary leg is capped (FTS_SUMMARY_MAX_CHARS) so no
+    # The summary leg is capped (FTS_SUMMARY_MAX_CHARS) so no
     # row's tsvector can pass Postgres' 1 MB limit.
     fts_doc = (
         "to_tsvector('simple', coalesce(payload->>'title','') || ' ' || "
@@ -129,7 +129,7 @@ async def search_signals(
         try:
             records = await conn.fetch(sql, *params)
         except Exception as exc:  # noqa: BLE001 - narrowed by SQLSTATE below
-            # W11-F135: a tsvector over Postgres' limit (SQLSTATE 54000,
+            # A tsvector over Postgres' limit (SQLSTATE 54000,
             # "string is too long for tsvector") must not fail the whole
             # call. The left() cap makes this unreachable for the summary
             # leg; if it still fires (a pathological title, a future
@@ -219,7 +219,7 @@ async def search_signals(
         # instead of silently filtering.  See module docstring.
         result["scope_predicate_note"] = (
             "scope_predicate received but not evaluated — Starlark "
-            "row-level evaluation is the L-104 follow-up."
+            "row-level evaluation is a known follow-up."
         )
     if known_at is not None:
         result["known_at_cut"] = _known_at.cut_stamp(

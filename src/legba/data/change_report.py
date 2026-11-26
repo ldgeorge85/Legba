@@ -8,12 +8,12 @@ verdict):
   * the WORLD carry plan's restraint-shift floor
     (``analysts.assembly_world.reports_change``) — a political block that
     reports a change may take one of the reserved world slots;
-  * the CARRY RULE (``legba.data.carried_state``, W11-F14) — a desk read whose
+  * the CARRY RULE (``legba.data.carried_state``) — a desk read whose
     verdict reports a change and cites fresh wire items is its own
-    re-evidence, even when none of its indicators fired (W11-F, roll 65).
+    re-evidence, even when none of its indicators fired.
 
 One definition, so the tiers cannot reach different conclusions about the same
-sentence. Lifted here from ``assembly_world`` / ``assembly_carry`` (roll 65)
+sentence. Lifted here from ``assembly_world`` / ``assembly_carry``
 because ``carried_state`` is imported by the registry's slim image through the
 absence route and may not import ``legba.data.analysts``. Stdlib plus the one
 text fold (which the absence route already loads).
@@ -21,7 +21,7 @@ text fold (which the absence route already loads).
 THE TEST (:func:`text_reports_change`), over the folded text, all required:
 
   1. the leading EPISTEMIC FRAME is set aside (:data:`EPISTEMIC_PREFIX_RE` —
-     *"Assessed - …"*, *"Assessed: …"*, *"Assessed that …"*). Before roll 65 the
+     *"Assessed - …"*, *"Assessed: …"*, *"Assessed that …"*). Previously the
      lead clause stopped at the dash after *"Assessed"*, so the stasis test
      read the single word ``assessed`` and passed every *"Assessed - a change
      in Sudan's top leadership is unlikely …"* verdict as a change;
@@ -29,9 +29,9 @@ THE TEST (:func:`text_reports_change`), over the folded text, all required:
   3. the verdict, up to its provenance tail (:data:`TAIL_RE`), names a change
      event (:data:`CHANGE_RE`) that it does not deny (:func:`asserts_change` —
      *"…reports no unrest, security-force split, or elite defection"* names
-     ``defection`` only to say it did not happen; roll 65).
+     ``defection`` only to say it did not happen.
 
-MEASURED (roll 65, the 2,516 moderate-or-higher desk reads whose indicators
+MEASURED (the 2,516 moderate-or-higher desk reads whose indicators
 evidenced nothing in the 14 days to 2026-11-08): BLUFs passing fell from 29 to
 4 on the top-job desk and from 180 to 30 on the elite-and-unrest desk, almost
 all of the drop being *"Assessed - … unlikely"* frames and denied lists. On the
@@ -78,8 +78,8 @@ TAIL_RE = re.compile(r";|\.\s|,?\s(?:while|whereas|but|although|though)\s")
 #: deliberately NOT here: on e30e67d3 Saudi Arabia's internal_stability verdict
 #: was *"External war pressure on Saudi territory keeps widening — Houthi drone
 #: and ballistic-missile strikes…"*, a kinetic report filed on a political
-#: desk. ``firings`` (roll 65): the noun of ``fired`` — *"post-midterm firings
-#: reach Wiles and Miller"* (US top-job read 3824a07b, 2026-11-08).
+#: desk. ``firings``: the noun of ``fired`` — *"post-midterm firings
+#: reach Wiles and Miller"*.
 CHANGE_RE = re.compile(
     r"(?<![\w-])(?:replac\w*|resign\w*|dismiss\w*|fired|firings|ousted|ouster|sacked"
     r"|appoint\w*|install\w*|sworn|step(?:s|ped)?\s+down|impeach\w*|arrest\w*"
@@ -92,7 +92,7 @@ CHANGE_RE = re.compile(
 #: STASIS in the lead clause — the top-job desk's "low likelihood of a change"
 #: frame, and a driver stated as holding. A verdict that opens this way is
 #: about what did NOT move, whatever its evidence clause goes on to mention.
-#: ``no (material) change`` (roll 65): *"Assessed: no change in France's top
+#: ``no (material) change``: *"Assessed: no change in France's top
 #: leadership is likely …"* is the same frame, negated rather than hedged.
 STASIS_RE = re.compile(
     r"(?<![\w-])(?:unlikely|likelihood|unchanged|steady|stable|holds?|held"

@@ -1,6 +1,6 @@
-"""D-6 — THE ASSESSMENT CHANNEL. `planning/DEMOTION_D1_SPEC_2026-09-04.md` §2.
+"""THE ASSESSMENT CHANNEL.
 
-What this file proves, in the spec's own order:
+What this file proves, in order:
 
   * §2.1 — the input restriction is MECHANICAL: ``derived_from`` is exactly the
     spine, the prompt builder's only data argument is the payload, and an
@@ -382,7 +382,7 @@ async def test_no_spine_at_all_is_an_honest_empty() -> None:
 
 @pytest.mark.asyncio
 async def test_the_payload_is_the_shape_the_reader_projects() -> None:
-    """D-4 ships a defensive projector for ``assessment.v1``; every key it
+    """Ships a defensive projector for ``assessment.v1``; every key it
     reads is emitted here, with the types it coerces."""
     payload = _payload()
     _, result = await _run_channel(payload)
@@ -394,7 +394,7 @@ async def test_the_payload_is_the_shape_the_reader_projects() -> None:
         "key", "top_share", "ratio_12", "bar_share", "bar_ratio", "earned",
         "n_candidates",
     }
-    assert a["lead_test"] == payload["lead"]["test"], "copied VERBATIM (§2.2)"
+    assert a["lead_test"] == payload["lead"]["test"], "copied VERBATIM"
     for m in a["markers"]:
         assert set(m) == {"ordinal", "sentence_index"}
     for u in a["unsupported"]:
@@ -554,7 +554,7 @@ def test_the_arithmetic_in_the_map_is_not_read_as_a_desk_sentence() -> None:
     ``asserts_desk_negative`` and ``absence_scope_laundered`` both walk
     ``desk_absence_sentences`` of the cited head — so a longer ``evidence_text``
     could in principle manufacture an absence sentence that the record never
-    carried, which is precisely the class this whole train exists to remove.
+    carried, which is precisely the class this whole change exists to remove.
 
     It does not: the arithmetic block contributes NO absence sentence, and the
     BLUF the desk-verdict checks read is unchanged. (``has_collection_denominator
@@ -943,7 +943,7 @@ def test_a_name_the_desks_own_span_carries_is_relayed_not_flagged() -> None:
 def test_a_sentence_quoting_the_ledgers_own_handle_is_grounded_the_replay_caught(
 ) -> None:
     """THE N=5 REPLAY'S OWN FINDING, and it was a false fire on the best
-    aperture sentence the train produced.
+    aperture sentence the change produced.
 
     Arm B's 09-06 body wrote *"The tier omitted reads on Russia
     (country_g20_ru), Britain (country_g20_gb), Haiti (country_watch_ht) … that
@@ -1144,7 +1144,7 @@ def test_the_rendered_roster_stays_inside_the_evidence_map_budget() -> None:
     """THE CEILING IS A TEST, not a slice — see ``APERTURE_ROSTER_BUDGET_CHARS``.
 
     A roster that outgrows the budget must fail loudly rather than silently
-    truncate back into the invitation this train removed. The live 33-unit
+    truncate back into the invitation this change removed. The live 33-unit
     roster renders at 579 bytes; the block is byte-identical in every citation,
     so at ``BLOCK_CAP`` = 8 it is paid eight times.
     """
@@ -1159,7 +1159,7 @@ def test_a_rostered_arithmetic_block_is_still_not_a_desk_sentence() -> None:
     """THE FALSE-POSITIVE DIRECTION, re-run on the branch that now has bytes in
     it. ``composition_integrity`` walks the cited head's absence sentences, so a
     longer aperture block could in principle manufacture a desk negative the
-    record never carried — the class this whole train exists to remove."""
+    record never carried — the class this whole change exists to remove."""
     payload = _rostered_payload()
     arithmetic = apr.record_arithmetic(payload)
     assert ci.desk_absence_sentences(arithmetic) == []
@@ -1170,9 +1170,9 @@ def test_a_rostered_arithmetic_block_is_still_not_a_desk_sentence() -> None:
 
 
 def test_the_voice_and_the_judge_are_shown_the_same_roster() -> None:
-    """P1's CONTRACT, as an assertion — and the one that would have caught this.
+    """THE CONTRACT, as an assertion — and the one that would have caught this.
 
-    ``fa3d2d85`` put the record's arithmetic into every citation's
+    The record's arithmetic goes into every citation's
     ``evidence_text`` for exactly one reason: what the voice is told has to be
     what the judge can check. Amendment 5 (2026-09-07) widened one side of that
     and not the other — its new ``## Coverage`` section put all 33 roster units
@@ -1208,7 +1208,7 @@ def test_the_voice_and_the_judge_are_shown_the_same_roster() -> None:
 def test_a_record_with_no_roster_is_byte_identical_to_the_shipped_block() -> None:
     """THE INERTNESS HALF. Every tier that publishes no ``coverage_roster`` —
     which is every tier but the world assembly — takes the else-branch, and this
-    train did not touch one byte of it."""
+    change did not touch one byte of it."""
     block = apr.declared_aperture(_payload())
     assert "unit roster: not computed at this grain" in block
     assert "declared roster" not in block
@@ -1218,7 +1218,7 @@ def test_a_record_with_no_roster_is_byte_identical_to_the_shipped_block() -> Non
 def test_a_counter_the_record_publishes_is_not_instrument_prose() -> None:
     """THE ARITHMETIC EXEMPTION, and it is the class's whole boundary.
 
-    P1 (``fa3d2d85``) put the record's arithmetic block behind every ordinal's
+    The record's arithmetic block sits behind every ordinal's
     ``evidence_text``, so the counters the record publishes about itself ARE
     gradeable — the live body's "Six reads fell below the verification floor"
     graded *supported* in the same read whose per-block numbers did not. The
@@ -1284,7 +1284,7 @@ def test_the_clause_is_in_the_prompt_and_the_version_moved_with_it() -> None:
     # D-6's voice contract is otherwise intact.
     assert "FACT vs PERSPECTIVE" in system
     assert "THREADS, WEIGHTED, UNCROWNED" in system
-    assert apr.PROMPT_VERSION == "assessment_prompt.v3", (
+    assert apr.PROMPT_VERSION == "assessment_prompt.v3.1", (
         "a voice change invisible in the data is one nobody can attribute"
     )
 
@@ -1452,7 +1452,7 @@ def test_the_judge_seam_accepts_the_fact_class_and_says_it_ran() -> None:
 
 
 def test_the_round_lineage_is_pinned_and_append_only() -> None:
-    """F-6 — the numbers have no DB home, so they live here, frozen, with their
+    """The numbers have no DB home, so they live here, frozen, with their
     source file. A badge that changes retroactively is a badge nobody can
     audit."""
     assert [r.round for r in rl.ROUND_LINEAGE] == ["R1", "R2", "R3"]
@@ -1821,7 +1821,7 @@ def test_the_fixture_carries_both_tension_populations() -> None:
 def test_the_declared_tension_puts_the_statement_in_the_evidence_map() -> None:
     """THE DEFECT, at the byte the judge reads.
 
-    Before this train the map carried "1 declared out of 228 pairs examined"
+    Before this change the map carried "1 declared out of 228 pairs examined"
     and nothing about WHICH pair or what either side said, so a sentence
     relaying the record's own tension had no truthmaker and could only grade
     unsupported. Three did, live.
@@ -1883,7 +1883,7 @@ def test_the_declared_tension_names_both_heads_and_quotes_what_is_safe(
             f"neither the words nor the withheld notice rode for {head_id}"
         )
     # at least one side's words DO ride — the guard must not be swallowing the
-    # whole point of the train
+    # whole point of the change
     assert any(
         span[:apr.TENSION_SPAN_CHARS] in arithmetic for _h, span in sides
     )
@@ -1950,7 +1950,7 @@ def test_the_tension_section_is_purely_additive() -> None:
 
     Removing the rendered section from a tension-bearing record's arithmetic
     must give back exactly the block the same record renders with no tensions —
-    so this train adds bytes and moves none.
+    so this change adds bytes and moves none.
     """
     payload = _tension_payload()
     with_tensions = apr.record_arithmetic(payload)
@@ -1964,7 +1964,7 @@ def test_a_record_with_no_tensions_is_byte_identical_to_the_shipped_block(
 ) -> None:
     """THE INERTNESS HALF. Two of the four post-G3 live spines declared no
     tension at all (09-07 12:00Z, 09-08 00:00Z) and their maps must not move by
-    one byte — they are this train's byte-identity control in the replay."""
+    one byte — they are this change's byte-identity control in the replay."""
     payload = _payload()
     assert not payload.get("tensions")
     assert apr.declared_tensions(payload) == ""
@@ -2015,7 +2015,7 @@ def test_a_tension_bearing_arithmetic_block_is_not_a_desk_sentence() -> None:
     This section puts two desks' own BLUF sentences into the arithmetic block,
     and ``composition_integrity`` walks a cited head's absence and verdict
     sentences — so the block could in principle manufacture a desk negative the
-    record never carried. That is the class this whole train exists to remove,
+    record never carried. That is the class this whole change exists to remove,
     so it gets asserted rather than assumed.
     """
     payload = _tension_payload()
@@ -2028,8 +2028,7 @@ def test_a_tension_bearing_arithmetic_block_is_not_a_desk_sentence() -> None:
 
 
 def test_the_voice_and_the_judge_are_shown_the_same_tension() -> None:
-    """P1's CONTRACT, for the tension half — the invariant the roster train
-    asserted for the roster. A tension the PROMPT names is a tension the
+    """THE CONTRACT, for the tension half — the invariant asserted for the roster. A tension the PROMPT names is a tension the
     EVIDENCE MAP names, because what the voice is told has to be what the judge
     can check."""
     payload = _tension_payload()
@@ -2056,12 +2055,12 @@ def test_the_voice_and_the_judge_are_shown_the_same_tension() -> None:
 
 
 def test_the_assessment_system_prompt_is_byte_identical_and_frozen() -> None:
-    """FROZEN FOR R4. This train is producer-side and ``payload``-only: it moves
+    """FROZEN FOR R4. This change is producer-side and ``payload``-only: it moves
     the EVIDENCE MAP and not the voice's instructions, so the system prompt and
     its version must not move by one byte. The hash is the assertion."""
     digest = hashlib.sha256(apr.ASSESSMENT_SYSTEM.encode()).hexdigest()
     assert digest == (
-        "df76febb6be1d9e42f0481455c3bf9d20ccb785d679bcd4cd82b866ff1408d60"
+        "13d6212b3aa5a37db432775e42c17b28666c50a9f7b247647fa30a0749d4873f"
     ), "ASSESSMENT_SYSTEM is frozen; a change here needs a stamp"
-    assert len(apr.ASSESSMENT_SYSTEM.encode()) == 14912
-    assert apr.PROMPT_VERSION == "assessment_prompt.v3"
+    assert len(apr.ASSESSMENT_SYSTEM.encode()) == 15163
+    assert apr.PROMPT_VERSION == "assessment_prompt.v3.1"

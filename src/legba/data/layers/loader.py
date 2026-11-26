@@ -1,12 +1,12 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Program 6 L0 — the idempotent upsert of one curated ``layer_map`` into
+"""The idempotent upsert of one curated ``layer_map`` into
 ``source_layers`` / ``desk_apertures`` (migration 0214).
 
-THE ONE WRITER. ``scripts/load_layer_map.py`` is the only caller in this lane
+THE ONE WRITER. ``scripts/load_layer_map.py`` is the only caller
 — no analyst, no HTTP route, no registry-lifecycle registration reads or
 writes this module. Kept as a package function rather than inline in the
-script so a future writer (a registry route, if Program 6 ever earns one)
+script so a future writer (a registry route, if one is ever added)
 reuses this contract instead of re-deriving it, the same split
 ``scripts/load_unit_reference.py`` takes with
 ``legba.data.analysts.deterministic_handlers._reference_store``.

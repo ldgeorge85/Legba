@@ -35,7 +35,7 @@
     ]
   },
   "source": "panel-registry/contracts.ts",
-  "source_sha256": "748f7926c9cff35ac02f9b125bf73b7f73ff45b1502a7779c92abe8d851a93a0",
+  "source_sha256": "cf6be53ef807f57158db823c285766e3e5a7578e6ed3fdfb01b104587d618ca4",
   "version": "panel_action_catalog/1",
   "views": {
     "analysis.contentions": {
@@ -167,7 +167,7 @@
       "declared": true,
       "home": "panel",
       "id": "system.alerts_watches",
-      "side": "reader"
+      "side": "operator"
     },
     "system.consult": {
       "actions": {},
@@ -203,7 +203,7 @@
       "declared": true,
       "home": "panel",
       "id": "system.eval_scorecard",
-      "side": "reader"
+      "side": "operator"
     },
     "system.findings": {
       "actions": {},
@@ -419,7 +419,7 @@
       "declared": true,
       "home": "panel",
       "id": "system.source_health",
-      "side": "reader"
+      "side": "operator"
     },
     "system.status": {
       "actions": {},
@@ -636,6 +636,35 @@
       "declared": true,
       "home": "stage",
       "id": "v4.morning_read",
+      "side": "reader"
+    },
+    "view:board_changed": {
+      "actions": {
+        "select": [
+          {
+            "name": "ref",
+            "ref_kinds": [
+              "finding",
+              "signal",
+              "event",
+              "situation",
+              "report",
+              "entity",
+              "source",
+              "analyst",
+              "journal_entry"
+            ],
+            "required": true,
+            "type": "ref"
+          }
+        ]
+      },
+      "binds": [
+        "subject"
+      ],
+      "declared": true,
+      "home": "stage",
+      "id": "view:board_changed",
       "side": "reader"
     },
     "view:forecasts": {

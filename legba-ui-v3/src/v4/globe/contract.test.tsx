@@ -238,7 +238,7 @@ describe('the map contract is the globe', () => {
   })
 })
 
-describe('the map in the frame (U-7): home and chrome by the room it is given', () => {
+describe('the map in the frame: home and chrome by the room it is given', () => {
   it('flat, the home fits the inhabited world in both sides; the globe fits the shorter side', () => {
     for (const [w, h] of [[576, 271], [740, 337], [910, 524], [854, 1230], [1393, 1879]]) {
       const z = homeZoom(w, h, 'flat')
@@ -255,12 +255,9 @@ describe('the map in the frame (U-7): home and chrome by the room it is given', 
     expect(homeCenter([60, 20], 'globe', 854, 1230)).toEqual([60, 20])
   })
 
-  it('folds the layer card under 40 × 30 rem and the legend under 30 rem tall', () => {
-    expect(chromeFolds(740, 337, false)).toEqual({ layers: true, legend: true })
-    expect(chromeFolds(480, 900, false)).toEqual({ layers: true, legend: false })
-    expect(chromeFolds(910, 524, false)).toEqual({ layers: false, legend: false })
-    expect(chromeFolds(1393, 1879, true)).toEqual({ layers: true, legend: true })
-    // not measured yet: nothing folded that cannot be judged
-    expect(chromeFolds(0, 0, false)).toEqual({ layers: false, legend: false })
+  it('folds the layer card and the legend at rest, at every size', () => {
+    for (const [w, h, inset] of [[740, 337, false], [480, 900, false], [910, 524, false], [1393, 1879, true], [2328, 1700, false], [0, 0, false]] as const) {
+      expect(chromeFolds(w, h, inset)).toEqual({ layers: true, legend: true })
+    }
   })
 })

@@ -13,7 +13,7 @@ inside the body and no ``choices``::
 (``{429, 500, 502, 503, 529}``) never fired for this shape and ``_account_call``
 recorded ``status="success"`` for **626** calls on the judge route between
 2026-09-06 and 2026-09-08 -- the one surface that could have paged on a
-two-day grader outage. The judge lane repaired it ABOVE the client, for the
+two-day grader outage. The judge repaired it ABOVE the client, for the
 verify judge only; the width grader and every analyst route share this client
 and were latently exposed.
 
@@ -507,7 +507,7 @@ def test_router_status_serialises_as_the_inner_code():
 
 
 # ---------------------------------------------------------------------------
-# 5. Status-line Retry-After (W11-F101): the gateway's 429 + ``Retry-After: 23``
+# 5. Status-line Retry-After: the gateway's 429 + ``Retry-After: 23``
 # ---------------------------------------------------------------------------
 
 _GATEWAY_429_BODIES = [

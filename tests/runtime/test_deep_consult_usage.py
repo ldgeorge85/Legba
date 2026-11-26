@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """A deep consult turn records per-call receipts and totals, as a chat turn
-does (roll-86 follow-up).
+does.
 
-Roll 86's live deep turn carried ``call_receipts: null`` and no route or
+A live deep turn carried ``call_receipts: null`` and no route or
 token counts: the worker's stages bound no run account, so the provider
 handler's per-call accounting recorded into nothing. These drive the stages
 through the REAL provider handler (``VLLMProviderHandler`` over a fake wire)
@@ -108,7 +108,7 @@ class _Conn:
             self.sink.append((sql, tuple(a)))
 
     def transaction(self) -> Any:
-        # A finding and its citation rows (lane DM-A) commit in one
+        # A finding and its citation rows commit in one
         # transaction; this fake records statements and has none to open.
         class _Tx:
             async def __aenter__(self) -> None:

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The contract-v2 SHADOW of a desk run (lane D-1) — measured, never read.
+"""The contract-v2 SHADOW of a desk run — measured, never read.
 
 WHAT IT DOES. Beside a live desk run (``inline_target``), on the SAME handed
 slice object and the SAME rendered prompt, a second synthesis asks the core
@@ -124,8 +124,24 @@ def shadow_enabled_for(analyst_id: str | None) -> bool:
     return bool(analyst_id) and str(analyst_id) in shadow_analysts()
 
 
+#: Tokens the seat prompt carries for numbers and words code owns, so the
+#: prompt states the limits the parser and the gates actually apply.
+LEVELS_TOKEN = "<<LEVELS>>"
+MIN_QUOTE_TOKEN = "<<MIN_QUOTE_WORDS>>"
+MAX_ROWS_TOKEN = "<<MAX_ROWS_PER_KIND>>"
+
+
 def rows_system_prompt(template: str, bounded_question: str | None) -> str:
-    return template.replace(QUESTION_TOKEN, (bounded_question or "the desk's bounded question").strip())
+    """The seat prompt with its tokens filled: the desk's bounded question,
+    the profile's level words (refused by name when the profile declares
+    none), the gate's quote minimum and the parser's row cap."""
+    from .desk_rows_contract import MAX_ROWS_PER_KIND, severity_levels
+    from .statement_gate import MIN_QUOTE_WORDS
+
+    out = template.replace(QUESTION_TOKEN, (bounded_question or "the desk's bounded question").strip())
+    if LEVELS_TOKEN in out:
+        out = out.replace(LEVELS_TOKEN, "|".join(severity_levels()))
+    return out.replace(MIN_QUOTE_TOKEN, str(MIN_QUOTE_WORDS)).replace(MAX_ROWS_TOKEN, str(MAX_ROWS_PER_KIND))
 
 
 @dataclass(frozen=True)
@@ -457,6 +473,9 @@ def launch_shadow(
 __all__ = [
     "DEFAULT_TIMEOUT_SECONDS",
     "LEDGER_TABLE",
+    "LEVELS_TOKEN",
+    "MAX_ROWS_TOKEN",
+    "MIN_QUOTE_TOKEN",
     "QUESTION_TOKEN",
     "REPAIR_THINKING",
     "SEAT_ID",

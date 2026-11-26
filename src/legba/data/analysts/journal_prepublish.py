@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Journal PRE-PUBLISH verdict — verification stands in front of the text (lane N-D).
+"""Journal PRE-PUBLISH verdict — verification stands in front of the text.
 
 Before this module the journal's verify pass was a side critique written ~7 s
 AFTER the entry, and nothing read it back: journal d4ff1266 (2026-11-11) opened
@@ -14,7 +14,7 @@ here BEFORE the row is written. This module is pure: given the payload, the
 verdict's flagged spans and the cited items' texts, it returns the payload to
 publish.
 
-WHAT IT DOES TO THE ENTRY — mark, never strip (the journal's §10 contract,
+WHAT IT DOES TO THE ENTRY — mark, never strip (the journal's contract,
 "flag-never-strip", and the brief's "choose marking when removal would break
 the sentence": a journal sentence is first-person connective prose, and
 deleting one leaves the paragraph's next "That …" pointing at nothing):

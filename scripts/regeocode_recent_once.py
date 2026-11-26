@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Re-tag RECENT signals under the lane N-O geo rules — ONCE, dry-run first.
 
-Lane N-O changed how ``signals.geo`` is derived at ingest
+The geo rules changed how ``signals.geo`` is derived at ingest
 (:mod:`legba.data.filters._geo_precedence` + the token rules in
 :mod:`legba.data.filters._geocode_rules`): an official source's declared
 country is always in its geo, subject-zone countries are added beside it,
@@ -22,7 +22,7 @@ Honesty rails (the ``regeocode_contaminated_signals`` contract)
 * BACKUP FIRST: ``--apply`` copies each changed row's ``geo``,
   ``payload.geo`` and ``payload.geo_fallback`` into
   ``signals_geo_backup_n_o`` BEFORE updating it (``ON CONFLICT DO NOTHING`` —
-  the first, pre-lane values are the ones kept, so a re-run never overwrites
+  the first, pre-change values are the ones kept, so a re-run never overwrites
   the backup with already-fixed values).
 * Corpus dirty-marker: every updated row NULLs ``indexed_at`` in the same
   statement (the 0082 rule) so the corpus indexer re-projects ``geo``.
@@ -30,7 +30,7 @@ Honesty rails (the ``regeocode_contaminated_signals`` contract)
 * BOUNDED: ``--since-days`` (default 7) or ``--since``/``--until`` (<= 31 d).
 * SCOPED: codes the source handler set itself (GDELT's structured country)
   are kept; a stored-untagged row that only the publisher-origin fallback
-  would tag (lane N-B's new-ingest-only rule) is skipped unless
+  would tag (the new-ingest-only rule) is skipped unless
   ``--include-fallback``.
 
 Run on the host with the repo mounted (registry container works the same):
@@ -136,14 +136,14 @@ def _strip(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-#: The text fields whose LEAD a held change is checked against (roll 74).
+#: The text fields whose LEAD a held change is checked against.
 _HOLD_FIELDS = ("title", "summary", "text", "raw_body")
 _HOLD_LEAD_CHARS = 400
 
 
 def _plainly_named_codes(payload: dict[str, Any]) -> set[str]:
     """The first country each text field's lead names, read WITHOUT the NER
-    person-name mask. Roll 74 found the lane N-B guard blanking country names
+    person-name mask. The new-ingest guard was found blanking country names
     inside NER surfaces mislabelled ``person`` ("US House", "Panama Canal",
     "Government of Liberia"), so a re-derive can drop a country the title
     plainly names; ``--hold-title-losses`` leaves such a row as it is."""
@@ -210,7 +210,7 @@ async def assess_row(
         fallback = out.payload.get("geo_fallback")
         if not geo and not include_fallback:
             # Stored untagged, now only the publisher-origin rung would tag
-            # it: that is lane N-B's (new-ingest-only) fallback, not N-O's.
+            # it: that is the new-ingest-only fallback, not this re-tag's.
             return Decision("skip_fallback_only", old_geo=[], new_geo=new_geo,
                             reason="publisher-origin backfill (use --include-fallback)")
     if set(new_geo) == set(geo):

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""HEAD INTEGRITY (lane N-A) — the current head of a desk × unit is the newest
+"""HEAD INTEGRITY — the current head of a desk × unit is the newest
 VERIFIED read, exactly one, and an old one is never presented as current.
 
 The replay fixtures are shaped on the live CD escalation chain of 2026-11-11

@@ -97,7 +97,7 @@ def _bearer_presented(scope: Mapping[str, Any]) -> bool:
     """Whether a bearer credential was presented — the flag the bearer
     middleware (outermost, X4 GATE) stamped. This module never reads the
     ``Authorization`` header itself: ``bearer_auth`` is the one place that
-    does (W11-F77). With no bearer middleware mounted the flag is absent and
+    does. With no bearer middleware mounted the flag is absent and
     the cookie is resolved; the route's bearer gate still prefers a Bearer."""
     return bool(_get(scope.get("state"), _rr.STATE_BEARER_PRESENTED_ATTR))
 

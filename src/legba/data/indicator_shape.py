@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""LEVEL-SHAPED INDICATORS (X4 LEVEL, W11-F36) — evidence for a standing status.
+"""LEVEL-SHAPED INDICATORS — evidence for a standing status.
 
-The carried-state rule (``legba.data.carried_state``, W11-F14) withholds a unit
+The carried-state rule (``legba.data.carried_state``) withholds a unit
 status from compositions once none of the unit's own indicators has
-re-evidenced it inside N cadence windows. Lane E1's live census (2026-10-08):
+re-evidenced it inside N cadence windows. A live census:
 46 of 159 status-bearing unit heads carried, mostly ``energy_security`` at
 "high / elevated" on G20 desks — a STANDING CONDITION (a sanctions regime in
 force, a strait under attack, a grid emergency) that change-shaped indicators

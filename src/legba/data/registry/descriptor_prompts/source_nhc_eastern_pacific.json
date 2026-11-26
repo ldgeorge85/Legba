@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.nhc.eastern_pacific": {
+      "source": "source_nhc_eastern_pacific.yaml",
+      "state": "draft"
+    }
+  }
+}

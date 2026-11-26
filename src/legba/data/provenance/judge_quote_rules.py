@@ -33,6 +33,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from ..grading_text import ABSENCE_VERDICT_TOKENS, FAITHFULNESS_VERDICT_TOKENS
 from .absence_slice import (
     _absence_carve_outs,
     _absence_content_terms,
@@ -133,23 +134,20 @@ _JUDGE_CONTRADICTED_HEDGED = "judge_contradicted_hedged_conflict"
 #: evidence by accident, which would make the requirement decorative.
 _JUDGE_QUOTE_MIN_CHARS = 16
 
-# The output-shape addendum, appended to every place the judge's JSON shape is
-# stated (the absence rubric + both the unit and composition prompt leads, which
-# the M14 survey call also uses). ONE constant so the requirement cannot drift
-# between routes, and so a prompt diff is a single greppable change.
+# The quote rule, appended wherever the judge's reply shape is stated (the
+# absence rubric and the unit and composition message tails, which the survey
+# call also uses). ONE constant so the requirement cannot drift between routes.
+# The refuting span sits inside each verdict entry, beside the claim it refutes,
+# so a reply with one entry too many or too few cannot misalign it; the parser
+# still reads a parallel top-level ``quotes`` array when a judge sends one.
+# The rule that analyst prose (a prior read, a sibling read) is a baseline and
+# never counter-evidence is stated once, in the shared claim-and-evidence
+# rules every judge system prompt carries (``legba.data.grading_text``); the
+# code below enforces it whatever the judge does.
 _JUDGE_QUOTE_RULE = (
-    ' Alongside "verdicts", return "quotes": a list of the SAME length, one entry '
-    "per claim, in the same order. For a \"contradicted\" verdict the entry MUST be "
-    "a VERBATIM span copied from the evidence above that refutes the claim; for "
-    'every other verdict use "". Never paraphrase and never invent a quote — a '
-    "contradiction whose quote is not found verbatim in the evidence is recorded "
-    "as a lesser, unsupported-class finding."
-    # V-G1: the anti-update rule, stated to the judge as well as enforced below.
-    " A PRIOR READ block, or any other ANALYST FINDING in the evidence, is the "
-    "BASELINE this claim is updating — it is NOT counter-evidence. Never quote a "
-    "prior read, a sibling desk's assessment, or any analyst prose to justify "
-    '"contradicted": a desk that revises its view on fresh reporting is doing its '
-    "job. Refute a claim ONLY with the SOURCE reporting itself."
+    '\nA contradicted verdict needs its refuting span in that entry\'s "quote", '
+    "copied VERBATIM from source reporting in the evidence; a paraphrase "
+    'is not accepted. Leave "quote" empty for every other verdict.'
 )
 
 
@@ -197,7 +195,7 @@ _JSON_ESCAPE_RE = re.compile(
     r"|\\([\"\\/bfnrt])"
 )
 
-#: The two-char escapes' decoded forms (JSON spec, table in RFC 8259 §7).
+#: The two-char escapes' decoded forms (JSON spec, RFC 8259 section 7).
 _JSON_SHORT_ESCAPES = {
     '"': '"', "\\": "\\", "/": "/",
     "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t",
@@ -440,44 +438,65 @@ def _quote_refutes(
 #: that a real refutation of the assertion is not swept up.
 _CARVE_OUT_QUOTE_MIN_SHARED_TERMS = 2
 
+#: The fields a faithfulness verdict entry fills BEFORE its verdict: the span
+#: it relies on, then the problem it found. A model that writes its evidence
+#: first decides from it; one that writes the verdict first argues for it.
+_FAITHFULNESS_ENTRY_FIELDS = (
+    '"quote": "<verbatim refuting span, or empty>", '
+    '"problem": "<which check fails, in a few words, or none>", '
+)
+
+#: The faithfulness routes' verdict words, as the reply contract lists them.
+_FAITHFULNESS_ALTERNATION = "|".join(
+    f'"{token}"' for token in FAITHFULNESS_VERDICT_TOKENS
+)
+
+#: The absence route's verdict words.
+_ABSENCE_ALTERNATION = "|".join(f'"{token}"' for token in ABSENCE_VERDICT_TOKENS)
+
+#: The fields an absence verdict entry fills before its verdict.
+_ABSENCE_ENTRY_FIELDS = (
+    '"basis": "source|analyst_prose|none", '
+    '"quote": "<verbatim span, or empty>", '
+)
+
+
 def _judge_reply_contract(
-    verdicts: str = '"supported"|"unsupported"|"contradicted"',
+    verdicts: str = _FAITHFULNESS_ALTERNATION,
+    entry_fields: str = _FAITHFULNESS_ENTRY_FIELDS,
 ) -> str:
-    """The judge's REPLY SHAPE (H3, stamped ``2026-09-24/1``) — one entry per
-    claim, and every entry NAMES the claim it grades.
+    """The judge's reply shape: one entry per claim, each naming its claim.
 
     ``claim_index`` is the number the claim was listed under in this call's
-    CLAIMS block. It is what ``judge_verdict_parsing.align_verdicts`` reads to
-    align a short or reordered reply by ID instead of failing the whole call
-    to the floor: the id arm has existed since ``2026-09-20/1``, but no prompt
-    ever asked for the ids, so it was reachable only by accident of model
-    verbosity. Entries that name nothing still align positionally, so a judge
-    that ignores the field degrades to the pre-H3 contract, and a full-length
-    bare-token reply is still read exactly as it always was.
+    CLAIMS block; ``judge_verdict_parsing.align_verdicts`` reads it to align a
+    short or reordered reply by id instead of failing the whole call. Entries
+    that name nothing still align by position.
 
-    ``verdicts`` is the route's own token list — the shared unit/composition
-    lead's three and the absence rubric's four differ, and that is fine: the
-    ENVELOPE is what must not drift between routes (the same discipline
-    ``_JUDGE_QUOTE_RULE`` keeps), so there is ONE renderer for it.
+    ``verdicts`` is the route's own token list and ``entry_fields`` the fields
+    written before the verdict (the span and the problem, or the absence
+    route's basis and span). The envelope is the same on every route, so there
+    is ONE renderer for it.
     """
     return (
-        ' Answer strict JSON only: {"verdicts": [{"claim_index": <the claim\'s '
-        'number>, "verdict": '
+        "\nReply with one JSON object and nothing else:\n"
+        '{"verdicts": [{"claim_index": <the claim\'s number>, '
+        + entry_fields
+        + '"verdict": '
         + verdicts
-        + '}, ...]} with one entry per claim, in order.'
+        + "}, ...]}\nOne entry per claim, in order."
     )
 
 
-#: The rubric sentences appended to every judge lead, alongside the quote rule.
+#: The qualifier rule appended to every judge lead, alongside the quote rule.
+#: The QUALIFIERS line is detected by code and can be wrong, so the judge is
+#: asked to check it against the claim rather than to obey it.
 _JUDGE_QUALIFIER_RULE = (
-    " Some claims are followed by an indented QUALIFIERS line. Honour it "
-    "strictly. CARVE-OUTS name what the claim already EXEMPTS — evidence of an "
-    "exempted thing is evidence the claim ACCOUNTS FOR, never a contradiction. "
-    "SCALE names the size the claim denies — evidence of the same kind of event "
-    "at a SMALLER scale (dozens against 'mass', one incident against "
-    "'widespread') SUPPORTS the claim rather than refuting it. The same holds "
-    "for anything the finding itself discloses elsewhere in its own prose: a "
-    "fact the analyst states and accounts for is not a fact the analyst hid."
+    "\nA QUALIFIERS line under a claim lists exemptions and scale words that "
+    "code detected. Check them against the claim yourself. Evidence of an "
+    "exempted thing, or of the same kind of thing at a smaller scale than the "
+    'claim denies, does not refute the claim (a handful against "many", one '
+    'case against "widespread"). The same holds for an exception the finding '
+    "itself discloses elsewhere in its own text."
 )
 
 
@@ -595,14 +614,12 @@ def _quote_is_refutable_evidence(
 # the claim failed and its score unchanged, which is the trade the whole
 # demotion train makes. A false hard fail is a fabrication accusation.
 #
-#   5. ENDPOINT BINDING (2026-08-09, the round-5 tightening). Round 5 scored the
-#      rule 0-for-1 on live fires: critique `b14bf715` (journal_assessor) claimed
-#      a Special Marine Warning "issued 6 Aug 06:00 EDT, expires 8 Aug 08:00
+#   5. ENDPOINT BINDING. The earlier rule scored 0-for-1 on live fires:
+#      critique `b14bf715` (journal_assessor) claimed a Special Marine Warning "issued 6 Aug 06:00 EDT, expires 8 Aug 08:00
 #      EDT", the judge's quote said "issued August 6 at 7:25AM EDT until August 6
-#      at 8:00AM EDT" — a two-day warning invented out of a 35-minute one, the
-#      round's one fully-earned third hard fail on that entry, and this rule
-#      demoted it. The set-of-magnitudes subset held ({6, 0, 8} is inside
-#      {6, 7, 25, 8, 0}) because flattening "06:00" and "8 Aug" to bare digits
+#      at 8:00AM EDT" — a two-day warning invented out of a 35-minute one, a
+#      fully-earned hard fail that the rule demoted. The set-of-magnitudes
+#      subset held ({6, 0, 8} is inside {6, 7, 25, 8, 0}) because flattening "06:00" and "8 Aug" to bare digits
 #      loses exactly the structure the claim asserts: WHICH endpoint each number
 #      pins. So the fingerprint is now endpoint-aware: every clock time and every
 #      month-day date the CLAIM pins must appear in the quote AS an endpoint of
@@ -614,7 +631,7 @@ def _quote_is_refutable_evidence(
 #      byte-identical — the 61-pair replay under the 2026-08-05/1 stamp flips
 #      only b14bf715.
 #
-#   6. DIRECTION BINDING (2026-08-10, the round-5 §10-5 arm, withdraw-only).
+#   6. DIRECTION BINDING (withdraw-only).
 #      Guard 5 closed the numeric half of the divergence class and left the
 #      PROSE half open: critique `037f769f` (region_composition) claimed the
 #      Burkina Faso assessment "shows no material change since the prior

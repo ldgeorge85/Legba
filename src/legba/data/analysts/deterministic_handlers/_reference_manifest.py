@@ -16,7 +16,7 @@ WHAT THE 06:43Z AUSTRALIA BUILD ACTUALLY DID, read out of ``analyst_traces``
     squarely in the window. The single best in-window page of the run was lost
     to a missing subdomain, twice.
   * Four more fetches went to ``reuters.com`` and ``bloomberg.com``, both
-    MEASURED unfetchable to this lane (FETCH_REVIEW §2). They were dropped from
+    MEASURED unfetchable from here. They were dropped from
     the search RESULTS and then fetched anyway, from URLs the model wrote out of
     its own head — the drop was a discovery fence and there was no fetch fence
     behind it.

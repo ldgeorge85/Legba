@@ -40,14 +40,16 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import zlib from 'node:zlib'
+import { loadEngineWords } from './engineWords.mjs'
 
-const ENGINE = [/\bsubstrate\b/i, /\bspine\b/i, /severity_delta/, /meta_finding/, /prompt_module_candidate/, /\bverify 0\.\d+/i, /\bgate failed\b/i]
+// the console's one list of engine words (`engineWords.mjs`), the same the desktop walk holds
+const { ENGINE_WORDS: ENGINE } = loadEngineWords(new URL('../../src/lib/engineWords.json', import.meta.url))
 
 /** M-3g: the mocked answer (invented filler), its contract and a recorded case.
- *  The cited records are the fixtures' invented ids on fixtures; live (roll 86)
+ *  The cited records are the fixtures' invented ids on fixtures; live
  *  they are a real signal and a real finding read from the server first — the
  *  peek a citation opens asks /lineage/<kind>/<id> of the real API, and an
- *  invented id there is a 404 (roll 85 live: two console errors). */
+ *  invented id there is a 404 (two console errors). */
 const M3G_REFS = { signal: 'd4e5f6a7-0000-4000-8000-000000000011', finding: 'e5f6a7b8-0000-4000-8000-000000000012' }
 /** The fixtures' finding a `#rec=` link opens (live: the resolved finding). */
 const REC_LINK_FINDING = 'ex_o0bkwz'
@@ -165,7 +167,7 @@ export async function walkPhoneShell(h) {
     await settle(p)
     const lt = await stepLongTasks(p, `phone ${width}: ${name}`, since)
     const c = await withTimeout(p.evaluate(pageChecks, engineSrc), 15000, `phone checks ${name}`).catch(() => null)
-    // roll 85: the Changed badge polls /v3/since/counts once a minute on every tab — a
+    // The Changed badge polls /v3/since/counts once a minute on every tab — a
     // background read, not the screen's own, so a poll landing inside a screen's window is not counted
     const L = landingStats(net.log.filter((r) => !r.url.includes('/v3/since/counts?')), phase)
     const row = { name, width, requests: L.requests, bytes: L.bytes, duplicates: L.duplicateRequests, dupList: L.duplicates, longTaskMs: lt?.max ?? null, ...(c ?? { smallTextCount: null, smallTargetCount: null, overflow: null, barOk: null, engine: [] }), ...(extra ?? {}) }
@@ -184,7 +186,7 @@ export async function walkPhoneShell(h) {
     return now(p)
   }
 
-  // Live (roll 86): the records the mocked Consult answer cites and the
+  // Live: the records the mocked Consult answer cites and the
   // `#rec=` link opens are real ones, read from the server through the page
   // (the walk's proxy adds the token) under their own phase, so no screen
   // counts them. Fixtures keep the invented ids their recordings answer.
@@ -356,7 +358,7 @@ export async function walkPhoneShell(h) {
       const u = new URL(r.url())
       if (!u.pathname.startsWith('/api/')) assets.push({ path: u.pathname, phase: net.phase })
     })
-    // the newest since-with-needs-you answer this page read (roll 86: what
+    // the newest since-with-needs-you answer this page read (what
     // "Needs you" is checked against — the server's answer, on fixtures and live)
     let sinceSeen = null
     p.on('response', (r) => {
@@ -394,7 +396,7 @@ export async function walkPhoneShell(h) {
     }
 
     // 2 — needs you; the window chips
-    // Roll 86: checked against the answer the page read, not the fixture's
+    // Checked against the answer the page read, not the fixture's
     // count — every episode the server says paged is listed, and nothing else.
     // On fixtures the answer must also hold one open episode that did NOT page
     // (2 paged + 1 at medium), so "and only that" is exercised there.
@@ -500,9 +502,9 @@ export async function walkPhoneShell(h) {
     await tap(p, '[data-testid="phone-watch-seg-alerts"]')
     await p.waitForSelector('[data-testid="watch-alert-row"]', { timeout: 10000 }).catch(() => {})
     since = await phase(p, `ph${w}-alert`)
-    // An OPEN episode: a closed one takes no Acknowledge or Snooze (roll 87
-    // live at 360 px: the newest row had closed a minute before, the walk
-    // opened it and counted 0 controls). The closed one is walked below.
+    // An OPEN episode: a closed one takes no Acknowledge or Snooze (at 360 px
+    // the newest row can have closed a minute before, and the walk then
+    // counts 0 controls). The closed one is walked below.
     const openRows = await p.locator('[data-testid="watch-alert-row"][data-open="1"]').count().catch(() => 0)
     await p.locator(openRows ? '[data-testid="watch-alert-row"][data-open="1"]' : '[data-testid="watch-alert-row"]').first().click({ position: { x: 8, y: 8 }, timeout: 5000 }).catch(() => {})
     const alertPage = await p.waitForSelector('[data-testid="phone-alert-page"][data-state="read"]', { timeout: 10000 }).then(() => true).catch(() => false)
@@ -517,7 +519,7 @@ export async function walkPhoneShell(h) {
     await tap(p, '[data-testid="phone-back"]', 4000)
     // A CLOSED episode: its page says there is nothing to act on, with no
     // control — and its controls (the subject's name, short or long) hold the
-    // 44 px floor both ways (roll 87: "Iran" 28 × 44 at 360 px).
+    // 44 px floor both ways (e.g. "Iran" 28 × 44 at 360 px).
     const closedRow = p.locator('[data-testid="watch-alert-row"][data-open="0"]').first()
     if (await closedRow.count().catch(() => 0)) {
       since = await phase(p, `ph${w}-alert-closed`)
@@ -537,7 +539,7 @@ export async function walkPhoneShell(h) {
       const p2 = await c2.newPage(); wire(p2, `phone ${w} reader`)
       net.override.set('/api/v1/auth/me', { status: 200, body: { kind: 'user', actor: 'user:ex_reader', role: 'reader', user: { id: 'ex_reader', actor: 'user:ex_reader', email: null, display_name: 'Example reader', role: 'reader', status: 'active', auth_provider: 'password', last_sign_in_at: null }, session_rejected: false, signin: true } })
       net.phase = `ph${w}-alert-reader`
-      // live (roll 86): the alert just opened — the fixtures' invented id is not on the server
+      // live: the alert just opened — the fixtures' invented id is not on the server
       const readerAlert = LIVE ? openedAlert : READER_ALERT
       await p2.goto(`${BASE}/m/#ws=watch&screen=alert%3A${encodeURIComponent(readerAlert ?? READER_ALERT)}`, { timeout: 30000 }).catch(() => {})
       const seen = await p2.waitForSelector('[data-testid="phone-alert-attention"]', { timeout: 20000 }).then(() => true).catch(() => false)

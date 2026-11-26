@@ -27,6 +27,7 @@ import Drawer from '@/v4/world/Drawer'
 import GlobeMap from '@/v4/globe/GlobeMap'
 import SvgWorld from '@/v4/globe/SvgWorld'
 import SubjectField from '@/v4/globe/SubjectField'
+import { CoverageStrip, type MapCoverage } from '@/v4/globe/coverage'
 import { hasWebGL2, mapEngine } from '@/lib/mapEngine'
 import { globeEnabled } from '@/lib/globeFlag'
 import { mapSurfaceDeclared, useSubjectCamera } from '@/lib/subjectGeometry'
@@ -66,20 +67,33 @@ function GlobePanel() {
   const [fallback, setFallback] = useState<string | null>(() =>
     hasWebGL2() ? null : 'this browser has no WebGL2, which the globe needs',
   )
+  const [coverage, setCoverage] = useState<MapCoverage | null>(null)
+  // The Board's map carries its coverage strip under it; the inset does not.
+  const strip = preset === 'board' ? <CoverageStrip coverage={coverage} /> : null
   if (fallback) {
     return (
       <PanelBoundary>
         <MapSubjectPin />
-        <SvgWorld preset={preset} active={visible} reason={fallback} />
+        <div className="flex h-full w-full flex-col">
+          <div className="relative min-h-0 flex-1">
+            <SvgWorld preset={preset} active={visible} reason={fallback} onCoverage={setCoverage} />
+          </div>
+          {strip}
+        </div>
       </PanelBoundary>
     )
   }
   return (
     <PanelBoundary>
       <MapSubjectPin />
-      <TileWebGLOverlay className="bg-surf-base">
-        <GlobeMap key={preset} preset={preset} active={visible} onFallback={setFallback} />
-      </TileWebGLOverlay>
+      <div className="flex h-full w-full flex-col">
+        <div className="relative min-h-0 flex-1">
+          <TileWebGLOverlay className="bg-surf-base">
+            <GlobeMap key={preset} preset={preset} active={visible} onFallback={setFallback} onCoverage={setCoverage} />
+          </TileWebGLOverlay>
+        </div>
+        {strip}
+      </div>
     </PanelBoundary>
   )
 }

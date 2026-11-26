@@ -1,4 +1,4 @@
-# Lane I-2 — the instance's DEFAULT PAGE PIPELINE (kind `page`,
+# The instance's DEFAULT PAGE PIPELINE (kind `page`,
 # src/legba/data/sources/page.py). Ships DRAFT, like every descriptor.
 #
 # What it is: not a publisher. It is the pipeline the ingestion intake runs an
@@ -14,7 +14,7 @@
 # it sits at `configured` (descriptors/LIFECYCLE.md): validated, no actor, no
 # reminder — and the intake admits ADDRESS requests under a `configured`
 # pipeline (data/intake_contract.ADDRESS_RUNNABLE_STATES). Registering and
-# walking it to `configured` is the orchestrator's step at the roll.
+# walking it to `configured` is a registry step on deploy.
 #
 # Provenance on what it lands: `source_id` is this pipeline; the publisher is
 # in `payload.publisher` (host, site name, and the registered source sharing
@@ -37,7 +37,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: i2_page_pipeline
+  owner: owner@local
   created: "2026-11-13T00:00:00Z"
 
 scope:
@@ -46,7 +46,7 @@ scope:
   languages: []
   tags: [page, on_request, intake]
   source_class: reporting           # most requested pages are news articles (followed from feeds); the publisher's own class rides payload.publisher
-  access_class: restricted          # Wave-E — a generic adapter with no concrete editorial source to review terms for — fail-closed, like the other generic adapters
+  access_class: restricted          # a generic adapter with no concrete editorial source to review terms for — fail-closed, like the other generic adapters
 
 acquisition: poll
 

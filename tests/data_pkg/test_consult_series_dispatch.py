@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""R-0 — the series tools are reachable through the consult ROUTER.
+"""The series tools are reachable through the consult ROUTER.
 
 ``series_history`` / ``series_compare`` were on the consult whitelist
 (``_KNOWN_TOOLS``) and in the substrate_read pack, but

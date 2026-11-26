@@ -16,7 +16,7 @@ Covers (mirrors the plan's test plan §6.1):
   * /extract fallback when payload['entities'] is empty.
   * non-entity rejection ("50%" / "June 2026" dropped via _is_nonentity_candidate).
   * idempotency: same triple twice → ONE row, confidence combined via the
-    bounded noisy-OR (Holes-A A2 / Holes-B Wave 0; was max), lineage unioned.
+    bounded noisy-OR (was max), lineage unioned.
   * PIECE B supersession: a new value for an existing (subject, predicate)
     closes the prior open row (valid_until + superseded_by) and opens the new
     one; an identical-triple re-assert does NOT supersede (upsert only).
@@ -790,7 +790,7 @@ async def test_idempotent_upsert(pg_pool):
             pub,
         )
     assert len(rows) == 1, "duplicate triple must upsert to ONE row"
-    # Holes-B Wave 0: same-value re-assert now combines confidence via the
+    # Same-value re-assert now combines confidence via the
     # bounded noisy-OR (corroboration), NOT GREATEST/max. 0.5 then 0.9 ->
     # 1-(1-0.5)*(1-0.9) = 0.95 (above the old max of 0.9).
     assert rows[0]["confidence"] == pytest.approx(0.95)
@@ -891,7 +891,7 @@ async def test_identical_triple_does_not_supersede(pg_pool):
     assert len(rows) == 1, "identical triple must upsert to ONE row (no spurious supersession)"
     assert rows[0]["valid_until"] is None, "same-value re-assert must NOT close the row"
     assert rows[0]["superseded_by"] is None
-    # Holes-B Wave 0: corroboration combines via bounded noisy-OR (was max).
+    # Corroboration combines via bounded noisy-OR (was max).
     # 0.4 then 0.9 -> 1-(1-0.4)*(1-0.9) = 0.94 (above the old max of 0.9).
     assert rows[0]["confidence"] == pytest.approx(0.94)
 
@@ -968,7 +968,7 @@ async def test_distinct_sources_still_corroborate(pg_pool):
             subj, val,
         )
     assert row is not None
-    # Floor + floor corroboration tops out at the DQ-P5 0.75 ceiling.
+    # Floor + floor corroboration tops out at the 0.75 ceiling.
     assert row["confidence"] == pytest.approx(0.75)
     assert sorted(json.loads(row["data"])["source_ids"]) == ["src.paper", "src.wire"]
 

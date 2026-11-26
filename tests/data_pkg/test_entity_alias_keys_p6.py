@@ -13,9 +13,9 @@
   nothing, a cursor resumes;
 * ``EXPLAIN``: both table probes are served by ``entity_alias_keys_pkey``;
 * ``scan`` (and unset) sends exactly the scan statements (pinned hashes of the
-  SQL text — the d312da77 text until roll 85, whose follow rule changed it
+  SQL text — the earlier d312da77 text, whose follow rule changed it
   deliberately on both paths — and the call sequence on a recording connection);
-* roll 85: a profile merged away (``merged_into`` set, whatever its
+* a profile merged away (``merged_into`` set, whatever its
   ``gc_status``) is never elected; a match on it is followed to the end of
   its chain, on every path, single and batch;
   ``shadow`` serves the scan's row and counts the disagreement;
@@ -225,7 +225,7 @@ async def test_contract_cases(pg_pool, tag, mode, monkeypatch) -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", MODES)
 async def test_merged_away_profiles_follow_to_the_keeper(pg_pool, tag, mode, monkeypatch) -> None:
-    """Roll 85 (lane P-6's finding): 1,451 live profiles carry ``merged_into``
+    """Live, 1,451 profiles carried ``merged_into``
     with ``gc_status`` 'dormant', and the lookup read only ``gc_status`` — so a
     tombstone was elected for its own name. Now it is followed to its keeper,
     identically on the scan and the key table (and in the batch)."""
@@ -477,7 +477,7 @@ async def test_explain_uses_the_key_index(pg_pool, sql_name, arg) -> None:
 # scan = byte-identical; shadow serves the scan; recording connection
 # ---------------------------------------------------------------------------
 
-_PINNED = {  # sha256 of the statement text (roll 85: the merged_into follow rule)
+_PINNED = {  # sha256 of the statement text (the merged_into follow rule)
     "_EXACT_SQL": "54934a741ae86a10f4708e6d784ea81be936e8dee9683c28709f97ecda33a3e2",
     "_EXACT_ALIAS_SQL": "7f71745f2634159925ec274f9a6a58ea507fa393864ccbf08de9d8e36d950ab6",
     "_ALIAS_SQL": "0eab139bfea1ffd5ac1d6f91d5ae288575ea4d36fde76bf72df31adc78d29937",
@@ -486,7 +486,7 @@ _INGEST_FALLBACK_SHA = "e73d9e8605a65e93e4033eb996c1c1fcd0498d7857f2cd12c4059ce6
 
 
 def test_every_election_statement_follows_merged_into() -> None:
-    """Roll 85: the rule is one fragment, in every statement on both paths and
+    """The rule is one fragment, in every statement on both paths and
     in the ingestion resolver's own copies."""
     for name in ("_EXACT_SQL", "_EXACT_ALIAS_SQL", "_ALIAS_SQL", "_EXACT_ALIAS_TABLE_SQL",
                  "_ALIAS_TABLE_SQL", "_EXACT_BATCH_SQL", "_EXACT_ALIAS_BATCH_SQL", "_ALIAS_BATCH_SQL"):

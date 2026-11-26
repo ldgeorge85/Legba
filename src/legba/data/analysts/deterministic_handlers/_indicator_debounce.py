@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The ``indicator_tracker`` flip debounce — pure code, no I/O (W11-F55).
+"""The ``indicator_tracker`` flip debounce — pure code, no I/O.
 
 The tracker used to diff the TWO most recent runs of every unit stream on every
 heartbeat and re-publish the whole flip set whenever any stream moved: over

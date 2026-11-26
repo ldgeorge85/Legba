@@ -18,12 +18,11 @@ row lands the question is a pronoun with no antecedent. Every downstream reader
 — the vector plane, the entity plane, an 8B gate, a 120B confirm — is handed a
 string that does not say what it is about.
 
-K-4 round 3 measured the cost on 120 labeled rows off the live gated stream
-(``planning/K4_LABELS_R3.csv``): deictic theses scored **0.133**, and the
-worst single desk-class, ``narrative_coordination``, scored **0.071**. Those
+A measurement on 120 labeled rows off the live gated stream found the cost:
+deictic theses scored **0.133**, and the worst single desk-class, ``narrative_coordination``, scored **0.071**. Those
 rows are not near-misses that better weighting would fix; they are pairs where
 the matcher could not have been right, because the thesis does not carry the
-proposition. The two worst offenders in the round — "the incident" (3 rows,
+proposition. The two worst offenders — "the incident" (3 rows,
 0 correct) and "the alleged Ukrainian attack" (6 rows, 0 correct) — were both
 about the SAME Caspian-vessel event, named in both origin findings.
 

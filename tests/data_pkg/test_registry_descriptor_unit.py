@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for the L-110 descriptor registry support pieces.
+"""Unit tests for the descriptor registry support pieces.
 
 No live containers needed — these exercise the bits that don't touch
 Postgres or NATS: event-subject naming, audit-payload shape, signing /

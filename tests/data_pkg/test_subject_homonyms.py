@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""B6 (W11-F13) — THE HOMONYM CLASS: a desk never reads another subject's code
+"""B6 — THE HOMONYM CLASS: a desk never reads another subject's code
 as its own.
 
 The North Korea desk (``country_watch_kp``, geo ``KP``) wrote findings about

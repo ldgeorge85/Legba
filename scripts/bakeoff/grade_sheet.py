@@ -36,12 +36,12 @@ sealed key. :func:`tell_test_passes` is the pre-registered criterion: accuracy
 the 2026-10-23 router retirement took v1.0's Gemini / Llama 3.3 70B / Mistral
 Medium routes away):
 
-  * primary model grader — :data:`GRADER_COMPONENT` (Nemotron Lightning,
-    thinking on, gateway alias ``lightning-think``); no arm uses it;
+  * primary model grader — :data:`GRADER_COMPONENT` (the Nemotron
+    think judge, gateway alias :func:`grader_alias`); no arm uses it;
   * second rater — the OPERATOR, on a manual sheet (the stratified 20 % plus
     every answer the primary marked contradicted); no component;
   * gold drafter — :data:`GOLD_DRAFTER_COMPONENT` (Gemma 4, thinking on,
-    ``gemma-think``); it never grades, the grader never builds gold, and the
+    alias :func:`gold_drafter_alias`); it never grades, the grader never builds gold, and the
     operator signs every gold row.
 
 "The exact served model id is probed and pinned in the run record before G1.
@@ -65,6 +65,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import yaml as _yaml
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import design as design_mod  # noqa: E402
@@ -80,11 +82,46 @@ DESCRIPTIVE_IF_VOID_OVER = 2
 GRADABLE = ("answered", "partial", "error")
 
 #: Design v1.1 §4.4. Component ids, not model names: the gateway serves aliases.
-GRADER_COMPONENT = "llm.judge.innoai_lightning_think.openai_compat"
-GRADER_ALIAS = "lightning-think"
+GRADER_COMPONENT = "llm.judge.gateway_rung2_think.openai_compat"
 SECOND_RATER = "operator"  # a manual sheet — no component, no model
-GOLD_DRAFTER_COMPONENT = "llm.verify.innoai_gemma_think.openai_compat"
-GOLD_DRAFTER_ALIAS = "gemma-think"
+GOLD_DRAFTER_COMPONENT = "llm.verify.gateway_gold_drafter.openai_compat"
+_DESCRIPTORS = Path(__file__).resolve().parents[2] / "descriptors"
+_ALIAS_FILES = {
+    GRADER_COMPONENT: "stack_component_llm_judge_gateway_rung2_think.yaml",
+    GOLD_DRAFTER_COMPONENT: "stack_component_llm_verify_gateway_gold_drafter.yaml",
+}
+
+
+def _descriptor_alias(component_id: str) -> str:
+    """A component's alias, read from its reviewable descriptor and resolved
+    from the environment when the descriptor names a variable (the served
+    alias is deployment data; the pin check compares the live row against
+    it). An unset variable fails loudly, naming it."""
+    from legba.data.schemas.env_refs import resolve_env_value
+
+    body = _yaml.safe_load((_DESCRIPTORS / _ALIAS_FILES[component_id]).read_text(encoding="utf-8"))
+    raw = body["config"]["model_name"]["raw"]
+    return str(resolve_env_value(raw, component_id=component_id, field="model_name"))
+
+
+def grader_alias() -> str:
+    return _descriptor_alias(GRADER_COMPONENT)
+
+
+def gold_drafter_alias() -> str:
+    return _descriptor_alias(GOLD_DRAFTER_COMPONENT)
+
+
+def __getattr__(name: str) -> str:
+    # ``GRADER_ALIAS`` / ``GOLD_DRAFTER_ALIAS`` resolve on each read, so
+    # importing this module never needs the environment.
+    if name == "GRADER_ALIAS":
+        return grader_alias()
+    if name == "GOLD_DRAFTER_ALIAS":
+        return gold_drafter_alias()
+    raise AttributeError(name)
+
+
 #: ``/v1/models`` entry keys that may name the model BEHIND an alias, in order.
 _SERVED_KEYS = ("root", "served_model", "model", "upstream_model", "parent")
 
@@ -287,12 +324,12 @@ def grader_pin(
     → ``common.Registry.stack_component`` row; ``listings`` maps the same id →
     that component's ``/v1/models`` body."""
     out: dict[str, Any] = {"probed_at": probed_at, "second_rater": SECOND_RATER}
-    for role, cid, alias in (("primary_grader", GRADER_COMPONENT, GRADER_ALIAS),
-                             ("gold_drafter", GOLD_DRAFTER_COMPONENT, GOLD_DRAFTER_ALIAS)):
+    for role, cid, alias in (("primary_grader", GRADER_COMPONENT, grader_alias()),
+                             ("gold_drafter", GOLD_DRAFTER_COMPONENT, gold_drafter_alias())):
         comp = components[cid]
         model = str(comp.get("model_name") or "")
         if model != alias:
-            raise SheetRefused(f"{cid} serves {model!r}, design v1.1 §4.4 pins the alias {alias!r}")
+            raise SheetRefused(f"{cid} serves {model!r}, the design pins the alias {alias!r}")
         entry = _models_entry(listings[cid], alias)
         out[role] = {
             "component": cid,
@@ -340,9 +377,9 @@ def grading_refusal(run: dict[str, Any] | None) -> str | None:
     if run is None:
         return None  # no run ledger (fixtures): nothing to check against
     if not run.get("grader_pin"):
-        return "no grader pin in run.json — run `grade_sheet.py pin-grader` first (design §4.4)"
+        return "no grader pin in run.json — run `grade_sheet.py pin-grader` first"
     if run.get("grader_route_changed"):
-        return f"the grader route changed mid-run — the run is void (§4.4): {run['grader_route_changed']}"
+        return f"the grader route changed mid-run — the run is void: {run['grader_route_changed']}"
     return None
 
 
@@ -363,7 +400,7 @@ async def recheck_pin(run_dir: Path, *, probe: Any = None) -> dict[str, Any]:
     drift = apply_pin(run, pin)
     run_path.write_text(json.dumps(run, indent=1, sort_keys=True), encoding="utf-8")
     if drift:
-        raise SheetRefused("GRADER ROUTE CHANGED — the run is void (design §4.4): " + "; ".join(drift))
+        raise SheetRefused("GRADER ROUTE CHANGED — the run is void: " + "; ".join(drift))
     return run
 
 
@@ -425,7 +462,7 @@ def main(argv: list[str] | None = None) -> int:
             run = json.loads(run_path.read_text(encoding="utf-8"))
             run.setdefault("tell_tests", []).append({"accuracy": acc, "passed": ok, "seed": key.get("seed")})
             run_path.write_text(json.dumps(run, indent=1, sort_keys=True), encoding="utf-8")
-        print(f"tell test: accuracy {acc:.2%} — {'PASS' if ok else 'FAIL: revise the normaliser (§5.4); no grading'}")
+        print(f"tell test: accuracy {acc:.2%} — {'PASS' if ok else 'FAIL: revise the normaliser; no grading'}")
         return 0 if ok else 3
     if a.cmd == "pin-grader":
         import asyncio
@@ -438,9 +475,9 @@ def main(argv: list[str] | None = None) -> int:
         drift = apply_pin(run, pin)
         run_path.write_text(json.dumps(run, indent=1, sort_keys=True), encoding="utf-8")
         if drift:
-            print("GRADER ROUTE CHANGED — the run is void (design §4.4):\n  " + "\n  ".join(drift))
+            print("GRADER ROUTE CHANGED — the run is void:\n  " + "\n  ".join(drift))
             return 2
-        print(f"grader pinned: {GRADER_COMPONENT} alias {GRADER_ALIAS} serves "
+        print(f"grader pinned: {GRADER_COMPONENT} alias {grader_alias()} serves "
               f"{run['grader_model_served']}; gold drafter {pin['gold_drafter']['served_model']}; "
               f"second rater {SECOND_RATER}")
         return 0

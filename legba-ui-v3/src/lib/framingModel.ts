@@ -1,6 +1,6 @@
 /**
  * framingModel — CROSS-FRAMING: one claim against the units that touch it,
- * where the layers diverge, and what no unit says (wave P lane B).
+ * where the layers diverge, and what no unit says.
  *
  * ## The gap this closes
  *

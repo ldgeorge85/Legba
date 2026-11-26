@@ -32,7 +32,7 @@ import type { ReactElement } from 'react'
 
 import { COMPONENTS } from '@/App'
 import { PANEL_REGISTRY } from '@/panel-registry/registry'
-import { LANDING_SURFACE, findSurface } from '@/lib/surfaces'
+import { BOARD_LIST_VIEW, LANDING_SURFACE, findSurface } from '@/lib/surfaces'
 import { __pendingReadEvents, __resetReadTelemetry } from '@/lib/readTelemetry'
 import { __resetReadLayout } from '@/lib/readLayout'
 import worldRow from './__fixtures__/assembly.world.json'
@@ -148,10 +148,11 @@ describe('the Morning Read mounts through the real workstation', () => {
     expect(kinds().filter((k) => k === 'brief_read')).toHaveLength(1)
   })
 
-  it("is what the Board's stage opens on (the landing, U-6)", () => {
+  it("is one link from the Board's stage, not the stage itself, and never a panel", () => {
     const board = findSurface(LANDING_SURFACE)!
-    expect(board.stage).toBe(KIND)
-    // One place per view: not also a panel.
+    expect(board.stage).toBe(BOARD_LIST_VIEW)
+    expect(board.stage).not.toBe(KIND)
+    // One place per view: not a panel either.
     expect(board.regions.flatMap((r) => r.views)).not.toContain(KIND)
     // The legacy prose one-pager is not seeded; it is a catalog kind.
     expect(board.regions.flatMap((r) => r.views)).not.toContain('v4.assessment')

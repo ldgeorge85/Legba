@@ -2,8 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Integration tests for migration 0086_entity_researcher_schema.sql.
 
-The SCHEMA FOUNDATION for the `entity_researcher` (E2b + E5 of
-planning/MASTER_PLAN_2026-07-10.md):
+The SCHEMA FOUNDATION for the `entity_researcher` (E2b + E5):
 
   * entity_judgement (the pairwise verdict cache) — constraints + UNIQUE-key
     dedupe hold. Its sibling `entity_alias` (the write-time canonicalization

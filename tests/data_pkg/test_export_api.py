@@ -74,8 +74,8 @@ def _fixed_identity() -> SigningIdentity:
 def _no_ambient_public_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
     """Isolate every test here from the host's REAL ``.env``.
 
-    ``legba.data.config._load_env`` falls back to the fixed path
-    ``/usr/local/deployments/active/legba/.env`` when no repo-relative
+    ``legba.data.config._load_env`` falls back to a fixed absolute
+    deployment ``.env`` path when no repo-relative
     ``.env`` exists — on a shared box that IS the live deployment's env
     file, so a plain test run inherits the deployment's real
     ``LEGBA_PUBLIC_BASE_URL`` value. That turns every
@@ -115,7 +115,7 @@ def _golden_items() -> list[dict]:
                     "title": "Troop columns filmed on Route 9",
                     "canonical_url": "https://example.org/route9",
                     "resolved": True,
-                    # P2-1: our archived copy of the original bytes exists —
+                    # Our archived copy of the original bytes exists —
                     # the citation line states it + the verifiable hash.
                     "archived": True,
                     "archive_sha256": "d0" * 32,
@@ -693,7 +693,7 @@ async def test_export_mixed_finding_and_journal_json(export_app, client: AsyncCl
         "canonical_url": "https://example.org/route9",
         "resolved": True,
         "resolution_source": "live",
-        # P2-1 additive evidence-archive surface — this signal carries no
+        # Additive evidence-archive surface — this signal carries no
         # object_ref, so both stay honestly empty (never fabricated).
         "archived": False,
         "archive_sha256": None,

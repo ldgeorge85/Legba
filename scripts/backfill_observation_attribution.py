@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Check that every LIVE observation row resolves a licence + attribution — DRY RUN ONLY.
 
-Lane N-R. Live ``observations`` rows are append-only by trigger (migration
+Live ``observations`` rows are append-only by trigger (migration
 0246), so the 8,036 PortWatch rows written on 2026-11-13 before the sink
 stamped ``license_class`` / ``attribution`` into ``provenance`` are NOT
 rewritten. Three ways a "backfill" could be done, and why this script takes

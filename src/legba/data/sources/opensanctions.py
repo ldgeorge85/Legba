@@ -117,7 +117,7 @@ class OpenSanctionsConfig(BaseModel):
 
     api_key_secret: str | None = Field(default=None, max_length=256)
     """Vault reference name (NOT the secret value). The runtime resolves
-    it at call time via ``ctx.secrets`` per L-102 §7."""
+    it at call time via ``ctx.secrets``."""
 
     dataset: str = Field(default="default", min_length=1, max_length=128)
     """OpenSanctions dataset id, e.g. ``all`` / ``sanctions`` /

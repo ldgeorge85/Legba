@@ -1,5 +1,5 @@
 /**
- * ContestedBadge — the contested-claim surface (Holes-B Wave 5, #101).
+ * ContestedBadge — the contested-claim surface.
  *
  * Makes the already-populated `fact_contention` sidecar VISIBLE on the fact /
  * Why provenance view AND on the findings-backed Claims panel. It looks the

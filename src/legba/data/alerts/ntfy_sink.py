@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """ntfy alert sink (E-2) — the second outward AlertSink, a NATIVE ntfy publish.
 
-The P1-1 slot filled as designed: one module implementing the
+One module implementing the
 :class:`~.sinks.AlertSink` protocol plus one
 :func:`~.sinks.register_alert_sink` call — the dispatcher supplies the
 ledger audit, idempotency, cooldown and never-raise fan-out for free.
@@ -16,7 +16,7 @@ alert is HUMAN-READABLE ON A PHONE, not a JSON blob:
   receipt link on its own line;
 * ntfy semantics ride the headers — ``X-Title`` / ``X-Priority`` /
   ``X-Tags`` / ``X-Click`` (see the mapping tables below), so tapping the
-  notification opens the record in the console (roll 84: ``#rec=<kind>:<id>``,
+  notification opens the record in the console (``#rec=<kind>:<id>``,
   :mod:`.console_link`) — never the JSON lineage receipt.
 
 Configuration (env)
@@ -31,8 +31,8 @@ Configuration (env)
   (the single pre-split topic). Unset ⇒ the sink is
   DECLARED-INACTIVE: it still registers, the dispatcher logs the gap once
   at startup, and every fan-out writes a ``skipped_unconfigured`` ledger
-  row — visible, never a silent drop (the P1-1 unconfigured contract,
-  identical to the webhook sink).
+  row — visible, never a silent drop (the same unconfigured contract as
+  the webhook sink).
 * ``LEGBA_ALERT_NTFY_TOKEN`` — optional access token for a protected ntfy
   server, sent as ``Authorization: Bearer <token>``. Never logged.
 * ``LEGBA_ALERT_NTFY_MIN_SEVERITY`` — severity floor (default ``high``,
@@ -318,7 +318,7 @@ class NtfyAlertSink:
             "X-Tags": ntfy_tags(payload),
         }
         if payload.console_url:
-            # Absolute only, and a CONSOLE page (roll 84): tapping the
+            # Absolute only, and a CONSOLE page: tapping the
             # notification opens the record, never the JSON lineage route.
             headers["X-Click"] = _header_safe(payload.console_url)
         if self._token:

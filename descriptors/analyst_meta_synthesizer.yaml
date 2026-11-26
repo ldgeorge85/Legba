@@ -28,7 +28,7 @@ identity:
   # retired (was draft) so a stray re-register cannot resurrect a retired
   # analyst — descriptor_state_drift reconciliation 2026-09-06.
   state: retired
-  owner: release_meta_activation
+  owner: owner@local
 
 subscription:
   # No `targets` block => META analyst (single global run; _cadence_targets
@@ -63,7 +63,6 @@ method:
       factory_kind: stack_ref
       raw: llm.primary.openai_compat
       expected_family: llm_provider
-    max_tokens: 768            # the kind's DEFAULT_MAX_TOKENS (narrower context)
   budget_tokens_per_day: 0
   retry:
     budget:

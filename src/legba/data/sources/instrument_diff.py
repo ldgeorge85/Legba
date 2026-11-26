@@ -16,7 +16,7 @@ Four differs, chosen per binding (``InstrumentSnapshotConfig.differ``):
     that is ``sdnEntry`` keyed on ``uid`` — the list's OWN identifier, never a
     position or a name. Namespaces are ignored (local names only), so the
     namespace URI moving between publications does not read as every entry
-    changing. Lane I-5: a path's LAST segment may name an ATTRIBUTE
+    changing. A path's LAST segment may name an ATTRIBUTE
     (``@logicalId``, ``nameAlias/@wholeName``) — for a list whose own
     identifier is an attribute (the EU FSF list keys ``sanctionEntity`` on
     ``@logicalId``). A path with no ``@`` segment reads element text exactly

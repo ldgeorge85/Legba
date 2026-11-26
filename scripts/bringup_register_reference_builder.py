@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Register the Reference Builder analyst descriptor (Program 2 track R2).
+"""Register the Reference Builder analyst descriptor.
 
 Create-only and idempotent, exactly like ``bringup_register_correctness_grader.py``:
 the descriptor lands in ``draft``; the operator (or the deploy runbook) transitions

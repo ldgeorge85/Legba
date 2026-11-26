@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Journal Wave 2 — the consolidator ``run_method`` emits entry_kind='consolidation'
-(plan §4.7 / §12). No DB / NATS / Dapr — the LLM + binding are stubs.
+"""The consolidator ``run_method`` emits entry_kind='consolidation'
+No DB / NATS / Dapr — the LLM + binding are stubs.
 
 The tier is the descriptor: ONE run_method, the entry_kind selected purely from
 the running ``analyst_id`` (``journal_consolidator`` → consolidation; any other →

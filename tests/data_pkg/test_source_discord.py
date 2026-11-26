@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for L-137 — Discord webhook source kind.
+"""Tests for Discord webhook source kind.
 
 Coverage:
 
@@ -590,7 +590,7 @@ async def test_pull_is_noop_generator():
     handler, _ = _make_handler(public_key=bytes(sk.verify_key))
     ctx = _make_source_context()
     await handler.on_configure(ctx)
-    # Iterating yields nothing — push-source convention per L-102.
+    # Iterating yields nothing — push-source convention.
     results = []
     async for sig in handler.pull(ctx, since=None):
         results.append(sig)

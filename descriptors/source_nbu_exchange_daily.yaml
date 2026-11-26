@@ -1,19 +1,19 @@
-# I-5 series-kind capabilities (2026-11-14) — the National Bank of Ukraine's
+# The National Bank of Ukraine's
 # official hryvnia exchange rates, daily, every listed currency, as a SERIES.
 # Ships DRAFT; the reference host walks it to CONFIGURED
-# (descriptors/LIFECYCLE.md), never active — activation is the owner's call.
+# (descriptors/LIFECYCLE.md), never active — activation is the operator's call.
 # Kind: series_api.
 #
-# WHY: war-economy rates (the review's row 5, "add"). X-1 could not write it:
-# the body is a TOP-LEVEL JSON ARRAY (I-5: `rows_path: "$"`) and its dates are
-# DD.MM.YYYY (I-5: date format `dmy_dotted`, matched exactly).
+# WHY: war-economy rates. The body is a TOP-LEVEL JSON ARRAY
+# (`rows_path: "$"`) and its dates are DD.MM.YYYY (date format
+# `dmy_dotted`, matched exactly).
 #
 # THE ENDPOINT. NBU open-data API, /NBUStatService/v1/statdirectory/exchange
-# with the bare `json` switch (the URL the review checked, kept verbatim — no
-# other parameter). Checked 2026-11-14 by the source-expansion review (one
+# with the bare `json` switch (the URL as checked, kept verbatim — no
+# other parameter). Checked (one
 # GET, generic client identity): 200, application/json, a top-level array of
 # 45 rows (one per currency), 5,543 bytes. Row fields as the NBU documents
-# them (the review recorded the shape, not the field list): `r030` (ISO 4217
+# them (shape checked, not a field list): `r030` (ISO 4217
 # numeric), `txt` (currency name, Ukrainian), `rate` (hryvnias per ONE unit of
 # the currency), `cc` (ISO 4217 alpha), `exchangedate` (DD.MM.YYYY, the day
 # the rate is in force). If the first poll finds other names it writes
@@ -40,7 +40,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: i5_series_kind_capabilities
+  owner: owner@local
   created: "2026-11-14T00:00:00Z"
 
 scope:

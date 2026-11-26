@@ -22,7 +22,7 @@
 # canonical history 0001..0053, so migrate applies everything after it, up to
 # whatever head src/legba/data/migrations/ carries in THIS checkout.
 #
-# NO STEP LABEL BELOW PINS A COUNT. Five of them had drifted by 2026-08 — "3
+# NO STEP LABEL BELOW PINS A COUNT. Five of them had drifted — "3
 # shared sources" was 7, "x6 watch tier" was 13, "25 desks" was 32, "~36
 # analysts" was 43, "head 0060" was 0185 — because a hand-typed number in a
 # label has nothing that notices when the list it describes grows. Each
@@ -126,8 +126,8 @@ done
 IS_REAL=0
 [ "${PROJECT}" = "legba" ] && IS_REAL=1
 
-# The profile's prompt packages (docs/PROFILES.md "Prompt packages"; W9
-# SPLIT-2): <profile>/prompts/ holds ONE package, legba_<id> (the geopolitics
+# The profile's prompt packages (docs/PROFILES.md "Prompt packages"):
+# <profile>/prompts/ holds ONE package, legba_<id> (the geopolitics
 # profile: legba_geopolitics, the six political-lean lenses). Descriptors name
 # its modules as prompt_module legba_<id>.<module>:ATTR, and registration
 # resolves every prompt_module — so the directory is exported onto PYTHONPATH
@@ -414,9 +414,9 @@ wait_for "registry-healthz" 120 \
   dc exec -T legba-registry curl -fsS "http://localhost:8090${REGISTRY_HEALTH_PATH}" \
   || warn "registry healthz not confirmed via exec (continuing; registrars will surface errors)"
 
-# Ordered registrar sequence. [0] loads the instance profile (PROFILE-1) and
+# Ordered registrar sequence. [0] loads the instance profile and
 # fails here, before any write, if its manifest does not validate.
-# Descriptors have ONE registrar (W6 SPLIT-1, DEC-13):
+# Descriptors have ONE registrar:
 # scripts/bringup_register_descriptors.py --profile walks the profile's
 # descriptors dir (the geopolitics profile: descriptors/*.yaml) of
 # the four registry families (action packs → sources → targets → analysts) plus
@@ -524,7 +524,7 @@ else
   run_registrar -m legba.data.migrate --dry-run 2>&1 | sed 's/^/        /' || true
 fi
 
-# (e) the profile's prompt packages import inside the RUNTIME (W9 SPLIT-2): the
+# (e) the profile's prompt packages import inside the RUNTIME: the
 #     runtime carries the image's copy only (no checkout is mounted), and a
 #     descriptor naming a module the image lacks fails its first run loud.
 if [ -n "${PROFILE_PROMPTS}" ]; then
@@ -541,14 +541,14 @@ else
   info "profile ${PROFILE} has no prompts/ directory (no profile prompt package to verify)"
 fi
 
-# (f) COLD ACTIVATION — NOT WIRED IN YET (RUNBOOK §26); run it by hand after this
+# (f) COLD ACTIVATION — NOT WIRED IN YET (docs/RUNBOOK.md); run it by hand after this
 #     script finishes:
 #
 #         scripts/deploy_smoke_cold_activation.sh --env-file "${ENV_FILE}"
 #
 #     Checks (a)-(e) all confirm that processes STARTED. None of them proves an
-#     actor can go from cold to a completed run, and that is the exact gap the
-#     2026-08-01 outage fell through: the descriptor-parse bug only bites on the
+#     actor can go from cold to a completed run, and that is the exact gap a
+#     past outage fell through: the descriptor-parse bug only bites on the
 #     COLD path, so warm actors kept serving and every check above stayed green
 #     while the fleet could not activate. The full test suite missed it too —
 #     every one of its ten-thousand-odd tests builds descriptors in process,

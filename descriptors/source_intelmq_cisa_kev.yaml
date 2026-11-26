@@ -1,7 +1,7 @@
-# S-2 — IntelMQ bridge SourceDescriptor: source.intelmq.cisa_kev
+# IntelMQ bridge SourceDescriptor: source.intelmq.cisa_kev
 # (kind: intelmq_collector_bridge).
 #
-# K-1 (2026-11-14): STILL PARKED, and no longer needed for the catalogue
+# STILL PARKED, and no longer needed for the catalogue
 # itself — source_cisa_kev.yaml (source.cisa.kev) reads the same public JSON
 # feed through the json_api kind, which needs no extra image. This adapter
 # stays as the example of the IntelMQ bridge for CERT feeds that only IntelMQ
@@ -41,7 +41,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft                       # KEYLESS feed, but the intelmq extra is not in the image
-  owner: s2_keyed_sources
+  owner: owner@local
   created: "2026-06-09T00:00:00Z"
 
 scope:
@@ -50,7 +50,7 @@ scope:
   languages: [en]
   tags: [cyber, vulnerability, threat_intel, kev, structured, global]
   source_class: official           # S1-T8 — US CISA primary government catalog
-  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
+  access_class: public          # free no-auth feed, no separate reuse agreement
 
 acquisition: poll
 

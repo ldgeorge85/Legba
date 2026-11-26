@@ -39,7 +39,7 @@ from legba.runtime.source_factory import (
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DESCRIPTORS_DIR = REPO_ROOT / "descriptors"
 
-# (filename, id, kind, source_class, geo, language) — the 41 Wave-A feeds.
+# (filename, id, kind, source_class, geo, language) — the 41 These feeds.
 WAVE_A_FILES: list[tuple[str, str, str, str, list[str], str]] = [
     ("source_who_disease_outbreak_news.yaml", "source.who.disease_outbreak_news", "json_api", "official", [], "en"),
     ("source_eia_today_in_energy.yaml", "source.eia.today_in_energy", "rss", "official", ["US"], "en"),
@@ -123,7 +123,7 @@ def test_descriptor_validates_and_conventions(fname, sid, kind, klass, geo, lang
     assert desc.identity.kind == kind
     # Ships draft → bulk registration creates no live actor on a fresh rig.
     assert desc.identity.state == LifecycleState.DRAFT, (
-        f"{fname}: Wave-A feeds must ship draft (operator-activated)"
+        f"{fname}: These feeds must ship draft (operator-activated)"
     )
     assert desc.acquisition == "poll"
     # A cadence schedule is present so an operator flip to active never trips
@@ -171,7 +171,7 @@ def test_ids_unique_and_disjoint_from_roster():
     """Wave-A ids are internally unique and collide with nothing already in the
     roster — the other descriptor files OR the S-1 embedded catalog."""
     wave_ids = [sid for _, sid, *_ in WAVE_A_FILES]
-    assert len(wave_ids) == len(set(wave_ids)), "duplicate Wave-A ids"
+    assert len(wave_ids) == len(set(wave_ids)), "duplicate ids"
 
     wave_files = {f for f, *_ in WAVE_A_FILES}
     existing: set[str] = set()
@@ -186,7 +186,7 @@ def test_ids_unique_and_disjoint_from_roster():
     existing.update(e["id"] for e in yaml.safe_load(catalog)["entries"])
 
     collisions = sorted(set(wave_ids) & existing)
-    assert not collisions, f"Wave-A ids collide with existing roster: {collisions}"
+    assert not collisions, f"ids collide with existing roster: {collisions}"
 
 
 def test_registrar_covers_every_wave_a_file():
@@ -211,4 +211,4 @@ def test_registrar_covers_every_wave_a_file():
     # Every seeded host resolves from at least one descriptor's URL.
     urls = " ".join(_config_url(_load_descriptor(f)).lower() for f, *_ in WAVE_A_FILES)
     for host in hosts:
-        assert host in urls, f"seeded host {host!r} matches no Wave-A feed URL"
+        assert host in urls, f"seeded host {host!r} matches no feed URL"

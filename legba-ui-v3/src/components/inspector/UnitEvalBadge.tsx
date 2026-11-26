@@ -1,5 +1,5 @@
 /**
- * UnitEvalBadge — the per-bounded-unit eval badge (P2-T6).
+ * UnitEvalBadge — the per-bounded-unit eval badge.
  *
  * Given a finding's `analystId`, renders the unit's honest eval badge off
  * `GET /api/v1/eval/scores` (e.g. `verified | faithfulness 0.45 | unmeasured
@@ -13,6 +13,7 @@
 import { useEffect, useState } from 'react'
 import { Gauge } from 'lucide-react'
 import { InfoTip } from '@/components/InfoTip'
+import { useBelowAdminPassive as useBelowAdmin } from '@/auth/roles'
 import { fetchEvalScores, findUnitScore, type UnitEvalScore } from '@/lib/unitEvalModel'
 import { FAITHFULNESS_EXPLAIN } from '@/lib/verdictModel'
 
@@ -41,10 +42,13 @@ export function unitScope(score: Pick<UnitEvalScore, 'n_findings'>): string {
 
 export function UnitEvalBadge({ analystId }: { analystId: string | null | undefined }) {
   const [score, setScore] = useState<UnitEvalScore | null>(null)
+  // The engine's own badge is an admin's: a reader reads the same figures in
+  // plain words in "How this was produced" (`components/HowProduced.tsx`).
+  const belowAdmin = useBelowAdmin()
 
   useEffect(() => {
     let cancelled = false
-    if (!analystId) {
+    if (!analystId || belowAdmin) {
       setScore(null)
       return
     }
@@ -58,10 +62,10 @@ export function UnitEvalBadge({ analystId }: { analystId: string | null | undefi
     return () => {
       cancelled = true
     }
-  }, [analystId])
+  }, [analystId, belowAdmin])
 
   // Not a bounded unit / no scorer run / fetch failed → no badge (honest).
-  if (!score) return null
+  if (!score || belowAdmin) return null
 
   return (
     <InfoTip

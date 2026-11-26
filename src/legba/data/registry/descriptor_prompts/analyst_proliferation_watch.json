@@ -1,8 +1,8 @@
 {
   "prompts": {
     "proliferation_watch": {
-      "chars": 25321,
-      "sha256": "d5e0cee5197074654f665ded20a79404c5f405fe7891d25235eed52f14809292",
+      "chars": 26313,
+      "sha256": "bc9ee980b128608d6f696c5a4e30287110cae7dee7db0ea61bfa0e740e7ffc72",
       "source": "analyst_proliferation_watch.yaml"
     }
   },

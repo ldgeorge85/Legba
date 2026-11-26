@@ -17,9 +17,7 @@ it (even only by demonym) stays SILENT; a resolved breach re-arms silently and
 can fire again; the interval gate declines without advancing anything; and the
 alert rides the D2 budget plumbing like every other class.
 
-The SA/Yemen soft-FP fix (clause 6, 2026-09-05,
-``planning/COVERAGE_FLOOR_82_2026-09-04.md`` §2.7; CORRECTED 2026-09-06,
-``planning/COVERAGE_FLOOR_OVERSUPPRESS_FIX_REPORT.md``): a frame that names
+The SA/Yemen soft-FP fix (clause 6): a frame that names
 only the ACTOR ("Houthi maritime embargo") must go silent on the missing
 POLITY when at least ``frame_evidence_min_findings`` (default 2) of its OWN
 cited FINDINGS have their own authored TITLE naming that polity — never
@@ -637,7 +635,7 @@ async def test_seeds_silently_then_fires_once_then_never_refires(
     # see what was compared without re-running anything.
     assert data["open_frame_count"] == 3
     assert any("Dolphin" in n for n in data["open_frame_names"])
-    # Lineage: the alert NAMES exemplar signals, so the P1 walk resolves it.
+    # Lineage: the alert NAMES exemplar signals, so the lineage walk resolves it.
     assert len(row["derived_from"]) > 0
     assert r2.finding.data["counts_by_class"][ats.TRIGGER_COVERAGE_FLOOR][
         "new_breaches"
@@ -791,9 +789,7 @@ async def test_the_alert_rides_the_d2_budget_plumbing(pg_pool, clean_slate):
 async def test_sa_yemen_actor_named_frame_is_silenced_by_its_own_cited_evidence(
     pg_pool, clean_slate,
 ):
-    """THE FIX, corrected 2026-09-06 (planning/COVERAGE_FLOOR_OVERSUPPRESS_
-    FIX_REPORT.md). ``planning/COVERAGE_FLOOR_82_2026-09-04.md`` §2.7's live
-    census: SA's register names only the actor ("Houthi maritime embargo
+    """THE FIX. The live census: SA's register names only the actor ("Houthi maritime embargo
     disrupts Red Sea shipping"), never the polity Yemen, even though SA's
     desks DO engage (4/8) — a soft false positive on the outcome measure.
     The first cut of this fix (df088954) read a cited finding's raw grounding
@@ -887,8 +883,7 @@ async def test_il_palestine_still_fires_when_cited_evidence_does_not_name_it(
 async def test_two_frames_each_with_one_incidental_mention_does_not_clear(
     pg_pool, clean_slate,
 ):
-    """THE REGRESSION'S EXACT SHAPE (planning/COVERAGE_FLOOR_OVERSUPPRESS_
-    FIX_REPORT.md). df088954's shipped clause 6 pooled EVERY open frame's
+    """THE REGRESSION'S EXACT SHAPE. The first clause 6 pooled EVERY open frame's
     cited evidence into one blob PER DESK, so a polity mentioned once each in
     TWO DIFFERENT frames' evidence cleared the breach even though NEITHER
     frame's own evidence recurringly named it — live, this is exactly
@@ -942,8 +937,7 @@ async def test_two_frames_each_with_one_incidental_mention_does_not_clear(
 
 
 # ---------------------------------------------------------------------------
-# R1-e — ``breaches_naming_only``, the design's B-1 producer
-# (planning/R1_FRAME_REPAIR_AMENDMENT_2026-09-06.md §3).
+# R1-e — ``breaches_naming_only``, the B-1 producer.
 #
 # BEHAVIOUR-NEUTRAL by contract: the three tests above are the neutrality
 # proof (they pass unchanged, alerts and watermarks byte-identical), and these

@@ -1,14 +1,14 @@
 /**
- * The forecast ledger's read model (ST0-C) — `GET /api/v1/v3/ledger/forecasts`.
+ * The forecast ledger's read model — `GET /api/v1/v3/ledger/forecasts`.
  *
  * The Ledger tab shows every forecast question sorted by what resolves next:
  * open questions first by due date, then closed ones. Each row carries one
  * cell per ARM (the operator, the scheduled tower, the consult, the frontier
- * comparison arm, the Clef arm), the sealed/open state, the due date and the
+ * comparison arm, the decision-model arm), the sealed/open state, the due date and the
  * resolution. An arm that stated no number is an ABSENCE with its reason
  * (`absent`, the reason on hover), never a blank; an arm with no row at all
- * is `—` ("not stated"). The Brier column is ST1's: until a resolution exists
- * and ST1's scoring lands it reads a placeholder, never a number.
+ * is `—` ("not stated"). The Brier column reads a placeholder, never a number, until
+ * a resolution exists and is scored.
  *
  * Pure: the panel renders `ledgerTableRows(...)`; this file is the unit-tested
  * mapping.
@@ -72,16 +72,16 @@ export interface LedgerForecastsResponse {
 
 export const LEDGER_ROUTE = '/v3/ledger/forecasts'
 
-/** The arm columns, in reading order. `think_tank` arrives with ST2. */
+/** The arm columns, in reading order. `think_tank` is added when that arm exists. */
 export const ARM_COLUMNS: readonly { kind: string; label: string }[] = [
   { kind: 'operator', label: 'Operator' },
   { kind: 'tower', label: 'Tower' },
   { kind: 'consult', label: 'Consult' },
   { kind: 'frontier_arm', label: 'Frontier' },
-  { kind: 'clef_arm', label: 'Clef' },
+  { kind: 'clef_arm', label: 'Decision model' },
 ]
 
-/** The Brier column's text until ST1 scores resolutions. */
+/** The Brier column's text until resolutions are scored. */
 export const BRIER_PLACEHOLDER = 'Brier (from resolution)'
 
 export interface ArmCell {
@@ -188,7 +188,7 @@ export function ledgerTableRows(res: LedgerForecastsResponse | null | undefined,
       stateLabel: STATE_LABEL[state],
       arms: ARM_COLUMNS.map((c) => armCell(c.kind, f.numbers ?? [])),
       resolution: resolutionText(f.resolution),
-      // ST1 computes the score from the resolution; nothing is printed before it.
+      // The score is computed from the resolution; nothing is printed before it.
       brier: f.resolution && f.resolution.outcome !== 'void' ? 'not scored yet' : '—',
       condition: f.condition ?? null,
     }

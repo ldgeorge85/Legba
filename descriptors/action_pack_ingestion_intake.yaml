@@ -1,4 +1,4 @@
-# ingestion_intake action pack (lane I-1 — the ingestion intake).
+# ingestion_intake action pack (the ingestion intake).
 #
 # An agent asks for something to be ingested: an address fetched under a
 # page pipeline, or a source re-polled from a window start. The request goes
@@ -22,7 +22,7 @@
 #
 # `default_pipeline`: the page pipeline (a source descriptor whose kind takes
 # an address) used when the agent names none; empty = LEGBA_INTAKE_DEFAULT_
-# PIPELINE, else (I-2) the instance's default page pipeline
+# PIPELINE, else the instance's default page pipeline
 # `source.page.default` (kind `page`, descriptors/source_page_pipeline_
 # default.yaml) for an address request.
 #
@@ -35,7 +35,7 @@ identity:
   version: "<content-hash stamped at register time>"
   abstraction_level: L1
   state: active
-  owner: i1_ingestion_intake
+  owner: owner@local
   created: "2026-11-13T00:00:00Z"
 
 tools:

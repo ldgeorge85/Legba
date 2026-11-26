@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""S-2 — acknowledge and snooze an alert episode (plan 4.4, migration 0261).
+"""Acknowledge and snooze an alert episode (plan 4.4, migration 0261).
 
   * ``POST/DELETE /v3/system/alerts/{id}/ack`` and ``…/snooze`` — contributor
     and admin with sign-in on; the bearer (operator class) with it off; a
@@ -12,7 +12,7 @@
     episode.
   * Every act is a history row and a signed, chained audit row naming the
     stable actor — never a credential.
-  * ``/since?include=needs_you`` and ``/since/counts`` keep the S-1 shapes;
+  * ``/since?include=needs_you`` and ``/since/counts`` keep the shapes;
     only ``acked_at`` / ``snoozed_until`` become real.
 
 PURE tests need no database; the rest run over the migrated test DB through
@@ -67,7 +67,7 @@ ADMIN_TOK = "s2-admin-token-" + "5" * 24
 SERVICE_TOK = "s2-service-token-" + "6" * 24
 _DOMAIN = "s2ack.example"
 
-#: The S-1 shapes (copied from test_s1_needs_you_and_seen; must not move).
+#: The shapes (copied from test_s1_needs_you_and_seen; must not move).
 NEEDS_YOU_ITEM_KEYS = [
     "id", "kind", "group", "topic", "severity", "summary", "subject_kind",
     "subject_id", "opened_at", "last_raised_at", "last_paged_at",
@@ -333,7 +333,7 @@ async def test_role_matrix_signin_on(on_app, pool) -> None:
     assert out["attention"]["acked_by"] == f"user:{ids['cole']}"
     assert out["attention"]["ack_active"] and out["attention"]["hidden_from_needs_you"]
     assert out["shared"] is True and "everyone" in out["shared_note"]
-    assert "Paging is unchanged" in out["paging_note"]
+    assert "Notifications are unchanged" in out["paging_note"]
     assert (await c.post(_url(eid, "ack"), headers=who["cole"],
                          json={"acked_by": "someone-else"})).status_code == 422
 
@@ -467,7 +467,7 @@ async def test_needs_you_hides_and_resurfaces(on_app, pool) -> None:
         body = await _needs_you(c, h, cursor)
         assert acked not in _ids(body) and snoozed not in _ids(body)
         assert other in _ids(body)
-    # S-1 shapes unchanged.
+    # Shapes unchanged.
     assert list(body) == SINCE_KEYS_WITH_NY
     assert all(list(i) == NEEDS_YOU_ITEM_KEYS for i in body["needs_you"]["items"])
     # The badge reflects the act at once (the 30 s reuse is dropped).

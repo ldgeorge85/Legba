@@ -59,8 +59,8 @@ THE FIVE THINGS THAT ARE CODE, NOT PROMPT
 
 WHICH MODEL, AND WHY IT IS A DESCRIPTOR FIELD (design F-1, ORCHESTRATOR RULING)
 ------------------------------------------------------------------------------
-The reference is worthless in-plane: a ``gpt-oss-120b`` reference against
-``gpt-oss-120b`` desks measures the family's shared blind spots and calls them
+The reference is worthless in-plane: a the core model reference against
+the core model desks measures the family's shared blind spots and calls them
 agreement. It must also not share a family with the JUDGE, or the instrument
 that measures attention and the instrument that measures faithfulness inherit
 each other's blindness — a weaker version of the disease this campaign treats.
@@ -70,7 +70,7 @@ llm.judge.cerebras_gemma4_31b.openai_compat`` (Gemma-4-31B on Cerebras, already
 a registered active component). It is NOT nemotron (that is the judge) and NOT
 ``llm.primary`` (that is the writer). Because it is a DESCRIPTOR field resolved
 by the shared ``_wire_deterministic_llm``, an operator can re-point it — to a
-self-hosted family on ai1, say — with a ``PUT`` and no code edit, no image
+self-hosted family on the models host, say — with a ``PUT`` and no code edit, no image
 rebuild. The Anthropic hard-refuse in that helper still applies.
 
 WHAT THIS INSTRUMENT CANNOT CLAIM (design §2.6, stated before any number)
@@ -110,7 +110,7 @@ from . import _reference_gap_dispatch
 logger = logging.getLogger(__name__)
 
 SUB_HANDLER_NAME = "desk_reference"
-#: Who writes the reference rows (lane 9): this deterministic rule.
+#: Who writes the reference rows: this deterministic rule.
 _WRITTEN_BY = rule_handle(SUB_HANDLER_NAME)
 
 #: THIS INSTRUMENT'S OWN population stamp. Deliberately NOT

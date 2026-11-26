@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The frozen case contract (C-1b, design C-1a §2/§4/§6) — bytes pinned.
 
-The UI lane builds against ``consult_case_schema.contract_document()`` in
+The UI builds against ``consult_case_schema.contract_document()`` in
 parallel, so its bytes are pinned here: a change to the nine tool schemas, the
 frame shapes or the record shape turns this red and must be said out loud.
 
@@ -26,7 +26,7 @@ from legba.data.stack.llm import tool_rounds as TR
 REPO = Path(__file__).resolve().parents[2]
 UI = REPO / "legba-ui-v3" / "src"
 
-#: THE PIN. Changing the contract changes this; say so in the lane report.
+#: THE PIN. Changing the contract changes this; say so in the change description.
 CONTRACT_SHA256 = "bcc36c2682399999c69a8cf97c6ae4ff879679b5c986f5d61d61ff8d7f7f1288"
 
 

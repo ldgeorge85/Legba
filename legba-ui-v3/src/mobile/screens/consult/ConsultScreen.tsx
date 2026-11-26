@@ -1,5 +1,5 @@
 /**
- * The Consult SCREEN (M-3g; plan §2.3 "Consult", §2.1 "a full-screen tab").
+ * The Consult SCREEN (a full-screen tab).
  *
  * Always open, full height, no toggle. Top to bottom:
  *
@@ -16,7 +16,7 @@
  *                    pinned above the keyboard (the shell follows
  *                    `visualViewport` and hides the bar while it is up)
  *
- * The turn is the desktop's (`state/useConsultTurn`, lane M-1): streaming,
+ * The turn is the desktop's (`state/useConsultTurn`): streaming,
  * the 202 left to the stream's terminal frame, the detached-turn pickup after
  * a reload, Stop then "answer from what it found", the partial and recovered
  * states. The phone always asks on the free route and never arms a write; no

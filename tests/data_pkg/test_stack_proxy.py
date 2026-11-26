@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for the L-123 proxy-pool stack handlers (`legba.data.stack.proxy`).
+"""Tests for the proxy-pool stack handlers (`legba.data.stack.proxy`).
 
 Three handler-level scopes:
 
@@ -50,7 +50,7 @@ from legba.data.stack.proxy.local_none import DIRECT_SENTINEL
 
 
 # ---------------------------------------------------------------------------
-# Fake credential resolver — mirrors the L-111 protocol surface.
+# Fake credential resolver — mirrors the protocol surface.
 # ---------------------------------------------------------------------------
 
 
@@ -121,7 +121,7 @@ class FakeProxyConfig:
 
 
 def test_bright_data_classvars_present():
-    """L-102 §1: every handler must declare `kind`, `family`, `schema_version`."""
+    """§1: every handler must declare `kind`, `family`, `schema_version`."""
     assert BrightDataProxyHandler.kind == BRIGHT_DATA_KIND == "proxy_pool"
     assert BrightDataProxyHandler.family == "stack"
     assert BrightDataProxyHandler.schema_version.startswith("legba/stack/proxy_pool/")
@@ -244,7 +244,7 @@ def test_default_allowed_countries_used_when_config_empty():
 
 
 # ---------------------------------------------------------------------------
-# URL formatting — the core of L-123.
+# URL formatting — the core of the proxy handlers.
 # ---------------------------------------------------------------------------
 
 
@@ -334,7 +334,7 @@ async def test_bright_data_url_rejects_disallowed_country():
 
 @pytest.mark.asyncio
 async def test_bright_data_url_no_caching_resolves_each_call():
-    """Per L-102 §7 — credentials must NOT be cached. Verify by counting
+    """Per §7 — credentials must NOT be cached. Verify by counting
     resolver calls across two `get_proxy_url` invocations."""
     resolver = _make_resolver()
     h = BrightDataProxyHandler(

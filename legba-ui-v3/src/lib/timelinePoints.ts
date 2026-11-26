@@ -292,7 +292,7 @@ export function situationSpans(rows: TLSituation[]): SituationSpan[] {
 }
 
 /**
- * Read-scoped evidence partition (P1-T7) — split a timeline's points into the
+ * Read-scoped evidence partition — split a timeline's points into the
  * read's DIRECTLY-CITED evidence vs. the surrounding context, given the set of
  * cited substrate ids (the read finding's `data.citations[].signal_id`, and
  * optionally the read finding's own id). The temporal lens emphasises the

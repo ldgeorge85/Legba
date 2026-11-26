@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""T-2 — thinking per call role, the seats that think, and the safety net.
+"""Thinking per call role, the seats that think, and the safety net.
 
 No model calls: the REAL vLLM handler over ``httpx.MockTransport`` (so the
 alias on the wire is what is asserted) and scripted doubles.
@@ -214,7 +214,7 @@ def test_the_descriptor_model_runs_the_refusals() -> None:
 def test_an_undeclared_gather_choice_leaves_every_content_hash_alone() -> None:
     assert GatherBlock().model_dump() == {"max_rounds": 1}
     assert GatherBlock(thinking="off").model_dump() == {"max_rounds": 1, "thinking": "off"}
-    # A descriptor this lane did not touch hashes exactly as before T-2.
+    # A descriptor this change did not touch hashes exactly as before.
     d = _descriptor("relationship_reifier")
     assert "thinking" not in d.model_dump(mode="json")["method"]["gather"]
     assert content_hash(d) == content_hash(d.model_copy())

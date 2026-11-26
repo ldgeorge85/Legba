@@ -70,6 +70,23 @@ from .judge_quote_rules import (
 )
 
 
+#: The faithfulness verdict for a claim worded as a judgement whose underlying
+#: facts are supported. It PASSES: it counts as supported in the score.
+VERDICT_SUPPORTED_AS_INFERENCE = "supported_as_inference"
+#: The faithfulness verdict for a claim cited to an article shown only in part,
+#: whose specifics are not in the part shown. It is not a finding that the claim
+#: is false: it is never a hard fail and never read as ``judge_unsupported``.
+VERDICT_UNVERIFIABLE_EXCERPT = "unverifiable_excerpt"
+#: Its span/ledger reason (SOFT in the fail-class table). The claim counts in
+#: the score's denominator and not in its numerator — the platform could not
+#: confirm it — but it is labelled as unchecked, not as unsupported.
+JUDGE_UNVERIFIABLE_EXCERPT = "judge_unverifiable_excerpt"
+#: The judge verdicts that pass a claim.
+PASSING_VERDICTS: frozenset[str] = frozenset(
+    {"supported", VERDICT_SUPPORTED_AS_INFERENCE}
+)
+
+
 class _JudgeVerdictError(RuntimeError):
     """The judge returned a structurally-invalid verdict set — a verdict count
     that does not match the graded claims. Raised so :func:`_maybe_llm_judge`
@@ -170,7 +187,14 @@ def _judge_reason(verdict: str) -> str:
         return _JUDGE_CONTRADICTED_HEDGED
     if verdict == _VERDICT_ROUTE_EXCLUDED:
         return _JUDGE_CONTRADICTED_ROUTE_EXCLUDED
-    return "judge_unsupported"
+    if verdict == VERDICT_UNVERIFIABLE_EXCERPT:
+        return JUDGE_UNVERIFIABLE_EXCERPT
+    if verdict == "unsupported":
+        return "judge_unsupported"
+    # A passing verdict has no failure reason, and any other token is one the
+    # parser should have refused. Either way, naming a reason would invent a
+    # failure the judge did not report.
+    raise ValueError(f"no failure reason for judge verdict {verdict!r}")
 
 
 def _judge_detail(verdict: str, quote: str, claim: str = "") -> str | None:

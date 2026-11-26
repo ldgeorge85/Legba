@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""R-1 — the type registry's INVARIANTS (they replace the pinned lists).
+"""The type registry's INVARIANTS (they replace the pinned lists).
 
-A pinned total says only "someone added one" and makes every lane that adds a
+A pinned total says only "someone added one" and makes every change that adds a
 thing edit the same line. These rules say what must be TRUE of every declared
 type instead, so a new type passes them by being complete, not by bumping a
 number:

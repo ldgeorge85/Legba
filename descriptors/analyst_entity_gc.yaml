@@ -1,9 +1,9 @@
-# Entity GC analyst descriptor (W4 remediation — defects D2 + D25).
+# Entity GC analyst descriptor.
 #
 # Activates the `entity_gc` deterministic sub-handler (already wired in
 # legba.data.analysts.deterministic.SUB_HANDLERS) on a cadence so the substrate's
 # entity garbage-collection runs unattended. Until now the handler existed and
-# was dispatchable but had NO active descriptor, so it never fired (D2: a built
+# was dispatchable but had NO active descriptor, so it never fired (a built
 # deterministic leg with no cadence is a dark leg).
 #
 # The handler performs seven non-destructive maintenance operations over the LIVE
@@ -13,8 +13,8 @@
 #   3. delete orphan signal_entity_links (rows pointing at a missing entity, or
 #      at an entity already merged away)
 #   4. auto-pause sources past the consecutive-failure threshold (bound by the
-#      source's last PRODUCED signal, not raw poll-outcome rows — T-4a)
-#   5. (D25) quarantine orphan proposed_edges — flip `pending` edges whose
+#      source's last PRODUCED signal, not raw poll-outcome rows)
+#   5. quarantine orphan proposed_edges — flip `pending` edges whose
 #      source/target entity is absent from entity_profiles.canonical_name to
 #      status='orphaned'. These are exactly the rows integrity_sweep COUNTS as
 #      orphan_proposed_edges_source / _target (406/678 and rising) but never
@@ -58,7 +58,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: active
-  owner: entity_gc
+  owner: owner@local
 
 subscription:
   # No `targets` block → META analyst: one global GC pass per cadence tick over

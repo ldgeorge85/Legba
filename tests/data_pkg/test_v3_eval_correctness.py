@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""M-1 — ``GET /api/v1/v3/eval/correctness``, the operator gold-set surface.
+"""``GET /api/v1/v3/eval/correctness``, the operator gold-set surface.
 
 The 2026-08-02 engine review's finding was not that the number was wrong but
 that it existed nowhere a reader would meet it: eight operator verdicts scoring

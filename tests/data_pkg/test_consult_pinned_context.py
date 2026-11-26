@@ -53,7 +53,7 @@ from legba.data.registry.deep_consult_api import build_deep_consult_router
 API_TOKEN_ENV = "LEGBA_REGISTRY_API_TOKEN"
 
 # What the SPA actually puts on the wire today (`Consult.tsx` :332) — kind, id
-# and `label`. The hydrated `text` is what the mobile lane will add.
+# and `label`. The hydrated `text` is what the mobile client will add.
 SPA_PINS = [
     {"kind": "finding", "id": "11111111-1111-1111-1111-111111111111",
      "label": "Border buildup"},
@@ -383,7 +383,7 @@ def test_deep_without_pins_is_byte_identical_to_the_old_shape(monkeypatch):
         "/api/v1/deep_consult", json={"question": "q"},
     )
     assert r.status_code == 202, r.text
-    # Roll 84 (23d3fe71): a deep run that names no model threads the core
+    # A deep run that names no model threads the core
     # component explicitly; nothing else about the pre-pin shape moved.
     assert captured["body"]["inputs"] == [
         {"question": "q", "scope_predicate": None,
@@ -472,10 +472,10 @@ def test_no_pins_renders_nothing():
 def test_user_prompt_without_pins_is_unchanged():
     """GOLDEN — the prompt the consult loop built before this field existed."""
     assert _render_user_prompt("What touches Brazil?", None) == (
-        "Operator question:\nWhat touches Brazil?"
+        "Question from the person asking:\nWhat touches Brazil?"
     )
     assert _render_user_prompt("q", "scope_geo('BR')") == (
-        "Operator question:\nq\n\n"
+        "Question from the person asking:\nq\n\n"
         "Scope predicate (apply to substrate queries): scope_geo('BR')"
     )
 
@@ -485,7 +485,7 @@ def test_user_prompt_leads_with_the_pinned_block():
     block = render_pinned_context_block(SPA_PINS)
     prompt = _render_user_prompt("q", None, block)
     assert prompt.startswith(PINNED_CONTEXT_HEADER)
-    assert prompt.endswith("Operator question:\nq")
+    assert prompt.endswith("Question from the person asking:\nq")
 
 
 def test_normalize_clamps_count_and_drops_junk():

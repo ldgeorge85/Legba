@@ -336,8 +336,9 @@ def test_producer_insert_statement_names_derived_from():
     D15 is caught here without a DB)."""
     import inspect
 
-    src = inspect.getsource(entity_resolution._resolve_batch)
+    assert "CO_OCCURS_UPSERT_SQL" in inspect.getsource(entity_resolution._resolve_batch)
+    src = entity_resolution.CO_OCCURS_UPSERT_SQL
     m = re.search(r"INSERT INTO proposed_edges\s*\((?P<cols>[^)]*)\)", src)
-    assert m, "could not locate the proposed_edges INSERT in _resolve_batch"
+    assert m, "could not locate the proposed_edges INSERT in the upsert"
     cols = m.group("cols")
     assert "derived_from" in cols, cols

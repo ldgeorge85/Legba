@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""``GET /v3/absence?scope=`` — typed absence as one named thing (lane k5).
+"""``GET /v3/absence?scope=`` — typed absence as one named thing.
 
 The route answers one desk's absences in ONE closed seven-kind vocabulary, and
 stamps every one of them in time. These tests bind through the REAL ASGI app
@@ -221,7 +221,7 @@ async def test_the_route_publishes_the_closed_kind_vocabulary(client):
     body = r.json()
     assert body["version"] == ABSENCE_ROUTE_VERSION
     # Nine kinds, each with its one-line meaning, on the wire (7g-2 added
-    # `history_gap`, W11-F14 `carried_unsupported`).
+    # `history_gap`, `carried_unsupported`).
     assert set(body["kinds"]) == set(ABSENCE_KINDS)
     assert len(body["kinds"]) == 9
     assert all(v.strip() for v in body["kinds"].values())
@@ -321,7 +321,7 @@ async def test_a_unit_past_its_cadence_is_source_stale_and_reads_stale(
     assert stale["proof"]["ref"] == stale_id
 
 
-#: W11-F14 — a fixture unit of this module's own (the roster is swapped for
+#: A fixture unit of this module's own (the roster is swapped for
 #: it), so no real unit's descriptor head can collide with the seeded cooldown.
 _CARRY_UNIT = "k5_e1_carry_unit"
 
@@ -350,7 +350,7 @@ async def _insert_unit_read(conn, *, age_h: float, statuses: list[str], now: dat
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_a_status_nobody_re_evidenced_is_carried_unsupported(client, api_app, monkeypatch):
-    """W11-F14 — the unit HAS a current read, but its status was last evidenced
+    """The unit HAS a current read, but its status was last evidenced
     two weeks ago: ``carried_unsupported``, its proof the last evidencing read
     (a ``finding`` ref) and its age, its clock the unit's latest read."""
     import legba.data.registry.absence_api as api
@@ -438,7 +438,7 @@ async def test_below_floor_reads_the_live_card_and_skips_no_finding(
     client, api_app, monkeypatch
 ):
     _, pg_store = api_app
-    # W5-F9 — the banding cadence is "40 4 * * *", so "a two-hour-old card has
+    # The banding cadence is "40 4 * * *", so "a two-hour-old card has
     # not come due" is only true when no 04:40Z slot falls in the two hours
     # before the read: against the real clock this failed daily 04:40-06:40Z.
     # Freeze the ROUTE's clock at 12:00Z today and age the card from it.
@@ -811,7 +811,7 @@ def test_grace_multiple_matches_the_gap_strips_typescript() -> None:
 
 def test_the_kind_vocabulary_matches_the_readers_typescript() -> None:
     """The reader labels the same seven kinds the route publishes — a kind the
-    UI cannot name renders as a blank, which is the defect this lane closes."""
+    UI cannot name renders as a blank, which is the defect this guards against."""
     text = _ABSENCE_TS.read_text(encoding="utf-8")
     block = re.search(
         r"ABSENCE_KIND_LABEL: Record<AbsenceKind, string> = \{(.*?)\n\}", text, re.S

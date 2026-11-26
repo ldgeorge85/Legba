@@ -1,9 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The liveness watchdog's honest-quiet evidence rules (split out of
-``liveness_watchdog`` in roll 86; that module re-exports every name here),
-and the pure empty-streak decision that applies them (moved with its roll-86
-weekend floor).
+``liveness_watchdog``, which re-exports every name here), and the pure
+empty-streak decision that applies them, including the weekend floor.
 
 Pure functions over one source's freshest poll evidence: is a cadence-stale or
 empty-streaking source simply QUIET upstream (no alert), or did the cursor or
@@ -32,7 +31,7 @@ __all__ = [
 #: and its env knob are in ``liveness_watchdog``).
 _DEFAULT_HONEST_QUIET_STREAK = 36
 
-#: Roll 86 — the honest-quiet page's WEEKEND FLOOR. The prolonged-quiet rule
+#: The honest-quiet page's WEEKEND FLOOR. The prolonged-quiet rule
 #: counts polls (36 by default), and 36 polls of an hourly source is 36 h:
 #: shorter than a weekend, so a weekday-only feed (source.ansa.english) paged
 #: every Saturday. A streak now also has to have lasted this long, measured
@@ -95,7 +94,7 @@ def _classify_streak(
     """
     if newest_entry_ts is None:
         return "unknown"
-    if last_signal is None:  # W11-F265: an entry older than the first-poll age cap when polled was skipped by design
+    if last_signal is None:  # An entry older than the first-poll age cap when polled was skipped by design
         stale = polled_at is not None and _as_aware_utc(newest_entry_ts) < _as_aware_utc(polled_at) - DEFAULT_FIRST_POLL_MAX_AGE
         return "honest_quiet" if stale else "cursor_fault"
     if _as_aware_utc(newest_entry_ts) > _as_aware_utc(last_signal):
@@ -122,7 +121,7 @@ def _source_stall_is_honest_quiet(row: dict[str, Any]) -> bool:
     outcome = row.get("last_poll_outcome") or ""
     if outcome == "gated":
         return True
-    # Roll 86: a 'success' that wrote NOTHING is the same evidence as an empty
+    # A 'success' that wrote NOTHING is the same evidence as an empty
     # poll. The geojson safety valve re-yields every feature on its 13th empty
     # poll (geojson.py force_unconditional); the unchanged features collapse
     # at the sink's duplicate check (reserve_unchanged) and the poll records
@@ -175,7 +174,7 @@ def _evaluate_empty_streaks(
     don't record the observation, pre-B0-12 rows) are returned at the lower
     ``threshold`` exactly as before.
 
-    Roll 86 WEEKEND FLOOR: a prolonged honest-quiet run also has to have
+    WEEKEND FLOOR: a prolonged honest-quiet run also has to have
     lasted :data:`QUIET_PAGE_MIN_ELAPSED_S` since the source's last ingested
     signal (:func:`quiet_long_enough_to_page`; a row's optional
     ``quiet_page_after_hours`` is the descriptor's own floor). Only that class
@@ -244,7 +243,7 @@ def _evaluate_empty_streaks(
             if fault_class == "honest_quiet":
                 if honest_quiet_threshold <= 0 or streak < honest_quiet_threshold:
                     continue  # still just quiet — stay silent (B0-12)
-                # Roll 86: and long in TIME, past a weekend (the weekday-only feed)
+                # And long in TIME, past a weekend (the weekday-only feed)
                 if not quiet_long_enough_to_page(
                     last_signal or newest_observed, newest_empty_at,
                     outcomes[0].get("quiet_page_after_hours"),

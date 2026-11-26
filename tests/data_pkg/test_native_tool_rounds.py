@@ -16,15 +16,15 @@ byte for byte, because a run with no tools to offer sends no ``tools`` and
 takes no new branch. That is the whole safety argument for deploying this with
 the flag up, and it is asserted rather than reasoned about.
 
-*Re-pin, 2026-11-14 (D-1).* The four recordings carrying a finding gained ONE
+*Re-pin, 2026-11-14.* The four recordings carrying a finding gained ONE
 key, ``finding.data.slice_scope`` (every desk finding now stores the window,
 sources and row ids it was handed — ``desk_rows_computed.slice_scope``). It is
 deterministic here (no coverage stamp and no window option, so the basis is
 the rows' own ``observed_span``). The re-pin asserted the run output equals
 each old recording with that key removed; nothing else moved.
 
-*Re-pin, 2026-09-28 (wave Q).* All five recordings re-captured off the flag-OFF
-path at the wave-Q integration head. The whole diff against the 2026-09-26 pin
+*Re-pin, 2026-09-28.* All five recordings re-captured off the flag-OFF
+path. The whole diff against the 2026-09-26 pin
 is ONE paragraph, verified path by path before the re-pin: the CARRIED-ANCHOR
 rule (``_tradecraft.CARRIED_ANCHOR_RULE``, appended to
 ``UNIT_GROUNDING_CLAUSE``) now closes every ``requests[*].system`` — the three
@@ -54,8 +54,8 @@ Anything beyond those two is a real regression — re-capture only with the
 diff explained the same way.
 
 **The new behaviour**, driven on the shapes the live core plane actually
-returns (``gpt-oss-120b`` on the core plane, probed 2026-09-16 — see
-``planning/ROADMAP_POSITION_2026-09-05.md`` §8). The stubs hand those raw wire
+returns (``gpt-oss-120b`` on the core plane, probed 2026-09-16).
+The stubs hand those raw wire
 dicts to the REAL ``VLLMProviderHandler._parse_response``, so the provider
 parsing under test is production's, not a hand-rolled imitation:
 
@@ -650,7 +650,7 @@ async def test_fallback_engages_for_a_non_native_provider(monkeypatch):
 # validate_args — the reply side of the grammar (the 2026-09-28 tool seam).
 #
 # The schemas above were rendered TO the model and never checked ON the reply.
-# Live, consult session 96d7bfc2 (core plane, 00:58Z): the first tool call was
+# From a recorded consult session: the first tool call was
 # ``list_situations`` carrying ``{"result": [six fabricated situation rows],
 # "status": "ok", "metadata": {}}`` — the model had written the answer it
 # expected into the call it was making. ``result``/``metadata`` were dropped by

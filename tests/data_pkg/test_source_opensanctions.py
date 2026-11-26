@@ -1,12 +1,12 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for :class:`legba.data.sources.opensanctions.OpenSanctionsSourceHandler` (L-134).
+"""Tests for :class:`legba.data.sources.opensanctions.OpenSanctionsSourceHandler`.
 
 Coverage:
 
   * Config schema validation (defaults, mode literal, self-hosted base_url
     requirement, blank dataset).
-  * Conformance with the L-102 source-kind class-var contract.
+  * Conformance with the source-kind class-var contract.
   * ``bulk_csv`` mode:
       - happy-path streaming from a local fixture file.
       - schema_filter restricts emitted entities.

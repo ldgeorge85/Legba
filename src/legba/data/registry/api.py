@@ -515,7 +515,7 @@ class RollbackBody(BaseModel):
 
 
 class StackRollbackBody(BaseModel):
-    """W11-F105 — `version` names the target (`target_version`, the
+    """`version` names the target (`target_version`, the
     descriptor rollback's field, is accepted too); omitted = the previous head."""
 
     version: str | None = Field(
@@ -907,7 +907,7 @@ def build_router(deps: RegistryAPIDeps) -> APIRouter:
         `action` stays accurate — use `/retire`.
         """
         fam = _parse_family(family)
-        # Family-aware since Program 7g: a `collection` runs its own four
+        # Family-aware: a `collection` runs its own four
         # states (draft → reviewed → loaded → superseded), so parsing
         # `to_state` as a `LifecycleState` would 400 on every legal
         # collection move. `state_machine_for` is the one place that mapping
@@ -1291,7 +1291,7 @@ def build_router(deps: RegistryAPIDeps) -> APIRouter:
         actor: str = Depends(require_bearer),
         deps_: RegistryAPIDeps = Depends(_get_deps),
     ) -> StackComponentOut:
-        """W11-F105 — re-head a prior version (the previous head by default)."""
+        """re-head a prior version (the previous head by default)."""
         try:
             row = await deps_.stack_registry.rollback(
                 component_id, actor,

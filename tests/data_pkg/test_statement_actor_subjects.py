@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""S-5 — actors as subjects, the verifier's "partly" class, feed-item vs page
+"""Actors as subjects, the verifier's "partly" class, feed-item vs page
 text, and the three non-statement outcomes (assessment / absence /
 restatement). Pure: no DB, no model (the link reader runs on a fake conn).
 """
@@ -271,7 +271,7 @@ def test_narrowing_to_the_supported_clause_is_gated_on_the_narrowed_text():
     kept = "The Northern Fleet seized a Borovian tanker on Friday"
     item = _item(text, linked=[FLEET])
     reply = {"pieces": [_entry("S2", narrow={"start": 0, "end": len(kept), "text": kept})]}
-    # the SEAT's narrowing, on the S-5 split (S-6 code splits this tail by
+    # the SEAT's narrowing, on the split (code splits this tail by
     # itself — asserted below)
     p = assemble_pieces(item, reply, handed=HANDED, pieces=split_sentence(text)).pieces[0]
     assert p.outcome == ESTABLISHED_ELIGIBLE, p.why()
@@ -282,7 +282,7 @@ def test_narrowing_to_the_supported_clause_is_gated_on_the_narrowed_text():
     whole = assemble_pieces(item, {"pieces": [_entry("S2")]}, handed=HANDED,
                             pieces=split_sentence(text)).pieces[0]
     assert whole.result.draft.text.rstrip(".").endswith("choke Borovian trade")
-    # S-6: by default code splits the judgement tail off and types it an
+    # By default code splits the judgement tail off and types it an
     # assessment resting on the head; the seat types only the head
     coded = assemble_pieces(item, {"pieces": [_entry("S2")]}, handed=HANDED).pieces
     assert [c.outcome for c in coded] == [ESTABLISHED_ELIGIBLE, "assessment"]
@@ -423,7 +423,7 @@ def test_page_text_both_and_neither_are_told_apart():
     # title and summary are separate texts: a quote may not straddle them
     straddle = SupportRow("evidence", "signal", "sig-1", quote="off Kessel The Northern Fleet", fetch_version_id=7)
     assert g.check_quote(straddle, _feed_texts("unrelated page")).reason == "quote_absent"
-    # no feed item resolved: nothing is recorded (S-4 behaviour)
+    # no feed item resolved: nothing is recorded (behaviour)
     assert "quote_found_in" not in g.check_quote(both, EvidenceTexts(by_fetch_version={7: "The Northern Fleet seized a tanker"})).detail
     # page text unavailable but the feed item carries it
     gone = g.check_quote(both, _feed_texts(None))

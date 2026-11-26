@@ -10,6 +10,7 @@
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiGet, apiPostWithStatus, ApiError } from '@/lib/api'
+import { withAt } from '@/lib/asOf'
 import { LEDGER_ROUTE, type LedgerForecastsResponse } from '@/lib/ledgerModel'
 import { SCORECARD_ROUTE, type ScorecardResponse } from '@/lib/scorecardModel'
 import {
@@ -40,11 +41,17 @@ async function orNull<T>(path: string): Promise<T | null> {
 
 const noRetry404 = (n: number, e: unknown) => !(e instanceof ApiError && e.status === 404) && n < 2
 
-export function useLedgerForecasts() {
+/**
+ * The ledger now, or — with an instant (`lib/asOf.ts`) — the ledger as it
+ * stood then (`?at=`), under the key the time band's past ticks read too.
+ * A past ledger does not change, so it is not polled.
+ */
+export function useLedgerForecasts(atMs: number | null = null) {
   return useQuery<LedgerForecastsResponse>({
-    queryKey: ['ledger-forecasts'],
-    queryFn: () => apiGet<LedgerForecastsResponse>(LEDGER_ROUTE),
-    refetchInterval: 60_000,
+    queryKey: atMs === null ? ['ledger-forecasts'] : ['ledger-forecasts', 'at', atMs],
+    queryFn: () => apiGet<LedgerForecastsResponse>(withAt(LEDGER_ROUTE, atMs)),
+    refetchInterval: atMs === null ? 60_000 : false,
+    staleTime: atMs === null ? undefined : Infinity,
     retry: noRetry404,
   })
 }

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""P4-1 + P4-2 — the ``narrative_mapper`` deterministic analyst (A11).
+"""The ``narrative_mapper`` deterministic analyst (A11).
 
 Pure tests (no DB): the registry wiring + structural-exempt badge, refuse-loud,
 published_at parsing, narrative reification (a contested family -> carrier

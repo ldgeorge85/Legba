@@ -11,7 +11,7 @@ identity:
   name: AR layer map (reviewed — the Program 6 control)
   schema_uri: legba/layer_map/1.0.0
   kind: layer_map
-  owner: layer_map_generator
+  owner: owner@local
   created: '2026-01-01T00:00:00Z'
   state: reviewed
 country: AR

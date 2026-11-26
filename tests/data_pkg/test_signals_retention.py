@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Signals TTL retention purge (graph-and-data Wave-1b, item 3 / D4).
+"""Signals TTL retention purge (graph-and-data).
 
 Two layers:
   * Unit (no DB) — the handler is a no-op when disabled (ttl_days<=0, the

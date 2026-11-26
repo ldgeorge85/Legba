@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Pure-logic (no-DB) tests for the W2 write-path remediation owned by
-AGENT D-writes-owner: D17 (collapse_open_triple), D15 (nexus provenance —
+"""Pure-logic (no-DB) tests for the W2 write-path remediation: D17 (collapse_open_triple), D15 (nexus provenance —
 source_signal_ids populates BOTH columns), and D18 (rel_type canonicalization
 to ONE vocabulary so the open-triple unique index + supersession bite).
 
@@ -11,8 +10,7 @@ control flow + the values bound onto each column. The integration round-trips
 live in tests/data_pkg/test_writes_nexus.py / test_writes_fact.py (those need a
 migrated DB).
 
-Anchored on the VERBATIM garbage strings from
-planning/PLATFORM_HEALTH_RESULTS.md:
+Anchored on the VERBATIM garbage strings seen in live data:
   * D18: "CoOccursWith" vs "co-occurs-with" (mixed-case defeats the index).
   * D14/D18: "Spain hostile to Saudi Arabia" (sports fixture typed hostile).
   * D17/D6: "Russian located in UK" ×8 (per-cycle valid_from drift dup-leak).
@@ -45,7 +43,7 @@ from legba.data.provenance.models import FactPayload, NexusPayload
 @pytest.fixture(autouse=True)
 def _pin_fact_contention_off(monkeypatch: pytest.MonkeyPatch) -> None:
     """This file tests the D15/D17/D18/A1/A2 write-path remediation — a layer
-    that predates and is orthogonal to the Wave 4 contention-coexist feature.
+    that predates and is orthogonal to the contention-coexist feature.
     The live deploy's ``.env`` sets ``LEGBA_FACT_CONTENTION=1`` (loaded
     eagerly at ``legba.data.config`` import time), which would route
     ``supersede_prior_facts()``/``_insert_fact()`` calls here through

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""R-3b Task 1 — the modular ``search_provider`` stack family.
+"""Task 1 — the modular ``search_provider`` stack family.
 
 Pure tests (no DB, no network): provider-protocol conformance for BOTH shipped
 handlers, the normalized-result mapping for each, the family's standing in the

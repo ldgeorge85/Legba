@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""B3 (T1.5, JOURNAL_CONNECTIVE_AUDIT_PROPOSAL_2026-09-09 §3 P7 / §6) —
-the register-nudge clauses in JOURNAL_NARRATE_PREAMBLE (the journal's
+"""The register-nudge clauses in JOURNAL_NARRATE_PREAMBLE (the journal's
 "narrating clause" the descriptor's ``prompt_module`` resolves; the
 descriptor itself carries no inline prompt text — confirmed via
 ``scripts/gen_descriptor_prompt_manifest.py``'s own rule, "a prompt_module-

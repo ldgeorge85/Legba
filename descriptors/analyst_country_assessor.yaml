@@ -1,4 +1,4 @@
-# P-17 — new-model inline_target analyst: country_assessor.
+# New-model inline_target analyst: country_assessor.
 #
 # The platform-wide situational-awareness analyst for the G20 country targets.
 # kind: inline_target.  Scoped by a subscription.targets.predicate that matches
@@ -24,9 +24,9 @@ identity:
   # RETIRED live via POST /retire (superseded by the bounded-unit + composition
   # architecture) and excluded from bringup_register_analysts.py. State set to
   # retired (was draft) so a stray re-register cannot resurrect a retired
-  # analyst — descriptor_state_drift reconciliation 2026-09-06.
+  # analyst.
   state: retired
-  owner: p17_reregister
+  owner: owner@local
 
 subscription:
   targets:
@@ -42,7 +42,7 @@ mapping:
 
 method:
   kind: llm_planner
-  # J2 (2026-08-15, FORWARD_PLAN §1) — the verify-path judge SAMPLING gate.
+  # The verify-path judge SAMPLING gate.
   # Unit findings are the SAMPLED verify population: the LLM faithfulness
   # judge grades a DETERMINISTIC 10% of this unit's findings (SHA-256 of the
   # finding id vs the rate — replayable, no RNG; the free-tier judge lane is
@@ -62,7 +62,7 @@ method:
       raw: llm.primary.openai_compat
       expected_family: llm_provider
     # RETIRED unit. Faithfulness VERIFY judge: production now runs the judge on
-    # the SAME core reasoning model (llm.primary.openai_compat, gpt-oss-120B) that
+    # the SAME core reasoning model (llm.primary.openai_compat, the core model) that
     # writes the analysis, NOT a cross-family model — a deliberate, temporary
     # choice (the 8B Llama-3.1-8B judge proved too weak). The stale raw ref below
     # is left untouched because this descriptor no longer fires. Gated by
@@ -72,14 +72,13 @@ method:
       factory_kind: stack_ref
       raw: llm.verify.slm_8b
       expected_family: llm_provider
-    max_tokens: 1536
   budget_tokens_per_day: 0
   # A3 cadence-vs-budget tuning. The budget retry policy is left at the
   # default `pause_until_next_window`: if the per-analyst cap is ever
   # projected to be crossed (e.g. an unusually signal-dense day), the
   # actor pauses THIS analyst until the next UTC bucket rather than
   # demoting to the paid Anthropic fallback (the `primary` is the
-  # self-hosted gpt-oss-120b; there is no cheap `fallback` LLM wired here,
+  # self-hosted core model; there is no cheap `fallback` LLM wired here,
   # and demote-to-paid would defeat the purpose of a budget guard). The
   # cadence below is sized so this pause is the safety net, not the norm.
   retry:
@@ -96,14 +95,15 @@ cadence:
   # LLM calls can land inside one budget bucket near-simultaneously, so the
   # budget math is per-TICK volume × ticks/day, not a trickle.
   #
-  # Per-run tokens (one llm_planner call, gpt-oss-120b):
+  # Per-run tokens (one llm_planner call, the core model):
   #   * input  = system prompt (~120 tok) + signal slice. The slice is
   #              capped at LIMIT 50 signals (_read_substrate_slice), each
   #              truncated to ~600 chars (title 200 + snippet 400 + prov).
   #              50 × 600 ≈ 30 000 chars ≈ 7 500 tok worst case; a typical
   #              single-country 24h slice is 20–30 signals ≈ 3 000–4 500 tok.
-  #   * output = max_tokens 1536 cap (a JSON finding is usually 300–800 tok).
-  #   → worst case ≈ 7 600 + 1 536 ≈ 9 100 tok/run; realistic ≈ 4 800 tok/run.
+  #   * output = the model's own maximum (no cap of ours; a JSON finding is
+  #     usually 300–800 tok).
+  #   → realistic ≈ 4 800 tok/run.
   #
   # Per-tick volume (19 targets, all fired each tick):
   #   * worst case ≈ 19 × 9 100  ≈ 173 000 tok/tick
@@ -135,14 +135,14 @@ cadence:
   # cadence-cooldown slack as a belt-and-braces guard.)
   cooldown_seconds: 21000
 
-# Tier-1 knowledge grounding (L-241). This G20 country assessor fans out one
+# Tier-1 knowledge grounding. This G20 country assessor fans out one
 # run per country target; with grounding.enabled the deps-builder PREPENDS a
 # dated "AUTHORITATIVE CURRENT CONTEXT" preamble built from the CURRENT
 # authoritative substrate facts (seed/curated, temporal-honesty-gated) about
 # the target country's geo + the named entities in its signal slice — e.g. the
 # country's CURRENT head of state + bloc memberships — so a stale-cutoff model
 # can't assume a prior officeholder. Token-capped at max_facts.
-# REGISTER-1g (2026-08-29) — NO `situations` SOURCE, AND THAT IS THE FIX.
+# NO `situations` SOURCE, AND THAT IS THE FIX.
 # This unit is `kind: inline_target`, so `actor_substrate_slice` ALREADY hands it
 # the desk's OPEN SITUATION REGISTER as a citable [N] block
 # (`unit_grounding._render_situations`) on every run with a target. Declaring
@@ -162,7 +162,7 @@ grounding:
   scope: [target_geo, slice_entities]
   # substrate = the ground-truth facts/nexuses block. The country's own open
   # frames arrive on the unit_grounding OPEN SITUATION REGISTER block instead
-  # (REGISTER-1g above), not from a `situations` source here.
+  # (above), not from a `situations` source here.
   # graph_structure = the SEPARATE "ASSESSED STRUCTURE" block — the knowledge
   # graph's interesting structures (tense actors / brokers / proxy chains) from
   # the structural_balance + graph_mining metrics; analysis-derived, fenced off
@@ -170,7 +170,7 @@ grounding:
   sources: [substrate, graph_structure]
   max_facts: 30
 
-# Agency grants — the seed packs from P-11 (NOT tools_whitelist).
+# Agency grants — the seed packs (NOT tools_whitelist).
 action_packs:
   - pack_id: media_processing
   - pack_id: incident_response
@@ -180,7 +180,7 @@ outputs:
   - kind: a2a_skill
     config:
       skill_id: intelligence.g20_country_assessment
-  # L-195 — export each country FINDING as a STIX 2.1 bundle (report SDO +
+  # Export each country FINDING as a STIX 2.1 bundle (report SDO +
   # cited-entity identities/locations + derived-from relationships). The
   # runtime invokes stix_bundle.emit with the live payload (dapr_actors
   # _emit_output_bindings). Primary sink: NATS legba.outputs.stix.<target_id>;
@@ -206,7 +206,7 @@ outputs:
       #   username: "legba"
       #   password: "@vault:taxii_password"          # vault-resolved secret
       #   # token: "@vault:taxii_bearer"             # for auth_kind: bearer
-  # L-197 — operator alerting. The runtime invokes alert.emit with the LIVE
+  # Operator alerting. The runtime invokes alert.emit with the LIVE
   # finding (dapr_actors _emit_output_bindings); alert.emit coerces the
   # FindingPayload into an AlertPayload, severity-gated by config below, then
   # fans out on the severity ladder (NATS always; Pushover at medium+; XMPP/
@@ -227,16 +227,16 @@ outputs:
         # NOTE: quote the bareword — PyYAML (YAML 1.1) parses unquoted `on`/`off`
         # as booleans True/False, which fail OutputSurface.mode's
         # Literal["on","off","default"] and crash alert.emit before any
-        # alert_sink_deliveries row is written (K-1 root cause).
+        # alert_sink_deliveries row is written (a past outage's root cause).
         - name: pushover
           mode: "on"
           min_severity: high
 
-# L-105 §3 / L-175 eval block — the rubric country_critic grades this analyst's
+# Eval block — the rubric country_critic grades this analyst's
 # findings against. REQUIRED for the critic→optimizer eval loop to produce
 # critiques; without it the critic hard-fails ("no eval.rubric"). The judge
 # (country_critic, Anthropic Opus) differs from this analyst's model
-# (gpt-oss-120b), so the L-105 heterogeneity guard passes with
+# (the core model), so the heterogeneity guard passes with
 # allow_self_correlated:false. Scoped to country situational assessments.
 eval:
   rubric: |

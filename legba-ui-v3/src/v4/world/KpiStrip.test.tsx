@@ -44,7 +44,7 @@ afterEach(() => {
 })
 
 describe('KpiStrip', () => {
-  it('prints the real 24-hour counts, uncapped, under the 24h labels (W11-F271)', async () => {
+  it('prints the real 24-hour counts, uncapped, under the 24h labels', async () => {
     stubCounts({ signals: 4381, findings: 718 })
     render(wrap(<KpiStrip />))
 
@@ -121,7 +121,7 @@ describe('KpiStrip', () => {
     expect(cards[2].textContent).toContain('—')
   })
 
-  it('asks one count read for the 24h cards — no /signals or /findings page (W11-F262, W11-F271)', async () => {
+  it('asks one count read for the 24h cards — no /signals or /findings page', async () => {
     const asked: string[] = []
     stubCounts({ signals: 1, findings: 2 }, asked)
     render(wrap(<KpiStrip />))

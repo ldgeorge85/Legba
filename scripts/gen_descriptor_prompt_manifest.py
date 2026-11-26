@@ -44,12 +44,12 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DESCRIPTORS_DIR = REPO_ROOT / "descriptors"
-#: R-1: one JSON per contributing descriptor file, in a package-data directory
+#: One JSON per contributing descriptor file, in a package-data directory
 #: (``legba.data.registry.descriptor_prompt_manifest`` assembles them). The
 #: single ``descriptor_prompts.json`` it replaces was the second most edited
-#: file in the tree; a lane now touches only its own descriptor's file.
+#: file in the tree; a change now touches only its own descriptor's file.
 MANIFEST_DIR = REPO_ROOT / "src" / "legba" / "data" / "registry" / "descriptor_prompts"
-#: The pre-R-1 single file; ``--check`` fails while it exists.
+#: The legacy single file; ``--check`` fails while it exists.
 LEGACY_MANIFEST_PATH = MANIFEST_DIR.with_name("descriptor_prompts.json")
 
 #: Bumped when the manifest's SHAPE changes, so a gauge reading an old artefact

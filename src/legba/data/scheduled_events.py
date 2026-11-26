@@ -61,7 +61,7 @@ DEFAULT_YAML = Path(__file__).resolve().parents[3] / "seeds" / "scheduled_events
 
 #: The insert. ``(title, starts_at)`` is the loader's idempotence key — a
 #: re-run of the same file is a no-op, never a duplicate row.
-#: Who writes the rows (lane 9): this loader, named once. The row's own
+#: Who writes the rows: this loader, named once. The row's own
 #: ``provenance`` says where the entry came from; this says what wrote it.
 WRITTEN_BY = "rule:scheduled_events_loader"
 

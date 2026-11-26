@@ -111,7 +111,7 @@ def _transient_retry_delay(
 ) -> tuple[float, float | None]:
     """The wait before the next transient attempt, and the Retry-After honoured.
 
-    W11-F101: the gateway answers 429 with ``Retry-After: 23`` while the default
+    The gateway answers 429 with ``Retry-After: 23`` while the default
     policy waits 1 s, 2 s -- three attempts inside four seconds never clear a
     23 s window. When the failure carries the server's instruction the delay
     is ``max(policy delay, retry_after)``, the latter capped at
@@ -155,7 +155,7 @@ async def _invoke_with_transient_retry(
 ) -> Any:
     """Run ``invoke`` up to ``max_attempts`` times, retrying TRANSIENT failures only.
 
-    Moved verbatim from the analyst actor's run loop (W11-F133) so the attempt
+    Moved verbatim from the analyst actor's run loop so the attempt
     budget is testable without an actor. Non-transient failures and the last
     attempt's failure propagate to the caller's classifier; ``on_attempt`` is
     told each attempt's 1-based number before it runs.
@@ -176,7 +176,7 @@ async def _invoke_with_transient_retry(
                 # Out of attempts — raise so the outer handler records
                 # HARD_FAIL / DLQ per hard_policy.
                 raise
-            # W11-F101: a provider Retry-After floors the wait.
+            # A provider Retry-After floors the wait.
             delay, ra_s = _transient_retry_delay(policy, attempt, exc)
             logger.warning(
                 "dapr_actors.analyst.transient_retry actor_id=%s "

@@ -64,8 +64,11 @@ import re
 from typing import Any
 
 __all__ = [
+    "EmptyBodyContractError",
     "OutputContractError",
+    "bluf_missing_step",
     "extract_json_object",
+    "has_bluf_line",
     "is_unusable_output",
     "iter_json_objects",
     "repair_confidence_word_token",
@@ -88,6 +91,20 @@ class OutputContractError(RuntimeError):
     degrade path keeps it — the house posture is degrade-not-fabricate, and
     prose IS content.
     """
+
+
+class EmptyBodyContractError(OutputContractError):
+    """A finding contract that carries the model's own title and no readable body.
+
+    The one :class:`OutputContractError` shape a caller may repair with a
+    second call: the model did write a finding (it titled it) and left the
+    body out of the JSON object, often writing it beside the object instead.
+    ``title`` is the model's title, kept for the receipt.
+    """
+
+    def __init__(self, message: str, *, title: str = "") -> None:
+        super().__init__(message)
+        self.title = title
 
 
 # ---------------------------------------------------------------------------
@@ -183,8 +200,7 @@ def strip_tool_plan_preamble(text: str) -> tuple[str, str]:
 # ``json.loads`` over the same malformed number and fail the same way,
 # landing the finding in the unstructured salvage path at a flat 0.30
 # confidence with an EMPTY ``indicators`` array. That is exactly backwards —
-# measured in ``planning/VOICE_REPLAY_2026-08-20/runs/
-# REVISION_RESULT_2026-08-21.md`` §5, the token only shows up where the
+# measured on a replay of the narrative corpus, the token only shows up where the
 # model is writing a confident positive: five cells across the 2026-08-21
 # narrative replay and the frozen 2026-08-20 corpus, every one a
 # coordination-positive call, every one spelling out ``nine``.
@@ -237,7 +253,7 @@ def iter_json_objects(text: str):
     """Each TOP-LEVEL balanced JSON object in ``text``, in order.
 
     ``extract_json_object`` returns the first and stops. That was right while
-    the only failure was garbage BEFORE the contract. The 2026-09-09 live shape
+    the only failure was garbage BEFORE the contract. The live shape
     puts garbage before it that is itself a well-formed object::
 
         {"tool": "web_evidence", "args": {...}}
@@ -321,7 +337,7 @@ def parse_finding_envelope(text: str) -> dict[str, Any] | None:
     model quoted mid-prose (a tool call it echoed, a sample payload) is never
     mistaken for the finding itself.
 
-    WALKS, rather than looks at the first object only (2026-09-09): the live
+    WALKS, rather than looks at the first object only: the live
     ``corpus_researcher`` shape emits the tool call it wanted and then the
     finding, in that order, in one completion. Rejecting the first object and
     stopping threw the finding away. Bounded by
@@ -386,12 +402,95 @@ def is_unusable_output(body: str) -> bool:
     return True
 
 
+#: A ``**BLUF:**`` marker at the start of a line with text after it, in the
+#: tolerant spellings ``assembly_spans`` already reads (colon inside or outside
+#: the bold, optional spaces).
+_BLUF_LINE_RE = re.compile(
+    r"^[ \t]*\*\*[ \t]*BLUF[ \t]*:?[ \t]*\*\*[ \t]*:?[ \t]*\S", re.MULTILINE
+)
+
+
+def has_bluf_line(body: str) -> bool:
+    """True when ``body`` has a ``**BLUF:**`` line with a sentence after it.
+
+    A warning predicate, never a reject: a body without one is still a usable
+    finding (``is_unusable_output`` decides that). It exists so quiet-window
+    bodies that skip the bottom line can be counted in the run trace.
+    """
+    return bool(body) and _BLUF_LINE_RE.search(body) is not None
+
+
+def bluf_missing_step(body: str, system_prompt: str | None) -> dict[str, str] | None:
+    """The run-trace warning step for a body that skips the BLUF it was asked for.
+
+    Returns ``None`` when the prompt never asked for a ``**BLUF:**`` line (an
+    analyst whose body shape has none) or when the body carries one.
+    """
+    if "**BLUF:**" not in (system_prompt or "") or has_bluf_line(body):
+        return None
+    return {"phase": "reflect", "kind": "bluf_missing_warning"}
+
+
 # ---------------------------------------------------------------------------
-# The JSON-ENVELOPE LEAK (2026-08-29) — unwrap it, or fail; never publish it
+# Prose written beside the object
+# ---------------------------------------------------------------------------
+
+_THINK_BLOCK_RE = re.compile(
+    r"<(think|thinking|reasoning)>.*?</\1>", re.IGNORECASE | re.DOTALL,
+)
+#: A thinking block that was opened and never closed: everything after it is
+#: the model's reasoning, not an answer.
+_THINK_OPEN_RE = re.compile(r"<(?:think|thinking|reasoning)>.*", re.IGNORECASE | re.DOTALL)
+_THINK_TAG_RE = re.compile(r"</?(?:think|thinking|reasoning)>", re.IGNORECASE)
+#: A lead-in addressed to the caller ("Here is the finding:"), alone on a line.
+_CALLER_LEAD_RE = re.compile(
+    r"^\s*(?:here(?:'s|\s+is|\s+are)|below\s+is|this\s+is\s+the|the\s+(?:finding|json|object)\s+is)\b[^\n]{0,120}$",
+    re.IGNORECASE,
+)
+#: Shorter than this is a stray line, not a body.
+_MIN_OUTSIDE_PROSE_CHARS = 120
+_MIN_OUTSIDE_PROSE_WORDS = 20
+
+
+def salvage_prose_outside_object(raw: str) -> str | None:
+    """The readable prose a reply carries outside its JSON object(s), or ``None``.
+
+    For a reply whose finding object has a title and an empty ``body`` while the
+    model wrote the body as plain text before or after the object. Removes every
+    balanced JSON object, thinking blocks and tags, code-fence lines and lead-ins
+    addressed to the caller; what is left counts only if it passes
+    :func:`is_unusable_output` and is longer than a stray line.
+    """
+    if not raw:
+        return None
+    text = raw
+    for blob in list(iter_json_objects(text)):
+        text = text.replace(blob, "\n", 1)
+    text = _THINK_BLOCK_RE.sub("", text)
+    text = _THINK_OPEN_RE.sub("", text)
+    text = _THINK_TAG_RE.sub("", text)
+    kept: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("```") or _FENCE_TAG_RE.match(stripped):
+            continue
+        if not kept and _CALLER_LEAD_RE.match(line):
+            continue
+        kept.append(line.rstrip())
+    prose = strip_tool_plan_preamble("\n".join(kept).strip())[0].strip()
+    if is_unusable_output(prose):
+        return None
+    if len(prose) < _MIN_OUTSIDE_PROSE_CHARS or len(prose.split()) < _MIN_OUTSIDE_PROSE_WORDS:
+        return None
+    return prose
+
+
+# ---------------------------------------------------------------------------
+# The JSON-ENVELOPE LEAK — unwrap it, or fail; never publish it
 # ---------------------------------------------------------------------------
 #
-# WHAT THIS CLOSES. The world composition of 2026-08-29 12:00Z
-# (``823ff9dd-89b9-47f9-9c7e-8c9cc631e31d``) published a BODY that was the
+# WHAT THIS CLOSES. One world composition
+# published a BODY that was the
 # model's raw JSON envelope, escapes and all:
 #
 #     { "title": "Russia mobilization heightens European escalation risk…",

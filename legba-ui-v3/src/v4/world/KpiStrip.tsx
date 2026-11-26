@@ -5,7 +5,7 @@
  *
  * WEIGHT (W11-F262, U-8). A count needs rows, never bodies.
  *
- * WHAT THE "24h" CARDS COUNT (W11-F271). "Signals 24h" and "Findings 24h"
+ * WHAT THE "24h" CARDS COUNT. "Signals 24h" and "Findings 24h"
  * used to print the length of the newest-500 page of `/signals` and
  * `/findings` — no time bound, so on any real day both read "500+" and the
  * label was not true. They now read `GET /v3/counts?window_hours=24`

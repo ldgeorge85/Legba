@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W11-F84 — a bounded drain of the actor host at SIGTERM.
+"""a bounded drain of the actor host at SIGTERM.
 
 THE DEFECT. Every rolling deploy recreates the runtime. An analyst run in flight
 at that moment has already WRITTEN its finding, but the verify leg that writes

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane D-1 — source drift on the real path against a migrated Postgres (the
+"""Source drift on the real path against a migrated Postgres (the
 data_pkg session database, isolated test stack only).
 
 Covered: a drift row classified and its dependants flagged ONCE (a second

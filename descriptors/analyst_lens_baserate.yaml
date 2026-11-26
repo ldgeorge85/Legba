@@ -1,7 +1,6 @@
-# lens_baserate — the base-rate-skeptic faculty (VOICES LV-1; build spec
-# planning/VOICES_BUILD_DESIGN.md §4, plan planning/VOICES_PLAN_2026-07-21.md).
+# lens_baserate — the base-rate-skeptic faculty (VOICES LV-1).
 #
-# One of FOUR function-typed faculty ids on the journal_assessor kind (DL-1/DL-3).
+# One of FOUR function-typed faculty ids on the journal_assessor kind.
 # The kind module maps this id → entry_kind='lens' in journal_entries — append-
 # only, OFF the fact/finding/nexus chain, V1 faithfulness verify fires on every
 # read (keyed on identity.kind, not id). It reads the VERIFIED tower top through
@@ -9,9 +8,9 @@
 # a new fact. NO publish edge.
 #
 # The declared prior LIVES in the persona module (legba.prompts.lens_baserate) —
-# the descriptor content hash IS the prior version (DL-2).
+# the descriptor content hash IS the prior version.
 #
-# Cadence: WEEKLY, staggered AFTER lens_trend (§4.1). Model plane: $0 core.
+# Cadence: WEEKLY, staggered AFTER lens_trend. Model plane: $0 core.
 
 identity:
   id: lens_baserate
@@ -24,7 +23,7 @@ identity:
     output_type: legba.runtime.Journal
     deps_type: legba.runtime.deps.StandardDeps
   state: active
-  owner: voices_build
+  owner: owner@local
 
 subscription:
   other_analysts: []
@@ -39,7 +38,7 @@ method:
   kind: llm_planner
   prompt_module: "legba.prompts.lens_baserate:LENS_SYSTEM"
   llm:
-    # Model-card sampling (gpt-oss ships generation_config temperature=1.0; the vLLM
+    # Model-card sampling (the core model ships generation_config temperature=1.0; the vLLM
     # client always sends temperature, so the card default can never apply on its own).
     # Fleet-wide per the 2026-07-24 sampling audit + A/B (+0.055 faith at 1.0).
     temperature: 1.0
@@ -52,11 +51,10 @@ method:
       raw: llm.primary.openai_compat
       expected_family: llm_provider
     narrate:
-      thinking: "on"   # T-2: the VOICE thinks; GATHER and PROPOSE stay on the plain alias
+      thinking: "on"   # the VOICE thinks; GATHER and PROPOSE stay on the plain alias
       factory_kind: stack_ref
       raw: llm.primary.openai_compat
       expected_family: llm_provider
-    max_tokens: 12288
   budget_tokens_per_day: 0
   gather:
     max_rounds: 6
@@ -65,7 +63,7 @@ method:
       strategy: pause_until_next_window
 
 cadence:
-  fallback_schedule: "15 7 * * 1"   # T-2 stagger: off escalation's 07:00 burst (was 0 7 * * 1)
+  fallback_schedule: "15 7 * * 1"   # Staggered off escalation's 07:00 burst
   cooldown_seconds: 518400            # 6d — below the 7d interval
 
 grounding:

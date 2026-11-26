@@ -186,7 +186,7 @@ __all__ = [
     "supersede_prior_facts",
     "supersede_prior_nexuses",
     "supersede_prior_consolidation",
-    # Holes-B Wave 0 — per-fact source credibility
+    # Per-fact source credibility
     "source_tier_credibility",
     "max_signal_credibility",
     "resolve_fact_source_credibility",

@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""S-5 — pure unit tests for `nats_stream` payload coercion (no broker).
+"""Pure unit tests for `nats_stream` payload coercion (no broker).
 
 The runtime output dispatcher (`dapr_actors._emit_output_bindings`) hands the
 `nats_stream` sink the LIVE analyst payload — a typed `FindingPayload` /
-`AlertPayload` (a pydantic model), NOT a plain dict. Before the S-5 fix the
+`AlertPayload` (a pydantic model), NOT a plain dict. Before the fix the
 encode step rejected it with ``payload must be a Mapping/dict (got
 FindingPayload)`` (observed 9x/48h on cross_doc_corroborator +
 corpus_researcher) and those findings never reached the live UI event feed.

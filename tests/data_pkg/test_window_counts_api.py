@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W11-F271 — ``GET /v3/counts``: the World KPI strip's 24-hour counts.
+"""``GET /v3/counts``: the World KPI strip's 24-hour counts.
 
 The route counts what the list routes would list in the window: canonical
 signals (``/signals``' own clause) by ``fetched_at`` and rows of kind

@@ -18,7 +18,7 @@ identity:
   version: "0000000000000000"
   abstraction_level: L1
   state: active
-  owner: p17_reregister
+  owner: owner@local
   created: "2026-06-03T00:00:00Z"
 
 scope:
@@ -29,7 +29,7 @@ scope:
   # S1-T8 — the English international news arm; classed reporting (conservative).
   # Note: the stronger-slant Arabic edition is separately catalogued.
   source_class: reporting
-  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
+  access_class: public          # free no-auth feed, no separate reuse agreement
 
 acquisition: poll
 
@@ -44,7 +44,7 @@ config:
   url:
     factory_kind: text
     raw: "https://www.aljazeera.com/xml/rss/all.xml"
-  # W6 SPLIT-1 fold, 2026-10-04: the live head carries this; the tree now does too: the sports-noise exclusion set live by PUT.
+  # Sports-noise exclusion set.
   keyword_exclude: [football, Premier League, Champions League, tennis, cricket, Formula 1, Olympics]
 
 pipeline:
@@ -73,8 +73,7 @@ pipeline:
         # REBEL stamps every triple confidence=1.0, so a min_confidence floor
         # can't filter noise. This light validity gate drops triples whose
         # subject/value is purely a spelled-out quantity/ordinal ("sixth",
-        # "at least five") — the worst categorically-wrong REBEL output the
-        # audit flagged. Conservative: a single real-name token keeps the triple.
+        # "at least five") — the worst categorically-wrong REBEL output. Conservative: a single real-name token keeps the triple.
         reject_quantity_endpoints: true
     - kind: geocode
       config: {}

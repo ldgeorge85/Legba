@@ -115,10 +115,11 @@ def test_fail_class_mapping_table() -> None:
         # class, DISTINCT reason so calibration can tell it from the heuristic.
         "stale_leader_vs_facts": FAIL_CLASS_HARD,
         "cross_target_leak": FAIL_CLASS_HARD,
-        # B6 (W11-F13): a desk claim naming only a HOMONYM of its subject.
+        # B6: a desk claim naming only a HOMONYM of its subject.
         "off_subject": FAIL_CLASS_HARD,
         "no_citation": FAIL_CLASS_SOFT,
         "judge_unsupported": FAIL_CLASS_SOFT,
+        "judge_unverifiable_excerpt": FAIL_CLASS_SOFT,
         "hedge_laundering": FAIL_CLASS_SOFT,
         # C-TIER: a composed clause resting ONLY on periphery-tier (below-floor
         # / unverified) sub-claims asserted WITHOUT hedged attribution — the
@@ -707,13 +708,10 @@ async def test_profile_independent_sends_staged_prompt(monkeypatch) -> None:
         judge_prompt_profile=JUDGE_PROFILE_INDEPENDENT,
     )
     assert judge.systems == [_INDEPENDENT_JUDGE_SYSTEM]
-    # Never "check your own work": the posture is an independent reviewer of
-    # ANOTHER analyst's claims, grounded only in the shown evidence.
-    assert "ANOTHER analyst" in _INDEPENDENT_JUDGE_SYSTEM
-    assert "INDEPENDENT" in _INDEPENDENT_JUDGE_SYSTEM
-    # Same verdict rubric labels — the A/B isolates posture, not the rubric.
-    for token in ("SUPPORTED", "UNSUPPORTED", "CONTRADICTED"):
-        assert token in _INDEPENDENT_JUDGE_SYSTEM
+    # The variant is the generic prompt plus one sentence saying the claims
+    # were written by another analyst — the A/B isolates that sentence.
+    assert "written by another analyst" in _INDEPENDENT_JUDGE_SYSTEM
+    assert _INDEPENDENT_JUDGE_SYSTEM.endswith(_GENERIC_JUDGE_SYSTEM)
     assert report.judge_status == "llm"
 
 

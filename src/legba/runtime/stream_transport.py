@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The transport seam of the SUBSCRIBE connector (lane I-4).
+"""The transport seam of the SUBSCRIBE connector.
 
 A transport holds ONE connection to an upstream and turns what arrives into
 :class:`~legba.data.sources.stream_event.StreamEvent` values (plus

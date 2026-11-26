@@ -1,4 +1,4 @@
-# evidence_refetch — W11-F138 challenge-block backlog drain.
+# evidence_refetch — challenge-block backlog drain.
 #
 # A `deterministic`-kind META analyst over the SHARED substrate. Every Times
 # of Israel and Jerusalem Post signal of the last 30 days was ingested with
@@ -54,7 +54,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: draft
-  owner: evidence_archiver
+  owner: owner@local
 
 subscription:
   # No `targets` block → META analyst: one global sweep per cadence tick over
@@ -72,8 +72,7 @@ method:
   impl: legba.data.analysts.deterministic:run_method
   sub_handler: evidence_refetch
   options:
-    # The shipped defaults, stated so the operator sees the two knobs the
-    # lane added. 50 re-fetches/tick drains the ~2.4k backlog in ~50 ticks;
+    # The shipped defaults, stated so the two knobs are visible. 50 re-fetches/tick drains the ~2.4k backlog in ~50 ticks;
     # 30 days is the window the defect was measured over.
     refetch_max_per_tick: 50
     refetch_window_days: 30

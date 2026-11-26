@@ -4,7 +4,7 @@
 -- 0235_external_grades_search_health.sql
 --
 -- `external_grades.search_health` — the per-engine health of the search that
--- decided the grade (X1 lane B5, W11-F15 + SW-3).
+-- decided the grade.
 --
 -- WHY
 -- ---

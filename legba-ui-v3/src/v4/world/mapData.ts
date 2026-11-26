@@ -226,7 +226,7 @@ async function fetchWorldSignals(): Promise<WorldSignal[]> {
   // Cursor-paginate up to the cap. The window filter is applied client-side by
   // the map (it owns the scrubber), so we fetch the most recent N globally.
   for (let guard = 0; guard < 12 && out.length < SIGNAL_MAX_ROWS; guard++) {
-    // The light weight by name (roll 86): it keeps `data.geo` cut to the point
+    // The light weight by name: it keeps `data.geo` cut to the point
     // (lat/lon) and `data.published_at` — all this layer reads. The full
     // payload is ~4.5 KB a row (2.2 MB per 500-row page, up to six pages).
     const params = new URLSearchParams({ limit: String(SIGNAL_PAGE_LIMIT), fields: 'summary' })

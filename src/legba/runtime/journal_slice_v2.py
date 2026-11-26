@@ -1,14 +1,14 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""T2.3 — the journal's SECOND FETCH LEG: salience-aware stratified sampling.
+"""The journal's SECOND FETCH LEG: salience-aware stratified sampling.
 
-THE DEFECT THIS EXISTS FOR (JOURNAL_CLUSTER_FIRST_SLICE_REPORT §0/§7).
+THE DEFECT THIS EXISTS FOR.
 :func:`legba.runtime.actor_substrate_slice._read_substrate_slice` fetches with
 ``ORDER BY fetched_at DESC LIMIT max(200, LEGBA_SLICE_ROW_CAP * 3)`` = 360 rows.
 For a geo-scoped desk that is a generous over-fetch of a small window. For the
 journal — a META analyst with no source, geo or predicate narrowing — the 24 h
 window holds ~3,570 rows, so 360 newest-first rows are the last **~3 hours**.
-Measured 2026-09-09: the day's #3 cluster (Israel-UK settlements, 77 rows across
+Measured: the day's #3 cluster (Israel-UK settlements, 77 rows across
 22 sources) put **1** row in the fetch; the top-10 clusters delivered 18 of their
 423 rows (4.3%). Cluster-first selection (T2.2) can only group what was fetched,
 so this leg — not the selector — is the dominant aperture bound.

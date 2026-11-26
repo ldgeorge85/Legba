@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """R2 — WHERE a page's publish date came from, and what each source is worth.
 
-Extracted from :mod:`._reference_page` (wave O, lane o2) when the three-source
+Extracted from :mod:`._reference_page` when the three-source
 extractor became a six-rung LADDER with a precedence order, a disagreement
 record and a language-sensitive prose reader. ``_reference_page`` imports these
 names back ONE WAY and re-exports them, so every caller and test is unchanged.

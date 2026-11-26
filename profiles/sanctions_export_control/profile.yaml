@@ -2,11 +2,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # A SKELETON focused-instance profile: sanctions and export-control
-# determination (DEC-11; Review B §1.2 F1). It carries only what the manifest
-# can carry today — a regime roster, a source set, the five questions as
-# data, the labels — and is NOT registered anywhere. INST-2 turns it into an
-# instance (unit descriptors with prompts and rubrics, a top floor, the
-# taxonomy families). docs/PROFILES.md explains each key.
+# determination. It carries only what the manifest can carry today — a regime
+# roster, a source set, the five questions as data, the labels — and is NOT
+# registered anywhere. An instance still has to add its own unit descriptors
+# with prompts and rubrics, a top floor, and the taxonomy families. docs/PROFILES.md explains each key.
 #
 # What a compliance user reads here is a RECORD of what was checked, when,
 # against which published instrument — never a legal determination.
@@ -26,7 +25,7 @@ seeds: []
 
 rosters:
   subject_tags: [regime, counterparty]
-  # No per-subject scorecard (Review B §1.2: declare none).
+  # No per-subject scorecard.
   units:
     - id: designation_change
       question: >-
@@ -50,7 +49,7 @@ rosters:
         being read in practice, and against what conduct?
   # The gazetteer declares only the polity universe and the four designating
   # authorities' spellings; every guard that needs a country-desk table answers
-  # not_applicable by name (W10 CANON-1, SEAMS #67).
+  # not_applicable by name (SEAMS #67).
   gazetteer: rosters/gazetteer.yaml
 
 # No profile-owned prose yet.
@@ -64,10 +63,9 @@ top_floor: none
 constants:
   # The per-subject tier is the regime (its targets are regime_<slug>).
   subject_frame: regime
-  # Review B §1.2: the subjects are regimes and counterparties, so the anchor
-  # a frame needs is an ORGANIZATION, and the frame anchor's design (§3.2)
-  # refuses an ORG anchor without a home-entity exclusion and an ORG fold the
-  # platform does not have. Declared none until it does: the anchor bar and
+  # The subjects are regimes and counterparties, so the anchor a frame needs
+  # is an ORGANIZATION, and the frame anchor design refuses an ORG anchor
+  # without a home-entity exclusion and an ORG fold the platform does not have. Declared none until it does: the anchor bar and
   # the coverage floor's fold refuse by name.
   anchor_class: none
   # A compliance record merges no entity without the adjudicator: every
@@ -86,7 +84,7 @@ ui:
   unit_noun:
     singular: question
     plural: questions
-  # Two frame families (Review B §1.2 taxonomy): jurisdiction → regime →
+  # Two frame families (taxonomy): jurisdiction → regime →
   # programme, and corporate group → legal entity → vessel or asset.
   frames:
     - {id: jurisdiction, label: Jurisdiction}

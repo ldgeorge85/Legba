@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The per-TURN consult cost ceiling — the front door's check (X2 lane C1; SEAMS #72 closed by Q-1).
+"""The per-TURN consult cost ceiling — the front door's check.
 
 WHAT IT IS. A dollar figure no single consult turn should exceed on a priced
 route — distinct from the per-RUN drilling ceilings in
 ``analysts.consult_spend_guard`` (``LEGBA_CONSULT_MAX_COST_USD_PER_RUN``),
-which the operator pinned off on 2026-09-16 (W2-F4).
+which stay off.
 
-WHAT IT DOES WHEN IT BITES (lane Q-1, after consult turn e749e301 cost $20.26):
+WHAT IT DOES WHEN IT BITES (a runaway turn once cost $20.26):
 the SINK is ``analysts.consult_turn_cost.TurnCeilingGuard``. Before each round
 the runner projects the next call and the synthesis that must follow; when
 they would cross the ceiling it stops calling tools, synthesises from what it

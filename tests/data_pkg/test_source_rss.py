@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for :class:`legba.data.sources.rss.RSSSourceHandler` (L-130).
+"""Tests for :class:`legba.data.sources.rss.RSSSourceHandler`.
 
 Coverage:
 
   * Config schema validation (defaults, parser literal, bad URL).
-  * Conformance with the L-102 source-kind class-var contract.
+  * Conformance with the source-kind class-var contract.
   * 200 happy path: feed parse, ``Signal`` shape, cursor persistence,
     health record on success.
   * 304 path: no Signals, no cursor mutation, health = healthy.
@@ -184,7 +184,7 @@ def test_rss_config_rejects_blank_url():
 
 
 def test_handler_class_contract():
-    """Sanity check the L-102 class-var contract."""
+    """Sanity check the class-var contract."""
     assert RSSSourceHandler.kind == "rss"
     assert RSSSourceHandler.family == "source"
     assert RSSSourceHandler.schema_version == "legba/source.rss/2-0-0"
@@ -896,7 +896,7 @@ def test_parse_tolerant_prose_date_accepts_seconds_and_bare_month():
 
 def test_parse_tolerant_prose_date_decodes_localized_months():
     """The live French / Turkish entries are decoded from closed per-language
-    month tables (W11-F151: an undecodable French date read as undated and,
+    month tables (an undecodable French date read as undated and,
     via the cursor, cost ICG every dated English item behind it). A month word
     in no table is still rejected, never guessed (see the garbage test)."""
     assert _parse_tolerant_datetime("Vendredi, juillet 24, 2026 - 13:43") == datetime(
@@ -940,7 +940,7 @@ def test_extract_published_prose_localized_month_is_decoded():
 
 
 # The live document verbatim (dates only), including the two localized entries
-# (decoded since W11-F151). Newest entry = 2026-07-30 15:47Z.
+# (decoded since the fix). Newest entry = 2026-07-30 15:47Z.
 CRISISGROUP_PROSE_FEED = """<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0">
 <channel>
@@ -994,7 +994,7 @@ async def test_pull_records_newest_entry_ts_for_prose_dated_feed():
     signals = await _collect(rss.pull(ctx))
     await rss.aclose()
 
-    # The localized-month entries are emitted AND dated (W11-F151).
+    # The localized-month entries are emitted AND dated.
     assert len(signals) == 4
     assert sum(1 for s in signals if s.payload["published_at"] is None) == 0
 
@@ -1132,7 +1132,7 @@ async def test_live_rss_feed_if_configured():
 
 
 # ---------------------------------------------------------------------------
-# W11-F135: ingestion caps (inline base64 images, oversize summary)
+# Ingestion caps (inline base64 images, oversize summary)
 # ---------------------------------------------------------------------------
 
 

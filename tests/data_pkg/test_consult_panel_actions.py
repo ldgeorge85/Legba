@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Q-1 — consult PANEL ACTIONS: the console's contracts, one catalogue, view actions only.
+"""Consult PANEL ACTIONS: the console's contracts, one catalogue, view actions only.
 
 * The server catalogue is GENERATED from the console's
   ``panel-registry/contracts.ts`` (``scripts/gen_panel_action_catalog.py``);
@@ -47,8 +47,8 @@ def _gen():
 
 @pytest.mark.skipif(
     not CONTRACTS.exists(),
-    reason="legba-ui-v3/src/panel-registry/contracts.ts arrives with lane U-6; "
-           "the merger merges U-6 first, then this drift test runs",
+    reason="legba-ui-v3/src/panel-registry/contracts.ts arrives with the console change; "
+           "the console change merges first, then this drift test runs",
 )
 def test_committed_catalogue_matches_the_console_contracts() -> None:
     committed = PA.CATALOG_PATH.read_text(encoding="utf-8")
@@ -66,7 +66,7 @@ def test_the_reader_fails_loud_on_an_unknown_construct(tmp_path: Path) -> None:
 
 
 def test_the_map_layer_ids_are_read_through_the_globe_catalogue() -> None:
-    """U-7 derives MAP_LAYER_IDS from GLOBE_LAYERS; the reader evaluates exactly
+    """Derives MAP_LAYER_IDS from GLOBE_LAYERS; the reader evaluates exactly
     that filter: every row in order, a row carrying ``unavailable`` left out."""
     ids = _gen().globe_layer_ids(REPO / "legba-ui-v3" / "src")
     assert ids == ["change", "blanks", "series", "forecasts", "events", "at_sea"]
@@ -142,7 +142,7 @@ CITE = [{"kind": "signal", "id": "s1"}]
     ({"view": "v4.map", "action": "set_layer", "args": {"layer": "heat", "on": True}}, "invalid_arg"),
     ({"view": "v4.map", "action": "set_layer", "args": {"layer": "events"}}, "invalid_arg"),
     ({"view": "v4.map", "action": "fly_to", "args": {"ref": {"kind": "report", "id": "r"}}}, "invalid_arg"),
-    # U-7: the one map contract — a position or an area by number, home, a window by dates.
+    # The one map contract — a position or an area by number, home, a window by dates.
     ({"view": "v4.map", "action": "fly_to", "args": {"lon": 56.3, "lat": 26.6, "zoom": 5}}, None),
     ({"view": "v4.map", "action": "fly_to", "args": {"west": 30, "south": 10, "east": 60.5, "north": 30}}, None),
     ({"view": "v4.map", "action": "fly_to", "args": {"lon": "56.3", "lat": 26.6}}, "invalid_arg"),
@@ -183,6 +183,6 @@ def test_the_case_prompt_lists_the_catalogue_compactly() -> None:
     line = C.panel_catalogue_line()
     assert "v4.map: fly_to(ref,lon,lat,zoom,west,south,east,north)" in line
     assert "set_layer(layer=change|blanks|series|forecasts|events|at_sea,on)" in line
-    # roll 84: U-9 (Watch), U-10 (Record sheet) and U-11 (Ledger) together add
-    # eight declared view actions (~1540 chars); each lane alone was under 1400.
+    # The Watch, Record sheet and Ledger panels together add
+    # eight declared view actions (~1540 chars); each alone was under 1400.
     assert len(line) < 1700

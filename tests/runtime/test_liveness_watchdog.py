@@ -921,7 +921,7 @@ def test_discriminator_never_ingested_with_upstream_entries_is_cursor_fault() ->
 
 
 def test_discriminator_never_ingested_feed_older_than_first_poll_cap_is_quiet() -> None:
-    # W11-F265: a new source whose feed's newest entry was already older than
+    # A new source whose feed's newest entry was already older than
     # the first-poll age cap when polled ingested nothing BY DESIGN (the cap
     # skipped it) — the feed is quiet, not a cursor fault.
     rows = _with_last_signal(
@@ -1019,7 +1019,7 @@ def test_discriminator_honest_quiet_prolonged_threshold_is_tunable() -> None:
 
 
 def _weekday_feed_over_a_weekend(n: int, *, quiet_hours: float, declared=None):
-    """Roll 86, source.ansa.english: ``n`` hourly honest-quiet empty polls,
+    """source.ansa.english: ``n`` hourly honest-quiet empty polls,
     the last signal ``quiet_hours`` before the newest poll."""
     last_signal = _NOW - timedelta(hours=quiet_hours)
     rows = _with_last_signal(
@@ -1486,7 +1486,7 @@ async def test_empty_streak_real_fetch_escalates_past_honest_quiet_bound(pg_pool
     # query itself truncates at 20 rows); with the fix
     # (_empty_streak_fetch_window() == 41 for default cfg) the real fetch
     # sees all 37 rows and the escalation fires.
-    # Roll 86: the quiet also has to outlast the weekend floor (72 h since the
+    # The quiet also has to outlast the weekend floor (72 h since the
     # last signal), so the signal sits 3 days further back than the run.
     source_id = f"source.streaktest.window37.{uuid4().hex[:8]}"
     async with pg_pool.acquire() as conn:
@@ -1550,7 +1550,7 @@ async def test_empty_streak_real_fetch_who_news_shaped_regression(pg_pool) -> No
 
 @pytest.mark.asyncio
 async def test_empty_streak_real_fetch_weekday_feed_over_a_weekend(pg_pool) -> None:
-    # Roll 86: source.ansa.english publishes on weekdays only. 40 hourly
+    # source.ansa.english publishes on weekdays only. 40 hourly
     # honest-quiet polls is past the 36-poll bound but only ~45 h since the
     # last signal — a weekend, not a dead feed: silent. A descriptor that
     # declares cadence.quiet_page_after_hours 0 keeps the poll count alone
@@ -2005,7 +2005,7 @@ def test_source_stall_diagnosis_gated_says_the_feed_delivered() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Lane N-U — an intermittent upstream HTTP 5xx is recorded at medium (ledger
+# An intermittent upstream HTTP 5xx is recorded at medium (ledger
 # row, no publish, no fan-out); a source dead past the declared window still
 # pages high; a ``cadence.expect_quiet`` head is out of the empty-streak page.
 # ---------------------------------------------------------------------------

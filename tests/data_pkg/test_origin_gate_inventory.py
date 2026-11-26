@@ -4,7 +4,7 @@
 
 Migration 0209 added ``origin_class`` to ``signals``/``facts``/``events`` and
 refused the three history classes at the table BECAUSE only the two v3 reader
-files had adopted the new gate. Program 7g-1 finished that sweep, and this
+files had adopted the new gate. A later sweep finished it, and this
 file is what says so in a way a future edit cannot quietly undo.
 
 THREE THINGS ARE PINNED HERE, and they do different jobs.
@@ -128,10 +128,10 @@ _NON_ORIGIN_CLASSED_TABLE = frozenset({
     "src/legba/data/analysts/reifier_selection.py",
     "src/legba/data/analysts/situation_tracker.py",
     "src/legba/data/analysts/window_ledger.py",
-    # Lane N-A: the desk-head live predicate over ``analyst_outputs`` findings
+    # The desk-head live predicate over ``analyst_outputs`` findings
     # (no ``origin_class`` column; a head closed BY a failed parse is still live).
     "src/legba/data/head_integrity.py",
-    # Lane N-G: the journal memory filter and the correction close, over
+    # The journal memory filter and the correction close, over
     # ``journal_entries`` (no ``origin_class`` column; the open-row pair is the gate).
     "src/legba/data/journal_evidence.py",
     "src/legba/data/provenance/journal_correction.py",
@@ -157,13 +157,13 @@ _NON_ORIGIN_CLASSED_TABLE = frozenset({
     "src/legba/prompts/journal_assessor/__init__.py",
     "src/legba/runtime/dapr_workflow/gepa.py",
     "src/legba/runtime/grounding.py",
-    # W11-F102: the floor re-judge selects and closes ``analyst_outputs``
+    # The floor re-judge selects and closes ``analyst_outputs``
     # critiques (no ``origin_class`` column; the open-row pair is the gate).
     "src/legba/runtime/rejudge_floor.py",
-    # W11-F150: list_findings' survey mode reads ``analyst_outputs`` findings
+    # ``list_findings``' survey mode reads ``analyst_outputs`` findings
     # (``f.kind = 'finding'``; no ``origin_class`` column, the pair is the gate).
     "src/legba/runtime/substrate_findings_reads.py",
-    # D-2 (c086aa1a): the intake drift batch re-checks first the pages that
+    # The intake drift batch re-checks first the pages that
     # open ``analyst_outputs`` heads cite (no ``origin_class`` column; the
     # open-row pair is the gate).
     "src/legba/runtime/intake_drift.py",
@@ -178,7 +178,7 @@ _OPEN_ROW_SITES = (
 #: validity predicate and of its mentions in comments/docstrings.
 _AS_OF_SITES = frozenset({
     "src/legba/data/analysts/deterministic_handlers/_event_lifecycle.py",
-    # I-1 (ingestion intake): NOT an as-of predicate — the drain's claim query
+    # NOT an as-of predicate — the drain's claim query
     # COALESCEs a host's newest ``ingestion_requests.claimed_at`` to
     # ``'-infinity'`` (no prior claim = never rate-limited). ``ingestion_requests``
     # is a work queue with no validity interval and no ``origin_class``.
@@ -187,7 +187,7 @@ _AS_OF_SITES = frozenset({
     "src/legba/data/registry/substrate_reads_api.py",
     "src/legba/runtime/substrate_query_port.py",
     "src/legba/runtime/substrate_temporal.py",
-    # D-2 (c086aa1a): NOT an as-of predicate — the drift batch COALESCEs an
+    # NOT an as-of predicate — the drift batch COALESCEs an
     # address's newest ``fetch_drift_observations.observed_at`` to
     # ``'-infinity'`` (no drift seen = every done re-check counts as stable).
     "src/legba/runtime/intake_drift.py",
@@ -369,7 +369,7 @@ def test_reactive_triggers_gate_the_ROW_not_the_query() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 4. The raw readers' RECORD-time cut (lane E0, ``known_at``)
+# 4. The raw readers' RECORD-time cut (``known_at``)
 # ---------------------------------------------------------------------------
 #
 # A third clock beside validity (``as_of``) and decision (``believed_as_of``):
@@ -380,7 +380,7 @@ def test_reactive_triggers_gate_the_ROW_not_the_query() -> None:
 # ``legba.data.raw_reader_known_at``. A file that starts rendering the cut, or a
 # raw reader added to arm B's pack without a classification, fails here.
 #
-# Lane E2 extends the cut to the RECORD readers (the record-only arm's tools)
+# The cut extends to the RECORD readers (the record-only arm's tools)
 # and to ``live_series``: each is classified in the same module, and the record
 # arm's tool list, the live reader and the classification can never drift
 # apart (the tests below pin all three surfaces to their tables). The port

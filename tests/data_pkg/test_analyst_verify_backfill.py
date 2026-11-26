@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for the ``verify_backfill`` deterministic sub-handler (W11-F84).
+"""Tests for the ``verify_backfill`` deterministic sub-handler.
 
 The sweep over cited findings whose verify leg never ran (a rolling deploy
 recreated the runtime between the finding's write and its critique's). It runs

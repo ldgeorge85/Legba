@@ -1,12 +1,12 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""K-2 — the registry-API kernel split, and the two ways it could rot.
+"""The registry-API kernel split, and the two ways it could rot.
 
 `legba.data.registry._deps` holds the kernel that 26 of this package's 50
-modules were reaching into a 2,524-line `api.py` to get: the B-2 bearer gate,
+modules were reaching into a 2,524-line `api.py` to get: the bearer gate,
 the C3 `sunset_headers` stamp, and the `RegistryAPIDeps` bundle + `_get_deps`
 resolver. `api.py` imports it ONE WAY and re-exports every moved name, so not a
-single importer changed (rewriting them onto `_deps` is K-5, operator-gated).
+single importer changed (rewriting them onto `_deps` is a later, separate step).
 
 That arrangement has exactly two failure modes, and this file pins both:
 
@@ -35,8 +35,7 @@ import legba.data.registry._deps as kernel
 import legba.data.registry.api as api
 
 #: Everything the kernel owns. The first five are the cross-module surface the
-#: cleanup analysis measured (`planning/CODE_CLEANUP_ANALYSIS_2026-08-02.md`
-#: section 3.4); the rest are the constants and privates that tests and
+#: cleanup analysis measured; the rest are the constants and privates that tests and
 #: `api.py`'s own module body reach for by name.
 KERNEL_NAMES = (
     "RegistryAPIDeps",
@@ -62,9 +61,9 @@ def test_every_kernel_name_still_resolves_through_api() -> None:
     missing = [n for n in KERNEL_NAMES if not hasattr(api, n)]
     assert not missing, (
         "these kernel names stopped resolving on legba.data.registry.api: "
-        f"{missing}. They moved to `_deps` in K-2 and are re-exported from "
+        f"{missing}. They moved to `_deps` in an earlier change and are re-exported from "
         "`api`; every existing importer still spells them `api.<name>`. "
-        "Restore the re-export, or rewrite the importers first (that is K-5)."
+        "Restore the re-export, or rewrite the importers first."
     )
 
 
@@ -107,7 +106,7 @@ def test_deps_never_imports_api_at_any_depth() -> None:
                     offenders.append(f"line {node.lineno}: import {alias.name}")
     assert not offenders, (
         "legba/data/registry/_deps.py imports the module it was extracted "
-        f"FROM: {offenders}. That closes the cycle K-2 opened up. Whatever "
+        f"FROM: {offenders}. That closes the cycle that change opened up. Whatever "
         "`_deps` needs from `api` either belongs in `_deps` or does not belong "
         "in the kernel."
     )
@@ -130,6 +129,6 @@ def test_importing_the_kernel_does_not_drag_in_the_http_surface() -> None:
     )
     assert proc.stdout.strip() == "False", (
         "importing legba.data.registry._deps pulled in legba.data.registry.api "
-        "— the kernel is no longer a leaf, so the import-hub decoupling K-2 "
+        "— the kernel is no longer a leaf, so the import-hub decoupling "
         f"bought is gone.\nstdout={proc.stdout!r} stderr={proc.stderr!r}"
     )

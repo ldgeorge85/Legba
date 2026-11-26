@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """THE SHARED POLITY MATCHER — one answer to "does this prose NAME that country?".
 
-WHY THIS MODULE EXISTS (A-0, ``ATTENTION_MEASUREMENT_DESIGN_2026-09-05`` §4).
+WHY THIS MODULE EXISTS.
 The coverage-floor detector (#82) had to answer that question and paid for a
 real answer: alias and demonym expansion in BOTH directions off the shared
 ``_entity_canon`` maps, a word-boundary probe with an optional plural, a
@@ -12,8 +12,7 @@ fleet desks by ``test_every_fleet_desk_excludes_its_own_country``.
 
 The attention instrument asks the SAME question of different prose — a desk's
 own head, a world reference item, an open situation frame — and a second
-implementation of it would be a second set of false positives. §Appendix A.4 of
-the design measured what the naive version reports instead: 3 of its 6
+implementation of it would be a second set of false positives. Measurement showed what the naive version reports instead: 3 of its 6
 fleet-wide "gaps" are the desk's own country under a spelling the gazetteer does
 not join (``britain`` for GB, ``argentine`` for AR, ``türkiye`` for TR).
 
@@ -21,13 +20,13 @@ So the matcher moves HERE, beside :mod:`legba.data._entity_canon` whose maps it
 is built from, and ``_coverage_floor_scan`` imports it and re-exports every name
 under its old module path. Nothing at that module's call sites changes.
 
-THE ONE FOLD SITE (MECH-6, ``LAYER_REVIEW`` §A.3: *"every text comparator the
-assembly design adds must fold unicode at one shared normalisation site"*).
+THE ONE FOLD SITE (every text comparator must fold unicode at one shared
+normalisation site).
 :func:`normalize_prose` now runs its input through
 :func:`legba.data.provenance.text_fold.normalize_for_match` before it does
 anything else. That is the ONLY place any text enters this module, so both
 sides of every comparison here are folded by construction — never one side and
-not the other, which is the whole MECH-6 failure class.
+not the other, which is the whole failure class.
 
 WHY THAT IS SAFE FOR THE COVERAGE FLOOR, stated as a property rather than a
 hope. ``_PUNCT`` (``[^a-z0-9]+``) runs AFTER the fold and collapses everything
@@ -202,7 +201,7 @@ def represented_by(canonical_name: str, frame_prose: str) -> str | None:
     doing the work for "South Africans" all along. Measured over the live 72 h
     signal pool (10,507 titles × 160 canon polities) and the last five days of
     assembled reads: no row loses a polity that a whole-token reading of its
-    prose supports. See ``planning/GEO_POLITY_INDEX_WHOLE_TOKEN_REPORT.md``.
+    prose supports.
     """
     return represented_in(
         normalized_surfaces(canonical_name), *prepare_prose(frame_prose)

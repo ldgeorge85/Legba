@@ -505,7 +505,7 @@ async def _set_judgement(conn: Any, a: str, b: str, value: Mapping[str, Any] | N
         key, lo, hi, value["verdict"], value.get("justification"), value["decided_by"],
         value.get("model_id"), value.get("confidence"),
         datetime.fromisoformat(value["decided_at"]) if value.get("decided_at") else None,
-        # Lane 9: the person (or credential) behind this write — the stamped
+        # The person (or credential) behind this write — the stamped
         # actor when it is a principal's, else the Consult write row's own
         # written_by (its actor is ``consult_write:<id>``, not a principal).
         handle_for_actor(prov.get("actor")),

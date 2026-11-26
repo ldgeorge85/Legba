@@ -1,6 +1,6 @@
-# W1-E — cross_target_raw BIND (built-but-unbound evidence sheet, item 1).
+# cross_target_raw BIND — binds a built but previously unbound analyst kind.
 #
-# cross_target_raw (L-171, src/legba/data/analysts/cross_target_raw.py, 656
+# cross_target_raw (src/legba/data/analysts/cross_target_raw.py, 656
 # LOC) is one of the 9 BUILT-IN AnalystKind values (schemas/analyst.py) with a
 # complete, tested runtime path: analyst_deps_builder._build_cross_target_raw
 # resolves its LLM deps, dapr_actors._read_substrate_slice walks its
@@ -21,10 +21,10 @@
 # signals across a bloc/alliance/region before any per-target finding exists)
 # that nothing else in the fleet provides.
 #
-# ACTOR-SIDE CARVE-OUT — LANDED (was the ⚠ KNOWN GAP in the W1-E draft):
+# ACTOR-SIDE CARVE-OUT — LANDED (was a known gap in the first draft):
 # The module's READ_SLICE resolves its target set from (in order) an explicit
-# runtime arg, `options.target_ids`, `subscription.targets.id_list` (the
-# field W1-E added to SubscriptionTargets), or a single `target_filter`. The
+# runtime arg, `options.target_ids`, `subscription.targets.id_list` (a
+# field of SubscriptionTargets), or a single `target_filter`. The
 # runtime now agrees with it on both trigger paths:
 #   * `AnalystActor._cadence_targets()` (runtime/dapr_actors.py) treats
 #     "id_list present" as ONE global run over that explicit set — it returns
@@ -59,7 +59,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: draft
-  owner: w1e_built_but_unbound
+  owner: owner@local
 
 subscription:
   targets:
@@ -102,7 +102,6 @@ method:
       factory_kind: stack_ref
       raw: llm.primary.openai_compat
       expected_family: llm_provider
-    max_tokens: 1536              # CrossTargetRawRunner's own default (cross_target_raw.py)
   budget_tokens_per_day: 0
   retry:
     budget:

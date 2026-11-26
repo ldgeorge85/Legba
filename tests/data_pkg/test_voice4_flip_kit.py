@@ -1,30 +1,21 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""VOICE-4 — pin the flip's byte-faithfulness claim, in the tree.
+"""Pin the flipped desk prompts: their text in the tree is checked against digests.
 
-THE CLAIM THIS TRAIN MAKES is narrow and total: the eight flipped descriptors
-carry the D6 draft prompts EXACTLY, byte for byte, and nothing else about those
-descriptors moved. Everything downstream — the replay verdicts, the fleet
-contract, the operator's decision to flip eight and hold one — rests on it.
+The eight flipped descriptors carry the desk prompts pinned in
+``scripts/voice4_flip/_flip_common`` (``INTENDED_SHA256``), and the held desk
+keeps its own pin. Later changes that sit on top of those prompts (shared
+contract paragraphs, per-desk paragraphs, a title hint line, level indicator
+lines) are peeled off by ``d6_base`` before the digest is taken, and the tests
+below police that peel so it can only remove what it names.
 
-WHY IT NEEDS A TEST AT ALL. The prompts were transcribed out of markdown code
-fences in ``planning/D6_DRAFTS_2026-08-19/`` and re-indented into YAML block
-scalars. That is a lossy-looking operation performed on 160KB of text, and the
-failure mode is not a crash: it is one dropped blank line, one stripped
-trailing space, one re-wrapped sentence that nobody notices until a desk's
-prompt quietly stops matching what the replay graded.
-
-WHY THE DIGESTS ARE PINNED IN THE KIT rather than re-derived from the drafts:
-``planning/`` is gitignored, so the drafts do NOT exist in a clean checkout or
-in an agent worktree. A test that could only run where the drafts are present
-would not be a gate. So the digests live in ``scripts/voice4_flip/_flip_common``
-and this file checks the tree against them ALWAYS; the leg that re-derives them
-from the drafts themselves runs additionally, wherever the drafts are readable.
+A descriptor edited without re-pinning moves its digest and fails here, and
+``apply_flip`` refuses to PUT a unit whose tree digest does not match the pin,
+so this test and that refusal are the same check at two moments.
 """
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -55,31 +46,6 @@ from _flip_common import (  # noqa: E402
 
 DESCRIPTORS = REPO_ROOT / "descriptors"
 
-#: Where the D6 drafts live when they are readable at all. Overridable so a
-#: worktree agent — whose checkout has no ``planning/`` — can still exercise the
-#: round-trip leg against the main checkout's copy.
-DRAFTS_DIR = Path(
-    os.environ.get(
-        "LEGBA_D6_DRAFTS_DIR", str(REPO_ROOT / "planning" / "D6_DRAFTS_2026-08-19")
-    )
-)
-
-_HAVE_DRAFTS = DRAFTS_DIR.is_dir()
-
-#: NOT an infra gate, and worded so C-1 strict mode does not read it as one.
-#: The drafts are internal planning documents that are gitignored BY DESIGN —
-#: a checkout without them is the normal, correct state of the release tree,
-#: not a broken rig. The gate this file actually enforces everywhere is the
-#: pinned-digest one; these two legs are the extra proof available wherever the
-#: drafts happen to be readable.
-_needs_drafts = pytest.mark.skipif(
-    not _HAVE_DRAFTS,
-    reason=(
-        f"D6 drafts unavailable at {DRAFTS_DIR} — planning/ is gitignored by "
-        "design; set LEGBA_D6_DRAFTS_DIR to run the draft round-trip legs"
-    ),
-)
-
 ALL_DESKS: tuple[str, ...] = UNITS + (HELD_UNIT,)
 
 
@@ -91,30 +57,6 @@ def _prompt(unit: str) -> str:
     return _doc(unit)["method"]["system_prompt"]
 
 
-def _draft_block(unit: str) -> str:
-    """The ```text block under '## REPLACEMENT SYSTEM PROMPT', exactly.
-
-    Re-implements the extraction the flip used, so the test re-derives the
-    bytes rather than trusting a value someone pasted twice. The asserts are
-    the extraction's own contract: exactly one such heading, exactly one fence
-    pair under it, and the fence is a ``text`` fence.
-    """
-    lines = (DRAFTS_DIR / f"{unit}_v2.md").read_text().split("\n")
-    heads = [
-        i for i, ln in enumerate(lines) if ln.startswith("## REPLACEMENT SYSTEM PROMPT")
-    ]
-    assert len(heads) == 1, f"{unit}: {len(heads)} REPLACEMENT SYSTEM PROMPT headings"
-
-    opens = [i for i in range(heads[0] + 1, len(lines)) if lines[i].startswith("```")]
-    assert opens, f"{unit}: no code fence under the heading"
-    open_i = opens[0]
-    assert lines[open_i].strip() == "```text", f"{unit}: fence is {lines[open_i]!r}"
-
-    closes = [i for i in range(open_i + 1, len(lines)) if lines[i].startswith("```")]
-    assert closes, f"{unit}: unterminated fence"
-    return "\n".join(lines[open_i + 1 : closes[0]])
-
-
 # ---------------------------------------------------------------------------
 # The byte-faithfulness anchor
 # ---------------------------------------------------------------------------
@@ -122,7 +64,7 @@ def _draft_block(unit: str) -> str:
 
 @pytest.mark.parametrize("unit", UNITS)
 def test_tree_prompt_matches_the_pinned_digest(unit: str) -> None:
-    """The gate. Runs everywhere, drafts or no drafts.
+    """The gate. Runs everywhere.
 
     A descriptor edited after the flip — a typo fix, a well-meant reword — moves
     this digest, and ``apply_flip`` refuses to PUT a unit whose tree digest does
@@ -131,15 +73,15 @@ def test_tree_prompt_matches_the_pinned_digest(unit: str) -> None:
 
     The comparison is against :func:`d6_base` rather than the raw prompt because
     a LATER train (FRAME-3) has since added a paragraph to the same house
-    contract. The pin still covers exactly what it was written to cover — the D6
-    draft bytes — and the peel is what keeps that true instead of re-pinning a
+    contract. The pin still covers exactly what it was written to cover — the pinned
+    prompt text — and the peel is what keeps that true instead of re-pinning a
     digest that would then prove nothing.
     """
     assert sha(d6_base(_prompt(unit))) == INTENDED_SHA256[unit]
 
 
 def test_the_held_desk_keeps_its_pre_flip_digest() -> None:
-    """``narrative_coordination`` is HELD: its D6 prose must not have moved.
+    """``narrative_coordination`` is HELD: its prompt prose must not have moved.
 
     FRAME-3's paragraph IS on this desk — the VOICE hold is about prose, and a
     tag contract cannot be per-desk when the desk is a scorecard dimension — so
@@ -201,14 +143,14 @@ def test_the_peel_removes_the_later_paragraphs_and_nothing_else(unit: str) -> No
 
 @pytest.mark.parametrize("unit", ALL_DESKS)
 def test_the_level_peel_is_exactly_its_declared_swaps(unit: str) -> None:
-    """X4 LEVEL (W11-F36) — the third later train's peel accounts for every
+    """X4 LEVEL — the third later train's peel accounts for every
     byte it moves: on a converted desk each X4 text is present once and the
     rollback changes the length by exactly the swaps' difference; every other
     desk is untouched by it."""
     prompt = _prompt(unit)
     swaps = LATER_LEVEL_SWAPS.get(unit, ())
     for new, old in swaps:
-        assert prompt.count(new) == 1, f"{unit}: X4 text not present exactly once"
+        assert prompt.count(new) == 1, f"{unit}: LEVEL text not present exactly once"
     peeled = pre_level_indicators(prompt)
     assert len(prompt) - len(peeled) == sum(len(n) - len(o) for n, o in swaps)
     if not swaps:
@@ -270,39 +212,6 @@ def test_a_reworded_title_hint_breaks_the_digest() -> None:
     corrupted = tree.replace(new_line, new_line.replace("who is doing what", "X"), 1)
     assert corrupted != tree
     assert sha(d6_base(corrupted)) != INTENDED_SHA256["escalation"]
-
-
-@pytest.mark.parametrize("unit", UNITS)
-@_needs_drafts
-def test_tree_prompt_is_the_draft_block_plus_the_clip_newline(unit: str) -> None:
-    """THE ROUND-TRIP PROOF — draft bytes in, identical bytes back out of YAML.
-
-    The prompt is stored as a literal block scalar (``system_prompt: |``) with
-    every line indented four spaces. Loading it back strips exactly that
-    indentation, so the value the registry is handed should equal the draft
-    block — with ONE difference, which is not a discrepancy but the block
-    scalar's definition: ``|`` is CLIP-chomped, so the loaded value ends in
-    exactly one newline. The draft blocks carry none (the closing fence follows
-    the last text line directly). Hence ``+ "\\n"``, and hence that being the
-    ONLY tolerated difference: anything else — a lost blank line, a stripped
-    trailing space, a re-wrap — fails here.
-
-    Peeled first, for the reason the pinned-digest test gives: a later train's
-    paragraph is not a discrepancy with the draft, it is a layer on top of it,
-    and the round trip is still a claim about the D6 bytes underneath.
-    """
-    assert d6_base(_prompt(unit)) == _draft_block(unit) + "\n"
-
-
-@pytest.mark.parametrize("unit", UNITS)
-@_needs_drafts
-def test_the_pinned_digests_come_from_the_drafts(unit: str) -> None:
-    """Ties the pin to its source, so the pin cannot drift from the drafts.
-
-    Without this, :data:`INTENDED_SHA256` would only prove the tree still
-    matches whatever was pinned — including a value pinned from a mistake.
-    """
-    assert sha(_draft_block(unit) + "\n") == INTENDED_SHA256[unit]
 
 
 # ---------------------------------------------------------------------------
@@ -502,6 +411,10 @@ def test_only_the_prompt_changed_against_the_pre_flip_descriptor(unit: str) -> N
     after = _doc(unit)
     before["method"].pop("system_prompt")
     after["method"].pop("system_prompt")
+    # The owner label was renamed across every definition after the flip; it
+    # is not part of what this comparison guards.
+    before.get("identity", {}).pop("owner", None)
+    after.get("identity", {}).pop("owner", None)
     if unit == "disruption_status":
         # 3bd55d5c (2026-08-21, post-flip): the tree DELIBERATELY caught up to
         # the live head's escalate_finding grant — the one structural drift the
@@ -563,14 +476,17 @@ def test_only_the_prompt_changed_against_the_pre_flip_descriptor(unit: str) -> N
     _after_bq = after.get("method", {}).get("bounded_question")
     if "bounded_question" not in before.get("method", {}) and _after_bq is not None:
         before["method"]["bounded_question"] = _after_bq
-    # Lane N-B (2026-11-11, post-flip): slice_since_watermark is a wholly new
-    # slice-reader knob on seven units, asserted in test_slice_coverage.py.
+    # slice_since_watermark is a post-flip slice-reader knob on seven units,
+    # asserted in test_slice_coverage.py.
     after.get("method", {}).get("options", {}).pop("slice_since_watermark", None)
-    # Three more wholly new, post-flip option knobs this pin never learned
-    # (roll 84 found them when the host run was made green; each has its own
-    # test): level_indicators (X4 LEVEL, e26f140c — energy_security,
-    # military_posture), offer_events (V3/P2, 80fdb309 — escalation) and
-    # offer_history (007e5cde — energy_security).
+    # Three more post-flip option knobs this pin never learned (each has its
+    # own test): level_indicators (energy_security, military_posture),
+    # offer_events (escalation) and offer_history (energy_security).
     for _knob in ("level_indicators", "offer_events", "offer_history"):
         after.get("method", {}).get("options", {}).pop(_knob, None)
+    # Post-flip: method.llm.max_tokens left every unit definition. It was never
+    # sent and limited nothing; each handler sends the model's own maximum
+    # (asserted in test_model_token_limits.py). Normalized on the BEFORE side.
+    before.get("method", {}).get("llm", {}).pop("max_tokens", None)
+    assert "max_tokens" not in after.get("method", {}).get("llm", {})
     assert before == after

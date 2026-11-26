@@ -15,8 +15,7 @@ Reference:
   * API docs / codebook:  https://ucdp.uu.se/apidocs/
   * GED endpoint shape:   https://ucdpapi.pcr.uu.se/api/gedevents/{version}
   * License (CC BY 4.0):  https://ucdp.uu.se/downloads/ (attribution, free reuse)
-  * Task row:             planning/PORTFOLIO_AND_INGESTION_EXECUTION_PLAN_2026-07-01.md (S1-T9)
-  * Source-kind contract: src/legba/data/sources/_contract.py (L-102 §2)
+  * Source-kind contract: src/legba/data/sources/_contract.py
 
 Key API details (documented shape — the live fetch is integrator-verified
 post-deploy per the task; this handler is written against the codebook):

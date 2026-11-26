@@ -37,9 +37,9 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# PROPOSE (§7 Wave 4) — the phase the propose pack never had (W1-C)
+# PROPOSE — the phase the propose pack never had
 # ---------------------------------------------------------------------------
-# THE DEFECT THIS FIXES (engine-review p5, 2026-08-02): ``journal_propose`` was
+# THE DEFECT THIS FIXES: ``journal_propose`` was
 # granted to two analysts, registered active, bound end-to-end by dapr_host +
 # the actor's ``_gather_write_bindings_for_target`` META self-allow, and
 # catalogued in the GATHER prompt since 0875b7d — with **0 invocations EVER**.

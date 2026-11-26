@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The three cleanup scripts the owner's 2026-11-15 decision allows (DM-G).
+"""The three cleanup scripts that are allowed to drop data.
 
 * ``archive_backup_tables.py`` - the nine backup tables: dry run by default, a
   drop only in the same invocation as its dump.

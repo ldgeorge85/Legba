@@ -1787,7 +1787,7 @@
    "200",
    "200"
   ],
-  "judge_llm_ref": "llm.verify.innoai_gemma.openai_compat",
+  "judge_llm_ref": "llm.verify.gateway_judge.openai_compat",
   "judge_pipeline_version": "2026-10-03/2",
   "judge_route": "configured",
   "judge_status": "llm",

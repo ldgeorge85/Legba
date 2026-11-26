@@ -1,0 +1,146 @@
+{
+  "about": "Worked cases that once sat inside judge prompts. They are misreads that taught a rule, retold with invented places and names; in a prompt they anchor grading on their own subjects and go stale, so they live here as a regression set. Each case names the judge route, the claim, the evidence the judge saw (paraphrased where the original was long), the verdict the current rules give, and the rule it teaches. An offline replay can send these to a judge and compare; the test beside this file checks the set is well formed and that no case has crept back into a platform prompt.",
+  "cases": [
+    {
+      "id": "absence-own-prose-as-refutation",
+      "route": "absence",
+      "claim": "No material change in the physical flow through the strait in the reviewed signals.",
+      "evidence": [
+        "PRIOR READ (this target's previous verified read): No material change in the physical flow through the strait; the situation is holding steady."
+      ],
+      "expected_verdict": "supported",
+      "teaches": "A desk's own earlier read is the baseline the claim updates, never the refutation; analyst prose is recognised by its shape even when unlabelled."
+    },
+    {
+      "id": "absence-limiting-words-ignored",
+      "route": "absence",
+      "claim": "No new border incidents were observed beyond the existing border-control extension.",
+      "evidence": [
+        "The government extended the existing border-control measures for another month."
+      ],
+      "expected_verdict": "supported",
+      "teaches": "Limiting words ('new', 'beyond the existing', 'other than') are part of what the claim denies; the exempted thing does not refute it."
+    },
+    {
+      "id": "absence-smaller-scale-confirms",
+      "route": "absence",
+      "claim": "No large-scale mobilisation was reported in the reviewed signals.",
+      "evidence": [
+        "Rallies have been smaller in scale than last month."
+      ],
+      "expected_verdict": "supported",
+      "teaches": "A smaller instance of the same kind supports a denial of the large-scale version; it is the same finding in other words."
+    },
+    {
+      "id": "absence-smaller-scale-protest",
+      "route": "absence_slice",
+      "claim": "No mass protests were reported in the window.",
+      "evidence": [
+        "Dozens protest outside a massive data centre"
+      ],
+      "expected_verdict": "supported",
+      "teaches": "'Dozens' is the negation of 'mass'; the scale word is part of the claim."
+    },
+    {
+      "id": "absence-wrong-universe",
+      "route": "absence",
+      "claim": "No new strikes were reported in this desk's collection for the subject this window.",
+      "evidence": [
+        "A strike was reported in a neighbouring country last week."
+      ],
+      "expected_verdict": "supported",
+      "teaches": "A negative scoped to one subject, corpus or window is not refuted by an instance from a different one."
+    },
+    {
+      "id": "absence-plan-is-not-occurrence",
+      "route": "absence",
+      "claim": "The port blockade continued with no immediate relief reported.",
+      "evidence": [
+        "Officials discussed a prospective transit arrangement that could ease shipments next month."
+      ],
+      "expected_verdict": "supported",
+      "teaches": "A plan, offer or negotiation is not an occurrence; mentioning the subject of the denial is not reporting the denied thing."
+    },
+    {
+      "id": "absence-consequence-adds-a-forecast",
+      "route": "absence",
+      "claim": "With no sanctions imposed, the macro-economic picture is unaltered by external statecraft.",
+      "evidence": [
+        "No sanctions designations appear in the reviewed signals."
+      ],
+      "expected_verdict": "unsupported",
+      "teaches": "A consequence drawn from an absence is an inference: it passes only if it restates the scoped negative. This one adds a claim about the economy that no row states. (The earlier rubric passed it as 'inheriting' the absence's support.)"
+    },
+    {
+      "id": "absence-coverage-line-is-a-proposition",
+      "route": "absence",
+      "claim": "No reads were available for the other regional members this cycle.",
+      "evidence": [
+        "Two member reads were assembled for this cycle."
+      ],
+      "expected_verdict": "supported",
+      "teaches": "A statement about what this run covered is a claim about the searched set, not about the world; grade it, do not decline it."
+    },
+    {
+      "id": "slice-domain-collision-sanctions",
+      "route": "absence_slice",
+      "claim": "No new sanctions designations, export controls, or secondary sanctions were reported.",
+      "evidence": [
+        "Environment ministry sanctions 6 firms after 1,200 hectares burn in Marrow Province"
+      ],
+      "expected_verdict": "supported",
+      "teaches": "A row that shares a word with the claim but is about a different subject (a domestic environmental penalty, not trade coercion) does not contradict it."
+    },
+    {
+      "id": "slice-domain-collision-procurement",
+      "route": "absence_slice",
+      "claim": "No confirmed capability, deployment, exercise, procurement, or doctrine change was reported.",
+      "evidence": [
+        "Second civil reactor site authorised for site preparations"
+      ],
+      "expected_verdict": "supported",
+      "teaches": "A civilian power station is not a military procurement; read what the row is about, not which words it shares with the claim."
+    },
+    {
+      "id": "composition-scope-deleted",
+      "route": "composition",
+      "claim": "No coordinated narrative appears in Veldaria's information environment.",
+      "evidence": [
+        "No coordinated narrative appears in this desk's collection for Veldaria."
+      ],
+      "expected_verdict": "unsupported",
+      "teaches": "Shape A: a desk's collection-scoped negative republished as a fact about the world."
+    },
+    {
+      "id": "composition-desk-cited-for-its-negation",
+      "route": "composition",
+      "claim": "The military-posture read confirms that Norland is modestly increasing offensive support, expanding its standing posture.",
+      "evidence": [
+        "No material change; Norland's standing offensive support to Estmark remains unchanged."
+      ],
+      "expected_verdict": "contradicted",
+      "teaches": "Shape B: a desk named as the authority for the reverse of its own verdict."
+    },
+    {
+      "id": "composition-claim-the-desk-does-not-make",
+      "route": "composition",
+      "claim": "The internal-stability read notes only modest, isolated protests, and the posture read describes the government translating its \"smart-defence\" doctrine.",
+      "evidence": [
+        "No unrest was reported in the window.",
+        "The posture read notes a doctrinal shift."
+      ],
+      "expected_verdict": "unsupported",
+      "teaches": "Shape C: weakening an absence into a small positive, or quoting as a desk's words a phrase it never wrote."
+    },
+    {
+      "id": "composition-direction-inverted",
+      "route": "composition",
+      "claim": "The two states are simultaneously tightening maritime control.",
+      "evidence": [
+        "BLUF: tighter control. The window's maritime change is a joint Tavira-Sund navigational corridor and a mine-clearance project."
+      ],
+      "expected_verdict": "contradicted",
+      "teaches": "Shape D: read what the sub-claim reports as having changed (an opening), not the word its summary line chose."
+    }
+  ]
+}

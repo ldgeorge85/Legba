@@ -1,17 +1,17 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The bake-off's two consult SYSTEM PROMPT variants (lane X3/G0) — text only.
+"""The bake-off's two consult SYSTEM PROMPT variants — text only.
 
-planning/reviews/BAKEOFF_DESIGN.md v1.0 §2 (arms B and C) says the stock consult
-prompt cannot serve an honest arm: it orders "the platform's OWN finished
+The stock consult prompt cannot serve an honest arm: it orders "the platform's OWN finished
 intelligence — list_findings / list_situations — comes FIRST", and its tool
 catalogue names twenty-four tools where arm B may use six and arm C four. Each
 arm needs "a system-prompt variant whose tool list and survey rule name only
 those tools".
 
-HOW A VARIANT IS BUILT. The stock prompt (``consult_system_prompt._SYSTEM_PROMPT``)
-is CUT at four markers it already carries and re-assembled, so everything the
-arms must share with every other consult turn is the stock text byte for byte:
+HOW A VARIANT IS BUILT. The stock prompt as the arms were measured with
+(``consult_bakeoff_stock.FROZEN_STOCK_PROMPT``, a frozen copy: the live consult
+prompt has moved on since) is CUT at four markers it carries and re-assembled,
+so everything the arms share with that stock text is byte for byte:
 
   * the analytic-standards preamble and the TASK line (everything before
     ``Available tools:``);
@@ -27,7 +27,7 @@ the arm has. Nothing orders a finished-intelligence read first.
 
 A marker the stock prompt stops carrying makes this module fail at import, so
 a variant can never silently drift into a half-built prompt. The variants are
-part of the pre-registered fixed prompts (design §2.1): their sha256 goes into
+part of the pre-registered fixed prompts: their sha256 goes into
 the run record (``scripts/bakeoff/run_arm.py``).
 """
 
@@ -35,8 +35,8 @@ from __future__ import annotations
 
 import hashlib
 
-from .consult_system_prompt import CONFIDENCE_FROZEN_BAKEOFF, CONFIDENCE_LIVE
-from .consult_system_prompt import _SYSTEM_PROMPT as _STOCK
+from .consult_bakeoff_stock import CONFIDENCE_FROZEN_BAKEOFF
+from .consult_bakeoff_stock import FROZEN_STOCK_PROMPT as _STOCK
 
 __all__ = [
     "RAW_SYSTEM_PROMPT",
@@ -84,9 +84,8 @@ _READ_RECEIPT = (
 
 _HEAD = _STOCK[: _STOCK.index(_M_TOOLS)]
 _CONTRACT = _cut(_STOCK, _M_CONTRACT, _M_STRATEGY)
-# Q-1: the live prompt's CONFIDENCE paragraph moved to the ICD-203 bands; the
-# arms keep the FROZEN pre-registered paragraph, so their hashes do not move.
-_TAIL = _cut(_STOCK, _M_QUALITY, None).replace(CONFIDENCE_LIVE, CONFIDENCE_FROZEN_BAKEOFF)
+# The arms keep the pre-registered CONFIDENCE paragraph, so their hashes do not move.
+_TAIL = _cut(_STOCK, _M_QUALITY, None)
 if CONFIDENCE_FROZEN_BAKEOFF not in _TAIL:
     raise RuntimeError("the frozen CONFIDENCE paragraph did not land in the bake-off tail")  # pragma: no cover
 if _TAIL.count(_STOCK_THIN_EXAMPLE) != 1 or _CONTRACT.count(_STOCK_BATCH_EXAMPLE) != 1:

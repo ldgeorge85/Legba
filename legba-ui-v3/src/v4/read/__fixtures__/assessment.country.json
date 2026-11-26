@@ -10,19 +10,19 @@
     "spine:country_composition"
   ],
   "title": "Taiwan holds at elevated: patrol cadence, not posture, is what moved",
-  "body": "*As of 3 September 2026; written from the Taiwan desk read of 11:40 UTC.*\n\n**BLUF:** Continued Chinese Coast Guard law‑enforcement patrols east of Taiwan hold this desk at an elevated but unchanged escalation risk, and the patrol cadence defines the top risk on this desk this cycle [[ref:1]].\n\n## Reading the desk\nThe lead block earns its position on cited mass alone, and the seven blocks beneath it neither raise nor lower that reading: none reports a change in posture, and one notes a second coast‑guard cutter on the eastern approach, which the desk itself never observed [[ref:1]].",
+  "body": "*As of 3 September 2026; written from the Taiwan desk read of 11:40 UTC.*\n\n**BLUF:** The fuel levy holds near its recent level while the regulator reviewshold this desk at an elevated but unchanged escalation risk, and the patrol cadence defines the top risk on this desk this cycle [[ref:1]].\n\n## Reading the desk\nThe lead block earns its position on cited mass alone, and the seven blocks beneath it neither raise nor lower that reading: none reports a change in posture, and one notes a second coast‑guard cutter on the eastern approach, which the desk itself never observed [[ref:1]].",
   "severity": null,
   "confidence": 0.6,
   "produced_at": "2026-09-03 11:52:10.118400+00",
   "derived_from": [
-    "bf9409e6-80cd-4098-8ed3-d6263fa993fe"
+    "00000000-0000-4000-8000-000000000096"
   ],
   "data": {
     "data": {
       "meta": true,
       "assessment": {
         "schema": "assessment.v1",
-        "spine_id": "bf9409e6-80cd-4098-8ed3-d6263fa993fe",
+        "spine_id": "00000000-0000-4000-8000-000000000096",
         "spine_schema": "assembly.v1",
         "lead_test": {
           "key": "cited_mass.v1",
@@ -82,12 +82,12 @@
         {
           "marker": "[[ref:1]]",
           "ordinal": 1,
-          "ref_id": "bf9409e6-80cd-4098-8ed3-d6263fa993fe",
+          "ref_id": "00000000-0000-4000-8000-000000000096",
           "ref_kind": "finding",
           "source": "country_composition",
-          "title": "Watch — Taiwan, Province of China read · 3 Sep — “Continued Chinese Coast Guard law‑enforcement patrols east of Taiwan sustain an elevated escalation risk, with no…”",
+          "title": "Watch — Taiwan, Province of China read · 3 Sep — “The fuel levy holds near its recent level while the regulator reviews allocation rules. Carriers report mixed boo…”",
           "spine_block": {
-            "finding_id": "ca7f3025-ee75-4607-8201-ac90395e370b",
+            "finding_id": "00000000-0000-4000-8000-000000000097",
             "desk": "escalation",
             "target_id": "country_watch_tw"
           },

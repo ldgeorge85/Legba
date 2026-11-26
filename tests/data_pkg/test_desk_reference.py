@@ -91,7 +91,7 @@ def test_descriptor_validates_and_binds_a_third_family():
     # to OpenRouter Mistral Large 3. The property that matters ("not the writer's
     # plane, not the judge's") is held by the fence tests; this pins the SHIPPED ref
     # so a silent drift back to a dead key is loud.
-    assert raw == "llm.grader.innoai_lightning.openai_compat", raw
+    assert raw == "llm.grader.gateway_third_family.openai_compat", raw
     assert "llm.primary" not in raw, "the reference must not share the WRITER's family"
     assert "nemotron" not in raw, "the reference must not share the JUDGE's family"
     assert "anthropic" not in raw.lower()
@@ -649,7 +649,7 @@ async def _seed_unit_descriptor(conn: Any) -> None:
     """The test DB is a fresh migrated DB with no REGISTERED analyst descriptors
     (those land at bringup, not from a migration), so the handler's bounded-
     question lookup would drop the unit and the census would be empty. Seed one
-    with a live method.bounded_question, exactly as the 09-05 PUT did."""
+    with a live method.bounded_question, exactly as a live PUT does."""
     await conn.execute(
         """
         INSERT INTO analyst_descriptors
@@ -994,7 +994,7 @@ async def test_f2_scorer_output_is_byte_identical_with_machine_rows_present(
     after = await _score()
     assert before == after, (
         "writing desk_reference rows CHANGED unit_correctness_scorer's output — "
-        "the F-2 labeled_by gate is not holding, and a machine-authored number "
+        "the labeled_by gate is not holding, and a machine-authored number "
         "is now reporting under the operator-label key"
     )
 
@@ -1264,7 +1264,7 @@ async def test_an_uncollected_item_writes_a_requirement_and_opens_a_question(
         ref_id = await _seed_reference_row(conn, items=[_ref_item()])
         leftover = await _foreign_matching_feeds(conn)
     assert leftover == [], (
-        "session-DB pollution (W6-F7 class): another test left source heads "
+        "session-DB pollution: another test left source heads "
         f"that match this desk's wanted classes: {leftover}"
     )
 

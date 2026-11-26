@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""forecast_arms.py — the comparison arms' numbers on the open forecasts (ST0-D).
+"""forecast_arms.py — the comparison arms' numbers on the open forecasts.
 
 For each OPEN, UNSEALED forecast question in the ledger (migration 0242) this
 states one number per arm, all at ONE as-of and from the SAME evidence
 packet (the design rule: same wires for every arm):
 
-  * ``clef_arm``     — the Clef-flash decision route
-    (``llm.decide.innoai_clef_flash``, ``POST /decide``, $0): a yes/no choice
+  * ``clef_arm``     — the gateway decision-model route
+    (``llm.decide.gateway_typed_choice``, ``POST /decide``, $0): a yes/no choice
     whose ``probabilities["yes"]`` is the number. A decision model writes no
     text, so its rationale is absent (stated, not invented).
   * ``frontier_arm`` — the frontier route ``llm.anthropic.opus_4_7`` (it must
@@ -76,9 +76,10 @@ import messages_api  # noqa: E402
 import packet_a  # noqa: E402
 
 from legba.data import forecast_ledger as fl  # noqa: E402
+from legba.data.schemas.legacy_name_digests import canonical_component_id  # noqa: E402
 
 ARMS = ("clef_arm", "frontier_arm", "tower")
-CLEF_COMPONENT = "llm.decide.innoai_clef_flash"
+DECISION_COMPONENT = "llm.decide.gateway_typed_choice"
 FRONTIER_COMPONENT = common.FRONTIER_COMPONENT
 RATIONALE_WORDS = 120
 #: Characters per token used for the worst-case INPUT bound (conservative:
@@ -187,7 +188,7 @@ def parse_frontier_reply(text: str) -> tuple[float | None, str | None, str | Non
     return p, rationale, problem
 
 
-def clef_questions(row: dict[str, Any]) -> dict[str, Any]:
+def decision_questions(row: dict[str, Any]) -> dict[str, Any]:
     spec = json.dumps(row.get("resolver_spec"), sort_keys=True, ensure_ascii=False)
     return {"resolves_yes": {
         "type": "choice",
@@ -202,7 +203,7 @@ def clef_questions(row: dict[str, Any]) -> dict[str, Any]:
     }}
 
 
-def clef_p(answer: dict[str, Any]) -> float | None:
+def decision_p(answer: dict[str, Any]) -> float | None:
     probs = answer.get("probabilities") or {}
     if "yes" in probs:
         return float(probs["yes"])
@@ -352,11 +353,11 @@ async def frontier_arm(row: dict[str, Any], prompt: str, rec: dict[str, Any], ru
     return rec
 
 
-async def clef_arm(row: dict[str, Any], packet: str, rec: dict[str, Any],
+async def decision_arm(row: dict[str, Any], packet: str, rec: dict[str, Any],
                    decide: DecideCall | None, model: str | None, version: str | None,
                    dry_run: bool) -> dict[str, Any]:
-    rec["model"] = {"component": CLEF_COMPONENT, "model_name": model, "version": version}
-    questions = clef_questions(row)
+    rec["model"] = {"component": DECISION_COMPONENT, "model_name": model, "version": version}
+    questions = decision_questions(row)
     rec["request"] = {"questions": questions, "state_sha256": hashlib.sha256(packet.encode()).hexdigest()}
     rec["cost"] = {"usd": 0.0}
     if dry_run:
@@ -369,7 +370,7 @@ async def clef_arm(row: dict[str, Any], packet: str, rec: dict[str, Any],
         rec.update(status="error", refusal=f"decide failed: {type(exc).__name__}: {str(exc)[:200]}")
         return rec
     answer = answers.get("resolves_yes") or {}
-    p = clef_p(answer)
+    p = decision_p(answer)
     rec.update(p=p, elapsed_s=round(time.monotonic() - t0, 2), reply_text=json.dumps(answer, sort_keys=True),
                status="answered" if p is not None else "unparsed",
                problem="a decision model writes no rationale" if p is not None else "no probability in the answer")
@@ -421,8 +422,20 @@ class Wiring:
     read_conn: Any
     frontier: Frontier | None = None
     decide: DecideCall | None = None
-    clef_model: str | None = None
-    clef_version: str | None = None
+    decision_model: str | None = None
+    decision_version: str | None = None
+
+
+async def stated_ref(conn: Any, question_id: str, arm: str, ref: str) -> str:
+    """The issuer_ref to state this arm's number under: an earlier number of the
+    same arm on this question stated under a RETIRED name of ``ref`` keeps its
+    ref, so the restatement updates that row instead of adding a second number
+    of the same arm (the ledger's unique key includes the ref)."""
+    for n in await conn.fetch(fl._NUMBERS_FOR_QUESTION, str(question_id)):  # noqa: SLF001
+        old = str(n["issuer_ref"])
+        if n["issuer_kind"] == arm and old != ref and canonical_component_id(old) == ref:
+            return old
+    return ref
 
 
 def open_unsealed(rows: list[dict[str, Any]], slugs: list[str] | None) -> list[dict[str, Any]]:
@@ -459,8 +472,8 @@ async def run_arms(w: Wiring, *, arms: list[str], as_of: datetime, out: Path, dr
                     await frontier_arm(row, prompt, rec, _DryRun(), fr, ceiling)
                 ref = FRONTIER_COMPONENT
             elif arm == "clef_arm":
-                rec = await clef_arm(row, packet, rec, w.decide, w.clef_model, w.clef_version, dry_run)
-                ref = CLEF_COMPONENT
+                rec = await decision_arm(row, packet, rec, w.decide, w.decision_model, w.decision_version, dry_run)
+                ref = DECISION_COMPONENT
             else:
                 rec = await tower_arm(row, rec, w.read_conn, as_of)
                 ref = "tower"
@@ -475,6 +488,7 @@ async def run_arms(w: Wiring, *, arms: list[str], as_of: datetime, out: Path, dr
                 record_ref = str(path.relative_to(common.REPO_ROOT))
             except ValueError:
                 record_ref = str(path)
+            ref = await stated_ref(w.write_conn, row["id"], arm, ref)
             n = number_for(rec, arm, ref, as_of, record_ref)
             if n is not None:
                 outcome, _ = await fl.state_number(w.write_conn, row["id"], n,
@@ -515,7 +529,7 @@ async def _live(a: argparse.Namespace, as_of: datetime) -> dict[str, Any]:  # pr
     async with common.readonly_conn() as ro:
         rows = await fl.fetch_ledger(ro, limit=1000, now=as_of)
         frontier = decide = None
-        clef_model = clef_version = None
+        decision_model = decision_version = None
         if "frontier_arm" in arms:
             comp = reg.stack_component(FRONTIER_COMPONENT)
             raw = (reg.get(f"/api/v1/registry/stack/{FRONTIER_COMPONENT}").get("body") or {}).get("config") or {}
@@ -534,23 +548,23 @@ async def _live(a: argparse.Namespace, as_of: datetime) -> dict[str, Any]:  # pr
             frontier = Frontier(str(comp["model_name"]), max_tokens, comp.get("version"), prices, call,
                                 refusal if not a.dry_run else (refusal or "dry_run: nothing is called"))
         if "clef_arm" in arms and not a.dry_run:
-            comp = reg.stack_component(CLEF_COMPONENT)
+            comp = reg.stack_component(DECISION_COMPONENT)
             key = await common.resolve_secret(ro, comp["api_key_ref"])
-            clef_model, clef_version = str(comp["model_name"]), comp.get("version")
+            decision_model, decision_version = str(comp["model_name"]), comp.get("version")
             url = f"{str(comp['api_endpoint']).rstrip('/')}/decide"
 
             async def decide(state: str, questions: dict[str, Any], _key: str = key) -> dict[str, Any]:
                 validate_questions(questions)
                 async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=15.0)) as c:
-                    r = await c.post(url, json={"model": clef_model, "state": state, "questions": questions},
+                    r = await c.post(url, json={"model": decision_model, "state": state, "questions": questions},
                                      headers={"Authorization": f"Bearer {_key}"})
                     r.raise_for_status()
                     return parse_answers(r.json(), questions)
         write_conn = None if a.dry_run else await asyncpg.connect(common._pg_dsn())
         try:
             w = Wiring(rows=rows, brief=lambda desk: packet_a.desk_brief(reg, desk), write_conn=write_conn,
-                       read_conn=ro, frontier=frontier, decide=decide, clef_model=clef_model,
-                       clef_version=clef_version)
+                       read_conn=ro, frontier=frontier, decide=decide, decision_model=decision_model,
+                       decision_version=decision_version)
             out = Path(a.out) if a.out else (
                 common.REPO_ROOT / "planning" / "reviews" / "forecast_arms" / as_of.date().isoformat())
             return await run_arms(w, arms=arms, as_of=as_of, out=out, dry_run=a.dry_run,
@@ -561,11 +575,11 @@ async def _live(a: argparse.Namespace, as_of: datetime) -> dict[str, Any]:  # pr
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    ap = argparse.ArgumentParser(description="State the comparison arms' numbers on the open forecasts (ST0-D).")
+    ap = argparse.ArgumentParser(description="State the comparison arms' numbers on the open forecasts.")
     ap.add_argument("--arm", nargs="+", choices=ARMS, default=list(ARMS))
     ap.add_argument("--as-of", help="ISO instant every arm shares (default: now, to the minute)")
     ap.add_argument("--slug", nargs="*", help="only these questions")
-    ap.add_argument("--out", help="record directory (default planning/reviews/forecast_arms/<date>/)")
+    ap.add_argument("--out", help="record directory (default: a dated folder under the forecast_arms output directory)")
     ap.add_argument("--dry-run", action="store_true", help="print the packets and cost bounds; call and write nothing")
     ap.add_argument("--execute", action="store_true", help="allow the PAID frontier arm")
     ap.add_argument("--ceiling-usd", type=float, help="the operator's ceiling for this run's frontier spend")

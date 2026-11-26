@@ -3,11 +3,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Audit ``signals.canonical_url`` against the row's own dates, READ-ONLY.
 
-K-4 R4 §9 **F4**: a FRESH signal carrying a STALE ``canonical_url`` — a Yonhap
+The defect: a FRESH signal carrying a STALE ``canonical_url`` — a Yonhap
 item whose body was unambiguously 6 Aug 2026 stored
 ``…/AEN20250710005751315``, a 2025-dated article id. That is a provenance
 defect in the ingest, not a matching defect, and its cost is concrete: a
-labeller trusting the URL grades the pair ``temporal_stale``, and a K-5 closer
+labeller trusting the URL grades the pair ``temporal_stale``, and a closer
 citing that URL cites the wrong article. The report routes the fix to the
 data-quality queue as exactly this: "audit ``canonical_url`` against body
 dates."
@@ -19,10 +19,10 @@ stored URL CLAIMS (:func:`legba.data._url_canon.url_embedded_date` — the
 shared, tested helper) and compares it against the dates the row actually
 carries: ``payload->>'published_at'`` when present, else ``fetched_at``. A row
 is SUSPECT when the URL's claimed date is more than ``--stale-days`` older
-than the row's date (the F4 shape), or in the row's future by more than
+than the row's date (the stale-URL shape), or in the row's future by more than
 ``--future-days`` (an impossible claim). This script NEVER writes — it only
 SELECTs and prints; acting on a hit (re-scrape, canonical repair, source
-descriptor fix) is an operator decision per source, not a heuristic rewrite.
+descriptor fix) is a per-source decision, not a heuristic rewrite.
 
 Run in the registry container (runtime deps present) against the live
 Postgres:
@@ -192,7 +192,7 @@ async def main() -> int:
         )
         return 0
 
-    print("canonical_url date audit (READ-ONLY) — K-4 R4 F4")
+    print("canonical_url date audit (READ-ONLY)")
     for k, v in summary.items():
         print(f"  {k} = {v}")
 

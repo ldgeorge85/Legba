@@ -64,7 +64,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: retired
-  owner: a7_geo_convergence
+  owner: owner@local
 
 subscription:
   # No `targets` block → META analyst: one global scan per cadence tick over

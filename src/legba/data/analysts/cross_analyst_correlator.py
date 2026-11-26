@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""L-177 cross_analyst_correlator analyst kind.
+"""cross_analyst_correlator analyst kind.
 
 Reads multiple analysts' outputs (``FindingPayload``, ``PredictionPayload``,
 ``MetaFindingPayload``, etc.) — broad subscription predicate matching many
@@ -12,18 +12,17 @@ analyst_ids — and emits one structured :class:`FindingPayload` reporting:
   * **blind_spots**    — gaps where the analyst set as a whole has nothing
     to say about a topic the substrate clearly tracks.
 
-This realises topology-redesign v2 §5.8 — and §6.4's "the global situational
-awareness coordinator is not a special construct, it is a
-``cross_analyst_correlator`` analyst with a broad subscription."
+The global situational awareness coordinator is not a special construct:
+it is a ``cross_analyst_correlator`` analyst with a broad subscription.
 
-Per topology-redesign v2 §5.8::
+In short::
 
     Reads:  multiple analysts' outputs simultaneously
     Method: LLM planner specialized in finding correlations, contradictions,
             agreement clusters
     Writes: meta-meta findings
 
-Per L-102 / kind_contracts §5: this kind's runtime invocation goes through
+This kind's runtime invocation goes through
 :func:`run_method`. The runtime in :mod:`legba.runtime.dapr_actors` calls
 ``await deps_bundle.run_method(inputs, options)`` (two-arg shape). The host
 wraps :func:`run_method` with the activation-time ``deps`` via
@@ -100,7 +99,7 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Kind identity (registry key — see kind_contracts §1)
+# Kind identity (registry key)
 # ---------------------------------------------------------------------------
 
 
@@ -109,7 +108,7 @@ SCHEMA_VERSION: str = "legba/analyst.cross_analyst_correlator/1-0-0"
 HANDLER_VERSION: str = "0.1.0"
 PROMPT_MODULE_PATH: str = "legba.prompts.cross_analyst_correlator.v1"
 
-# Host-discovered constants — see L-211/L-241 integration pass.
+# Host-discovered constants.
 from ..provenance.kinds import OutputKind as _OutputKind  # noqa: E402
 
 OUTPUT_KIND: _OutputKind = _OutputKind.FINDING
@@ -136,7 +135,7 @@ class LLMHandlerLike(Protocol):
 
     Same shape as :class:`legba.data.analysts.inline_target.LLMHandlerLike`
     and the structural type :class:`legba.runtime.analyst_method.LLMHandlerLike`
-    used by the spike (L-002a). The duplication is intentional — kinds are
+    used by the spike. The duplication is intentional — kinds are
     pluggable, and importing across kinds would break that.
     """
 
@@ -526,7 +525,7 @@ def _coerce_correlation(
 
     Malformed JSON → fallback to an "unstructured" finding. The runtime's
     ``write_analyst_output`` will revalidate against the iglu schema and
-    DLQ-route anything still wrong (per L-107 §6).
+    DLQ-route anything still wrong.
     """
     meta_marks = {
         "meta": True,
@@ -709,7 +708,7 @@ def _coerce_correlation(
 
 
 # ---------------------------------------------------------------------------
-# LLM call (direct — DSPy wrapping deferred to L-176 per L-105)
+# LLM call (direct — DSPy wrapping deferred)
 # ---------------------------------------------------------------------------
 
 
@@ -826,7 +825,7 @@ async def run_method(
         )
     except Exception:
         # Let the runtime classify failure (transient vs hard) — see
-        # kind_contracts §7. We don't swallow because failure semantics
+        # We don't swallow because failure semantics
         # gate cooldowns, reminders, and DLQ routing.
         logger.warning(
             "cross_analyst_correlator.llm_error analyst_id=%s", analyst_id,
@@ -982,16 +981,16 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
 
 
 # ---------------------------------------------------------------------------
-# Wave B prereq #4 — DSPy prompt module surface
+# DSPy prompt module surface
 # ---------------------------------------------------------------------------
 
 
 def build_prompt_module() -> Any:
     """Construct and return the DSPy module bound to this analyst kind.
 
-    Wave B prereq #4: backfilled to return a real
+    Backfilled to return a real
     :class:`legba.prompts.cross_analyst_correlator.v1.CrossAnalystCorrelatorCycle`
-    so the L-176 optimizer can compile candidates against the trace set.
+    so the optimizer can compile candidates against the trace set.
 
     The kind handler keeps the direct ``chat_complete`` path (no dspy
     hard-requirement at runtime); this module is the optimization-

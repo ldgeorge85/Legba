@@ -54,7 +54,7 @@ _SEVERITY_RANK: dict[str, int] = {
 }
 _SEVERITY_TAG_PREFIX = "severity:"
 
-# FRAME-3 — SEVERITY AS STATE (``planning/FRAME_PROGRAM_2026-08-20.md`` §0.6).
+# SEVERITY AS STATE.
 #
 # The tag above used to answer two questions at once and therefore neither: a
 # desk tagged the severity of its SLICE DELTA, so a war in its fourth month
@@ -125,7 +125,7 @@ def severity_delta_from_tags(tags: Any) -> str | None:
     """The ``severity_delta:<rose|fell|steady|new>`` value in a finding's tags.
 
     ``None`` when absent or unrecognised — the ONLY honest answer for a head
-    written before the FRAME-3 flip reached its desk, or by a model that skipped
+    written before the standing-level split reached its desk, or by a model that skipped
     the tag. Every consumer is required to tolerate that ``None`` rather than
     substitute ``steady``: "nobody said" and "the desk checked and it held" are
     different facts, and papering the first over as the second is precisely the
@@ -336,15 +336,15 @@ class AlertPayload(_AnalystOutputBase):
 
 class CritiquePayload(_AnalystOutputBase):
     """Critique payload — covers both narrative critique outputs and the
-    L-175 eval-loop critic's scored judgments.
+    eval-loop critic's scored judgments.
 
-    Historical (Wave A) usage: analyst-kind outputs whose primary product
+    Historical usage: analyst-kind outputs whose primary product
     is a narrative critique (``target_ref`` + free-text ``rubric``).
 
-    L-175 eval-loop usage (added 2026-05-21): the critic analyst kind
+    Eval-loop usage: the critic analyst kind
     grades another analyst's output against the analyzed analyst's
     ``descriptor.eval.rubric`` block and emits a scored ``CritiquePayload``
-    per L-105 §3.2. The L-105 fields are optional so the historical Wave A
+    per the eval-loop contract. Those fields are optional so the historical
     shape (used by ``write_critique`` in ``provenance/writes.py`` and
     ``test_writes.test_write_critique_lands_row``) keeps validating
     unchanged.
@@ -353,17 +353,17 @@ class CritiquePayload(_AnalystOutputBase):
     (:mod:`legba.data.analysts.critic`) — the payload just carries the
     audit fields. ``judge_model`` ≠ ``analyzed_model`` is the contract;
     the payload itself doesn't validate the inequality so a deliberate
-    ``allow_self_correlated`` escape-hatch (per L-105) can still land a
+    ``allow_self_correlated`` escape-hatch can still land a
     row with the two equal.
     """
 
     kind_marker: Literal["critique"] = "critique"
 
-    # Wave A narrative-critique fields (kept for back-compat).
+    # Narrative-critique fields (kept for back-compat).
     target_ref: UUID | None = None
     rubric: str = Field(default="", max_length=256)
 
-    # L-175 eval-loop fields (per L-105 §3.2). All optional so the Wave A
+    # Eval-loop fields. All optional so the narrative-critique
     # shape ``CritiquePayload(title=..., target_ref=...)`` still validates.
     analyzed_output_id: UUID | None = None
     analyzed_analyst_id: str = Field(default="", max_length=256)
@@ -640,20 +640,18 @@ class JournalPayload(BaseModel):
 
     # The discriminator. Entries, chronicles, and lens reads are pure append;
     # only consolidations supersede. 'chronicle' = the public-record tier
-    # (planning/CHRONICLE_BUILD_2026-07-21.md — detached third-person cited
-    # prose over the tower top; same payload contract). 'lens' / 'lens_diff' =
-    # the VOICES faculty-lens tier (planning/VOICES_PLAN_2026-07-21.md, DL-1): a
+    # (detached third-person cited prose over the tower top; same payload
+    # contract). 'lens' / 'lens_diff' = the faculty-lens tier: a
     # faculty reads the verified tower top through a declared falsifiable prior
     # ('lens'), and a fifth diff pass narrates their agree/split/outlier
     # ('lens_diff'). Both ride this exact JournalPayload contract + verify floor.
     # (The chronicle build hit exactly this Literal: an unwidened list rejected
     # the new kind at validation — widen it BEFORE the write path can produce it.)
-    # 'inquiry' / 'crossroads' = the Program 5 STATEFUL tier
-    # (planning/PROGRAM5_INQUIRY_DESIGN_2026-09-24.md §2): a standing
+    # 'inquiry' / 'crossroads' = the STATEFUL tier: a standing
     # investigation carrying a ledger across cycles, written by the `inquiry`
     # KIND (not by journal_assessor) but riding this exact payload contract,
     # this verify floor and the same off-chain derived_from. `crossroads` is the
-    # one fixed-mandate descriptor on that kind (§5). Same Literal-widen lesson
+    # one fixed-mandate descriptor on that kind. Same Literal-widen lesson
     # the chronicle and the lenses both hit: widen BEFORE the write path can
     # produce the kind, or validation rejects the row.
     entry_kind: Literal[
@@ -678,15 +676,15 @@ class JournalPayload(BaseModel):
     # first-ever consolidation (the bootstrap case, §8).
     supersedes: UUID | None = None
     # Forced DETERMINISTICALLY by a non-LLM post-step (§10) — never trusted as
-    # agent-self-reported. Empty in Wave 0 (the deterministic post-step is Wave 1).
+    # agent-self-reported. Empty until the deterministic post-step writes it.
     honesty_flags: list[str] = Field(default_factory=list)
-    # Free-form per-row metadata (VOICES LV-1, migration 0090). Empty {} for
+    # Free-form per-row metadata (migration 0090). Empty {} for
     # every entry/consolidation/chronicle row (no behavior change). A 'lens' row
     # carries {"lens_id": <analyst_id>}; a 'lens_diff' row carries the structured
-    # {"matrix": {...}} agreement matrix (VOICES_BUILD_DESIGN §2.9 / §3.3).
+    # {"matrix": {...}} agreement matrix.
     # Mirrors FactPayload.data / NexusPayload.data. `prior_version` is
     # deliberately NOT duplicated here — the row's own analyst_version column IS
-    # the prior version (DL-2).
+    # the prior version.
     data: dict[str, Any] = Field(default_factory=dict)
     kind_marker: Literal["journal"] = "journal"
 

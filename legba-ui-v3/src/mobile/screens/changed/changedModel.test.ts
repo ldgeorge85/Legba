@@ -1,5 +1,5 @@
 /**
- * M-3a — the landing's data: "needs you" is what PAGED (the owner's rule),
+ * The landing's data: "needs you" is what PAGED,
  * Changed is the Board's ranked list plus the due forecasts, "since you last
  * looked" counts from the same answer, and one read per window.
  */
@@ -59,7 +59,7 @@ describe('changedModel', () => {
   })
 })
 
-describe('roll 85: the badge reads the counts route', () => {
+describe('the badge reads the counts route', () => {
   it('asks /since/counts for the same window start as the list', () => {
     const now = Date.parse('2026-11-14T10:20:30Z')
     expect(countsPath(86_400_000, now)).toBe(`/v3/since/counts?cursor=${encodeURIComponent('2026-11-13T10:20:00.000Z')}`)

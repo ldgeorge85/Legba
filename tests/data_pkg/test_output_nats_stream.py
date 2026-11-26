@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Integration tests for L-191 — `legba.data.outputs.nats_stream`.
+"""Integration tests for `legba.data.outputs.nats_stream`.
 
 Real NATS JetStream container per `tests/data_pkg/conftest.py` (started by
 `_ensure_containers_up`). No mocks for the NATS surface — the contract

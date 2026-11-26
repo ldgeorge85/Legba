@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""ST0-C — ``GET /api/v1/v3/ledger/forecasts``.
+"""``GET /api/v1/v3/ledger/forecasts``.
 
 The router mounted on a FastAPI app over the store fake (the production
 store functions answer it), plus the slim-image guard: the route ships in

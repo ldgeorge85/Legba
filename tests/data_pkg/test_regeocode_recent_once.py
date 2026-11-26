@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane N-O — ``scripts/regeocode_recent_once.py``, the bounded one-shot re-tag.
+"""``scripts/regeocode_recent_once.py``, the bounded one-shot re-tag.
 
 * PURE (``assess_row``): the live FR / BA mis-tags re-derive to the declared
   country; a handler-set code (GDELT) is kept; a row whose answer needs the
@@ -9,7 +9,7 @@
 * DB-backed (``integration``, container suite): dry-run writes nothing;
   ``--apply`` backs up first, updates geo + payload.geo, NULLs indexed_at,
   stays inside the window, and is idempotent (the backup keeps the FIRST,
-  pre-lane values).
+  pre-change values).
 """
 
 from __future__ import annotations
@@ -95,8 +95,8 @@ async def test_place_query_needing_the_gazetteer_is_skipped():
 
 @pytest.mark.asyncio
 async def test_hold_title_losses_keeps_a_country_the_title_names():
-    """Roll 74: NER mislabelled "US House" as a person and the N-B guard
-    blanked it, so the re-derive dropped US. Lane N-U fixed the guard (the
+    """NER mislabelled "US House" as a person and the guard
+    blanked it, so the re-derive dropped US. A later change fixed the guard (the
     country inside a mislabelled institution stays), so that row now
     re-derives UNCHANGED; --hold-title-losses still holds a row whose re-derive
     drops a country the unmasked title names (the guard's own Jim Jordan)."""

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""ST0-A on a migrated test DB — the 0242 guards the store's fakes cannot prove.
+"""On a migrated test DB — the 0242 guards the store's fakes cannot prove.
 
   * the migration body re-applies with zero catalog change;
   * the real store round-trips (upsert, state, seal, resolve) through asyncpg;
@@ -150,3 +150,53 @@ async def test_a_resolution_only_retires(conn):
         await conn.execute("UPDATE forecast_resolutions SET active = true WHERE NOT active")
     with pytest.raises(asyncpg.exceptions.CheckViolationError):
         await conn.execute("DELETE FROM override_log")
+
+
+async def _instant(conn) -> datetime:
+    """The server's clock now, strictly after every write already committed."""
+    return await conn.fetchval("SELECT clock_timestamp()")
+
+
+async def test_the_ledger_as_it_stood_ignores_what_was_written_after(conn):
+    # Before the instant: one sealed question with two numbers, and one still
+    # being drafted (unsealed), which the read counts but cannot show.
+    _, sealed = await fl.upsert_question(conn, _q("FX1-sealed"))
+    await fl.state_number(conn, sealed, fl.ForecastNumber("operator", "operator", 0.25, NOW))
+    await fl.state_number(conn, sealed, fl.ForecastNumber("clef_arm", "llm.decide.fict", 0.6, NOW))
+    await fl.seal_question(conn, sealed, at=await _instant(conn))
+    _, drafting = await fl.upsert_question(conn, _q("FX2-drafting"))
+    await fl.state_number(conn, drafting, fl.ForecastNumber("operator", "operator", 0.4, NOW))
+    at = await _instant(conn)
+
+    # After it: the draft is restated and sealed, a third question is written
+    # and sealed, and the first is resolved and then corrected.
+    await fl.state_number(conn, drafting, fl.ForecastNumber("operator", "operator", 0.45, NOW))
+    await fl.seal_question(conn, drafting, at=await _instant(conn))
+    _, later = await fl.upsert_question(conn, _q("FX3-later"))
+    await fl.state_number(conn, later, fl.ForecastNumber("operator", "operator", 0.5, NOW))
+    await fl.seal_question(conn, later, at=await _instant(conn))
+    await fl.resolve(conn, sealed, outcome="no", resolved_by="operator:1", early=True,
+                     evidence_refs=["url:https://example.org/fict"])
+    await fl.resolve(conn, sealed, outcome="yes", resolved_by="operator:1", early=True,
+                     evidence_refs=["url:https://example.org/fict2"], correction_reason="misread")
+
+    rows, unsealed = await fl.fetch_ledger_as_of(conn, at)
+    assert [r["slug"] for r in rows] == ["FX1-sealed"]
+    assert unsealed == 1
+    row = rows[0]
+    assert row["status"] == "open" and row["resolution"] is None
+    assert [(n["issuer_kind"], n["p"], n["sealed"]) for n in row["numbers"]] == [
+        ("operator", 0.25, True), ("clef_arm", 0.6, True)]
+
+    # Between the two resolutions: the first outcome, before its correction.
+    first = await conn.fetchval(
+        "SELECT resolved_at FROM forecast_resolutions WHERE question_id = $1::uuid AND NOT active", sealed)
+    rows, unsealed = await fl.fetch_ledger_as_of(conn, first)
+    by = {r["slug"]: r for r in rows}
+    assert set(by) == {"FX1-sealed", "FX2-drafting", "FX3-later"} and unsealed == 0
+    assert by["FX1-sealed"]["status"] == "resolved" and by["FX1-sealed"]["resolution"]["outcome"] == "no"
+    assert [n["p"] for n in by["FX2-drafting"]["numbers"]] == [0.45]
+
+    # Now: the corrected outcome.
+    now_rows = {r["slug"]: r for r in await fl.fetch_ledger(conn)}
+    assert now_rows["FX1-sealed"]["resolution"]["outcome"] == "yes"

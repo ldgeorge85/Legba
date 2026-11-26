@@ -663,7 +663,7 @@ class MediaCloudSourceHandler:
         if self._secret_resolver is None:
             raise RuntimeError(
                 "MediaCloudSourceHandler has no secret resolver wired; "
-                "the runtime (L-103) injects one at activation time."
+                "the runtime injects one at activation time."
             )
         ref = self._config.api_key_secret
         secret_id = ref.raw if isinstance(ref, SecretRef) else str(ref)

@@ -18,7 +18,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactElement } from 'react'
 import { fromFullRow } from '@/lib/subjectReads'
 import { CatalogPopover } from '@/components/CatalogPopover'
-import { ObjectRail, RAIL_SECTIONS } from './ObjectRail'
+import { ObjectRail, RAIL_SECTIONS, SubjectRoster } from './ObjectRail'
 import { registerShell, type ShellPort } from '@/lib/applyAction'
 import profileUiJson from '@/lib/profile_ui.json'
 import { PANEL_REGISTRY } from '@/panel-registry/registry'
@@ -139,7 +139,7 @@ function fakeShell() {
       calls.push(`bound:${kind}:${id}`)
       return true
     }),
-    switchStance: vi.fn(),
+    switchStance: vi.fn((id: string) => calls.push(`stance:${id}`)),
     applyPreset: vi.fn((id: string) => calls.push(`preset:${id}`)),
     runMission: vi.fn((id: string) => calls.push(`mission:${id}`)),
     reopenConsult: vi.fn(),
@@ -215,7 +215,7 @@ describe('RATCHET — panel rows in the rail: 0 (was 26)', () => {
     expect(panelRows.map((r) => r.textContent)).toEqual([])
   })
 
-  it('the catalog is the top bar ＋ popover (U-2), and it lists no drill', () => {
+  it('the catalog is the top bar ＋ popover, and it lists no drill', () => {
     let closed = false
     render(wrap(<CatalogPopover mode="personal" side="operator" onClose={() => (closed = true)} />))
     // The rail no longer carries its own search / catalog row.
@@ -303,29 +303,27 @@ describe('Subjects — grouped by the profile roster', () => {
     expect(lane.textContent).not.toMatch(/High|Moderate|Low|Unverified/)
   })
 
-  it('X3/D3 — a subject click opens its READ: the scope moves to it, it is focused, its page opens bound', async () => {
+  it('a subject click makes it the point, focuses it, and goes to its home — the subject tab', async () => {
     renderRail()
     fireEvent.click(await screen.findByTestId('rail-subject-country_g20_br'))
     // (1) the wall's scope — the feed and the Morning Read filter by it
     expect(useScope.getState().scope).toMatchObject({ kind: 'target', id: 'country_g20_br', label: 'Brazil' })
     // (2) the focus — the Inspector (read state first) and Consult's pin follow it
     expect(useSelection.getState().selection).toMatchObject({ kind: 'target', id: 'country_g20_br', label: 'Brazil' })
-    // (3) the subject page, bound to it, through the one executor
-    expect(shell.calls).toEqual(['bound:subject.page:country_g20_br'])
+    // (3) its home: the subject tab, whose page follows the point — never a
+    // bound copy inside the tab the reader was on
+    expect(shell.calls).toEqual(['stance:subject'])
   })
 
-  it('X3/D3 — the click compiles to set_scope → focus → open_panel subject.page#brief, in that order', () => {
+  it('the click compiles to set_scope → focus → arrange subject, in that order', () => {
     expect(subjectReadActions('country_g20_br', 'Brazil')).toEqual([
       { action: 'set_scope', args: { kind: 'target', id: 'country_g20_br', label: 'Brazil' } },
       { action: 'focus', args: { ref: { kind: 'target', id: 'country_g20_br' }, label: 'Brazil' } },
-      {
-        action: 'open_panel',
-        args: { kind: 'subject.page', params: { subject: { kind: 'target', id: 'country_g20_br' }, tab: 'brief' } },
-      },
+      { action: 'arrange', args: { layout: 'subject', layout_type: 'stance' } },
     ])
   })
 
-  it('X3/D3 — ONE subject noun on the rail: no rendered string carries two of subject / desk / target / country', async () => {
+  it('ONE subject noun on the rail: no rendered string carries two of subject / desk / target / country', async () => {
     localStorage.setItem('legba_rail_collapsed', JSON.stringify([]))
     renderRail()
     await screen.findByText('Brazil')
@@ -370,7 +368,7 @@ describe('Reads, Units, Cases, Queues', () => {
     expect(useSelection.getState().selection).toMatchObject({ kind: 'analyst', id: 'energy_security' })
   })
 
-  it('no mission rows and no layouts block: the arrangement machinery is gone (U-2)', () => {
+  it('no mission rows and no layouts block: the arrangement machinery is gone', () => {
     renderRail()
     expect(document.querySelector('[data-testid^="rail-mission-"]')).toBeNull()
     expect(screen.queryByTestId('layout-preset-select')).toBeNull()
@@ -404,5 +402,31 @@ describe('Reads, Units, Cases, Queues', () => {
   it('in the cis mode the personal-only queues are not offered', () => {
     render(wrap(<ObjectRail mode="cis" />))
     expect(screen.getByTestId('rail-queues-none')).toBeInTheDocument()
+  })
+})
+
+describe("the reader's rail: subjects ranked by what changed", () => {
+  it('most changes first with the count, then "No change" by name; no band word', async () => {
+    const changes = new Map([
+      ['lane_hormuz', 2],
+      ['country_watch_sd', 5],
+    ])
+    render(wrap(<SubjectRoster changes={changes} />))
+    await waitFor(() => expect(screen.getByTestId('rail-subject-country_g20_br')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByTestId('rail-subject-lane_hormuz')).toBeInTheDocument())
+    const moved = [...screen.getByTestId('rail-subjects-changed').querySelectorAll('[data-rail-row="subject"]')]
+    expect(moved.map((b) => b.getAttribute('data-testid'))).toEqual(['rail-subject-country_watch_sd', 'rail-subject-lane_hormuz'])
+    expect(moved[0].textContent).toBe('Sudan5')
+    expect(screen.getByTestId('rail-subjects-still-head').textContent).toBe('No change')
+    expect(within(screen.getByTestId('rail-subjects-still')).getByTestId('rail-subject-country_g20_br').textContent).toBe('Brazil')
+    expect(screen.getByTestId('rail-subjects-ranked').textContent).not.toMatch(/High|Moderate|Low|Unverified/)
+  })
+
+  it('before the counts are read: the roster by name, with no count and no "No change" head', async () => {
+    render(wrap(<SubjectRoster changes={null} />))
+    await waitFor(() => expect(screen.getByTestId('rail-subject-country_g20_br')).toBeInTheDocument())
+    expect(screen.getByTestId('rail-subjects-ranked')).toHaveAttribute('data-read', '0')
+    expect(screen.queryByTestId('rail-subjects-still-head')).toBeNull()
+    expect(screen.getByTestId('rail-subject-country_g20_br').textContent).toBe('Brazil')
   })
 })

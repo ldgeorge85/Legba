@@ -2,8 +2,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# b0_13_catch.sh — the ONE-SHOT instrumented catch for the B0-13 :52 event-loop
-# freeze (plan: planning/B0_13_ROOT_CAUSE_2026-07-23.md Part 6). READ-ONLY
+# b0_13_catch.sh — the ONE-SHOT instrumented catch for the :52 event-loop
+# freeze. READ-ONLY
 # except a py-spy pip install inside the runtime container (ephemeral).
 #
 # Run at ~00:44 UTC (cron /etc/cron.d/legba-b0-13-catch — REMOVE after the
@@ -11,7 +11,7 @@
 # (expected ~00:52) it captures: the frozen Python stack (py-spy, twice),
 # pg_stat_activity + ungranted pg_locks, sidecar/scheduler tails, and then the
 # scheduler's 'Sidecar connected' actorTypes lines after the watchdog's FIRST
-# restart (validates the P2 Fix-2a order). Exits by TIMEBOX if no freeze.
+# restart (validates the restart order). Exits by TIMEBOX if no freeze.
 
 set -u
 RUNTIME="legba-legba-runtime-dapr-1"
@@ -57,14 +57,14 @@ log "--- step 3: delivery-plane innocence check (expect ~empty)"
 docker logs legba-dapr-sidecar-1 --since "$(date -u -d '3 min ago' +%FT%TZ)" 2>&1 | grep -v 'Removed 0 expired rows' | tail -20
 docker logs legba-dapr-scheduler-1 --since "$(date -u -d '3 min ago' +%FT%TZ)" 2>&1 | grep -vi compact | tail -10
 
-log "--- step 4: wait for the watchdog FIRE (P2 validation) — up to 45 min"
+log "--- step 4: wait for the watchdog FIRE (validation) — up to 45 min"
 fire_deadline=$(( $(date +%s) + 45 * 60 ))
 while [ "$(date +%s)" -lt "$fire_deadline" ]; do
     if tail -5 /var/log/legba_host_watchdog.log 2>/dev/null | grep -q " FIRE "; then
         log "watchdog FIRED — capturing scheduler actorTypes over the next 4 min"
         sleep 240
         docker logs legba-dapr-scheduler-1 --since "$(date -u -d '6 min ago' +%FT%TZ)" 2>&1 | grep 'Sidecar connected' | tail -6
-        log "P2 PASS iff the FIRST post-FIRE line lists SourceActor/AnalystActor/TargetActor"
+        log "PASS iff the FIRST post-FIRE line lists SourceActor/AnalystActor/TargetActor"
         break
     fi
     sleep 20

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane N-B — the desk slice's WATERMARK window and its declared coverage gap.
+"""The desk slice's WATERMARK window and its declared coverage gap.
 
 The US desk's ``ORDER BY fetched_at DESC LIMIT 120`` slice covered ~6-7 h of
 an ~11 h cycle; 11-10 19:13-23:44Z was in no US slice (142030d0 Jim Jordan

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""``on_screen`` — what the console shows as a turn is asked (lane Q-1, from U-6) — a leaf.
+"""``on_screen`` — what the console shows as a turn is asked — a leaf.
 
 The console (``legba-ui-v3/src/lib/onScreen.ts``) sends, with every turn asked
 from the frame, ids and places only — never a view's content::
@@ -118,27 +118,25 @@ def point_of(on_screen: Any) -> dict[str, str] | None:
 
 
 def render_on_screen_block(on_screen: Any) -> str:
-    """The compact, labelled context block (``""`` when there is nothing)."""
+    """The compact, labelled context block (``""`` when there is nothing).
+
+    The point's label is written as a JSON string, so a quote mark or a
+    newline in it cannot break the block. The open views and the chat
+    placement are not printed: no instruction uses them.
+    """
     if not isinstance(on_screen, Mapping):
         return ""
-    lines = ["ON SCREEN (the operator's console as this was asked — context for what they are "
-             "looking at, never evidence; cite rows, not the screen):"]
-    head = f"page {on_screen.get('page') or '?'} ({on_screen.get('side') or 'reader'} side)"
+    lines = ["ON SCREEN (what the person asking had on screen; context for 'this' and 'here', "
+             "never evidence):"]
+    head = f"page: {on_screen.get('page') or 'unknown'}"
     point = point_of(on_screen)
     head += (
-        f" · point: {point['kind']} {point['id']}" + (f" \"{point['label']}\"" if point["label"] else "")
+        f" · point: {point['kind']} {point['id']}"
+        + (f" {json.dumps(point['label'], ensure_ascii=False)}" if point["label"] else "")
         if point else " · point: none"
     )
     win = on_screen.get("window") if isinstance(on_screen.get("window"), Mapping) else None
     if win:
         head += f" · window {win.get('span') or 'custom'} ({win.get('from')} → {win.get('to')})"
     lines.append(head)
-    views = [v for v in on_screen.get("views") or () if isinstance(v, Mapping)][:MAX_VIEWS]
-    if views:
-        lines.append("views: " + ", ".join(
-            f"{v.get('id')}@{v.get('at') or '?'}{'' if v.get('front') else ' (behind)'}" for v in views
-        ))
-    chat = on_screen.get("chat") if isinstance(on_screen.get("chat"), Mapping) else None
-    if chat:
-        lines.append(f"consult: {chat.get('placement') or '?'}{', collapsed' if chat.get('collapsed') else ''}")
     return "\n".join(lines)

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""P3-T6 — the ``composition_lineage_sweep`` deterministic sub-handler.
+"""The ``composition_lineage_sweep`` deterministic sub-handler.
 
 Walks ``derived_from`` BACKWARD from each recent composition root
 (world_assessor / country_composition) via ``validate_lineage`` and reports
@@ -227,8 +227,8 @@ def _gauge_row(analyst: str, title: str, body: str = "") -> dict[str, Any]:
 async def test_frame_gauge_lands_in_the_finding_data_and_body():
     """The gauge's numbers reach the sweep's EXISTING output surface.
 
-    Review §5.2 puts the gauge here rather than in a new analyst — "Extend,
-    don't build" — so the acceptance test is that the extension actually shows
+    The gauge lives here rather than in a new analyst ("extend,
+    don't build"), so the acceptance test is that the extension actually shows
     up where a reader of this finding will meet it: in ``data`` for machines and
     in the body lines for humans.
     """
@@ -267,12 +267,12 @@ async def test_frame_gauge_queries_all_four_composition_tiers():
     contract unchanged, which makes it the only tier this gauge can still say
     anything about after the cutover.
 
-    P3 LANE A adds a SIXTH, and it is the second half of that same sentence:
+    A SIXTH rule is the second half of that same sentence:
     after the demotion the gauge can only say something about a tier that still
     AUTHORS a title, and there are now exactly two of those — the world voice
     and the per-country one.
 
-    W5 (2026-11-07) adds hybrid_threat_composition beside
+    hybrid_threat_composition sits beside
     escalation_composition: the second thematic tier, gauged like the first.
     """
     conn = _LineageConn(roots=[], nodes={}, catalog=set(), gauge=[])

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""P2-T5 — the per-unit correctness-vs-reference scorer.
+"""the per-unit correctness-vs-reference scorer.
 
 Covers, mostly as PURE functions (no DB):
 
@@ -257,7 +257,7 @@ class _FakePool:
 class _FakeConn:
     """Routes the handler's reads to canned rows by SQL shape.
 
-    Five shapes now: the FLEET-WIDE operator gold-set pull (M-1, no args — it
+    Five shapes now: the FLEET-WIDE operator gold-set pull (no args — it
     reads every ``correctness_labels`` row in one trip), then the per-unit
     reference labels / faithfulness / prior-population / findings reads.
     """
@@ -275,7 +275,7 @@ class _FakeConn:
         d = self._data.get(unit, {})
         if "FROM unit_reference_labels" in sql:
             return d.get("labels", [])
-        # The M-2 prior-population rollup also matches `kind = 'critique'`, so
+        # The prior-population rollup also matches `kind = 'critique'`, so
         # its distinctive GROUP BY must be tested first.
         if "kind = 'critique'" in sql and "GROUP BY" in sql:
             return d.get("faithfulness_priors", [])
@@ -433,7 +433,7 @@ async def test_faithfulness_population_is_honest_when_the_pull_fails():
 
 
 # ---------------------------------------------------------------------------
-# M-1 — the PRIMARY (operator gold-set) axis.
+# The PRIMARY (operator gold-set) axis.
 #
 # The handler read `unit_reference_labels` (1 row, retired analyst, 0 source
 # ids) and reported None every day of its life, while the 8 real operator
@@ -550,7 +550,7 @@ async def test_operator_pull_failure_degrades_to_the_honest_empty_axis():
 
 
 # ---------------------------------------------------------------------------
-# M-2 — prior judge populations are ANNOTATED beside the headline, never mixed.
+# Prior judge populations are ANNOTATED beside the headline, never mixed.
 # ---------------------------------------------------------------------------
 
 
@@ -603,7 +603,7 @@ async def test_prior_judge_populations_are_annotated_not_pooled():
 # `faithfulness_score` metric family in STAMP_EXPECTED_SHIFTS characterises it
 # exactly — the same argument that licenses pooling in band_calibration_tracker
 # licenses it here, and the strict filter cost the same thing: 573 of 26,949
-# critiques usable, per-unit n ~19-32 (CAMPAIGN_2026-08-29 A-7).
+# critiques usable, per-unit n ~19-32.
 # ---------------------------------------------------------------------------
 
 

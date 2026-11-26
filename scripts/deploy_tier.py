@@ -166,7 +166,7 @@ PATH_RULES: tuple[tuple[str, str, str], ...] = (
     # --- descriptors ---------------------------------------------------------
     ("descriptors/LIFECYCLE.md", DESCRIPTOR, "host lifecycle overlay the walker applies"),
     ("descriptors/RETIRED.md", DESCRIPTOR, "retirement rows the walker applies"),
-    ("descriptors/LIFECYCLE.d/*.md", DESCRIPTOR, "one host lifecycle row the walker applies (R-1)"),
+    ("descriptors/LIFECYCLE.d/*.md", DESCRIPTOR, "one host lifecycle row the walker applies"),
     ("descriptors/examples/**", T0, "example descriptors, never registered"),
     ("descriptors/*.yaml", DESCRIPTOR, "a descriptor: its schema_uri family decides"),
     ("descriptors/**", FULL, "unrecognised descriptor-tree file"),

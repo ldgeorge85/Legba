@@ -219,7 +219,18 @@ function FlowCanvasArea({ engine }: { engine?: LayoutEngine }) {
         >
           <Background gap={24} />
           <Controls showInteractive={false} />
-          <MiniMap pannable zoomable />
+          {/* Themed to the dark canvas; not drawn until there is a node to show. */}
+          {nodes.length > 0 && (
+            <MiniMap
+              pannable
+              zoomable
+              bgColor="var(--surf-1)"
+              maskColor="rgba(10,12,16,0.7)"
+              nodeColor="var(--ink-3)"
+              className="!border !border-line"
+              data-testid="flow-minimap"
+            />
+          )}
         </ReactFlow>
       </>
     )

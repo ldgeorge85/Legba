@@ -49,7 +49,7 @@ the "ground truth" block. This also subsumes the leg-1b coherence filter: an
 ingested ``<person> | leader of | <geo>`` can no longer contradict the seeded
 officeholder because it is filtered out wholesale, not row-by-row.
 
-Design constraints (per planning/KNOWLEDGE_GROUNDING_PLAN.md Tier 1):
+Design constraints (Tier 1):
 
   * NO new vector / embed dependency — this is a couple of cheap Postgres
     reads against the same current-facts gate
@@ -128,7 +128,7 @@ __all__ = [
 # Env-overridable so an operator who later adds a high-trust source_type (e.g.
 # a vetted ``wikidata`` lane distinct from ``seed``) can admit it without a
 # code change; an empty/blank override falls back to the safe default.
-#: ``operator`` (W11 C-2b-2/facts, decision D6): a fact the operator asserted
+#: ``operator``: a fact the operator asserted
 #: through the consult write plane is the operator's own word — it grounds like
 #: curated. A model-initiated ``proposed`` fact still never does.
 _DEFAULT_TRUSTED_SOURCE_TYPES: tuple[str, ...] = ("seed", "curated", "operator")
@@ -163,7 +163,7 @@ def trusted_source_types() -> tuple[str, ...]:
 
 
 def contention_surfacing_enabled() -> bool:
-    """P3-2 — whether the grounding preamble ANNOTATES a disputed fact
+    """Whether the grounding preamble ANNOTATES a disputed fact
     (CONTESTED/DISPUTED). Default ON (``LEGBA_CONTENTION_SURFACING`` truthy or
     unset); set the flag to a falsey value ('0'/'off'/'false'/'no') for a kill
     switch that renders disputed facts plainly (no annotation). This is a pure
@@ -176,7 +176,7 @@ def contention_surfacing_enabled() -> bool:
 
 
 def contention_prefer_surfaced() -> bool:
-    """P3-2 — whether slice assembly PREFERS the arbiter's surfaced winner over
+    """Whether slice assembly PREFERS the arbiter's surfaced winner over
     its contested siblings in the grounding ORDER BY. **Default OFF**
     (``LEGBA_CONTENTION_SURFACING_PREFER`` unset/falsey): this changes WHAT
     analysts consume, so it never ships silently — the annotation (above) stays
@@ -228,11 +228,10 @@ def _row_get(row: Any, key: str, default: Any = None) -> Any:
 # pure function of (live_reach, harvest_class, desk_salience, age, id) — no
 # LLM, no randomness, reproducible run-to-run and unit-testable without a DB.
 
-# Harvest-class priority (see scripts/harvest_open_questions.py K-2a + the
-# K-2b unit-payload faucet in inline_target.convert_open_questions). Ordinal,
+# Harvest-class priority (see scripts/harvest_open_questions.py and the
+# unit-payload faucet in inline_target.convert_open_questions). Ordinal,
 # smaller = higher priority.
-#   * coverage_floor — R-B (RESEARCH_PROGRAM_SPEC §2.2), 2026-09-05. Ranked
-#     FIRST (2026-09-06 tune — see below). The target's own evidence keeps
+#   * coverage_floor — ranked FIRST (see below). The target's own evidence keeps
 #     naming a polity NO open frame names, and it is the ONLY class provably
 #     unanswerable from our own corpus: the detector established the gap by
 #     measuring our corpus, so re-mining that same corpus is the one
@@ -379,7 +378,7 @@ def dispatch_scope_of(diagnostic_evidence: Any) -> tuple[str | None, tuple[str, 
     """``(target_id, geo)`` a DISPATCHED standing question carries, or
     ``(None, ())`` for every question that carries none. Pure + DB-free.
 
-    THE TARGET CARRY (RESEARCH_PROGRAM_SPEC §1.3, §8 F-8). ``geo`` is the ONLY
+    THE TARGET CARRY. ``geo`` is the ONLY
     reachability key a research signal has: ``actor_substrate_slice`` narrows a
     desk's reactive slice on ``geo && $n::text[]`` and nothing else (verified
     2026-09-05: all 134 head targets carry a ``sources`` array, 136 entries,
@@ -549,7 +548,7 @@ _WORLD_CONTEXT_BLOCK_CHAR_CAP = 3000
 # (degrade-not-drop — ``build_world_context_block([])`` returns ``None``).
 #
 # CALIBRATION (M22, 2026-07-06 — live embedding probe against the 293-point
-# world_context corpus, the `embedding-inno1` / bge-m3 endpoint). The 0.65 floor
+# world_context corpus, the bge-m3 embedding endpoint). The 0.65 floor
 # filtered ~100% of hits (0/81 runs injected) because it sat ABOVE the achievable
 # on-target cosine for this embedder+corpus. Two paired retrieval fixes recalibrate
 # the distribution (query construction + doc-side context prefix; see
@@ -590,7 +589,7 @@ def world_context_min_score() -> float:
         return _WORLD_CONTEXT_MIN_SCORE
 
 
-# Quality guard for the situations grounding block (review M2 + DQ P6). Clustered
+# Quality guard for the situations grounding block Clustered
 # "nothing to report" / status-quo findings get a signature + materialise as
 # situations; they are NON-events and must never be injected as an ongoing
 # situation NOR head the intensity ranking. Two shape families match:
@@ -598,7 +597,7 @@ def world_context_min_score() -> float:
 #   1. LEGACY "No … (alerts / -specific / in the latest batch)" — the extinct
 #      weather-alert non-event ("No France-specific weather alerts in the latest
 #      batch of signals").
-#   2. DQ P6 MID-STRING status-quo shapes — the live pollution the legacy anchor
+#   2. MID-STRING status-quo shapes — the live pollution the legacy anchor
 #      missed: "United States – No observable WMD proliferation activity",
 #      "Canada – Stability maintained (no dominant instability vector)",
 #      "North Korea – Status quo across examined domains", "Russia – Low
@@ -665,7 +664,7 @@ def is_non_event_situation_name(name: Any) -> bool:
 
     Shared, dependency-light predicate: the grounding READ uses it to drop these
     frames from the injected block, and :mod:`situation_clustering` reuses it at
-    MATERIALIZATION time (DQ P6) to stamp ``data.steady_state`` so a steady-state
+    MATERIALIZATION time to stamp ``data.steady_state`` so a steady-state
     frame is authoritatively marked at write time, not only name-filtered on read.
     Keep the two call sites on the SAME regex so the tag and the read never drift.
     """
@@ -679,7 +678,7 @@ _is_non_event_situation = is_non_event_situation_name
 class GroundingFact:
     """A single current authoritative fact row, normalised for rendering.
 
-    CONTESTED annotation (Holes-B Wave 5 — #101). A grounding-eligible
+    CONTESTED annotation. A grounding-eligible
     (seed/curated) fact can still belong to a live contention group when the
     operator vetted two coexisting values for the same ``(subject, predicate)``
     or an ingestion-side dispute names a curated value as one of its clusters.
@@ -993,9 +992,9 @@ class GroundingOpenQuestion:
             bits.append("opened today" if age_days == 0 else f"opened {age_days}d ago")
         if self.live_reach > 0:
             bits.append(f"live_reach={self.live_reach}")
-        # R-B — the DISPATCH scope, printed ONLY when the question carries one.
+        # The DISPATCH scope, printed ONLY when the question carries one.
         # This is the token an outbound-research run has to quote back so its
-        # evidence lands in the desk that asked (§1.3: geo is the only
+        # evidence lands in the desk that asked (geo is the only
         # reachability key). Questions without a scope render exactly as they
         # did before this existed.
         if self.target_id and self.geo:
@@ -1887,7 +1886,7 @@ class SubstrateGroundingResolver:
         # spent only on facts that can actually render. (The Python guard below
         # is the in-process backstop for the same rule.)
         #
-        # CONTESTED annotation (Wave 5, #101): LEFT JOIN the already-populated
+        # CONTESTED annotation: LEFT JOIN the already-populated
         # contention SIDECAR so a grounding-eligible fact that is in a live
         # dispute is ANNOTATED (CONTESTED/DISPUTED), never silently asserted as
         # ground truth. Read-only — the join touches nothing, the provenance
@@ -1896,7 +1895,7 @@ class SubstrateGroundingResolver:
         # ``collapsed`` group (down to one value) reads as uncontested, so the
         # COALESCE folds it back to the marker default — we trust the live
         # sidecar status over a possibly-stale ``facts.contested`` marker.
-        # P3-2 preference (default OFF): when opted in, a surfaced winner
+        # Preference (default OFF): when opted in, a surfaced winner
         # outranks its contested siblings so the grounded line is the arbiter's
         # pick. OFF by default so analyst consumption is unchanged unless an
         # operator explicitly enables it. The annotation (contested/disputed)
@@ -1978,7 +1977,7 @@ class SubstrateGroundingResolver:
             # default. ``_row_get`` keeps a pre-Wave-5 row shape (one that never
             # SELECTed the joined columns) backward-compatible — it degrades to
             # the plain/uncontested default rather than raising.
-            # Annotation kill-switch (P3-2): flag OFF renders every fact plainly
+            # Annotation kill-switch: flag OFF renders every fact plainly
             # (uncontested), regardless of the sidecar. Default ON = unchanged.
             contested_raw = _row_get(r, "contested")
             contested = (
@@ -2676,8 +2675,7 @@ def build_grounding_preamble(
 # AUTHORITATIVE CURRENT CONTEXT ground-truth block, with a header that makes the
 # trust boundary explicit: situations are analysis DERIVED from clustered
 # findings (the system's own situational picture), NOT operator-vetted ground
-# truth. Per the Phase-5 operator decision, situations are NEVER laundered into
-# the ground-truth block.
+# truth. Situations are NEVER laundered into the ground-truth block.
 _SITUATIONS_HEADER = (
     "ASSESSED SITUATIONS (the system's current situational picture — ONGOING "
     "frames the platform has CLUSTERED from recent findings, NOT operator-vetted "
@@ -2877,10 +2875,10 @@ def build_graph_structure_block(structure: "GroundingGraphStructure | None") -> 
 # header makes the trust boundary explicit: this text is PRIOR, not EVIDENCE. It
 # frames HOW the unit reasons (method / what to look for), never WHAT is true, and
 # is NOT citable via ``[N]`` — every claim still cites the numbered signals, so
-# verify semantics are untouched by construction (the honesty rule, RAG plan §B).
+# verify semantics are untouched by construction (the honesty rule).
 # The EXACT operator-facing header string is preserved verbatim as the leading
 # clause so a trace / prompt audit can grep for it.
-# DQ Phase-2 RAG tune (2026-07-03): the mechanism finding showed the faithfulness
+# The mechanism finding showed the faithfulness
 # cost was UNCITED INTERPRETATION, not fact-leak — the model used a prior to write
 # an inferred judgement ("the most plausible mechanism is …") with no [N]. The old
 # header forbade stating an uncited "fact"; it now forbids an uncited fact OR

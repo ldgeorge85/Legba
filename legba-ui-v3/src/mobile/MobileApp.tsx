@@ -1,9 +1,9 @@
 /**
  * MobileApp — the September phone surface: a navigator and a report. NOT
- * MOUNTED since the phone shell (M-2); lane M-4 deletes it. Its Consult sheet
- * went with M-3g (Consult is the shell's Consult tab, `screens/consult/`).
+ * MOUNTED since the phone shell; slated for deletion. Its Consult sheet
+ * went away (Consult is the shell's Consult tab, `screens/consult/`).
  *
- * ── THE LIST IS LIGHT; A READ IS FETCHED WHEN IT IS OPENED (M-0a) ─────────
+ * ── THE LIST IS LIGHT; A READ IS FETCHED WHEN IT IS OPENED ─────────
  * Until 2026-11-14 the navigator asked `/findings` for eighty rows at FULL
  * weight — every read's blocks, quoted spans and cited signals — so that
  * opening a report cost no network. Live, that one response was 9.2 MB on

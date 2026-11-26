@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W11-F160 — consult turn 91b6260c stored its header text as the answer.
+"""Consult turn 91b6260c stored its header text as the answer.
 
-2026-11-05 23:06Z, session 567daed8. The forced final wrote ``<<<FINAL>>>``,
+The forced final wrote ``<<<FINAL>>>``,
 ``uncertainty: 0.55`` and then a ``cited_refs:`` line that listed ~101 distinct
 ids and looped until the 32,768-token output cap: 969 ids, 102 unique, cut
 mid-uuid, no blank line, no prose. ``_parse_sentinel_final`` returned None on
@@ -19,7 +19,7 @@ Pinned here:
    trailing fragment, and keep at most 30 — and a degenerate header line does
    not hide prose written after it.
 4. A normal answer parses exactly as before.
-5. The prompts say so (W11-F160 + the W11-F162 ledger line).
+5. The prompts say so (and the ledger line).
 """
 
 from __future__ import annotations
@@ -359,11 +359,16 @@ def test_the_prompts_carry_the_new_lines() -> None:
         "palette; if the question asks for one, say so once in the answer and "
         "use query_hypotheses / list_findings instead — do not search for it."
     )
-    for prompt in (_SYSTEM_PROMPT, RAW_SYSTEM_PROMPT, VERIFIED_SYSTEM_PROMPT):
+    # The bake-off arms keep the text they were measured with.
+    for prompt in (RAW_SYSTEM_PROMPT, VERIFIED_SYSTEM_PROMPT):
         assert contract in prompt and required in prompt
-    assert ledger in _SYSTEM_PROMPT
-    synth = _tx.synthesis_system(_SYSTEM_PROMPT, FINAL_SENTINEL)
+    # The live prompt states the same limits in its answer format, and the
+    # stale line that contradicted list_due_resolvers is gone.
+    assert "(ids the tools returned, each once, at most 30)" in _SYSTEM_PROMPT
+    assert ledger not in _SYSTEM_PROMPT and "list_due_resolvers(" in _SYSTEM_PROMPT
+    synth = _tx.synthesis_system(_SYSTEM_PROMPT, FINAL_SENTINEL, frozen=True)
     assert (
         "List at most 30 cited_refs, each once, on one line, then a blank line, "
         "then the answer prose — the answer prose is required."
     ) in synth
+    assert "in the answer format above" in _tx.synthesis_system(_SYSTEM_PROMPT, FINAL_SENTINEL)

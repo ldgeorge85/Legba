@@ -195,7 +195,7 @@ describe('LayerPanel — the aperture section', () => {
   })
 })
 
-describe('LayerPanel — the layer catalog (UI-B4/map)', () => {
+describe('LayerPanel — the layer catalog', () => {
   beforeEach(() => {
     useWorldState.setState({ counts: {} })
   })

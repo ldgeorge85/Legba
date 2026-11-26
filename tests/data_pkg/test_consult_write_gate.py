@@ -83,8 +83,7 @@ async def rig(world: World, monkeypatch):
     against) and the consult_write binding, re-pointed at an armed request."""
     # The rig's registry runs in dev mode. The main checkout's .env carries the
     # live LEGBA_REGISTRY_API_TOKEN into the test container while the rig's
-    # client is built with token="" — the registry answered 401 (w5-int,
-    # 2026-10-04); a lane worktree has no .env, so it never saw this.
+    # client is built with token="" — the registry answered 401; a worktree has no .env, so it would never see this.
     monkeypatch.delenv("LEGBA_REGISTRY_API_TOKEN", raising=False)
     front = front_mod.WritesFront(
         type("Deps", (), {"descriptor_registry": world.reg})(), is_live=lambda rid: True, executor=world.ex,
@@ -368,7 +367,7 @@ async def test_unarmed_is_byte_identical_and_armed_offers_the_five(rig):
     names = [t["name"] for t in armed["tools"]]
     n = len(W.WRITE_TOOL_NAMES)
     assert names[-n:] == list(W.WRITE_TOOL_NAMES) and names[:-n] == [t["name"] for t in before["tools"]]
-    assert "Changes (call them" in armed["system"] and "SEAMS #64" in armed["system"]
+    assert "Changes (call them" in armed["system"] and "not available in this version" in armed["system"]
     assert result.consult_response.answer.endswith("writes: none")
     assert result.consult_response.data["writes"] == []
 

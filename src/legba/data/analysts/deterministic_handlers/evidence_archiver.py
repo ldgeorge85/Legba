@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""``evidence_archiver`` sub-handler — NATIVE cited-evidence archival (P2-1).
+"""``evidence_archiver`` sub-handler — NATIVE cited-evidence archival.
 
-Program §A3 (planning/PROGRAM_RECOMMENDATIONS_2026-07-24.md): the receipt
-chain today terminates in a ``canonical_url`` — a link that rots. This sweep
+The receipt
+chain terminates in a ``canonical_url`` — a link that rots. This sweep
 archives the ORIGINAL evidence behind CITED signals (not the firehose) so the
 chain terminates in OUR verifiable copy:
 
@@ -50,10 +50,9 @@ chain terminates in OUR verifiable copy:
     backfills extraction later). A media failure never fails the row; the
     canonical_url bytes are the primary archive.
 
-**V-E1 — JS-WALL / BOT-CHECK / REDIRECT-INTERSTITIAL REJECTION.**
-(planning/VERIFY_PATH_STRUCTURAL_FIXES_SPEC_2026-07-31.md §V-E, JUDGE_READOUT
-§5: a stored ``archived_text`` reading "JavaScript is disabled in your
-browser" — a Le Monde citation — grounded a judged claim.) A successful
+**JS-WALL / BOT-CHECK / REDIRECT-INTERSTITIAL REJECTION.**
+(A stored ``archived_text`` reading "JavaScript is disabled in your
+browser" — a Le Monde citation — once grounded a judged claim.) A successful
 Trafilatura extraction is not necessarily ARTICLE text — a no-JS fallback
 page, a bot-check interstitial, or a link-shortener redirect notice all
 "extract" cleanly; they are extraction FAILURES wearing the shape of success.
@@ -69,32 +68,31 @@ so "Trafilatura found nothing" and "Trafilatura found a wall" stay
 distinguishable) and logged at WARNING with the URL host (never the body —
 hosts are low-cardinality and safe to log, article text is not).
 
-**V-E2 — substance-floor marker (extraction-side half only).** Every
+**SUBSTANCE-FLOOR MARKER (extraction-side half only).** Every
 successful (non-rejected) extraction also stamps
 ``payload.archived_text_chars`` — the ``len()`` of the stored
 ``archived_text``, in the SAME update as the text itself — a free-to-compute
 receipt of how much was actually extracted. This handler does not consume the
-field (that is the judge-context "substance: thin" labeling — spec item V-E2
-proper — which is explicitly OUT OF SCOPE here: it belongs to the verify-path
+field (that is the judge-context "substance: thin" labeling proper — which is explicitly OUT OF SCOPE here: it belongs to the verify-path
 pass). Stamping it now means that pass never has to re-fetch or re-parse a
 body just to learn its length.
 
-**P2-2 LICENSE GATE (posture documented here, on purpose).** Each candidate's
+**LICENSE GATE (posture documented here, on purpose).** Each candidate's
 ``license_class`` is resolved from the signal (``payload.license_class`` — the
-LIC-2 SourceScope→signal stamp — falling back to the manual-batch
+SourceScope→signal stamp — falling back to the manual-batch
 ``raw_provenance`` license, via :func:`legba.data.opensearch.
 signal_license_class`). Sources whose class FORBIDS retention
 (:data:`FORBID_RETENTION_CLASSES`: ``anti_ai_walled`` — never fetch, per the
-LIC-1 ledger §E.4 enforcement hooks; ``tos_restrictive`` — reviewed-
+license ledger's enforcement hooks; ``tos_restrictive`` — reviewed-
 restrictive terms; ``personal_use_only``) are SKIPPED with an honest
 ``skipped_license`` counter and a recorded ``skipped_license`` sidecar row —
 never silently. The DEFAULT posture for unknown/unset license is **ARCHIVE**:
-this is an open-web news quotation-for-evidence product, the LIC-1 ledger
+this is an open-web news quotation-for-evidence product, the license-review ledger
 found zero active sources with an anti-LLM EULA, and the evaluated class is
 recorded on every row precisely so a future policy flip (e.g. fail-closed on
 ``unknown``) can re-evaluate mechanically instead of by memory.
 
-**R-3b — THE FAIL-OPEN DEFAULT INVERTS FOR WEB-RETRIEVED ROWS (and ONLY those).**
+**THE FAIL-OPEN DEFAULT INVERTS FOR WEB-RETRIEVED ROWS (and ONLY those).**
 The fail-open posture above was calibrated against a FINITE, operator-reviewed
 set of ~48 active sources. A search provider returns arbitrary open-web
 domains — unbounded, unreviewed, and certainly including anti-AI-walled
@@ -122,9 +120,9 @@ publishers. Under the old rule such a hit would arrive with
     ``"fail_closed"`` (default) | ``"inherit"`` (fall back to the curated
     fail-open posture).
 
-**R-4 — THE CURATED FAIL-OPEN POSTURE IS NOW AN OPTION, NOT A LAW.**
+**THE CURATED FAIL-OPEN POSTURE IS NOW AN OPTION, NOT A LAW.**
 Everything above leaves one asymmetry standing: a REGISTERED source whose
-licence was never classified still archives, because the LIC-1 review found no
+licence was never classified still archives, because the license review found no
 anti-LLM EULA among the ~48 feeds active at the time. That was a finding about
 a specific catalog on a specific date, not a property of the world, and an
 operator who registers their own feeds inherits a posture that was never
@@ -134,16 +132,16 @@ measured for them. So the posture is now governed rather than assumed:
     behaviour, byte for byte**) | ``"fail_closed"``.
   * Under ``"fail_closed"`` a candidate whose ``license_class`` is unset or the
     reviewed-but-indeterminate ``"unknown"`` does NOT get its bytes archived,
-    whatever its origin. It is recorded with the SAME terminal status the R-3b
+    whatever its origin. It is recorded with the SAME terminal status the web-origin
     skip uses (``skipped_license_unreviewed`` — the constraint vocabulary is
     closed, and that status already means exactly "we never reviewed this
     source, so we are not keeping its bytes") and its OWN run counter,
     ``skipped_license_unknown``, so the two policies stay separately priceable
     in the receipt. At ROW level they separate on ``retrieval_origin``: web
-    rows are the R-3b population, NULL/curated rows the R-4 one.
-  * The gate runs AFTER the R-3b gate, so a web-origin row keeps being counted
-    as ``skipped_license_unreviewed``; turning R-4 on never re-attributes a
-    skip that R-3b was already making.
+    rows are the web-origin population, NULL/curated rows the curated-source one.
+  * The gate runs AFTER the web-origin gate, so a web-origin row keeps being counted
+    as ``skipped_license_unreviewed``; turning curated-source on never re-attributes a
+    skip that web-origin was already making.
   * An UNRECOGNISED option value keeps the DEFAULT and logs a WARNING — the
     descriptor channel also drops it with a ``handler_options`` trace note
     (choices are declared in ``legba.data.option_catalog.handler_options``). Neither
@@ -153,7 +151,7 @@ measured for them. So the posture is now governed rather than assumed:
 Fail-open is defensible only while every source that can reach this handler has
 been licence-reviewed — which is true of the reference deployment and is not
 true by default of anyone else's. The honest sequence for an operator is:
-classify the feeds you registered (``payload.license_class`` via the LIC-2
+classify the feeds you registered (``payload.license_class`` via the license
 ``SourceScope`` stamp), then flip the gate; the ``skipped_license_unknown``
 counter tells you what the flip costs before and after. Flipping it is ONE
 registry PUT against the ``evidence_archiver`` descriptor —
@@ -190,10 +188,10 @@ Output ``data`` keys (the cadence receipt the operator reads):
     media_failed        int — media_ref fetches that failed (row still archived)
     text_extracted      int — archived objects whose main text reached payload
                               (payload.archived_text_chars stamped alongside —
-                              V-E2, the substance-floor marker)
+                              the substance-floor marker)
     text_extract_failed int — HTML/text objects Trafilatura could not extract
     text_extract_rejected_boilerplate
-                        int — V-E1: Trafilatura DID return text, but it matched
+                        int — wall-pattern rejection: Trafilatura DID return text, but it matched
                               the JS-wall/bot-check/redirect-interstitial deny
                               list (:func:`_match_wall_pattern`) — a no-JS
                               fallback page, a bot challenge, a link-shortener
@@ -210,18 +208,18 @@ Output ``data`` keys (the cadence receipt the operator reads):
                               ``payload.archived_text`` for ~30.7% of telegram
                               rows. The BYTES are still archived; only the
                               derived-text upgrade is withheld.
-    skipped_license     int — P2-2 gate refusals on a REVIEWED forbidding class
+    skipped_license     int — license-gate refusals on a REVIEWED forbidding class
     skipped_license_unreviewed
-                        int — R-3b fail-closed refusals: web-retrieved origin +
+                        int — web-origin fail-closed refusals: web-retrieved origin +
                               unset/unknown licence. Bytes withheld, metadata
                               kept, counted separately from skipped_license so
                               the cost of fail-closed is measurable.
     skipped_license_unknown
-                        int — R-4 fail-closed refusals: ANY row (curated
+                        int — curated-source fail-closed refusals: ANY row (curated
                               included) with unset/unknown licence, when
                               ``options.unknown_license_gate='fail_closed'``.
                               Always 0 at the shipped default. Shares the
-                              sidecar STATUS with the R-3b skip (closed CHECK
+                              sidecar STATUS with the web-origin skip (closed CHECK
                               vocabulary) but never its counter.
     blocked_by_challenge
                         int — (a′) pages an anti-bot CHALLENGE stood in front
@@ -241,13 +239,13 @@ Output ``data`` keys (the cadence receipt the operator reads):
     deadline_stop       int — 1 when the run stopped at the soft deadline
     skipped_no_root     int — 1 when the archive root was absent/unwritable
     per_source          {source_id: {fetched, challenge_blocked,
-                          boilerplate_rejected, body_stored}} — W11-F138,
+                          boilerplate_rejected, body_stored}} —
                           the per-feed outcomes the source-health surface
                           computes off the evidence_archive sidecar with the
                           same vocabulary (a feed's body-extraction rate is
                           body_stored / fetched).
 
-**W11-F138 — PER-HOST FETCH POLICY.** Times of Israel and the Jerusalem Post
+**PER-HOST FETCH POLICY.** Times of Israel and the Jerusalem Post
 answer every fetch with an anti-bot challenge (http_403, several times a
 day), so their signals carry a summary and no body. The fetch now consults
 :mod:`legba.data.sources._fetch_policy`: an edge block (401/403/429) on a
@@ -324,8 +322,8 @@ logger = logging.getLogger(__name__)
 
 SUB_HANDLER_NAME = "evidence_archiver"
 
-#: P2-2 — license classes that FORBID retention of the original bytes (the
-#: LIC-1 ledger §E.4 vocabulary). ``anti_ai_walled`` = never fetch (hard
+#: License classes that FORBID retention of the original bytes (the
+#: license ledger vocabulary). ``anti_ai_walled`` = never fetch (hard
 #: denial); ``tos_restrictive`` = reviewed-restrictive publisher terms;
 #: ``personal_use_only`` = personal-use grants. Everything else — including
 #: unknown/unset (recorded as NULL) — ARCHIVES under the open-web
@@ -335,8 +333,8 @@ FORBID_RETENTION_CLASSES: frozenset[str] = frozenset(
     {"anti_ai_walled", "tos_restrictive", "personal_use_only"}
 )
 
-#: R-3b — for a WEB-RETRIEVED row, does an unreviewed licence still archive?
-#: ``False`` = fail CLOSED. The LIC-1 fail-open default was calibrated against
+#: For a WEB-RETRIEVED row, does an unreviewed licence still archive?
+#: ``False`` = fail CLOSED. The license-review fail-open default was calibrated against
 #: ~48 operator-reviewed sources; search makes the domain set unbounded and
 #: unaudited, so the default inverts — but ONLY for rows whose retrieval origin
 #: says web. Registered sources keep the fail-open posture unchanged.
@@ -348,7 +346,7 @@ WEB_ORIGIN_UNKNOWN_LICENSE_ARCHIVES: bool = False
 #: for a web-retrieved row neither does.
 UNREVIEWED_LICENSE_CLASSES: frozenset[str] = frozenset({"unknown"})
 
-#: The sidecar status for an R-3b fail-closed skip (migration 0112). Distinct
+#: The sidecar status for a web-origin fail-closed skip (migration 0112). Distinct
 #: from ``skipped_license`` on purpose: that one means "a REVIEWED class forbade
 #: retention", this one means "we never reviewed this domain".
 STATUS_SKIPPED_LICENSE_UNREVIEWED = "skipped_license_unreviewed"
@@ -358,7 +356,7 @@ STATUS_SKIPPED_LICENSE_UNREVIEWED = "skipped_license_unreviewed"
 #: is "we could not fetch it", this one is "a publisher's edge refused us and
 #: said so in an interstitial". Before this existed, a 5–13 kB Cloudflare /
 #: DataDome page landed as a thin extraction and read downstream as *the web
-#: had nothing* — the false-absence defect FETCH_REVIEW §2 names as bigger
+#: had nothing* — the false-absence defect, bigger
 #: than the 403 itself. The BYTES are still archived (they are the evidence of
 #: the block); only the derived-text upgrade is withheld.
 STATUS_BLOCKED_CHALLENGE = "blocked_challenge"
@@ -367,13 +365,13 @@ STATUS_BLOCKED_CHALLENGE = "blocked_challenge"
 WEB_ORIGIN_GATE_FAIL_CLOSED = "fail_closed"
 WEB_ORIGIN_GATE_INHERIT = "inherit"
 
-#: R-4 — the CODE-level posture for an unreviewed licence on ANY row, curated
-#: included. ``True`` = archive (the LIC-1 fail-OPEN default), which is what
+#: The CODE-level posture for an unreviewed licence on ANY row, curated
+#: included. ``True`` = archive (the license-review fail-OPEN default), which is what
 #: ships. Kept as a module constant for the same reason
 #: ``WEB_ORIGIN_UNKNOWN_LICENSE_ARCHIVES`` is: a future decision to invert the
 #: SHIPPED default is one line here, and the option below keeps working either
 #: way round. Recommendation for a self-registered catalog is fail-closed —
-#: see the R-4 section of the module docstring.
+#: see the curated-source section of the module docstring.
 UNKNOWN_LICENSE_ARCHIVES: bool = True
 
 #: ``options.unknown_license_gate`` values.
@@ -478,14 +476,14 @@ _UPSERT_ARCHIVE_SQL = """
 # surfaces derive archived/archive_sha256 from this existing column alone);
 # retention_class upgraded to evidence_hold unless the row already sits in a
 # keep-class (retain_always stays retain_always); and, WHEN text was extracted
-# ($3 non-null), payload.archived_text AND payload.archived_text_chars (V-E2 —
+# ($3 non-null), payload.archived_text AND payload.archived_text_chars (substance-floor marker —
 # the substance-floor marker: a free len() of the stored text, so a later
 # verify-side pass can label thin evidence without re-reading bodies) are BOTH
 # set, and the corpus dirty-marker contract is honored: indexed_at = NULL
 # re-queues the doc, updated_at = now() protects the re-null from the
 # indexer's version-guarded stamp (BOTH in this same UPDATE — see
 # corpus_indexer's DIRTY-MARKER CONTRACT). With no text (either Trafilatura
-# failure OR a V-E1 wall-pattern rejection), updated_at still bumps
+# failure OR a wall-pattern rejection), updated_at still bumps
 # (harmless) and indexed_at is left alone.
 _STAMP_SIGNAL_SQL = """
     UPDATE signals
@@ -513,9 +511,9 @@ _STAMP_SIGNAL_SQL = """
 
 
 def resolve_license_class(row: Mapping[str, Any]) -> str | None:
-    """The signal's license class as the P2-2 gate sees it.
+    """The signal's license class as the license gate sees it.
 
-    ``payload.license_class`` (the LIC-2 SourceScope→signal ingest stamp)
+    ``payload.license_class`` (the license SourceScope→signal ingest stamp)
     first, then the manual-batch ``raw_provenance`` license — the same
     resolution the corpus doc projection uses (one truth, one helper)."""
     return signal_license_class(row)
@@ -531,13 +529,13 @@ def license_forbids_retention(
     policy flip can re-evaluate.
 
     This is the CURATED-source rule. Web-retrieved rows additionally pass
-    :func:`web_origin_license_unreviewed` (R-3b), which inverts the unknown
+    :func:`web_origin_license_unreviewed` (web-origin), which inverts the unknown
     default for them alone."""
     return license_class is not None and license_class in forbid
 
 
 def resolve_signal_retrieval_origin(row: Mapping[str, Any]) -> str | None:
-    """The signal's retrieval origin as the R-3b gate sees it.
+    """The signal's retrieval origin as the web-origin gate sees it.
 
     The migration-0112 column first, then the payload stamp — resolved by the
     ONE owner (:mod:`legba.data.retrieval_origin`) that the OpenSearch facet
@@ -553,7 +551,7 @@ def web_origin_license_unreviewed(
 ) -> bool:
     """True when this row is web-retrieved with NO affirmative licence verdict.
 
-    The R-3b inversion, stated as a single predicate so its scope is
+    The web-origin inversion, stated as a single predicate so its scope is
     auditable at a glance:
 
       * not a web origin → ``False`` (curated sources keep the fail-open
@@ -581,7 +579,7 @@ def license_unreviewed(
 ) -> bool:
     """True when this row has NO affirmative licence verdict AND policy says no.
 
-    The R-4 gate, origin-blind on purpose — it is the CURATED-source rule
+    The curated-source gate, origin-blind on purpose — it is the CURATED-source rule
     :func:`license_forbids_retention` deliberately leaves fail-open, made
     governable:
 
@@ -603,9 +601,9 @@ def license_unreviewed(
     return license_class is None or license_class in UNREVIEWED_LICENSE_CLASSES
 
 
-# The page-text helpers (``_is_textual``, ``_skip_text_extraction``, the V-E1
+# The page-text helpers (``_is_textual``, ``_skip_text_extraction``, the
 # wall list ``_match_wall_pattern`` and the Trafilatura pass ``_extract_text``)
-# live in :mod:`legba.data.sources.page_text` since lane I-2, so the archiver,
+# live in :mod:`legba.data.sources.page_text` so the archiver,
 # the fetch-receipt writer and the ``page`` source kind run ONE extraction.
 # They are imported at the top of this module under their historical names.
 
@@ -650,7 +648,7 @@ class _HostPoliteness:
 
 
 # ---------------------------------------------------------------------------
-# W11-F138 — the per-host fetch policy (sources/_fetch_policy.py) reaches the
+# the per-host fetch policy (sources/_fetch_policy.py) reaches the
 # archiver as a TWO-LEG client bundle:
 #
 #   * ``primary`` — the ONE plain guarded client every host shares, opened
@@ -745,17 +743,17 @@ def _zero_counters() -> dict[str, Any]:
         # so a receipt can distinguish "a publisher blocked us" from "the web
         # had nothing" — the whole point of the detector.
         BLOCKED_BY_CHALLENGE: 0,
-        # V-E1 — distinct from text_extract_failed: Trafilatura DID return
+        # Distinct from text_extract_failed: Trafilatura DID return
         # text, but it matched the JS-wall/bot-check/redirect deny list.
         "text_extract_rejected_boilerplate": 0,
         "text_extract_skipped": 0,
         "skipped_license": 0,
-        # R-3b — kept DISTINCT from skipped_license so an operator can measure
+        # Kept DISTINCT from skipped_license so an operator can measure
         # what fail-closed costs, which is the question that decides whether to
         # move to ledger-on-first-sight.
         "skipped_license_unreviewed": 0,
-        # R-4 — the curated fail-closed policy's own counter. Always 0 at the
-        # shipped default; distinct from the R-3b counter so an operator can
+        # The curated fail-closed policy's own counter. Always 0 at the
+        # shipped default; distinct from the web-origin counter so an operator can
         # price the two policies separately even though the sidecar rows share
         # a status (the CHECK vocabulary is closed; retrieval_origin separates
         # them at row level).
@@ -767,7 +765,7 @@ def _zero_counters() -> dict[str, Any]:
         "bytes_stored": 0,
         "deadline_stop": 0,
         "skipped_no_root": 0,
-        # W11-F138 — per-feed outcomes: {source_id: {fetched,
+        # per-feed outcomes: {source_id: {fetched,
         # challenge_blocked, boilerplate_rejected, body_stored}}. The same
         # four names the source-health surface computes per feed off the
         # evidence_archive sidecar, so a run receipt and the health read
@@ -852,7 +850,7 @@ async def _archive_one(
     if is_web_retrieved(retrieval_origin):
         counters["web_origin_examined"] += 1
 
-    # ---- P2-2 license gate — a REVIEWED forbidding class (never silent) ----
+    # ---- license gate — a REVIEWED forbidding class (never silent) ----
     if license_forbids_retention(license_class, forbid):
         counters["skipped_license"] += 1
         await _record(
@@ -863,7 +861,7 @@ async def _archive_one(
         )
         return
 
-    # ---- R-3b fail-closed gate — web origin + NO affirmative licence ----
+    # ---- web-origin fail-closed gate — web origin + NO affirmative licence ----
     # Runs BEFORE the fetch: the bytes are never downloaded, so nothing has to
     # be discarded afterwards. Metadata (URL, class, origin) is still recorded.
     if web_origin_license_unreviewed(
@@ -883,10 +881,10 @@ async def _archive_one(
         )
         return
 
-    # ---- R-4 fail-closed gate — ANY row with no affirmative licence ----
+    # ---- curated-source fail-closed gate — ANY row with no affirmative licence ----
     # OFF at the shipped default, so this branch is unreachable unless the
     # operator PUT `unknown_license_gate: fail_closed` on the descriptor. It
-    # runs AFTER the R-3b gate on purpose: a web row is already accounted for
+    # runs AFTER the web-origin gate on purpose: a web row is already accounted for
     # above, so turning this on never re-attributes an existing skip. Same
     # pre-fetch position — nothing is downloaded and then discarded.
     if license_unreviewed(license_class, fail_closed=unknown_fail_closed):
@@ -905,7 +903,7 @@ async def _archive_one(
         return
 
     # ---- fetch the original bytes (egress-guarded, size-capped, polite) ----
-    # W11-F138 — the fetch consults the per-host policy: an edge block on a
+    # the fetch consults the per-host policy: an edge block on a
     # host registered impersonate=on is counted and re-issued through the
     # impersonated leg (``_fetch_canonical``); every other host takes the
     # plain client it always took.
@@ -1067,14 +1065,14 @@ async def _archive_one(
         if archived_text is not None:
             wall_pattern = _match_wall_pattern(archived_text)
             if wall_pattern is not None:
-                # V-E1 — a JS-wall/bot-check/redirect-interstitial body wearing
+                # A JS-wall/bot-check/redirect-interstitial body wearing
                 # the shape of a successful extraction. Reject it exactly like
                 # a Trafilatura failure: no payload.archived_text write, no
                 # corpus dirty-marker requeue. The BYTES stay archived either
                 # way — only the derived-text upgrade is withheld.
                 counters["text_extract_rejected_boilerplate"] += 1
                 feed["boilerplate_rejected"] += 1
-                # W11-F138 — stamped on the sidecar row (not a status: the
+                # stamped on the sidecar row (not a status: the
                 # closed CHECK vocabulary has none for it) so the health
                 # surface's per-feed boilerplate_rejected can read the SAME
                 # event the counter just tallied.
@@ -1128,7 +1126,7 @@ async def _archive_one(
         ),
     )
     async with pool.acquire() as conn:
-        # V-E2 — the substance-floor marker: a free len() alongside the text
+        # The substance-floor marker: a free len() alongside the text
         # itself, so a later verify-side pass never has to re-read the body
         # to know how much was actually extracted.
         archived_text_chars = len(archived_text) if archived_text is not None else None
@@ -1136,7 +1134,7 @@ async def _archive_one(
             _STAMP_SIGNAL_SQL, signal_id, object_ref, archived_text, archived_text_chars,
         )
     counters["archived"] += 1
-    # W11-F138 — a real stored body for the feed's extraction rate (a
+    # a real stored body for the feed's extraction rate (a
     # challenge page never reaches this line: it returns above with the
     # blocked_challenge record).
     feed["body_stored"] += 1
@@ -1167,7 +1165,7 @@ async def _sweep(pool: Any, options: Mapping[str, Any]) -> dict[str, Any]:
         if isinstance(forbid_raw, (list, tuple, set))
         else FORBID_RETENTION_CLASSES
     )
-    # R-3b — the web-origin posture, overridable per run without a code change
+    # The web-origin posture, overridable per run without a code change
     # (same discipline as forbid_license_classes). Anything other than the
     # explicit "inherit" keeps the fail-closed default: a typo must not silently
     # re-open the gate.
@@ -1179,7 +1177,7 @@ async def _sweep(pool: Any, options: Mapping[str, Any]) -> dict[str, Any]:
         )
         web_origin_fail_closed = gate != WEB_ORIGIN_GATE_INHERIT
 
-    # R-4 — the curated posture. DEFAULT "archive" = today's behaviour exactly.
+    # The curated posture. DEFAULT "archive" = today's behaviour exactly.
     # Only the exact literal "fail_closed" engages it; an unrecognised value
     # keeps the DEFAULT and says so at WARNING, because a typo must not move a
     # licence policy in EITHER direction silently. (The descriptor channel
@@ -1214,7 +1212,7 @@ async def _sweep(pool: Any, options: Mapping[str, Any]) -> dict[str, Any]:
     politeness = _HostPoliteness(per_host_delay)
     started = time.monotonic()
     async with AsyncExitStack() as stack:
-        # W11-F138 — the plain client opens lazily with the exact kwargs this
+        # the plain client opens lazily with the exact kwargs this
         # sweep always passed (see ``_FetchClients``); a second impersonated
         # leg opens only if a challenge-blocked policy host ever calls for it.
         clients = _FetchClients(stack, timeout=timeout_s)
@@ -1243,13 +1241,13 @@ def _build_finding(counters: Mapping[str, Any]) -> FindingPayload:
         f"Evidence archiver: archived {counters.get('archived', 0)} of "
         f"{counters.get('examined', 0)} cited signal(s), "
         f"{counters.get('skipped_license', 0)} license-skipped, "
-        # R-3b — surfaced in the TITLE, not buried in the body: a fail-closed
+        # Surfaced in the TITLE, not buried in the body: a fail-closed
         # skip is a decision the operator took, and it should be visible in the
         # cadence receipt without opening the row.
         f"{counters.get('skipped_license_unreviewed', 0)} web-unreviewed-skipped, "
         f"{counters.get('fetch_failed', 0)} failed"
     )
-    # R-4 — appended ONLY when the policy actually refused something, so the
+    # Appended ONLY when the policy actually refused something, so the
     # shipped-default title is unchanged character for character.
     if counters.get("skipped_license_unknown", 0):
         title += (

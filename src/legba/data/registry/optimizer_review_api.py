@@ -235,7 +235,7 @@ def register_optimizer_review_routes(
             body = body.model_copy(update={"reviewer": reviewer})
         return await apply_optimizer_review(
             deps, candidate_id=candidate_id, body=body,
-            # W11-F62: the audit role follows the authenticated principal
+            # The audit role follows the authenticated principal
             # (``service:…`` / ``operator:…``), never a hard-coded "operator".
             actor_role=role_for_actor(principal),
         )

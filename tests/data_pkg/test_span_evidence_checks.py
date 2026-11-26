@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane N-D — the deterministic span → cited-source checks.
+"""The deterministic span → cited-source checks.
 
 Each case is a live 2026-11-11 specimen (sweep_quality_1111b), with the cited
 text trimmed to the passage that decides it.

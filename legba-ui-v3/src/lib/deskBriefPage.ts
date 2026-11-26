@@ -63,8 +63,8 @@ const NOUN = PROFILE_UI.subject.singular.toLowerCase()
 /**
  * One citation entry of an export item. The route publishes a UNIFORM key set
  * across every citation kind, so a reader never has to sniff a shape — but the
- * two date keys arrived in wave O, so they are optional HERE: a registry that
- * has not rolled past that lane answers without them, and a page that assumed
+ * two date keys arrived later, so they are optional HERE: a registry that
+ * has not been updated past that point answers without them, and a page that assumed
  * the key would print `undefined` as a date.
  */
 export interface ExportCitation {
@@ -658,10 +658,10 @@ export function shareText(share: number | null | undefined): string {
     : 'unmeasured'
 }
 
-/** The judge (faithfulness) cell — a share with its unit, or `unmeasured`. */
+/** The per-claim check's cell — the share of claims its sources support, or `unmeasured`. */
 export function judgeText(score: number | null | undefined): string {
   return typeof score === 'number' && Number.isFinite(score)
-    ? `${(score * 100).toFixed(0)}% faithfulness`
+    ? `${(score * 100).toFixed(0)}% supported`
     : 'unmeasured'
 }
 

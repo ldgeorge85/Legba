@@ -24,7 +24,7 @@ import { MAX_REGIONS, isSlotId, type RegionId, type SurfaceDef, type ViewId } fr
 import { placeRegions, type RegionPlacement } from '@/lib/frameGrid'
 
 /** Where a view is placed relative to one already in the dock. */
-export type ViewPosition = { referencePanel: string; direction: 'right' | 'below' | 'within' }
+export type ViewPosition = { referencePanel: string; direction: 'left' | 'right' | 'above' | 'below' | 'within' }
 
 /**
  * Add one view. `seeded` views get the close-less tab; the opener returns the

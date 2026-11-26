@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""P1-6 — the "since last visit" diff + band-trajectory read routes.
+"""The "since last visit" diff + band-trajectory read routes.
 
 Two read-only GET endpoints mounted under ``/api/v1/v3`` beside the v3
 telemetry router (the SAME ``RegistryAPIDeps`` bundle + ``require_bearer``
@@ -28,8 +28,7 @@ gate, per the ``v3_api`` / ``substrate_reads_api`` wiring convention):
     S-1 (the phone's "what needs me", 2026-11-14): ``include=needs_you``
     appends ONE section built from the single alert log (``alerts``, the
     L-1 episode table — NOT ``analyst_outputs kind='alert'``, which is what
-    the ``alerts`` section above reads): the open episodes that PAGED (paged-only
-    since roll 84), opened or paged since the cursor, capped like the
+    the ``alerts`` section above reads): the open episodes that PAGED (paged-only), opened or paged since the cursor, capped like the
     rest. A non-admin caller sees the world topic's kinds only (the full log
     is the admin route). Without ``include`` the response is the envelope
     from before, byte for byte (pinned in the tests).
@@ -58,7 +57,7 @@ Honesty rules (house style):
   * ``new_findings`` carries ONLY verified findings (a faithfulness-verify
     critique exists AND ``min(confidence, faithfulness) >= 0.50``), with the
     verify-EXEMPT structural analysts excluded — those never enter the verify
-    pass, so they can never meet the bar (mirrors the P1-3 trigger's
+    pass, so they can never meet the bar (mirrors the alert trigger's
     ``verified_finding`` gate).
   * A fresh cursor returns a valid all-empty envelope (HTTP 200), never a 404.
   * Situation lifecycle edges are DERIVED, not fabricated: the clustering
@@ -168,7 +167,7 @@ CHANGED_SECTIONS: tuple[str, ...] = (
 def classify_band_transition(from_band: str, to_band: str) -> tuple[str, str]:
     """(direction, severity) for one desk×dimension band change.
 
-    Mirrors ``alert_trigger_scan.classify_band_transition`` (the P1-3 severity
+    Mirrors ``alert_trigger_scan.classify_band_transition`` (the severity
     mapping) WITHOUT importing the trigger scan: up the risk ladder =
     ``deterioration``/``high``; down = ``improvement``/``medium``; transitions
     in/out of ``insufficient-evidence`` are coverage events, not risk reads —
@@ -469,7 +468,7 @@ class BandTrajectoryResponse(BaseModel):
 # Verified new findings since cursor. INNER lateral: the verified bar REQUIRES
 # a faithfulness verdict (a finding with no critique cannot qualify). The
 # lateral pins to the faithfulness critique (title LIKE 'Faithfulness
-# verify%') exactly like /findings + the P1-3 trigger — a later generic
+# verify%') exactly like /findings + the alert trigger — a later generic
 # critique must not win the produced_at race. NULL analyst_id rows are kept
 # (they are not structural-exempt; plain <> ALL would silently drop them).
 # H17 — SET-BASED: the cursor window + the exempt-analyst filter bound the outer
@@ -576,7 +575,7 @@ _SITUATIONS_SQL = """
 """
 
 # Alert rows since cursor. ``channel`` resolves the AlertPayload's
-# routing_hint (the P1-3 trigger class), falling back to the nested
+# routing_hint (the alert trigger class), falling back to the nested
 # trigger_class / the emitting analyst — never fabricated beyond that. The
 # resolution expression is factored so the projection and the optional
 # ``channel=`` filter ($2, NULL = unfiltered) can never drift apart.
@@ -631,7 +630,7 @@ def scorecard_band_changes(
     cursor: datetime,
 ) -> list[BandChange]:
     """Desk×dimension transitions between the latest pre-cursor scorecard and
-    the current head (the P1-3 band-crossing comparison shape, watermark-free).
+    the current head (the alert trigger's band-crossing comparison shape, watermark-free).
 
     Skips honestly rather than fabricating:
 
@@ -903,7 +902,7 @@ def invalidate_since_counts() -> None:
 
 
 def build_since_router(deps: RegistryAPIDeps) -> APIRouter:
-    """Construct the P1-6 router bound to the registry deps.
+    """Construct the router bound to the registry deps.
 
     Both endpoints are read-only GETs, bearer-gated via ``require_bearer``,
     reading from the primary pool via ``deps.descriptor_registry.pg.acquire()``
@@ -921,7 +920,7 @@ def build_since_router(deps: RegistryAPIDeps) -> APIRouter:
             description=(
                 "Opt-in extra sections, comma-separated. `needs_you`: the "
                 "alert log's open episodes that paged (paged-only), opened "
-                "or paged since the cursor (S-1). Absent: the "
+                "or paged since the cursor. Absent: the "
                 "response is exactly the envelope from before it existed."
             ),
         ),

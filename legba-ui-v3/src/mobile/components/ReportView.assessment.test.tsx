@@ -56,7 +56,7 @@ describe('an Assessment row, alone', () => {
     expect(screen.getAllByTestId('citation-chip').length).toBeGreaterThanOrEqual(16)
   })
 
-  it('M-0a: the header carries no engine figure (no verify score, gate, block count or drop ledger)', () => {
+  it('The header carries no engine figure (no verify score, gate, block count or drop ledger)', () => {
     view(ASSESSMENT)
     const header = screen.getByTestId('report-view').querySelector('header')!.textContent ?? ''
     expect(header).not.toMatch(/verify|gate|blocks|below the line|below floor|aperture|floor honoured/i)
@@ -84,7 +84,7 @@ describe('an Assessment row with its spine', () => {
 })
 
 describe('the spine row itself', () => {
-  it('M-0a: no "verify 1.00" on the header or the cards; a card says how old its evidence is in words', () => {
+  it('No "verify 1.00" on the header or the cards; a card says how old its evidence is in words', () => {
     view(SPINE)
     const page = screen.getByTestId('report-view').textContent ?? ''
     expect(page).not.toMatch(/verify \d|gate (passed|failed)|\d+ blocks/)
@@ -95,7 +95,7 @@ describe('the spine row itself', () => {
   })
 })
 
-describe('reader words in the report header and body (U-1)', () => {
+describe('reader words in the report header and body', () => {
   it('names the subject instead of its machine id, and renders markdown', () => {
     // Synthetic title/body over the fixture's shape.
     view({

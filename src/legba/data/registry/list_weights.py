@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The registry's list routes and their weights (lane P-8, 03c §2.1 / §5).
+"""The registry's list routes and their weights.
 
 RULE. A route that returns a list answers a declared LIGHT projection by
 default; the full record is read by id, or by asking for it by name
@@ -18,7 +18,7 @@ Two readers hold the table to the app:
     registry: each route's default page, measured, against its budget.
 
 Budgets were set from live default pages on 2026-11-14 (sizes in the
-comments; registry at roll 83) with headroom, rounded. A route that outgrows
+comments) with headroom, rounded. A route that outgrows
 its budget fails the report; raising a number here is a visible act.
 
 Registry-slim: stdlib only.
@@ -62,7 +62,7 @@ LIST_ROUTES: dict[str, ListWeight] = {
     f"{_V1}/analysts/{{analyst_id}}/outputs": ListWeight(
         "fields=summary", True, "fields=full (a finding: GET /findings/{id})",
         None, 96 * KB),
-    # W11 walk fix (roll 84 live: /signals?limit=500 2.21 MB of the Watch's
+    # Walk fix (live: /signals?limit=500 was 2.21 MB of the Watch's
     # 4.57 MB): `signal_list_weight.SignalSummaryRow`. Live default page
     # (50 rows): full 213 KB → summary ~20 KB (500 rows: 2,275 KB → 207 KB,
     # measured from a live page projected offline).
@@ -71,15 +71,15 @@ LIST_ROUTES: dict[str, ListWeight] = {
     # --- documents, not flipped, with the reason --------------------------
     # 248 descriptors, 805 KB: the registry's machine CRUD surface (the
     # runtime, bring-up scripts and the console's descriptor editor read the
-    # bodies), so the default stays the whole body. W11 walk fix: the
+    # bodies), so the default stays the whole body. the
     # console's rosters ask `fields=summary` by name (`descriptor_list_weight`;
     # live: targets 279 KB → 73 KB, analysts 546 KB → 71 KB).
     f"{_V1}/registry/descriptors": ListWeight(
         "fields=summary", False, None,
         "descriptor bodies are the registry's machine API (runtime, bring-up, "
         "editor read them); the console's rosters ask fields=summary", 1_600 * KB),
-    # Roll 87 (the Watch page 2.01 MB against 2.00; its largest read
-    # /v3/events?limit=500 at 419 KB): the map and the time band ask
+    # The Watch page was 2.01 MB against a 2.00 budget; its largest read was
+    # /v3/events?limit=500 at 419 KB, so: the map and the time band ask
     # `fields=summary` by name (`event_list_weight.EventSummaryRow`, 500 rows
     # 419 KB -> 239 KB live). The default stays the whole row: a subject's
     # timeline, a situation's tracked events and the export basket read it.
@@ -155,16 +155,16 @@ LIST_ROUTES: dict[str, ListWeight] = {
     f"{_V1}/v3/system/escalations": ListWeight(None, False, None, _NARROW, 320 * KB),
     f"{_V1}/v3/system/production-gauge": ListWeight(None, False, None, _NARROW, 512 * KB),
     f"{_V1}/v3/system/receipt-anchors": ListWeight(None, False, None, _NARROW, 128 * KB),
-    # roll 84 — list routes other lanes added, declared at merge: all narrow
+    # More list routes, all narrow
     # (aggregates, counts, or capped records), budgets priced, not measured.
     f"{_V1}/v3/eval/runs": ListWeight(None, False, None, _NARROW, 128 * KB),  # E-3: aggregates only
     f"{_V1}/v3/ledger/resolution-queue": ListWeight(None, False, None, _NARROW, 128 * KB),  # F-1
     f"{_V1}/v3/ledger/resolution-records": ListWeight(None, False, None, _NARROW, 256 * KB),  # U-11: evidence capped at 40
     f"{_V1}/v3/since/counts": ListWeight(None, False, None, _NARROW, 8 * KB),  # S-1: counts only
-    # roll 89 — data-model lane 9 (DM-B): one narrow row per origin (about one
+    # One narrow row per origin (about one
     # per source descriptor, ~180 live), budget priced, not measured.
     f"{_V1}/registry/origins": ListWeight(None, False, None, _NARROW, 256 * KB),
-    # data-model lane 10 (DM-C): the held family, light by default (240
+    # The held family, light by default (240
     # characters of text per row); 50 rows priced at ~25 KB, budget 64 KB
     # (tests/data_pkg/test_held_record_db.py measures a page of long texts).
     f"{_V1}/v3/record/assertions": ListWeight(

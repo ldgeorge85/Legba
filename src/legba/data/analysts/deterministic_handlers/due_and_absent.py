@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """``due_and_absent`` sub-handler — what was expected by a date, and what
-this collection holds no record of. No model call. Lane E-1 (2026-11-14).
+this collection holds no record of. No model call.
 
 WHAT COUNTS AS AN EXPECTATION. Only a row that carries an explicit date in
 the record; nothing is inferred and no model reads anything:

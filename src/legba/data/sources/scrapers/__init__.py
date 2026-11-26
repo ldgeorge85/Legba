@@ -10,7 +10,7 @@ Currently shipped:
 
   * :mod:`legba.data.sources.scrapers.example_news` — generic RSS- /
     sitemap-driven news-article scraper. Demonstrates the contract and serves
-    as a test fixture; not a production path (lane I-2: a single page is
+    as a test fixture; not a production path (a single page is
     fetched and landed by the ``page`` source kind, ``data/sources/page.py``).
 """
 

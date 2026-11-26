@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane N-R unit checks (no database): the pull.done ``sinks=`` field, the
+"""Unit checks (no database): the pull.done ``sinks=`` field, the
 PortWatch descriptor's subject kind + attribution, and the hash neutrality of
 the new ``scope.attribution`` field. DB-backed proofs (persisted rows, batch
 timing) are ``tests/data_pkg/test_ingestion_followups_n_r.py``."""
@@ -38,7 +38,7 @@ def test_portwatch_declares_entity_subjects_and_the_attribution_line() -> None:
             b'"portname": "Strait of Hormuz", "ObjectId": 7, "n_total": 101}}]}')
     records, more, _sha = parse_page(body, cfg=cfg, page_url="https://x.invalid/q")
     assert not more and records and {r.subject_kind for r in records} == {"entity"}
-    # The handler default stays the pre-lane value (roll safety, see the config comment).
+    # The handler default stays the previous value (see the config comment).
     assert PortWatchConfig().subject_kind == "global"
 
 

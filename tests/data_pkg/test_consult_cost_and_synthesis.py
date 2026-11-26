@@ -1,12 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The c8a0105c train: what a run is allowed to spend, and finishing a cut one.
+"""What a run is allowed to spend, and finishing a cut one.
 
 The incident
 ============
 
-2026-09-16 09:43-09:49Z, session f12ebbd4, request c8a0105c. The operator's own
-run, on ``llm.anthropic.fable_5_1``. Eleven calls, ten rounds, fifty tool
+A live consult run, on ``llm.anthropic.fable_5_1``. Eleven calls, ten rounds, fifty tool
 calls, 283 cited refs — and then the final synthesis was handed a fixed 150s
 slice, did not finish a long answer inside it, and was CANCELLED. The partial
 generation was discarded and the operator received 487 characters of apology,
@@ -406,7 +405,7 @@ def test_the_spend_guard_reads_the_real_anthropic_price_table() -> None:
     The guard's fallback path computes from ``PRICE_TABLE`` when a response did
     not carry a stamped estimate. If the table key or the estimator's prefix
     match ever drifts, an expensive plane silently estimates $0 and the cost
-    ceiling stops existing — which is exactly the failure this whole train is
+    ceiling stops existing — which is exactly the failure this whole change is
     about, one level down.
     """
     from legba.data.analysts.consult_spend_guard import estimate_call_cost

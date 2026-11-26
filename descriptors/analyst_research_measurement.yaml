@@ -1,28 +1,28 @@
-# research_measurement — the outbound-research program's three counters (R-D).
+# research_measurement — the outbound-research program's three counters.
 #
-# RESEARCH_PROGRAM_SPEC_2026-09-05 §4 in full. A `deterministic`-kind META
+# A `deterministic`-kind META
 # analyst (sub_handler=research_measurement) that reads the research signals
-# R-A writes — ordinary `signals` rows carrying `retrieval_origin =
+# the research pack writes — ordinary `signals` rows carrying `retrieval_origin =
 # 'web_search:<component_id>'`, the seam migration 0112 built and that nothing
 # has ever written — and publishes:
 #
-#   * NOVELTY       (§4.1) from R-A's WRITE-TIME stamp, beside the F-9 caveat
+#   * NOVELTY from the WRITE-TIME stamp, beside this caveat
 #                   (v1 matches exact url/content_hash, so it OVER-reports) and
 #                   a stricter v1b arm (novel AND the host was not already in
 #                   the desk's slice window) and the conservative near_dup
 #                   companion from the existing dedup fold.
-#   * CORROBORATION (§4.2) over a MATURED 7-day forward window: a later
+#   * CORROBORATION over a MATURED 7-day forward window: a later
 #                   NON-research signal (`retrieval_origin IS NULL`) in the same
 #                   canonical fold or at the same canonical_url. The weak
 #                   entity-overlap arm is reported separately and NEVER merged.
-#   * CONSEQUENCE   (§4.3) as an ascending ladder of REACH, not effect:
+#   * CONSEQUENCE as an ascending ladder of REACH, not effect:
 #                   cited by any finding -> cited by a DESK head -> that head
 #                   was QUOTED into a composition.
 #
-# Plus §4.5's R4 stratification: every desk head in the window split into
+# Plus a stratification: every desk head in the window split into
 # has_research_evidence ∈ {true,false}, never pooled.
 #
-# WHY IT IS A FINDING AND NOT A NEW KIND. §4.4: `kind='finding'` +
+# WHY IT IS A FINDING AND NOT A NEW KIND. `kind='finding'` +
 # analyst_id='research_measurement', the calibration_tracking precedent
 # (nothing writes kind='calibration'). GET /api/v1/findings?analyst_id=
 # research_measurement therefore serves it on day one with NO API edit.
@@ -30,28 +30,28 @@
 # back in as substrate.
 #
 # A GAUGE, NEVER A REPAIR. It COUNTS and NAMES. No UPDATE, no sidecar, no
-# ceiling lift, no LLM. §1.4b's magnitude lift is deliberately NOT built here
+# ceiling lift, no LLM. A magnitude lift is deliberately NOT built here
 # and is not stubbed: the finding publishes
 # corroboration.ceiling_lift.performed = false with its reason, so the
 # counter's silence can never be mistaken for a lift that happened.
 #
-# HONEST-NULL. Gate G9 (§6.3): every rate carries its `n`, and a rate that
+# HONEST-NULL. Every rate carries its `n`, and a rate that
 # cannot be earned publishes as null with a machine-readable reason
 # (no_rows / n_below_minimum / novelty_not_stamped / window_not_matured).
-# This matters more than usual here — §4's own power statement (F-10) puts
-# regime-1 yield at ~20-60 research signals/week, which powers NOVELTY and does
-# NOT power CORROBORATION or CONSEQUENCE. R4 gets a direction, not a verdict,
+# This matters more than usual here — the power analysis puts
+# first-regime yield at ~20-60 research signals/week, which powers NOVELTY and does
+# NOT power CORROBORATION or CONSEQUENCE. The result is a direction, not a verdict,
 # on counters 2 and 3, and this handler is built to say so rather than to
 # publish a small-sample number.
 #
 # REFUSES LOUD: requires a live deps.pg_pool. Zero is also this counter's
-# honest verified baseline (229,945 signals, 100% NULL retrieval_origin at
-# 2026-09-05), so a zeroed finding emitted because the pool was missing would
+# honest verified baseline (229,945 signals, 100% NULL retrieval_origin
+# when measured), so a zeroed finding emitted because the pool was missing would
 # be indistinguishable from the real measurement. It raises instead.
 #
-# STATE: draft. R-A has not merged, so there are no research signals to count
-# and every counter reads its structurally-verified zero. Activate after R-A
-# lands (see planning/RESEARCH_RD_REPORT.md "deploy steps").
+# STATE: draft. Until the research pack writes signals there is nothing to
+# count and every counter reads its structurally-verified zero. Activate after
+# the research pack is in use.
 #
 # Target-agnostic META: the subscription declares NO `targets` selector, so the
 # cadence heartbeat is a SINGLE global sweep, and no predicate is declared
@@ -68,7 +68,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: draft
-  owner: research_program_rd
+  owner: owner@local
 
 subscription:
   # META analyst: one global sweep per tick. The handler reads the research
@@ -86,7 +86,7 @@ method:
   kind: deterministic
   impl: legba.data.analysts.deterministic:run_method
   sub_handler: research_measurement
-  # No LLM block and no token budget — §4 is explicit that nothing here is a
+  # No LLM block and no token budget — nothing here is a
   # judge call. Every knob below is declared in
   # legba.data.analysts.handler_options.HANDLER_OPTIONS["research_measurement"];
   # the values here are the in-source defaults restated so an operator can see

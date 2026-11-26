@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""R-1 — the head-driven ``/v3/system/source-firing`` read equals the
+"""The head-driven ``/v3/system/source-firing`` read equals the
 whole-table GROUP BY it replaced, row for row, in one snapshot; and migration
 0251 leaves its index on the (small) test database.
 
@@ -22,7 +22,7 @@ import pytest
 from legba.data.config import PostgresConfig
 from legba.data.registry.v3_api import _SOURCE_FIRING_SQL
 
-#: The statement the route ran before R-1, verbatim (whole-table aggregates
+#: The statement the route ran before the rewrite, verbatim (whole-table aggregates
 #: unioned by source id, filtered to real heads).
 _OLD_SOURCE_FIRING_SQL = """
     WITH heads AS (
@@ -152,7 +152,7 @@ async def test_head_driven_source_firing_equals_the_whole_table_read(
 
         async with conn.transaction(isolation="repeatable_read", readonly=True):
             old = [tuple(r) for r in await conn.fetch(_OLD_SOURCE_FIRING_SQL)]
-            # U-9 appended last_poll_newest_entry_at: the old form's ten columns compare
+            # Appended last_poll_newest_entry_at: the old form's ten columns compare
             new = [tuple(r)[:10] for r in await conn.fetch(_SOURCE_FIRING_SQL)]
         assert new == old
         mine = {r[0]: r for r in new if r[0].startswith(tag)}

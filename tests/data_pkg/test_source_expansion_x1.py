@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""X-1 — the source-expansion descriptors: shape, state, licence, Telegram.
+"""The source-expansion descriptors: shape, state, licence, Telegram.
 
-* Every X-1 descriptor validates through the real ``SourceDescriptor`` model
+* Every descriptor validates through the real ``SourceDescriptor`` model
   AND its handler's config schema (the production unwrap), ships ``draft``,
   and the reference host's overlay walks it to ``configured`` — never active.
 * The licence ledger is never left unset; an attribution class carries a
@@ -137,7 +137,7 @@ def test_register_bindings_pin_a_retainable_licence_pair(name):
     assert cfg.license_class == d.scope.license_class
     assert cfg.license_class not in RETENTION_FORBIDDEN_LICENSE_CLASSES
     if name == "source_eu_fsf_sanctions_list.yaml":
-        # I-5: the record differ reads an attribute key; FSF is keyed on its own id.
+        # The record differ reads an attribute key; FSF is keyed on its own id.
         assert (cfg.differ, cfg.record_tag, cfg.key_path) == ("xml_records", "sanctionEntity", "@logicalId")
     else:
         assert cfg.differ == "text"             # the Canada entry element was never probed
@@ -201,7 +201,7 @@ def _tg(name: str) -> TelegramChannelSourceConfig:
     return TelegramChannelSourceConfig.model_validate(_unwrap_factory_dict(_body(name)["config"]))
 
 
-#: The ten X-1 channels, moved into the live descriptor on 2026-11-14 (roll 83)
+#: The ten channels, moved into the live descriptor on 2026-11-14
 #: with their reviewed classes; the staged file holds none.
 X1_MOVED_CLASSES: dict[str, str | None] = {
     "GeneralStaffZSU": "official", "kpszsu": "official", "mod_russia": "official",
@@ -218,7 +218,7 @@ def test_staged_telegram_rides_the_live_account_text_only():
     assert staged["deps"]["vault_secrets"] == live["deps"]["vault_secrets"]
     cfg = _tg(STAGED_TELEGRAM)
     assert cfg.include_media is False
-    assert cfg.channels == [] and cfg.classes == {}      # all ten moved (roll 83)
+    assert cfg.channels == [] and cfg.classes == {}      # all ten moved
     # No handle is both staged and live (moving one means removing it here).
     norm = lambda xs: {c.lstrip("@").lower() for c in xs}  # noqa: E731
     assert not norm(cfg.channels) & norm(_tg(LIVE_TELEGRAM).channels)

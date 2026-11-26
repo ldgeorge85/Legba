@@ -1,4 +1,4 @@
-# Event Reconciler analyst descriptor — DATA MODEL V3 / P1.
+# Event Reconciler analyst descriptor.
 #
 # A `deterministic`-kind META analyst that writes the two relation classes the
 # substrate can infer without adjudication:
@@ -8,7 +8,7 @@
 #     number of resolved actors.
 #
 # caused_by and contradicts are deliberately not inferred here; the writer
-# refuses them with SEAMS #56 until an attribution/contradiction lane exists.
+# refuses them with SEAMS #56 until an attribution/contradiction reader exists.
 #
 # Like event_clustering, this descriptor is state: draft and the handler still
 # no-ops while LEGBA_EVENTS is off.
@@ -24,7 +24,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: draft
-  owner: data_model_v3_p1
+  owner: owner@local
 
 subscription:
   # META sweep: the handler reads the bounded event population directly through
@@ -46,7 +46,7 @@ method:
     max_events: 20000
     evolves_min_actors: 2
     evolves_max_gap_hours: 168
-    # P1b (2026-09-23): the same turn-budget discipline as event_clustering —
+    # The same turn-budget discipline as event_clustering —
     # LEGBA_EVENT_RECONCILER_PASS_BUDGET_SECONDS defaults 120 s; this option is
     # the descriptor-side mirror and 0 disables the bound.
     pass_budget_seconds: 120

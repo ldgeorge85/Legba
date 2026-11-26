@@ -1,10 +1,9 @@
-# Alert Trigger Scan analyst descriptor (P1-3 — verification-gated alerting,
-# trigger set v1).
+# Alert Trigger Scan analyst descriptor (verification-gated alerting).
 #
 # A first-class `deterministic`-kind META analyst that, on a ~10-minute
 # cadence, scans VERIFIED substrate state for TRANSITIONS and side-writes one
 # `kind='alert'` analyst_outputs row per fired trigger, fanning each outward
-# through the shared P1-1 alert-sink dispatcher (ledger row per sink outcome +
+# through the shared alert-sink dispatcher (ledger row per sink outcome +
 # webhook when configured). Trigger classes:
 #
 #   1. band_crossing      — a desk×dimension scorecard band changed vs the
@@ -100,7 +99,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: draft
-  owner: p1_3_triggers
+  owner: owner@local
 
 subscription:
   # No `targets` block → META analyst: one global scan per cadence tick over
@@ -131,5 +130,5 @@ cadence:
 
 # No output bindings: the run summary is TRACE_ONLY (audited in
 # analyst_traces); the REAL product — the kind='alert' rows — is side-written
-# by the handler and fanned outward through the shared P1-1 dispatcher.
+# by the handler and fanned outward through the shared dispatcher.
 outputs: []

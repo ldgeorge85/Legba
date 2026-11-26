@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""``GET /v3/evidence/drift*`` — the source-drift panel's data (lane D-1).
+"""``GET /v3/evidence/drift*`` — the source-drift panel's data.
 
 * ``/evidence/drift`` — classifications over a window (``window_hours``,
   default 168) by class and by source, flags by state, and the open total;

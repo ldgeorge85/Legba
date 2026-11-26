@@ -286,7 +286,7 @@ async def _seed_signals(
                 json.dumps({
                     "summary": f"test signal {d}",
                     "sentiment": 0.0,
-                    "title": f"K-3 e2e test signal {d}",
+                    "title": f"e2e test signal {d}",
                 }),
                 f"k3-e2e-{new_id.hex}",
                 f"https://example.invalid/k3-e2e/{new_id}",

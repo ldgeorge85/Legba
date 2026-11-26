@@ -8,7 +8,7 @@ was a signal's TITLE and nothing else. The evidence a negative has to survive is
 usually in the article, not the headline, so the platform's own absence backstop
 was reading the one surface the evidence is not on.
 
-THE MEASUREMENT it comes from (`planning/SALIENCE_DESIGN_2026-08-21.md` §1.2, the
+THE MEASUREMENT it comes from (the
 `pro_ir_0817` case): the decisive proliferation row sat BODY-ONLY at slice
 position [76]; the claim's content terms — "delivery", "enrichment",
 "weaponization", "proliferation" — matched ZERO of the 120 slice titles, so the
@@ -40,6 +40,8 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
+
+import legba.data.provenance.verify as _verify
 
 from legba.data.provenance.absence_slice import (
     _ABSENCE_SLICE_BODY_CHARS,
@@ -75,7 +77,7 @@ class _SliceJudge:
     async def chat_complete(self, messages, *, max_tokens=None, temperature=None,
                             system=None, **kw):
         prompt = messages[0]["content"]
-        if "INPUT-SLICE" in (system or "") or "slice" in (system or "").lower():
+        if system == _verify._ABSENCE_SLICE_JUDGE_SYSTEM:
             self.slice_calls += 1
             self.slice_prompts.append(prompt)
             return _Response(json.dumps(self._slice or {}))
@@ -153,7 +155,7 @@ async def test_signal_body_is_capped() -> None:
 
 
 async def test_composed_row_behaviour_is_unchanged() -> None:
-    """W1(b) still holds: a composed row shows its BODY, title only as fallback."""
+    """Still holds: a composed row shows its BODY, title only as fallback."""
     conn = _FakeConn([
         {"title": "topic", "body": "the verdict prose", "source_id": "",
          "provenance_kind": "", "row_kind": "output"},

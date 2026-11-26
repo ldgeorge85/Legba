@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Render a byte-faithful PROMPT PACK for operator review.
 
-The operator wants to personally read EXACTLY what the models are sent.
+A reader can personally inspect EXACTLY what the models are sent.
 ``analyst_traces.prompt_rendered`` is NULL on every row (never wired), and
 ``analyst_traces.input_payload`` is ``{}`` on every row — so this script
 REPLAYS each analyst's most recent real run through the REAL render
@@ -227,8 +227,8 @@ def wire_digest(system: str, user: str) -> tuple[str, int]:
 
 
 def resolve_promoted_prompt(analyst_id: str) -> str | None:
-    """The SAME query as ``optimizer.resolve_promoted_system_prompt`` (P4-T6
-    guard included), via psql."""
+    """The SAME query as ``optimizer.resolve_promoted_system_prompt`` (guard
+    included), via psql."""
     rows = db_json(
         "SELECT data->>'candidate_prompt_module_text' AS text "
         "FROM analyst_outputs "
@@ -500,7 +500,7 @@ def replay_unit_user_prompt(
             "results and are NOT reconstructable (see the GATHER note below)"
         )
 
-    # Grounding preamble — captured VERBATIM in the trace (DQ P6).
+    # Grounding preamble — captured VERBATIM in the trace.
     preamble = None
     if info["preamble"] is not None:
         preamble = info["preamble"].get("preamble_text") or ""

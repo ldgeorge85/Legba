@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""P1-1 webhook alert sink — bounded-retry POST, gating, redaction.
+"""Webhook alert sink — bounded-retry POST, gating, redaction.
 
 Same fake-HTTP pattern as ``tests/data_pkg/test_output_taxii_client.py``
 (queued responses / raised exceptions, recorded calls) — the sink's HTTP
@@ -179,7 +179,7 @@ async def test_transient_exhaustion_degrades_never_raises() -> None:
     sink = _sink(http)
     result = await sink.deliver(_payload())
     assert result.outcome == "transient_error"
-    # 2 retries → 3 attempts total (the P1-1 bounded-retry contract).
+    # 2 retries → 3 attempts total (the bounded-retry contract).
     assert result.attempts == 3 and len(http.calls) == 3
     assert "http 500" in result.detail
 

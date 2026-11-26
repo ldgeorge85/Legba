@@ -116,7 +116,7 @@ def load_models():
     logger.info(f"Loading models on device: {device}")
 
     # 1. NLLB-200 translation — upgraded 600M-distilled -> 1.3B-distilled
-    #    (2026-07-09) for higher proper-noun / place-name fidelity on the
+    #    for higher proper-noun / place-name fidelity on the
     #    non-Latin war-beat (ru/ar/uk/he/fa/…). Better translation directly
     #    lifts downstream spaCy-NER entity yield (that pipeline is translate->
     #    English->NER). ~+1.4GB VRAM in fp16; T4 GPU0 has ~6.5GB headroom.

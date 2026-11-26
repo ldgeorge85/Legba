@@ -4,10 +4,9 @@
 
 This module exports three GET endpoints — `findings`, `situations`,
 `signals` — that read directly from their respective public tables on
-the primary Postgres substrate. They back the new
-P-1..P-3 panels described in `plans/legba_panels_redesign_2026_05_28.md`
-and follow the same wiring convention as `v3_api.py`: a small router
-constructed via `build_substrate_reads_router(deps)`, the shared
+the primary Postgres substrate. They back the findings, signals and
+situations panels and follow the same wiring convention as `v3_api.py`: a
+small router constructed via `build_substrate_reads_router(deps)`, the shared
 `RegistryAPIDeps` bundle, and the same `require_bearer` gate used by the
 rest of the registry surface.
 
@@ -62,8 +61,8 @@ from .api import RegistryAPIDeps, require_bearer
 from .read_latency import fast_json_response, page_json_response_off_loop
 from .substrate_reads_folds import (
     FACET_SCAN_CAP as _FACET_SCAN_CAP,
-    FAITHFULNESS_VERIFICATION_CTE as _FAITHFULNESS_VERIFICATION_CTE,
-    STRUCTURAL_VERIFICATION_CTE as _STRUCTURAL_VERIFICATION_CTE,
+    as_of_findings_where as _as_of_findings_where,
+    verification_ctes as _verification_ctes,
 )
 from .substrate_reads_folds import full_row_sql as _full_row_sql
 from .substrate_reads_folds import parse_full_row as _parse_full_row
@@ -173,7 +172,7 @@ class FindingRow(BaseModel):
         finding's own ``confidence``. This is the critic ACTUATION: a finding
         the critic graded poorly surfaces a lowered confidence, so the score
         DOES something instead of being a spectator.
-      * ``verification`` — P0-T3: the faithfulness verify pass's detail block
+      * ``verification`` — The faithfulness verify pass's detail block
         (``faithfulness_score`` + the named ``unsupported_spans`` + the
         ``judge_status`` label) when a faithfulness critique exists, so the
         operator sees WHY confidence was demoted. NULL for a legacy / unverified
@@ -206,15 +205,15 @@ class FindingRow(BaseModel):
     # S3 critic-actuator (additive, nullable).
     critic_score: float | None = None
     effective_confidence: float | None = None
-    # P0-T3 faithfulness-verify detail (additive, nullable). Names the
+    # Faithfulness-verify detail (additive, nullable). Names the
     # unsupported spans so the demotion is explained, never opaque.
     verification: dict[str, Any] | None = None
-    # P0-4 (additive, nullable): "structural" for verify-exempt deterministic
+    # (additive, nullable): "structural" for verify-exempt deterministic
     # structural/mining analysts — the honest badge stamp, never fabricated.
     verify_exempt: str | None = None
     # X4 READPATH: set ONLY when `verification` is null — pending|absent (verification_state.py).
     verification_state: dict[str, Any] | None = None
-    # E-1 (2026-07-27 sweep item 3, additive, nullable): the EXPLICIT
+    # Additive, nullable: the EXPLICIT
     # below-floor mark. ``True`` = a graded finding whose surfaced
     # ``effective_confidence`` sits under the system-wide 0.50 floor
     # (``_FAITH_FLOOR`` — a test-enforced mirror of
@@ -279,7 +278,7 @@ class SignalRow(BaseModel):
     geo: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
     entity_classes: list[str] = Field(default_factory=list)
-    # P2-1 evidence archival (additive) — derived from the EXISTING
+    # Evidence archival (additive) — derived from the EXISTING
     # signals.object_ref column (`cas:sha256/<hex>`, stamped by the
     # evidence_archiver when our copy of the original bytes exists). Lets the
     # UI/exports show "evidence preserved" + the verifiable hash without a
@@ -338,7 +337,7 @@ class ContentionRow(BaseModel):
     opened_at: datetime
     resolved_at: datetime | None
     updated_at: datetime
-    # P3-2 coexistence record (migration 0097) — HOW/WHEN the current winner was
+    # Coexistence record (migration 0097) — HOW/WHEN the current winner was
     # surfaced. Read-only annotation (never mutates a fact); NULL when nothing is
     # surfaced (abstained / collapsed).
     surfaced_by: str | None = None          # 'deterministic' | 'llm'
@@ -518,10 +517,10 @@ def _hydrate_finding(row: Any) -> FindingRow:
     effective_confidence = (
         min(confidence, critic_score) if critic_score is not None else confidence
     )
-    # P0-T3 — the faithfulness-verify detail (names the unsupported spans), only
+    # The faithfulness-verify detail (names the unsupported spans), only
     # present when a faithfulness critique exists; NULL → no fabricated block.
     verification = _load_jsonb_opt(row.get("verification"))
-    # C2b (P4-6) — the structural_claims verdict for a verify-EXEMPT structural
+    # The structural_claims verdict for a verify-EXEMPT structural
     # finding (its own lateral; a structural critique is NEVER a faithfulness
     # one). ``structural_verified`` flips the honest badge to
     # ``structural-verified``; the structural verification detail is surfaced when
@@ -570,7 +569,7 @@ def _hydrate_finding(row: Any) -> FindingRow:
         critic_score=critic_score,
         effective_confidence=effective_confidence,
         verification=verification,
-        # P0-4 / C2b — the structural verify-exemption stamp, derived server-side
+        # The structural verify-exemption stamp, derived server-side
         # from the ONE registry: ``structural`` (unverified) or, when a passing
         # structural critique exists for this finding, ``structural-verified``.
         verify_exempt=verify_exempt,
@@ -619,7 +618,7 @@ def _hydrate_finding_summary(row: Any) -> FindingSummaryRow:
 
 
 def _hydrate_finding_judgment(row: Any) -> FindingJudgmentRow:
-    """Map a `fields=judgment` SQL row (§ the route's `if fields ==
+    """Map a `fields=judgment` SQL row (the route's `if fields ==
     "judgment"` branch) to `FindingJudgmentRow`.
 
     `verification` is the SAME object-level `coalesce(faithfulness,
@@ -664,11 +663,11 @@ async def fetch_situations_page(
     cursor: str | None = None,
 ) -> SituationsPage:
     """One situations page — the query the ``/api/v1/situations`` route and
-    the V3/P3 ``/api/v1/v3/situations`` alias BOTH run (the v3 surface needed
+    the ``/api/v1/v3/situations`` alias BOTH run (the v3 surface needed
     the same list so the temporal acceptance proof can curl the v3 prefix;
     extracting the query keeps the two routes on one WHERE clause forever).
 
-    ``as_of`` (V3/P3) is the canonical validity-time read: the frames that
+    ``as_of`` is the canonical validity-time read: the frames that
     held on date D, including ones closed since —
     ``COALESCE(valid_from, -infinity) <= D AND (valid_until IS NULL OR
     valid_until > D)`` — never ANDed with an open-row gate. A malformed
@@ -799,7 +798,7 @@ def _hydrate_signal(row: Any, *, target_id: str | None = None) -> SignalRow:
         geo=geo,
         tags=tags,
         entity_classes=list(row.get("entity_classes") or []),
-        # P2-1: archived-evidence surface, derived from signals.object_ref
+        # Archived-evidence surface, derived from signals.object_ref
         # alone (cas:sha256/<hex>); never fabricated for foreign ref shapes.
         archived=row.get("object_ref") is not None,
         archive_sha256=sha256_from_object_ref(row.get("object_ref")),
@@ -915,9 +914,8 @@ def build_substrate_reads_router(deps: RegistryAPIDeps) -> APIRouter:
         # `derived_from`, both verification folds) is `fields=full` by name,
         # or one record at `GET /findings/{finding_id}`. The switch back is
         # this one default (`FINDINGS_DEFAULT_FIELDS`).
-        # P-mobile — the list-view weight (build report
-        # "findings fields=summary"). `fields=summary` is `FindingsSummaryPage`: the nine
-        # scalar columns every list row needs (§ below) plus the handful of
+        # The list-view weight. `fields=summary` is `FindingsSummaryPage`: the
+        # nine scalar columns every list row needs (below) plus the handful of
         # `assembly`/`verification`/`drops` leaves MorningRead's history rail and
         # the mobile navigator actually read — never the full `body`, the
         # per-block `assembly.blocks` (quoted prose + spans + signals), or the
@@ -931,6 +929,9 @@ def build_substrate_reads_router(deps: RegistryAPIDeps) -> APIRouter:
         # list reduced to `findings_projection.JUDGMENT_FIELDS` — never the
         # finding's full `data`, `derived_from`, or `body`.
         fields: FindingsFields = Query(default=FINDINGS_DEFAULT_FIELDS),
+        # The record as it stood: only findings, and critiques of them, written
+        # by this instant (`substrate_reads_folds.as_of_findings_where`).
+        at: datetime | None = Query(default=None),
         principal: str = Depends(require_bearer),
     ) -> Response:  # R-1: a page model's bytes via read_latency.fast_json_response
         limit = _validate_limit(limit)
@@ -947,7 +948,13 @@ def build_substrate_reads_router(deps: RegistryAPIDeps) -> APIRouter:
         if since is not None:
             args.append(since)
             where.append(f"f.produced_at >= ${len(args)}")
-        # P1-T1 reachability — the ~1100 NULL-target "orphan" findings are
+        at_param: int | None = None
+        if at is not None:
+            args.append(at)
+            at_param = len(args)
+            where.extend(_as_of_findings_where(at_param))
+        faith_cte, struct_cte = _verification_ctes(at_param)
+        # Reachability — the ~1100 NULL-target "orphan" findings are
         # unreachable from any country view. `target_id_null=true` returns ONLY
         # those orphans. It takes precedence over a (meaningless) co-passed
         # `target_id` exact filter, since a NULL row can't also equal a value.
@@ -959,7 +966,7 @@ def build_substrate_reads_router(deps: RegistryAPIDeps) -> APIRouter:
         if analyst_id is not None:
             args.append(analyst_id)
             where.append(f"f.analyst_id = ${len(args)}")
-        # P1-T1 reachability — analyst-set reach. `analyst_id_in` is a CSV of
+        # Reachability — analyst-set reach. `analyst_id_in` is a CSV of
         # analyst ids; return the UNION (any finding whose analyst_id is in the
         # set). Composes with a single `analyst_id` (AND) when both are passed.
         if analyst_id_in is not None:
@@ -1004,7 +1011,7 @@ def build_substrate_reads_router(deps: RegistryAPIDeps) -> APIRouter:
         # $1..$where_argc contiguous (the scan-floor probe below re-runs exactly
         # those, and a bind list has to match).
         pending_judge_status = judge_status
-        # P1-T1 reachability — keyword reach. Full-text match over the
+        # Reachability — keyword reach. Full-text match over the
         # concatenated title+body. `to_tsvector(...) @@ plainto_tsquery(...)` is
         # correct without a dedicated index (seq scan, scoped by the other
         # predicates); COALESCE guards the (NOT NULL today, but defensive) text.
@@ -1092,7 +1099,7 @@ def build_substrate_reads_router(deps: RegistryAPIDeps) -> APIRouter:
             return _encode_cursor(floor["produced_at"], floor["id"])
 
         if fields == "summary":
-            # §"fields=summary" — the SAME two laterals (a finding's LATEST
+            # `fields=summary` — the SAME two laterals (a finding's LATEST
             # faithfulness critique, else its latest structural critique), but
             # the SELECT list pulls only the leaf scalars the list surfaces
             # render: no `f.body`, no full `f.data` (the assembly's quoted
@@ -1117,8 +1124,8 @@ def build_substrate_reads_router(deps: RegistryAPIDeps) -> APIRouter:
                      WHERE {' AND '.join(where)}
                      ORDER BY f.produced_at DESC, f.id DESC
                      {page_limit}
-                ), {_FAITHFULNESS_VERIFICATION_CTE},
-                   {_STRUCTURAL_VERIFICATION_CTE}
+                ), {faith_cte},
+                   {struct_cte}
                 SELECT f.id, f.kind, f.title, f.confidence, f.severity,
                        f.target_id, f.analyst_id, f.produced_at, f.created_at,
                        f.data->'data'->'assembly'->>'tier' AS assembly_tier,
@@ -1170,8 +1177,8 @@ def build_substrate_reads_router(deps: RegistryAPIDeps) -> APIRouter:
                      WHERE {' AND '.join(where)}
                      ORDER BY f.produced_at DESC, f.id DESC
                      {page_limit}
-                ), {_FAITHFULNESS_VERIFICATION_CTE},
-                   {_STRUCTURAL_VERIFICATION_CTE}
+                ), {faith_cte},
+                   {struct_cte}
                 SELECT f.id, f.kind, f.title, f.analyst_id, f.analyst_version,
                        f.target_id, f.target_version, f.produced_at,
                        f.severity, f.confidence, f.schema_uri,
@@ -1202,7 +1209,7 @@ def build_substrate_reads_router(deps: RegistryAPIDeps) -> APIRouter:
         # The full row: the gate input, both verification folds, the badge —
         # substrate_reads_folds.full_row_sql (the S8-T2 / C2b pins; P-5: the
         # jsonb columns as text, parsed with the page bytes off the loop).
-        sql = _full_row_sql(" AND ".join(where), page_limit, after_fold)
+        sql = _full_row_sql(" AND ".join(where), page_limit, after_fold, at_param)
         async with deps.descriptor_registry.pg.acquire() as conn:
             rows = await conn.fetch(sql, *args)
             next_cursor = await _facet_next_cursor(conn, rows)
@@ -1223,7 +1230,7 @@ def build_substrate_reads_router(deps: RegistryAPIDeps) -> APIRouter:
         state: SituationState | None = Query(default=None),
         target_id: str | None = Query(default=None),
         since: datetime | None = Query(default=None),
-        # V3/P3 — the canonical as-of read on the frame's validity span:
+        # The canonical as-of read on the frame's validity span:
         # the frames that held on date D, including ones closed since. A
         # malformed value 422s at the FastAPI boundary, never defaults.
         as_of: datetime | None = Query(default=None),
@@ -1338,7 +1345,7 @@ def build_substrate_reads_router(deps: RegistryAPIDeps) -> APIRouter:
                 data=[summary_row(o) for o in out], next_cursor=next_cursor))
         return SignalsPage(data=out, next_cursor=next_cursor)
 
-    # ---------------- contention (Holes-B Wave 5, #101) ----------------
+    # ---------------- contention ----------------
 
     @router.get("/contention", response_model=ContentionPage)
     async def list_contention(

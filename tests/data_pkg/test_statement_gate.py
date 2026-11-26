@@ -240,8 +240,8 @@ def test_g2_observation_values_count_as_stated():
 
 
 def test_g2_publication_day_is_rule_a_and_the_s3_switch_still_withdraws_it():
-    # S-4 decided rule (a): the evidence row's own publication day is a date a
-    # statement may carry. The S-3 configuration (switch off) still refuses it.
+    # Decided rule (a): the evidence row's own publication day is a date a
+    # statement may carry. The configuration (switch off) still refuses it.
     row = _row(quote="the attack on Thursday killed 5 people")   # PUB = Fri 13 Nov
     st = _stmt(text="An attack in Kabul killed 5 on 13 November 2026.")
     res = g.check_dates(st, [row])

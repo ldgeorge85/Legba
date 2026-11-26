@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Desk OUTPUT CONTRACT v2 — the factual part of a read as typed ROWS (lane D-1).
+"""Desk OUTPUT CONTRACT v2 — the factual part of a read as typed ROWS.
 
 WHY. A desk (an ``inline_target`` unit) writes one prose finding with ``[N]``
 markers. Lanes S-3..S-6 measured how much of that prose can be turned into
@@ -56,9 +56,10 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from .likelihood_words import LIKELIHOOD_BANDS
 from .statement_seats import as_text
 
-#: The contract's name, stamped on every shadow record. ``v2.1`` (lane D-2):
+#: The contract's name, stamped on every shadow record. ``v2.1``:
 #: a fact row may take a SURFACE subject (``subject_kind: surface``), actors
 #: are offered when a cited row names them (not only when it links them), and
 #: the repair round's rule changed (words from the row's own quotes; a split).
@@ -78,11 +79,9 @@ FACT_KINDS = frozenset({"event", "state", "level", "attributed"})
 
 RESTATEMENT_STATUSES = frozenset({"confirmed", "revised", "no_longer_supported"})
 
-#: The ICD-203 probability bands the house standard names (consult prompt).
-CONFIDENCE_WORDS: tuple[str, ...] = (
-    "almost no chance", "very unlikely", "unlikely", "roughly even chance",
-    "likely", "very likely", "almost certain",
-)
+#: The seven likelihood bands, from the one shared table. "cannot say" is not
+#: among them: the parser does not accept it as a row's confidence.
+CONFIDENCE_WORDS: tuple[str, ...] = tuple(word for _cut, word in LIKELIHOOD_BANDS)
 _CONFIDENCE_ALIASES = {
     "remote": "almost no chance", "highly unlikely": "very unlikely",
     "roughly even": "roughly even chance", "even chance": "roughly even chance",
@@ -90,8 +89,23 @@ _CONFIDENCE_ALIASES = {
     "almost certainly": "almost certain", "virtually certain": "almost certain",
 }
 
-SEVERITIES = frozenset({"low", "moderate", "elevated", "high", "critical"})
-SEVERITY_DELTAS = frozenset({"rose", "fell", "steady", "new"})
+#: The word a read gives when nothing in its window bears on the question
+#: (a level and a change both accept it).
+NO_LEVEL = "none"
+SEVERITY_DELTAS = frozenset({"rose", "fell", "steady", "new", NO_LEVEL})
+
+
+def severity_levels() -> tuple[str, ...]:
+    """The profile's level words, lowest first (``constants.levels``). A
+    profile that declares none cannot run the desk-rows seat: refused by
+    name, never another profile's words."""
+    from .profile_constants import current, levels
+
+    words = levels()
+    if not words:
+        raise ValueError(f"desk_rows.levels_undeclared: profile {current().profile!r} declares no "
+                         "constants.levels; the desk-rows seat needs its level words")
+    return words
 DESK_COLLECTS = frozenset({"yes", "no", "unknown"})
 
 #: Rows of one kind read from one reply. Rows past it are counted, not read —
@@ -347,7 +361,7 @@ def parse_rows_reply(obj: Mapping[str, Any] | None) -> RowsReply | None:
     return RowsReply(
         tuple(facts), tuple(absences), tuple(judgements), tuple(restated),
         title=as_text(obj.get("title")),
-        severity=severity if severity in SEVERITIES else None,
+        severity=severity if severity in (*severity_levels(), NO_LEVEL) else None,
         severity_delta=delta if delta in SEVERITY_DELTAS else None,
         confidence=confidence, lead=as_text(obj.get("lead")), would_change=would,
         indicators=tuple(as_text(i.get("statement") if isinstance(i, Mapping) else i)
@@ -436,8 +450,8 @@ __all__ = [
     "FACT_KINDS",
     "MAX_ROWS_PER_KIND",
     "MAX_SPLIT_ROWS",
+    "NO_LEVEL",
     "RESTATEMENT_STATUSES",
-    "SEVERITIES",
     "SEVERITY_DELTAS",
     "SUBJECT_KINDS",
     "AbsenceRow",
@@ -450,6 +464,7 @@ __all__ = [
     "WouldChange",
     "fact_as_dict",
     "normalize_confidence",
+    "severity_levels",
     "parse_repairs",
     "parse_rows_reply",
     "reply_as_dict",

@@ -1,7 +1,6 @@
 # Entity Resolution analyst descriptor — ongoing NER-mention → entity-graph fold.
 #
-# Makes scripts/backfill_entity_graph.py continuous (PIVOT_BUILD_PLAN §9
-# fast-follow). A first-class `deterministic`-kind analyst over the SHARED raw
+# Makes scripts/backfill_entity_graph.py continuous. A first-class `deterministic`-kind analyst over the SHARED raw
 # signal pool: it resolves `signals.payload.entities` (NER mentions) into the
 # entity substrate — `entity_profiles` + `signal_entity_links` + co-occurrence
 # `proposed_edges` — every time it fires, so the Entities / Entity-Graph panels
@@ -38,7 +37,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: active
-  owner: entity_resolution
+  owner: owner@local
 
 subscription:
   # No `targets` block → META analyst: one global sweep per cadence tick over

@@ -175,8 +175,8 @@ from .judge_pipeline_lineage import (  # noqa: F401 — re-exported surface
 #
 # 2026-08-09/1 — the round-5 pair: one regression fix, one honesty fix.
 #
-#   V-I1 guard 5  the numeral fingerprint is ENDPOINT-AWARE. Round 5 scored
-#         V-I1 0-for-1 on live fires — its one absorption (critique b14bf715)
+#   V-I1 guard 5  the numeral fingerprint is ENDPOINT-AWARE. V-I1 scored
+#         0-for-1 on live fires — its one absorption (critique b14bf715)
 #         demoted a fully-earned hard fail because "issued 6 Aug 06:00, expires
 #         8 Aug 08:00" and "issued August 6 at 7:25AM until August 6 at 8:00AM"
 #         flatten to the same magnitude set. Every clock-time / month-day
@@ -199,13 +199,13 @@ from .judge_pipeline_lineage import (  # noqa: F401 — re-exported surface
 # as the measurement corrections they are.
 #
 # 2026-08-10/1 — V-I1 guard 6: the confirmation fingerprint reads PROSE
-#   DIRECTION (round-5 §10-5; judge_quote_rules.py's guard-6 banner carries the
+#   DIRECTION (judge_quote_rules.py's guard-6 banner carries the
 #   mechanism). A claim taking one side of a direction axis whose "confirming"
 #   quote takes the OPPOSITE side about the same subject was never confirmed —
 #   the suppression withdraws. Withdraw-only like guard 5; the 69-pair replay
 #   flips only 037f769f. EXPECTED SHIFT: hard-fail count rises by this class.
 #
-# 2026-08-15/1 — Phase J, the judge-plane rebuild (FORWARD_PLAN_2026-08-15 §1).
+# 2026-08-15/1 — Phase J, the judge-plane rebuild.
 #   Three changes land under one stamp, and every one of them moves the
 #   POPULATION rather than a verdict rule — which is exactly what the split key
 #   exists to keep legible.
@@ -215,7 +215,7 @@ from .judge_pipeline_lineage import (  # noqa: F401 — re-exported surface
 #       to NVIDIA Nemotron 3 Super 120B A12B via OpenRouter
 #       (llm.judge.openrouter_nemotron120b.openai_compat, free tier).
 #       CROSS-FAMILY IS PRESERVED: an NVIDIA judge over an OpenAI-derived
-#       (gpt-oss-120b) producer plane — the independence property the judge
+#       (the core model) producer plane — the independence property the judge
 #       plane was rebuilt to keep. Same handler subprovider (.openai_compat →
 #       vllm wire shape); the verdict rules are byte-identical. Verdicts from
 #       a different model family are a different instrument: never pool.
@@ -242,9 +242,9 @@ from .judge_pipeline_lineage import (  # noqa: F401 — re-exported surface
 #   fail-class ratio computed across this boundary compares an exhaustive
 #   census against a sample graded by a different model family — two
 #   instruments, two frames. Every measurement over this stamp must carry
-#   its n AND its sampling frame (§5 of the plan makes that binding).
+#   its n AND its sampling frame.
 #
-# 2026-08-20/1 — RUST-1, the EVIDENCE-BYTES fix (panel 2026-08-16 §V-1). What
+# 2026-08-20/1 — RUST-1, the EVIDENCE-BYTES fix. What
 #   the judge SEES is now what the corpus SCORES. The evidence map was rendered
 #   with ``json.dumps`` default ``ensure_ascii=True`` — every non-ASCII char
 #   shown as a six-char backslash-uXXXX escape, every newline as the two-char
@@ -459,7 +459,7 @@ from .judge_pipeline_lineage import (  # noqa: F401 — re-exported surface
 #   asserts CURRENCY ("remains", "continues", "ongoing", "active driver") or
 #   CORROBORATION ("confirms", "corroborates", "bears out") about the world.
 #   This is CORRECTNESS-R2's largest single-mechanism ``inaccurate`` mass
-#   (ATTRIBUTION §1): the desks write "no material change" into the situation
+#   the desks write "no material change" into the situation
 #   register, the register reports that back as intensity and recency, and the
 #   desks then cite it as confirmation the underlying event is live. At the
 #   round's T0 the AR composition's BLUF read "the register confirms the strike
@@ -528,8 +528,8 @@ from .judge_pipeline_lineage import (  # noqa: F401 — re-exported surface
 #   whether a rising violation count is detection or over-firing.
 #
 # 2026-08-28/1 — V-J1, THE DISCLOSED-AND-DOWNWEIGHTED CONFLICT, plus the two
-#   DOMAIN-COLLISION few-shots. Off the 08-27 hard-fail step-change check
-#   (planning/HARDFAIL_STEPCHANGE_CHECK_2026-08-27.md), which adjudicated 13 of
+#   DOMAIN-COLLISION few-shots. Off the 08-27 hard-fail step-change check, which
+#   adjudicated 13 of
 #   the 24 live ``absence_slice_contradicted`` hard fails on 2026-08-25/1 and
 #   tallied 5 true catches, 5 clear over-fires and 3 borderline. That check's
 #   own verdict was that the 08-25/1 title-parity attribution is WRONG (the
@@ -595,8 +595,7 @@ from .judge_pipeline_lineage import (  # noqa: F401 — re-exported surface
 #   stamp; if that branch is ever revived it RE-STAMPS. Two populations must
 #   never share a key, and the one that shipped owns it.
 #
-#   THE DEFECT (planning/CAMPAIGN_2026-08-29/PREMISE_GRADING_LOOP.md A-5b and
-#   Decision 6B). The gate score peaked at exactly four checkable claims and
+#   THE DEFECT. The gate score peaked at exactly four checkable claims and
 #   declined monotonically thereafter (n=1,898 judged rows), so a desk that said
 #   MORE checkable things scored WORSE — while the external rounds independently
 #   measured ``under_hedged`` 42 against ``over_hedged`` 1, 43/43 band misses
@@ -683,8 +682,7 @@ from .judge_pipeline_lineage import (  # noqa: F401 — re-exported surface
 #   added there finds it before it ships.
 #
 #   EXPECTED SHIFT — V-J1 STARTS COUNTING, AND THE SCORE CANNOT MOVE FROM IT.
-#   R3's archived live-fire census (planning/PROOF_ROUND_2026-08-29/mech/
-#   hedged_conflict_livefire.json) replays seven live specimens: 0/7 fire as
+#   The archived live-fire census replays seven live specimens: 0/7 fire as
 #   shipped, 4/7 with the fold, and all seven reproduce exactly in the branch's
 #   regression suite. So hedged-conflict HARD fails begin moving to SOFT and the
 #   two demotion counters leave zero for the first time. ``faithfulness_score``
@@ -740,8 +738,7 @@ from .judge_pipeline_lineage import (  # noqa: F401 — re-exported surface
 #   findings carrying a marker that "does not resolve", 15 of the 16 bad markers
 #   exactly ``N = n_refs + 1``, every one on a "no change" sentence.
 #
-#   WHAT IS TRUE. The 2026-08-29 sweep v2 falsified it
-#   (planning/CAMPAIGN_2026-08-29/DQ_SWEEP_V2.md §4). The baseline resolved
+#   WHAT IS TRUE. The 2026-08-29 sweep v2 falsified it. The baseline resolved
 #   markers against ``analyst_traces.input_row_refs`` — ``uuid[] NOT NULL
 #   DEFAULT '{}'``, a flat array of consumed SUBSTRATE row ids that carries no
 #   ``ref_kind`` and by construction cannot hold a grounding block. The method
@@ -811,7 +808,7 @@ from .judge_pipeline_lineage import (  # noqa: F401 — re-exported surface
 #   the fleet, and is the signal to revert the render half.
 #
 # 2026-09-03/1 — D-3, THE ASSEMBLY ARMS + THE SHARED FOLD (the composition
-#   demotion program, D-1 §3). Two changes ride this one bump, and they are
+#   demotion program). Two changes ride this one bump, and they are
 #   separable in the counters but not in the population.
 #
 #   (i) FIVE ARMS ENTER, FOUR OF THEM DETERMINISTIC — and the fifth does not
@@ -897,7 +894,7 @@ from .judge_pipeline_lineage import (  # noqa: F401 — re-exported surface
 #   gap of 0.050 against a 0.300 threshold. On an assembled row every assumption
 #   under it is false: the KEY is repaired (``cited_mass.v1``, sd 1.673 on the
 #   live candidate pool against the max-pool's 0.024), the LEAD is PLURAL
-#   (``earned_single`` | ``co_leads`` | ``none`` — VOICE §4.5.7: the check
+#   (``earned_single`` | ``co_leads`` | ``none`` — the check
 #   "presupposes one correct lead and will fight a plural one"), and the ORDERING
 #   IS THE PAYLOAD, so an assembled read cannot bury its own lead and the verdict
 #   is already published with its arithmetic in ``assembly.lead.test``.
@@ -915,23 +912,21 @@ from .judge_pipeline_lineage import (  # noqa: F401 — re-exported surface
 #   ship ARM 5, so pulling it would leave that class with no grader until D-6.
 #
 #   (v) WHAT WAS ACTUALLY BUILT FOR THE HARD GATE — and the honest answer is
-#   THE ARMS, NOT THE GATE. D-1 §3.6 priced "promote to HARD" at six pieces of
+#   THE ARMS, NOT THE GATE. Promoting to HARD would take six pieces of
 #   new machinery, the fourth of which — a withhold / do-not-publish seam —
-#   DOES NOT EXIST ANYWHERE IN THE TREE. Ratified F-12: the real enforcement
+#   DOES NOT EXIST ANYWHERE IN THE TREE. So the real enforcement
 #   stays at ASSEMBLE time, where a publish decision already lives, and verify's
 #   arms are INDEPENDENT AUDITORS that run post-persist like every other check
 #   here. So this train ships the arms COUNTED, HARD-LABELLED and LOUD (every
 #   fire logs at ERROR naming the constructor as the defect), and it ships NO
 #   score cap, NO persisted ``hard_fail_count``, NO fourth ``gate_score()`` cap
-#   and NO suppression seam. **The gate is D-3b.** This paragraph is where that
-#   is said, per §3.6's own instruction not to ship labels and call it a gate.
+#   and NO suppression seam. **The gate is D-3b.** This paragraph says so,
+#   rather than ship labels and call them a gate.
 #
-#   AND WHAT THIS TRAIN DOES NOT BUILD, said out loud because the campaign notes
-#   assume otherwise: the D3/#71 CLAIM-CLASS SPLIT. It does not exist — zero
-#   occurrences of ``claim_class`` in ``src/``, ``tests/`` or ``planning/`` —
-#   and the ruling (C, operator 2026-08-29) is design-first, own stamp,
-#   sequenced after #69. D-3 adds ONE new branch (``assembly``, version
-#   ``assembly_arms.v1``) for its own deterministic instrument and leaves
+#   AND WHAT THIS TRAIN DOES NOT BUILD, said out loud: the
+#   CLAIM-CLASS SPLIT. It does not exist — zero occurrences of ``claim_class`` in ``src/`` or ``tests/`` —
+#   and is to be designed first, with its own stamp. D-3 adds ONE new branch
+#   (``assembly``, version ``assembly_arms.v1``) for its own deterministic instrument and leaves
 #   ``no_citation`` and ``_claim_kind``'s five prose kinds untouched.
 #
 #   DIRECTION OF THE EXPECTED SHIFT: ALL THREE FAMILIES MOVE, and for two
@@ -957,7 +952,7 @@ from .judge_pipeline_lineage import (  # noqa: F401 — re-exported surface
 #
 #   BEFORE/AFTER: on the ASSEMBLY population, quote fidelity is 1.000 over all
 #   spans or the constructor is broken — that is an INVARIANT, not a threshold,
-#   and 0.98 is not a pass (D-1 §5.3 G2). On the LEGACY population, the arms are
+#   and 0.98 is not a pass. On the LEGACY population, the arms are
 #   INERT BY CONSTRUCTION and this half is proven, not asserted: a 70-row live
 #   replay (30 compositions carrying 30 assembly-less payloads, 40 unit desk
 #   heads; 477 checkable claims, 206 spans) is **70/70 BYTE-IDENTICAL** to the
@@ -1047,7 +1042,7 @@ from .judge_pipeline_lineage import (  # noqa: F401 — re-exported surface
 #   INDEPENDENT cited sub-claim: on the 35 replayed rows the new overalls run
 #   0.5714 / 0.8528 / 0.9200 (min / mean / max) and every one of them is the
 #   CEILING, not the arms. A read assembled perfectly out of weak inputs is still
-#   a weak read. AND IT IS STILL NOT A GATE: D-1 §3.6's forced ``0.0`` on a firing
+#   a weak read. AND IT IS STILL NOT A GATE: the forced ``0.0`` on a firing
 #   arm remains D-3b and remains unbuilt, so a construction bug reads (say) 0.90
 #   here rather than zero — the same labels-only posture the rest of this plane
 #   holds, said out loud so nobody reads the regrade as the gate arriving.
@@ -1064,12 +1059,12 @@ from .judge_pipeline_lineage import (  # noqa: F401 — re-exported surface
 #   first ``world_assessment`` the channel ever published (critique ffaed9fa,
 #   2026-09-05 12:17Z) graded **0.00** — seven claims, none supported — and six of
 #   the seven were faithful. The channel's fidelity-to-spine IS
-#   ``citation_support`` over the spine's own words (D-1 §2.5 / §3.5), and that
+#   ``citation_support`` over the spine's own words, and that
 #   part was wired correctly and ran: the live row carries ``citation_support``
 #   0.0 over 6 checkable with ``branch_versions.citsupp.v5``, minted one citation
 #   per cited spine ordinal with ``ref_id`` = the spine row and ``evidence_text`` =
 #   that block's quoted span, exactly as specified. The defect is what the map
-#   OMITTED. ``build_assessment_prompt`` hands the voice THREE things (D-6 §1.1) —
+#   OMITTED. ``build_assessment_prompt`` hands the voice THREE things —
 #   the header, the rendered record, and THE RECORD'S OWN ARITHMETIC, introduced
 #   to it as *"facts about the record, handed to you. You may quote them"* — and
 #   the map carried only the second. So "the ledger notes six reads sit below the
@@ -1088,7 +1083,7 @@ from .judge_pipeline_lineage import (  # noqa: F401 — re-exported surface
 #
 #   THIS IS NOT A WIDENING OF THE FENCE. Every number added is already ON the
 #   spine row, in ``payload``, which is still the only argument either the prompt
-#   builder or the citation builder has (D-6 §1's assertion 2, unchanged and still
+#   builder or the citation builder has (unchanged and still
 #   AST-pinned). Nothing new is read.
 #
 #   (iv) A NEW GRADED POPULATION ENTERS WITH NO PRIOR HISTORY. Restated here
@@ -1096,7 +1091,7 @@ from .judge_pipeline_lineage import (  # noqa: F401 — re-exported surface
 #   ``world_assessment`` transitioned draft→active on 2026-09-05 and its first row
 #   is graded under this stamp. It is graded on FIDELITY TO ITS OWN SPINE as its
 #   OWN POPULATION and must never be pooled with the assembly's ~1.0 or with any
-#   composition mean — D-6 §6 requires this sentence to ride the D-3 stamp, and
+#   composition mean — this sentence rides the D-3 stamp, and
 #   the mechanical reason has not changed: there is no per-analyst
 #   composition-faithfulness aggregation in the tree, so the pooling bar cannot be
 #   enforced by a ``GROUP BY`` that does not exist and has to be stated in words.
@@ -1155,7 +1150,7 @@ from .judge_pipeline_lineage import (  # noqa: F401 — re-exported surface
 #   names. No single bounded block states a comparison across blocks, so the
 #   sentence the channel mandated was the sentence the judge could only call
 #   unsupported. The channel's voice contract and its grader were in direct
-#   tension, and D-6 §6.1 named the repair: teach the rubric that the assembly
+#   tension, and the repair is to teach the rubric that the assembly
 #   performs one ranking the voice may relay.
 #
 #   THE LICENCE RESTS ON A PUBLISHED FACT, NOT ON A CONCESSION. The assembly
@@ -1225,7 +1220,7 @@ from .judge_pipeline_lineage import (  # noqa: F401 — re-exported surface
 #       ``weighted_comparison_licensed``, ``weighted_comparison_licensed_hard``
 #       and the four ``weighted_comparison_denied_*`` classes.
 #
-#   BEFORE/AFTER, measured: see ``planning/G3_REPAIR_REPORT.md`` for the two-arm
+#   BEFORE/AFTER, measured: a two-arm
 #   N=5 replay through the real channel path and the real verify path against the
 #   live core plane and the live judge. On the LEGACY population the train is
 #   INERT BY CONSTRUCTION and it is proven the way D-3's was, not asserted: the 40
@@ -1581,7 +1576,7 @@ from .judge_pipeline_lineage import (  # noqa: F401 — re-exported surface
 # critic, the desk-reference labeller and the retired external grader all sent
 # temperature 0.0 (the critic default 0.1); they now send 1.0. On the gemma
 # route the gateway had ALREADY fixed sampling at 1.0, so the judge verdicts
-# graded on ``gemma`` barely move; the verdicts graded on the lightning rungs
+# graded on ``gemma`` barely move; the verdicts graded on the Nemotron rungs
 # (0.0 applied there) are where the regime changes. Scores recorded before and
 # after are NOT the same instrument: a stochastic judge at 1.0 can flip a
 # borderline span either way run to run. No stored score is rewritten.
@@ -1592,11 +1587,49 @@ from .judge_pipeline_lineage import (  # noqa: F401 — re-exported surface
 #   * ``faithfulness_score`` — MOVES (sampling noise enters the judge).
 #   * ``severity_split``    — MOVES (a borderline span may flip hard/soft).
 #   * ``reason_census``     — MOVES (the same flip changes the reason counts).
+#
+# 2026-11-25/1 — THE JUDGES STOP LEANING TOWARD A PASS. The faithfulness judge
+# prompts are rewritten around four checks (every specific stated; no added
+# cause, intent, consequence or forecast; no report, plan or party claim stated
+# as fact; no dropped hedge) instead of "unsupported only for an invented noun
+# or number". A summary line with no citation must restate cited claims at the
+# same strength rather than passing unless it names a specific. The absence
+# judges no longer quote an error record that told them to pass, and "too thin
+# to tell" is unsupported; a correctly scoped negative over a set that lacks
+# the thing is still supported with no citation. One shared block of
+# claim-and-evidence rules (scale and limiting words, plans, party statements,
+# analyst text as a baseline, machine-made entries) is imported by every judge,
+# and every reply entry writes its span before its verdict.
+#
+# The verdict set gains two words. ``supported_as_inference`` (a claim worded
+# as a judgement whose facts are supported) PASSES: it counts as supported and
+# its ledger row is ``supported`` with a detail saying so, counter
+# ``claims_supported_as_inference``. ``unverifiable_excerpt`` (a claim cited to
+# an article shown only in part, whose specifics are not in the part shown)
+# counts in the denominator and not the numerator, under its own SOFT reason
+# ``judge_unverifiable_excerpt`` (counter ``claims_unverifiable_excerpt``),
+# never as ``judge_unsupported``. A verdict word outside the contract no longer
+# coerces to ``unsupported``: it fails the call to the floor under
+# ``judge_error`` with the word in the log line. Both prompted profiles move
+# (``citsupp.v7``, ``absence.v6``).
+#
+# EXPECTED SHIFT: all three families MOVE.
+#   * ``faithfulness_score`` — MOVES, expected DOWN. Claims the old prompt
+#     passed (added causes, claims stated as fact, dropped hedges, unmarked
+#     summary lines stated more firmly than their sources, excerpt-cited claims,
+#     absences on thin evidence) can now fail. Nothing was tuned to offset it.
+#   * ``severity_split`` — MOVES. More soft fails; the hard class is unchanged
+#     but the judge now sees the same scale and baseline rules the severity
+#     chain enforces.
+#   * ``reason_census`` — MOVES. One reason code is ADDED to
+#     ``_FAIL_CLASS_BY_REASON`` (``judge_unverifiable_excerpt``, soft), and
+#     ``judge_unsupported`` rises; ``judge_error`` rises by the replies that
+#     used an unknown verdict word.
 # ---------------------------------------------------------------------------
 
 #: Stamped into every faithfulness critique's ``data.verification`` block.
 #: Re-exported by ``verify`` (the historical import surface).
-JUDGE_PIPELINE_VERSION = "2026-11-13/1"
+JUDGE_PIPELINE_VERSION = "2026-11-25/1"
 
 
 def expected_shift(stamp: str, metric_family: str) -> str:

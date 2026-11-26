@@ -60,7 +60,7 @@ finally:
         os.environ.pop("LEGBA_DATA_PG_DB", None)
 
 #: sha256 (canonical JSON, sorted keys, tuples as lists) of each literal this
-#: lane moved into the profile, measured on the pin d1893001.
+#: literal moved into the profile, measured on the pin d1893001.
 _PIN_DIGESTS = {
     "desk_reference.UNIT_QUERY_TERMS": "5470324d69fd5ee182e7f83567e4741526166e1bcd19af8c1e1134221920dc37",
     "_title_frame_gauge.DIMENSION_TERMS": "726510ea34da2870d14e96a2bb261854e5c39a335507028df213a8a7fbf8dfe8",

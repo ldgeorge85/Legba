@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""R-1 — seam ids that parallel lanes cannot collide on.
+"""Seam ids that parallel contributors cannot collide on.
 
-``docs/SEAMS.md`` used to carry "the next free number is N": every lane that
+``docs/SEAMS.md`` used to carry "the next free number is N": every change that
 declared a seam edited that line and raced the others for N. Seams 1-94 keep
 their numbers; a new seam takes a lower-kebab slug, and its row sits after the
-numbered rows in slug order, so two lanes touch different lines.
+numbered rows in slug order, so two changes touch different lines.
 """
 from __future__ import annotations
 

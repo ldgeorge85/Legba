@@ -367,8 +367,8 @@ def test_selector_match_parity_with_runtime_sourceref():
 def test_subprovider_rule_parity_with_runtime():
     from legba.runtime.analyst_deps_builder import infer_llm_subprovider
 
-    for cid in ("llm.primary.openai_compat", "llm.anthropic.opus_4_7", "llm.decide.innoai_clef_flash",
-                "llm.openai.gpt", "llm.verify.innoai_gemma.openai_compat", "x.y"):
+    for cid in ("llm.primary.openai_compat", "llm.anthropic.opus_4_7", "llm.decide.gateway_typed_choice",
+                "llm.openai.gpt", "llm.verify.gateway_judge.openai_compat", "x.y"):
         assert fp.infer_subprovider(cid) == infer_llm_subprovider(cid, endpoint=None), cid
 
 
@@ -379,7 +379,14 @@ def test_code_facts_match_the_code_they_mirror():
     assert VLLMProviderHandler._DEFAULT_TEMPERATURE == fp.VLLM_DEFAULT_TEMPERATURE
     assert tuple(AnthropicProviderHandler.TEMPERATURE_DEPRECATED_PREFIXES) == fp.ANTHROPIC_TEMPERATURE_DROPPED_PREFIXES
     vsrc = (_SRC / "legba/data/stack/llm/vllm.py").read_text()
-    assert 'kwargs.pop("send_max_tokens", False)' in vsrc and "LEGBA_LLM_SEND_MAX_TOKENS" in vsrc
+    from legba.data.analysts import _llm_budget as budget
+    from legba.data.stack.llm import vllm
+
+    # The off switch the basis names, and the input-budget arithmetic it mirrors.
+    assert vllm.SEND_MAX_TOKENS_ENV == "LEGBA_LLM_SEND_MAX_TOKENS" and "_send_switched_off()" in vsrc
+    assert fp.INPUT_BUDGET_DEFAULT == budget.DEFAULT_INPUT_TOKEN_BUDGET
+    assert fp.INPUT_BUDGET_OUTPUT_RESERVE_MAX_SHARE == budget.OUTPUT_RESERVE_MAX_SHARE
+    assert fp.INPUT_BUDGET_MARGIN == budget.DERIVED_MARGIN_TOKENS
     for sites in fp.HARD_CODED_TEMPERATURE.values():
         for _leg, val, path in sites:
             assert val == 1.0
@@ -448,7 +455,7 @@ TRACE = {
          "component_id": "llm.primary.openai_compat", "prompt_tokens": 26626, "completion_tokens": 1303,
          "total_tokens": 27929, "finish_reason": "stop", "completion_text": "{\"title\": \"secret body\"}"},
         {"at": "2026-11-13T06:57:59Z", "leg": "verify_judge", "model": "gemma",
-         "component_id": "llm.verify.innoai_gemma.openai_compat", "total_tokens": 4749,
+         "component_id": "llm.verify.gateway_judge.openai_compat", "total_tokens": 4749,
          "completion_tokens": 184, "finish_reason": "length", "completion_text": "x"},
     ]),
     "tool_calls": json.dumps([{"at": "2026-11-13T06:57:50Z", "name": "escalate", "pack": "escalate_finding",
@@ -550,12 +557,13 @@ class FakeConn:
         if tag == "latest_prompt":
             return {"run_id": RUN_ID, "run_started_at": _T0, "analyst_version": "a" * 64,
                     "prompt_rendered": TRACE["prompt_rendered"], "prompt_sha256": "p" * 64,
-                    "prompt_tail": json.dumps({"text": "tail", "total_chars": 95966})}
+                    "input_payload": json.dumps({"prompt_tail": {"text": "tail", "total_chars": 95966}}),
+                    "bulk_bundle_id": None, "bulk_columns": None}
         if tag == "latest_steps":
             return {"run_id": RUN_ID, "run_started_at": _T0, "status": "success",
                     "intermediate_steps": TRACE["intermediate_steps"], "output_row_refs": [OUT_ID]}
         if tag in ("run", "run_body"):
-            return TRACE if args[0] == RUN_ID else None
+            return dict(TRACE, bulk_bundle_id=None, bulk_columns=None) if args[0] == RUN_ID else None
         if tag == "version_body":
             return ({"descriptor_id": args[0], "version": args[1], "state": "retired", "is_head": False,
                      "created_at": _T0, "body": json.dumps({"identity": {"id": args[0]}, "old": True})}

@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The derived origin groups, and where independence counting WOULD change if
-it counted origin groups — READ-ONLY (data-model lane 9).
+it counted origin groups — READ-ONLY.
 
 Derives every origin from what the database holds (``legba.data.origins``:
 source heads, the licence ledger, the knowledge sets) WITHOUT writing it, then

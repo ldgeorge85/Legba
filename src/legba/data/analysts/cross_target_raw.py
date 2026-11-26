@@ -95,7 +95,7 @@ class CrossTargetDeps(Protocol):
 
 
 # ---------------------------------------------------------------------------
-# Prompt module (DSPy wrapping deferred to L-176 / L-105 §2)
+# Prompt module (DSPy wrapping deferred)
 # ---------------------------------------------------------------------------
 
 
@@ -108,7 +108,7 @@ Respond with strict JSON, nothing else: {"title": "...", "body": "...", "confide
 
 
 PROMPT_MODULE_PATH: str = "legba.prompts.cross_target_raw.v1"
-"""Dotted import path for the DSPy prompt module (Wave B prereq #4)."""
+"""Dotted import path for the DSPy prompt module."""
 
 
 def build_prompt_module() -> Any:

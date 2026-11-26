@@ -1,9 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""R-B — THE COVERAGE-FLOOR DISPATCH: an alert becomes a STANDING QUESTION.
+"""THE COVERAGE-FLOOR DISPATCH: an alert becomes a STANDING QUESTION.
 
-``planning/RESEARCH_PROGRAM_SPEC_2026-09-05.md`` §2.2 / §0.9 rules that
-dispatch for the outbound-research program is **a ``hypotheses`` row, not a
+Dispatch for the outbound-research program is **a ``hypotheses`` row, not a
 queue**: ``_coverage_floor_scan``'s alert converts to ``status='open_question'``
 with ``harvest_class='coverage_floor'``, and the corpus_researcher's EXISTING
 ``grounding.sources: [open_questions]`` drain (``runtime.grounding
@@ -194,8 +193,8 @@ MAX_DISPATCH_PER_SCAN: int = 8
 # The hottest desk (F-6) — which desk's bounded question the gap carries
 # ---------------------------------------------------------------------------
 #
-# The coverage-floor alert is per TARGET; a bounded question is per DESK. §8
-# F-6 rules the question target-scoped and desk-AGNOSTIC ("this target's
+# The coverage-floor alert is per TARGET; a bounded question is per DESK. The question is
+# target-scoped and desk-AGNOSTIC ("this target's
 # evidence names X and no open frame does"), carrying the HOTTEST desk's
 # ``method.bounded_question`` as CONTEXT — chosen deterministically as the desk
 # owning the target's most intense open situation.
@@ -254,7 +253,7 @@ async def resolve_dispatch_context(
     (the caller gates). A target with no open dimension-signed situation, or
     whose hottest desk declares no ``bounded_question`` (the three composition
     tiers deliberately declare none), resolves to an ABSENT entry — and the
-    rendered question then carries the gap alone, which §8 F-6 names as the
+    rendered question then carries the gap alone, which is the
     defensible cheaper option. Never a fabricated question.
     """
     if not target_ids:
@@ -316,7 +315,7 @@ def dispatch_marker(
 ) -> dict[str, Any]:
     """The ONE durable marker object stored in ``diagnostic_evidence``.
 
-    Carries, per the R-B contract: the target id + its ``geo`` (§1.3 — geo is
+    Carries, per the R-B contract: the target id + its ``geo`` (geo is
     the ONLY reachability key, so a dispatched question that does not carry it
     dispatches research that reaches no desk), the named gap, the desk's
     bounded question per F-6, the dispatching alert id, and the
@@ -345,8 +344,8 @@ def dispatch_marker(
         "source_id": source_id,
         "question_source": question_source,
         "target_id": target_id,
-        # §1.3 — the reachability key, carried so the researcher's META run can
-        # scope the evidence it fetches to the desk that asked (F-8).
+        # The reachability key, carried so the researcher's META run can
+        # scope the evidence it fetches to the desk that asked.
         "geo": [str(g) for g in geo if str(g).strip()],
         "entity_fold": entity_fold,
         "gap_name": gap_name,

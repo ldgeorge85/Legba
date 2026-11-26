@@ -3,8 +3,8 @@
 --
 -- 0054_facts_source_credibility.sql
 --
--- Holes-B Wave 0 — carry a per-fact `source_credibility` onto the `facts`
--- table so the contested-claims arbiter (Holes-B, #101) can weight competing
+-- Carry a per-fact `source_credibility` onto the `facts`
+-- table so the contested-claims arbiter can weight competing
 -- (subject, predicate) values by how trustworthy the asserting source is.
 --
 -- WHY:
@@ -13,7 +13,7 @@
 --   signal write in runtime/source_actor.py). But that score never propagated
 --   to the FACTS extracted from those signals, so the arbiter's Q·C·R·F scoring
 --   had no per-fact credibility term to read. Both fact producers now STAMP this
---   column at write time (Wave 0): the ingestion path takes the MAX over its
+--   column at write time: the ingestion path takes the MAX over its
 --   backing signals' `source_credibility` (else the ingestion tier nominal 0.5),
 --   and the analyst path takes the source-tier nominal (seed/curated 0.9,
 --   agent/ingestion 0.5), overridden by the backing-signal max when present.

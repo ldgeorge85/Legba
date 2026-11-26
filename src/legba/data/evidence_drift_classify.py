@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Source drift CLASSIFICATION — what changed between two versions of one page
-(lane D-1). Rule-based, in code, no model.
+"""Source drift CLASSIFICATION — what changed between two versions of one page.
+Rule-based, in code, no model.
 
 INPUT. Two versions of one canonical address (``fetch_versions``): the
 EXTRACTED main text each kept (the archiver's Trafilatura pass, stored on the
@@ -113,7 +113,7 @@ FLAGGING_CLASSES: frozenset[str] = frozenset(
 
 #: "Does this substantive edit change the claim THIS citation makes?" — built
 #: by D-2 (SEAMS row 79, resolved): legba.data.evidence_drift_assess.
-CLAIM_JUDGE_SEAM = "evidence_drift.claim_judge (D-2: legba.data.evidence_drift_assess)"
+CLAIM_JUDGE_SEAM = "evidence_drift.claim_judge (legba.data.evidence_drift_assess)"
 
 # -- thresholds (from the 2026-11-13 live sample) ------------------------------
 

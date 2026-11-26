@@ -1,8 +1,8 @@
 {
   "prompts": {
     "statement_typing_seat": {
-      "chars": 5546,
-      "sha256": "aa19da18d42d7fb3bac90b6c5b75dab6cf936fa7ea333746d8550ec549d98a26",
+      "chars": 5770,
+      "sha256": "f6bef52f08c2b8e2b42b2da12bdf4eea9945f84c79bf06544aa49ceff623b1a7",
       "source": "analyst_statement_typing_seat.yaml"
     }
   },

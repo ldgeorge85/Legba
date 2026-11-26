@@ -392,7 +392,7 @@ async def run(
 
 async def main() -> int:
     ap = argparse.ArgumentParser(
-        description="Re-derive geo for S-2-contaminated historical signals "
+        description="Re-derive geo for contaminated historical signals "
         "with the CURRENT enrichment rules (dry-run by default).",
     )
     ap.add_argument("--apply", action="store_true",

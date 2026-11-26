@@ -13,6 +13,7 @@ import {
   columnsFor,
   frameGrid,
   placeRegions,
+  RAIL_OPEN_FROM,
   rootPxFor,
 } from './frameGrid'
 
@@ -32,6 +33,14 @@ describe('the grid at the four reference widths', () => {
 })
 
 describe('the rules behind the numbers', () => {
+  it('the rail starts shut below 1680 px of width and open from it', () => {
+    expect(RAIL_OPEN_FROM).toBe(1680)
+    expect(frameGrid(1366).railPx).toBe(48)
+    expect(frameGrid(1600).railPx).toBe(48)
+    expect(frameGrid(1679).railPx).toBe(48)
+    expect(frameGrid(1680).railPx).toBe(240)
+  })
+
   it('the type steps up at 2200 and 3000 px of width', () => {
     expect([1366, 2199, 2200, 2999, 3000, 5120].map(rootPxFor)).toEqual([16, 16, 18, 18, 24, 24])
   })

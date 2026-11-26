@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Integration tests for L-121 — QdrantVectorStoreHandler.
+"""Integration tests for QdrantVectorStoreHandler.
 
-Per the task brief: real Qdrant container (already running per L-091). A
+Per the task brief: real Qdrant container (already running). A
 per-session unique collection prefix avoids collision with parallel agents.
 
 The brief's required test surface:
@@ -104,7 +104,7 @@ async def handler() -> QdrantVectorStoreHandler:
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_handler_kind_metadata():
-    """L-102 §1: every handler exposes kind / family / schema_version."""
+    """§1: every handler exposes kind / family / schema_version."""
     assert QdrantVectorStoreHandler.kind == "vector_store"
     assert QdrantVectorStoreHandler.family == "stack"
     assert QdrantVectorStoreHandler.schema_version.startswith("legba/stack/vector_store/")
@@ -115,7 +115,7 @@ async def test_handler_kind_metadata():
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_target_collection_naming_convention():
-    """Project-wide `legba_target__<target_id>` convention (matches L-001 + L-151)."""
+    """Project-wide `legba_target__<target_id>` convention (matches the other stores)."""
     assert collection_name_for_target("brazil") == "legba_target__brazil"
     assert collection_name_for_target("ind-001") == "legba_target__ind-001"
     with pytest.raises(ValueError):
@@ -335,7 +335,7 @@ async def test_lifecycle_pause_and_resume_idempotent(handler: QdrantVectorStoreH
     rt = RuntimeContext(instance_id="test_instance")
     await handler.on_pause(rt)
     assert handler._activated is False
-    # Operations still work (Phase-2 doesn't gate; runtime does, per L-160).
+    # Operations still work (Phase-2 doesn't gate; runtime does).
     names = await handler.list_collections()
     assert isinstance(names, list)
     await handler.on_activate(rt)
@@ -420,7 +420,7 @@ async def test_upsert_zero_points_is_noop(handler: QdrantVectorStoreHandler):
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_config_from_legba_data_qdrant_config():
-    """from_env path: builds handler config from L-001 bootstrap env config."""
+    """from_env path: builds handler config from bootstrap env config."""
     from legba.data.config import QdrantConfig
     cfg = QdrantVectorStoreConfig.from_legba_data_qdrant_config(QdrantConfig.from_env())
     # Defaults survive the conversion.

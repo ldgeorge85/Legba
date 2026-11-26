@@ -1,6 +1,6 @@
 // @vitest-environment node
 /**
- * The walk's pure parts: the fixture sanitizer (no owner content can reach a
+ * The walk's pure parts: the fixture sanitizer (no private content can reach a
  * committed fixture) and the budget evaluation (what fails the gate).
  */
 import { readFileSync, existsSync } from 'node:fs'
@@ -15,6 +15,8 @@ import { PICKABLE, pickPlace } from './pick.mjs'
 // @ts-expect-error — plain ESM tool modules, no type declarations
 import { EVENT_SUMMARY_COLUMNS, SIGNAL_SUMMARY_COLUMNS, atRequestedWeight, lightSignalData, placesDeclaringNoSource, summaryDescriptorBody, summaryEventRow } from './weights.mjs'
 import { withRecordAddress } from './record.mjs'
+// @ts-expect-error — plain ESM tool modules, no type declarations
+import { READER_IDENTITY, READER_ROLES, loadEngineWords, readerEngineHits } from './engineWords.mjs'
 // @ts-expect-error — plain ESM tool modules, no type declarations
 import { ROLE_GATED, ROLE_RANK, passwordFromFile, roleFrom, roleGateFor, sessionCookieFrom, skipsForRole } from './signin.mjs'
 
@@ -93,7 +95,21 @@ describe('budgets: what fails the walk', () => {
     consultMoves: [{ what: 'moves to a right column', ok: true, note: 'ok' }],
   }
 
-  it('a clean walk passes; reader text under the floor fails by default (U-3) and is only reported when asked', () => {
+  it('Consult: an Ask button cut off at 1366, or answers squeezed under the composer, fail', () => {
+    const ev = (r: unknown) => evaluate(r, { ...DEFAULT_BUDGETS, enforceTextFloor: false }, 'fixture')
+    const ok = { width: 1366, where: 'landing', boxWidth: 600, askVisible: true, askRect: [900, 600, 960, 640], transcriptFraction: 0.64 }
+    expect(ev({ ...clean, consult: [ok] }).failures).toEqual([])
+    const cut = ev({ ...clean, consult: [{ ...ok, askVisible: false, askRect: [1330, 600, 1420, 640] }] }).failures
+    expect(cut.join('\n')).toMatch(/Ask button is fully on screen at 1366/)
+    const squeezed = ev({ ...clean, consult: [{ ...ok, transcriptFraction: 0.1 }] }).failures
+    expect(squeezed.join('\n')).toMatch(/answers share of the dock at 1366/)
+    const missing = ev({ ...clean, consult: [{ ...ok, askVisible: null }] }).failures
+    expect(missing.join('\n')).toMatch(/no Ask button found/)
+    // a folded dock hides the transcript on purpose: no share is measured
+    expect(ev({ ...clean, consult: [{ ...ok, transcriptFraction: null }] }).failures).toEqual([])
+  })
+
+  it('a clean walk passes; reader text under the floor fails by default and is only reported when asked', () => {
     const e = evaluate(clean, { ...DEFAULT_BUDGETS, enforceTextFloor: false }, 'fixture')
     expect(e.failures).toEqual([])
     expect(e.table.find((r: { check: string }) => r.check.startsWith('reader text')).verdict).toBe('report')
@@ -122,13 +138,13 @@ describe('budgets: what fails the walk', () => {
     }
   })
 
-  it('the frame budgets (U-6): an empty band, tiny text at 3840, a ribbon of a chat, a splitter that does not stick', () => {
+  it('the frame budgets: an empty band, tiny text at 3840, a ribbon of a chat, a splitter that does not stick', () => {
     const shell = {
       ...clean,
       layout: [
-        // the owner's 3840 screenshot: a dead band, 13 px text
+        // a 3840 px screen: a dead band, 13 px text
         { where: 'landing 3840', viewport: 3840, emptyBandPx: 700, bodyTextPx: 13, chatWidthRem: 46, chatWidthPx: 1104 },
-        // the owner's 1920 screenshot: Consult a 380 px ribbon (23.75 rem)
+        // a 1920 px screen: Consult as a 380 px ribbon (23.75 rem)
         { where: 'landing 1920', viewport: 1920, emptyBandPx: 20, bodyTextPx: 12, chatWidthRem: 23.8, chatWidthPx: 380 },
       ],
       drags: [{ what: 'the chat divider', before: 400, after: 580, reloaded: 400, moved: true, kept: false }],
@@ -142,7 +158,61 @@ describe('budgets: what fails the walk', () => {
   })
 })
 
-describe('the landing request budget (U-5)', () => {
+describe('engine words on reader surfaces (the reader pass)', () => {
+  const base = {
+    mode: 'fixture', base: 'b', at: 't', textFloorPx: 12, longTasks: [], landingReadyMs: 3000,
+    overflow: [1680, 1366, 1920, 2560, 3840, 390].map((w) => ({ where: 'x', width: w, docWidth: w })),
+    consult: [], zeroBeforeRead: [], errors: [], phoneMachineIds: [], steps: [], layout: [], drags: [], consultMoves: [],
+  }
+  const view = (name: string, role: string, engineWords: string[], reader = true) => ({ name, width: 1680, reader, role, smallText: 0, engineWords })
+  const ev = (surfaces: unknown[]) => evaluate({ ...base, surfaces }, { ...DEFAULT_BUDGETS, emptyBandMaxFraction: 1 }, 'fixture')
+  const rowOf = (e: { table: { check: string; verdict: string; value: string }[] }, check: string) => e.table.find((r) => r.check === check)!
+
+  it('a reader view with an engine word FAILS, naming the view and the word', () => {
+    const e = ev([view('reader: board', 'reader', []), view('reader: subject page', 'reader', ['faithfulness', 'units carried'])])
+    expect(e.failures.join('\n')).toMatch(/engine words on reader surfaces, as a reader: reader: subject page 1680: faithfulness \| units carried/)
+  })
+
+  it('a contributor on a reader page is held to the same budget', () => {
+    expect(READER_ROLES.has('contributor')).toBe(true)
+    expect(ev([view('reader: ledger', 'contributor', ['grader'])]).failures.join()).toMatch(/as a reader/)
+  })
+
+  it('an admin on a reader page is reported, never failed; an operator surface is not counted', () => {
+    const e = ev([view('surface board', 'operator', ['judge 0.97']), view('surface engine', 'reader', ['grader'], false), view('reader: board', 'reader', [])])
+    expect(e.failures.filter((f: string) => /engine words/.test(f))).toEqual([])
+    expect(rowOf(e, 'engine words on reader surfaces, as an admin').verdict).toBe('report')
+    expect(rowOf(e, 'engine words on reader surfaces, as a reader').verdict).toBe('pass')
+  })
+
+  it('nothing walked as a reader is reported as not measured (the pass\'s own step fails instead)', () => {
+    const r = rowOf(ev([view('surface board', 'operator', [])]), 'engine words on reader surfaces, as a reader')
+    expect(r.verdict).toBe('report')
+    expect(r.value).toMatch(/not measured/)
+  })
+
+  it('reads the console\'s one list: every engine term, the reader words, the allow list', () => {
+    const { ENGINE_WORDS, READER_ALLOW, terms } = loadEngineWords(join(HERE, '..', '..', 'src', 'lib', 'engineWords.json'))
+    expect(ENGINE_WORDS.length).toBe(terms.length)
+    for (const t of terms) expect(t.reader.length, t.term).toBeGreaterThan(0)
+    const hit = (text: string) => ENGINE_WORDS.some((re: RegExp) => re.test(text))
+    for (const leak of ['judge 0.97 mean faithfulness', 'grader 110/238 desks graded', 'UNITS CARRIED', 'typed absences', 'scale not stated', 'GET /v3/since', 'match_verified=false', 'Logged only · the page rule has no entry', 'μ=172.0 σ=84.0', 'UNCORROB', 'Runtime', 'Investigate · Brazil', 'world_assessor', 'staleness debt', 'correctness 0.0% (0/3)']) {
+      expect(hit(leak), leak).toBe(true)
+    }
+    // ordinary prose and the reader's own words do not count
+    for (const plain of ['A judge in Lagos ruled on the case', 'Checked · 3 sources', '2 claims flagged', 'Single source', 'How this was produced', 'Burkina Faso · 24 Nov']) {
+      expect(hit(plain) && !READER_ALLOW.has(plain), plain).toBe(false)
+    }
+  })
+
+  it('the reader pass answers an invented reader, and the hits helper keeps only reader views', () => {
+    expect(READER_IDENTITY.role).toBe('reader')
+    expect(READER_IDENTITY.user.email).toBeNull()
+    expect(readerEngineHits([view('a', 'reader', ['x']), view('b', 'operator', ['y']), view('c', 'reader', [], true)])).toEqual([{ where: 'a 1680', words: ['x'] }])
+  })
+})
+
+describe('the landing request budget', () => {
   const log = [
     { phase: 'start', url: '/api/v1/auth/me', bytes: 50 },
     { phase: 'landing', url: '/api/v1/auth/me', bytes: 110 },
@@ -185,7 +255,7 @@ describe('the landing request budget (U-5)', () => {
   })
 })
 
-describe('the phone budgets (M-0a): what the 2026-11-14 phone audit found', () => {
+describe('the phone budgets: what the 2026-11-14 phone audit found', () => {
   const base = {
     mode: 'fixture', longTasks: [], landingReadyMs: 1000, surfaces: [], consult: [],
     overflow: [1680, 1366, 1920, 2560, 3840, 390].map((w) => ({ where: 'x', width: w, docWidth: w })),
@@ -232,7 +302,7 @@ describe('the phone budgets (M-0a): what the 2026-11-14 phone audit found', () =
     ]) expect(f).toContain(needle)
   })
 
-  it('M-1: a phone turn that streams, draws its contract and stops passes; each defect fails by name', () => {
+  it('A phone turn that streams, draws its contract and stops passes; each defect fails by name', () => {
     const turn = {
       streamed: true, contract: true, partial: true,
       sends: { window: true, grounding: true, onScreen: true, model: 'core', writes: false },
@@ -258,7 +328,7 @@ describe('the phone budgets (M-0a): what the 2026-11-14 phone audit found', () =
   })
 })
 
-describe('a summary read gets the summary row from a full recording (roll 86: the fixture walk could not see what the light roster dropped)', () => {
+describe('a summary read gets the summary row from a full recording (the fixture walk could not see what the light roster dropped)', () => {
   const golden = JSON.parse(readFileSync(join(HERE, 'fixtures', 'weights_golden.json'), 'utf8'))
 
   it('mirrors the registry\'s projections case for case (fixtures/weights_golden.json, held on the Python side too)', () => {
@@ -269,7 +339,7 @@ describe('a summary read gets the summary row from a full recording (roll 86: th
     expect(EVENT_SUMMARY_COLUMNS).toEqual(golden.event_summary_columns)
   })
 
-  it('cuts the events at fields=summary only (roll 87: the Watch page over its 2 MB budget); the default stays whole', () => {
+  it('cuts the events at fields=summary only (the Watch page over its 2 MB budget); the default stays whole', () => {
     const q = (s: string) => new URLSearchParams(s)
     const page = { data: [{ id: 'e', title: 't', summary: 'long', locations: ['x'], geo_lat: 1, geo_lon: 2 }], next_cursor: null }
     expect(atRequestedWeight('/api/v1/v3/events', q('limit=500&fields=summary'), page).data[0]).toEqual({ id: 'e', title: 't', geo_lat: 1, geo_lon: 2 })
@@ -343,7 +413,7 @@ describe('the place pick clicks the map, not its chrome (U-8, roll 80 "no accent
     expect(pt).not.toEqual(first)
   })
 
-  it('a blank\'s hatch over a changed place is the place: the map\'s click selects it by iso (roll 86 live: every changed area was hatched)', () => {
+  it('a blank\'s hatch over a changed place is the place: the map\'s click selects it by iso', () => {
     const pt = pickPlace(fakeDoc({ hatched: true }), PICKABLE)
     expect(pt).not.toBeNull()
     expect(pt).toEqual(pickPlace(fakeDoc(), PICKABLE))
@@ -367,7 +437,7 @@ describe('the place pick clicks the map, not its chrome (U-8, roll 80 "no accent
   })
 })
 
-describe('the Watch page (U-9)', () => {
+describe('the Watch page', () => {
   const file = join(HERE, 'fixtures', 'watch.json')
   it.runIf(existsSync(file))('its fixtures are invented: example sources, example.org pages — nothing recorded', () => {
     const fx = JSON.parse(readFileSync(file, 'utf8'))
@@ -394,7 +464,7 @@ describe('the Watch page (U-9)', () => {
 })
 
 
-describe('the Record sheet budget (U-10)', () => {
+describe('the Record sheet budget', () => {
   const F = 'ex_u10fnd'
   const log = [
     { phase: 'landing', url: '/api/v1/findings?limit=40', bytes: 900 },
@@ -442,7 +512,7 @@ describe('the Record sheet budget (U-10)', () => {
     expect(f).toMatch(/the Record sheet's reads in the landing: 1/)
   })
 })
-describe('the Ledger budget (U-11): no score below five, light reads', () => {
+describe('the Ledger budget: no score below five, light reads', () => {
   const base = {
     mode: 'fixture', longTasks: [], landingReadyMs: 1000, surfaces: [], consult: [],
     overflow: [1680, 1366, 1920, 2560, 3840, 390].map((w) => ({ where: 'x', width: w, docWidth: w })),
@@ -468,7 +538,7 @@ describe('the Ledger budget (U-11): no score below five, light reads', () => {
       expect(f).toMatch(/ledger: no score below five resolutions/)
     }
   })
-  it('the evaluation record must answer: published or none published, never not served or unreadable (E-3)', () => {
+  it('the evaluation record must answer: published or none published, never not served or unreadable', () => {
     expect(evaluate({ ...base, ledger: { ...ledger, proofState: 'published', proofRuns: ['current', 'withdrawn'] } }, DEFAULT_BUDGETS, 'fixture').failures).toEqual([])
     for (const proofState of ['not_served', 'unreadable', 'error']) {
       const f = evaluate({ ...base, ledger: { ...ledger, proofState } }, DEFAULT_BUDGETS, 'fixture').failures.join('\n')
@@ -485,7 +555,7 @@ describe('the Ledger budget (U-11): no score below five, light reads', () => {
   })
 })
 
-describe('the phone shell (M-2)', () => {
+describe('the phone shell', () => {
   const file = join(HERE, 'fixtures', 'phone.json')
   it.runIf(existsSync(file))('its overlay is invented: example subjects, the Watch fixture alert ids, no recorded episode', () => {
     const fx = JSON.parse(readFileSync(file, 'utf8'))
@@ -520,7 +590,7 @@ describe('the phone shell (M-2)', () => {
   })
 })
 
-describe('the Record address the live fallback opens (roll 87: it wiped the frame params and was never read)', () => {
+describe('the Record address the live fallback opens (it wiped the frame params and was never read)', () => {
   it('sets rec= beside the frame params, drops a stale cite, keeps everything else', () => {
     const h = withRecordAddress('#scope=target%3Acountry_x&ws=board&cite=3', 'finding', 'f-1')
     const p = new URLSearchParams(h.slice(1))
@@ -532,7 +602,7 @@ describe('the Record address the live fallback opens (roll 87: it wiped the fram
   })
 })
 
-describe('signin: a live walk as a named account (roll 89)', () => {
+describe('signin: a live walk as a named account', () => {
   it('reads the password from a `password:` line, else the whole file', () => {
     expect(passwordFromFile('email: a@b\npassword: s3cret word  \n')).toBe('s3cret word')
     expect(passwordFromFile('  only-the-password\n')).toBe('only-the-password')

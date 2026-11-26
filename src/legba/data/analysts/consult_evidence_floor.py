@@ -4,7 +4,7 @@
 
 THE DEFECT THIS CLOSES (CONSULT_REVIEW_2026-09-28 §A, §B.3/§B.4). A consult
 turn's ``uncertainty`` was the model's own header number, clamped to [0, 1]
-and nothing else. It depended on no property of the run: session ``96d7bfc2``
+and nothing else. It depended on no property of the run: one recorded session
 made **two** tool calls, one of which carried a fabricated tool result in its
 arguments, and reported ``uncertainty: 0.30`` — a 70 % confidence over
 essentially nothing, which the platform published unchallenged.

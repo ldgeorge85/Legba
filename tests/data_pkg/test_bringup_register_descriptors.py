@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W6 SPLIT-1 — the one descriptor walker, end to end on the real driver.
+"""The one descriptor walker, end to end on the real driver.
 
 ``scripts/bringup_register_descriptors.py`` is what deploy.sh now runs for
 every descriptor head. This file proves, against a FRESH migrated Postgres
@@ -121,12 +121,12 @@ async def test_walker_registers_everything_then_is_idempotent(fresh_db, capsys):
                 taxa.setdefault(r["family"], set()).add(r["value"])
             seeded = {(r["family"], r["value"]) for r in await conn.fetch(
                 "SELECT family, value FROM vocabulary_entries WHERE family <> 'analyst_kind'")}
-        # W7 FRAME-1 — every vocabulary seed file's entries landed
+        # Every vocabulary seed file's entries landed
         assert {(s.family, s.value) for s in walker.load_vocabulary_seeds()} <= seeded
         wrong = {k: (v, got.get(k)) for k, v in want.items() if got.get(k) != v}
         assert not wrong, wrong
         assert set(walker.NON_BUILTIN_ANALYST_KINDS) <= kinds
-        # W7 TAXON-1: the four taxon families are seeded, equal to their literals
+        # The four taxon families are seeded, equal to their literals
         assert taxa == {f: set(v) for f, v in TAXON_FALLBACKS.items()}
         # nothing excluded by RETIRED.md was registered
         assert not {(e.family, e.descriptor_id) for e in excluded} & set(got)
@@ -162,15 +162,14 @@ def _one(family: str, descriptor_id: str):
 
 
 def test_the_walker_plans_the_profile_projector_as_a_draft():
-    """W9 VIEW-1 — the projector's FILE ships ``draft`` (files never schedule);
-    its live ``active`` state is a LIFECYCLE.md row since the first live build
-    (roll 39), so the walker plans it unchanged; it validates as a deterministic
+    """The projector's FILE ships ``draft`` (files never schedule);
+    its live ``active`` state is a LIFECYCLE.md row since the first live build, so the walker plans it unchanged; it validates as a deterministic
     analyst with no token budget, and the crosswalk seed file is a vocabulary
     seed, never a planned descriptor."""
     import yaml as _yaml
     p = _one("analyst", "profile_projector")
     model = walker.validate(p)
-    # the PLAN carries the LIFECYCLE overlay (active since roll 39); the FILE ships draft
+    # the PLAN carries the LIFECYCLE overlay ; the FILE ships draft
     assert model.identity.state.value == "active"
     shipped = _yaml.safe_load(
         (walker.DESCRIPTORS_DIR / "analyst_profile_projector.yaml").read_text(encoding="utf-8"))

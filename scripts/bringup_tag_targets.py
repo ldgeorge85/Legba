@@ -85,7 +85,7 @@ FAMILY = "target"
 #     with its member rule ``tag:region_<slug>``). The judgment calls the old
 #     table carried (RU under Europe, TR under MENA) live in the desk files.
 #   * its APPLICABILITY tags — the profile's ``constants.applicability_tags``
-#     (the S1-T3 unit-applicability matrix: ``nuclear_watch`` /
+#     (the unit-applicability matrix: ``nuclear_watch`` /
 #     ``conflict_active`` / ``sanctions_regime`` for the exemplar), in that
 #     declared order, wherever the desk's file carries one.
 #

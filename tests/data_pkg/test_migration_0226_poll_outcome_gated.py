@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """0226 — ``source_poll_outcomes.keyword_filtered`` and the ``gated`` outcome,
-on the REAL driver (W3-F8).
+on the REAL driver.
 
 * the migration file is idempotent: applied twice (the runner applies it once;
   a hand re-run must be a no-op) the column is one nullable integer and the

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""An in-memory connection that answers ``legba.data.eval_runs``'s SQL (E-3).
+"""An in-memory connection that answers ``legba.data.eval_runs``'s SQL.
 
 Dispatch is on the store's OWN SQL constants, so the functions under test are
 the production ones; an unknown statement fails the test. The 0260 guard

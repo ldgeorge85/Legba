@@ -41,6 +41,8 @@ import { drive } from '@/lib/applyAction'
 import { applyPanelAction } from '@/lib/panelActions'
 import { railActions } from '@/lib/commands'
 import { READER_SURFACES, pageViews, readerKinds, isFrameView, type Side } from '@/lib/surfaces'
+import type { RoleRank } from '@/auth/roles'
+import { offeredToRank } from '@/auth/adminViews'
 
 /** Frame, not views: never offered as a region's view. */
 const FRAME_KINDS = new Set(['system.consult', 'system.inspector'])
@@ -58,7 +60,7 @@ export interface CatalogEntry {
   search: string
 }
 
-function viewsFor(mode: Mode, side: Side): string[] {
+function viewsFor(mode: Mode, side: Side, rank: RoleRank | null): string[] {
   const reader = side === 'reader' ? new Set<string>(readerKinds()) : null
   const kinds = catalogKinds()
     .filter((k) => !reader || (reader.has(k) && !FRAME_KINDS.has(k)))
@@ -73,13 +75,14 @@ function viewsFor(mode: Mode, side: Side): string[] {
   for (const c of allContracts()) {
     if (PANEL_REGISTRY[c.id as PanelKind] || c.id.startsWith('slot:')) continue
     if (side === 'reader' && c.side !== 'reader') continue
+    if (!offeredToRank(c.id, rank)) continue
     frameViews.add(c.id)
   }
   return [...kinds, ...frameViews]
 }
 
-export function catalogEntries(mode: Mode, side: Side = 'operator'): CatalogEntry[] {
-  return viewsFor(mode, side)
+export function catalogEntries(mode: Mode, side: Side = 'operator', rank: RoleRank | null = null): CatalogEntry[] {
+  return viewsFor(mode, side, rank)
     .map((k) => {
       const c = contractOf(k)
       const kindDef = PANEL_REGISTRY[k as PanelKind]?.definition
@@ -107,12 +110,23 @@ function useContractsVersion(): number {
   )
 }
 
-export function CatalogPopover({ mode, side = 'operator', onClose }: { mode: Mode; side?: Side; onClose: () => void }) {
+export function CatalogPopover({
+  mode,
+  side = 'operator',
+  rank = null,
+  onClose,
+}: {
+  mode: Mode
+  side?: Side
+  /** The caller's role rank: an admin-only view is left out below admin (null: not known). */
+  rank?: RoleRank | null
+  onClose: () => void
+}) {
   const [filter, setFilter] = useState('')
   const ref = useRef<HTMLDivElement>(null)
   const input = useRef<HTMLInputElement>(null)
   const version = useContractsVersion()
-  const entries = useMemo(() => catalogEntries(mode, side), [mode, side, version]) // eslint-disable-line react-hooks/exhaustive-deps
+  const entries = useMemo(() => catalogEntries(mode, side, rank), [mode, side, rank, version]) // eslint-disable-line react-hooks/exhaustive-deps
   const q = filter.trim().toLowerCase()
   const visible = q
     ? entries.filter((e) => e.search.includes(q))
@@ -124,14 +138,17 @@ export function CatalogPopover({ mode, side = 'operator', onClose }: { mode: Mod
     const onDown = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) onClose()
     }
+    // Escape closes the catalog only (taken before the shell's Escape, which clears the point).
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      onClose()
     }
     window.addEventListener('mousedown', onDown)
-    window.addEventListener('keydown', onKey)
+    window.addEventListener('keydown', onKey, true)
     return () => {
       window.removeEventListener('mousedown', onDown)
-      window.removeEventListener('keydown', onKey)
+      window.removeEventListener('keydown', onKey, true)
     }
   }, [onClose])
 

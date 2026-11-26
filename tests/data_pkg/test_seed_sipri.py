@@ -182,7 +182,7 @@ async def test_sipri_driver_writes_and_is_idempotent(pg_pool, fixture_yaml: Path
     r2 = await run_seed_source(pg_pool, adapter, dry_run=False, options=opts)
     assert not r2.errors
     assert r2.seed_batch_id == r1.seed_batch_id, (
-        "an identical re-import dedupes onto the same batch row (P3-3 ledger "
+        "an identical re-import dedupes onto the same batch row (ledger "
         "idempotency) rather than minting a duplicate"
     )
 

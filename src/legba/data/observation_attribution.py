@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Licence, attribution and declared subject kind of LIVE series rows — in one
-query, for rows written before or after the lane N-R stamp (lane N-R).
+query, for rows written before or after the license/attribution stamp.
 
 WHY A READ-TIME JOIN. Live ``observations`` rows are append-only by trigger
 (migration 0246: UPDATE/DELETE of an ``origin_class='live'`` row raises). The

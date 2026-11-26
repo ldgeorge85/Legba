@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Schema hygiene (lane P-8, A-64): every table, index and view in the
+"""Schema hygiene: every table, index and view in the
 application schema is created by a migration (or named, with its reason, in
 ``schema_hygiene.RUNTIME_CREATED``); migration 0264's index drops and the
 out-of-transaction script that finishes (and reverses) them agree.
@@ -84,7 +84,7 @@ def test_runtime_created_names_are_really_created_by_their_file(name):
     assert reason
     text = (REPO / path).read_text(encoding="utf-8")
     if "*" in name and name.startswith("graph_arcs_new_"):
-        # Postgres names the staging table's indexes. Since P-7 (roll 84) the
+        # Postgres names the staging table's indexes. Since then the
         # LIKE copy takes no index; the primary key and the post-load indexes
         # are created on graph_arcs_new without a name.
         assert "LIKE public.graph_arcs" in text

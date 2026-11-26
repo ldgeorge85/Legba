@@ -228,12 +228,14 @@ async def test_resolve_budget_params_no_llm_uses_per_run_budget() -> None:
 
 
 @pytest.mark.asyncio
-async def test_resolve_budget_params_falls_back_to_llm_max_tokens() -> None:
+async def test_resolve_budget_params_ignores_the_descriptors_max_tokens() -> None:
+    # The descriptor's method.llm.max_tokens is no longer read as the estimate:
+    # it bounded nothing and is gone from the definitions.
     desc = _descriptor_stub(llm={"max_tokens": {"raw": 9000}})
     provider, model, est = await resolve_llm_budget_params(
         desc, registry_client=None,
     )
-    assert (provider, model, est) == ("", "", 9000)
+    assert (provider, model, est) == ("", "", 0)
 
 
 @pytest.mark.asyncio

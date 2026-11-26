@@ -43,7 +43,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft                       # KEYED + billable — operator flips deliberately
-  owner: s2_keyed_sources
+  owner: owner@local
   created: "2026-06-09T00:00:00Z"
 
 scope:
@@ -52,7 +52,7 @@ scope:
   languages: [en]
   tags: [news, events, geopolitical, structured, global]
   source_class: reporting          # S1-T8 — news-derived event aggregator
-  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
+  access_class: public          # free no-auth feed, no separate reuse agreement
 
 acquisition: poll
 

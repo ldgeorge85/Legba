@@ -8,7 +8,7 @@
  *  - every kind the catalog lists, in either mode, has a non-empty description;
  *  - the description table names only registered kinds (no stale row);
  *  - no description borrows an instance's words (the platform is not the
- *    geopolitics exemplar — planning/PLATFORM_VS_EXEMPLAR §1);
+ *    geopolitics exemplar);
  *  - the popover renders the line and the filter matches on it.
  */
 import { describe, it, expect, afterEach } from 'vitest'

@@ -26,7 +26,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: active
-  owner: piece_a_nexus_activation
+  owner: owner@local
 
 subscription:
   # No `targets` block => META analyst (single global sweep; _cadence_targets
@@ -46,7 +46,7 @@ method:
   # (relationship_reifier). llm_planner matches the single-turn chat_complete
   # typing shape the kind uses (same as the other LLM-bearing kinds).
   kind: llm_planner
-  # K-3: this named `legba.prompts.relationship_reifier.v1`, which has never
+  # This named `legba.prompts.relationship_reifier.v1`, which has never
   # existed — the kind has no DSPy module (no `build_prompt_module`), its
   # prompt is the module-level `_SYSTEM_PROMPT` constant, and
   # `_build_relationship_reifier` never sets `ReifierDeps.system_prompt`, so
@@ -61,12 +61,10 @@ method:
       raw: llm.primary.openai_compat
       expected_family: llm_provider
     # ONE typer, on the $0 self-hosted core plane. No failover tier and no
-    # escalation ladder: K-G2 measured that gpt-oss-120b agrees with ITSELF on
+    # escalation ladder: K-G2 measured that the core model agrees with ITSELF on
     # only 79.6% of candidates (Cohen's kappa = 0.589), so no difficulty signal
     # exists to route on and any second model would re-roll ~20% of the graph's
     # edges for nothing. See SINGLE_TYPER_RATIONALE in the kind module.
-    max_tokens: 384            # the single-candidate RETRY path's budget; the
-                               # batch path computes its own (280/verdict, measured)
     temperature: 1.0
   budget_tokens_per_day: 0
 
@@ -81,7 +79,7 @@ method:
   #   LLM calls/day          1,200 ÷ 12             = 100
   #   accept rate            measured, core 120B    = 46.8%
   #   new edges/day (drain)  1,200 × 0.468          ≈ 562
-  #   ai1 GPU/day            1,200 × 2.538 s/edge   ≈ 51 min
+  #   models-host GPU/day       1,200 × 2.538 s/edge   ≈ 51 min
   #   tokens/day             1,200 × 557 tok/edge   ≈ 670k  (budget 1,000,000,
   #                                                          33% headroom — NO
   #                                                          budget increase)
@@ -96,7 +94,7 @@ method:
   # = 750/day, i.e. ~16 days, after which throughput settles at ~205 edges/day.
   # That is 17× today's measured ~12/day, and the backlog shrinks instead of
   # growing. Today's 80 calls/day produce ZERO edges — every one lands on a dead
-  # row (§1) — so the comparison is 205 against 12, not against 80.
+  # row — so the comparison is 205 against 12, not against 80.
   options:
     max_candidates: 600        # per RUN cap; live runs find ~47 typeable each (10-01..10-03)
     batch_size: 6              # the 09-24 live operating point (was 12 — see the 2026-10-04 note below)
@@ -111,14 +109,13 @@ cadence:
   # proposed_edges sweep is present. Reify is the next hop after resolution.
   #
   # UNCHANGED by K-G2 on purpose. The throughput deficit was never cadence — it
-  # was that every run's window contained zero typeable rows (§1). With the queue
+  # was that every run's window contained zero typeable rows. With the queue
   # fixed and the cap raised, two runs a day carry 1,200 candidates on ~51 min of
   # GPU; running more often would add scheduling surface for no additional work,
   # because steady-state throughput is bounded by ~450 qualifying ARRIVALS/day,
   # not by how often the sweep looks.
-  # 2026-10-04 (W6 SPLIT-1 fold): the LIVE operating point since the 09-24 PUT is
-  # three runs an hour (72/day) with a 15-min cooldown and batch 6. Measured
-  # 10-01..10-03: ~3,400 typed/day, ~330 accepted edges/day (the acceptance rate
+  # The LIVE operating point is three runs an hour (72/day) with a 15-min
+  # cooldown and batch 6. Measured over three days: ~3,400 typed/day, ~330 accepted edges/day (the acceptance rate
   # is ~10%, not the 46.8% the paragraph above assumed), ~570 LLM calls/day on
   # the $0 core plane. The designed 2-runs/day setting would cut edges/day by
   # ~3×, so the tree now carries the live point; the arithmetic test pins it.

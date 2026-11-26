@@ -1,8 +1,7 @@
-# NOTE (2026-05-23): This unit is retained as an ALTERNATIVE bring-up
+# NOTE: This unit is retained as an ALTERNATIVE bring-up
 # path. The canonical bring-up is now container-mode via
-# `docker compose --profile runtime up -d` (see docs/RUNBOOK.md §2 +
-# §13). For host-mode + containerized daprd sidecar, also set
-# `LEGBA_DAPR_APP_CHANNEL=host.docker.internal` in `.env` so the
+# `docker compose --profile runtime up -d` (see docs/RUNBOOK.md). For host-mode + containerized daprd
+# sidecar, also set `LEGBA_DAPR_APP_CHANNEL=host.docker.internal` in `.env` so the
 # sidecar dispatches into the host process. Use this systemd unit
 # only when docker daemon access for the legba app images is
 # unavailable on the host.

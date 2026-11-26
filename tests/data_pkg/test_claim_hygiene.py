@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""C-2 — claim-text hygiene at ingest (pure tests; every fixture INVENTED).
+"""Claim-text hygiene at ingest (pure tests; every fixture INVENTED).
 
 A claim row keeps the claim (claimant, victim ORGANISATION, date, words) and
 loses what a leak post carries with it: URL paths (host only), onion

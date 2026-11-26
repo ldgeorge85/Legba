@@ -1,24 +1,24 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Frame readers — the situation / timeline / event substrate reads
-(V3/P6 extraction).
+(extracted from the query port).
 
-``substrate_query_port.py`` crossed its module-size headroom when the P6
-event tools landed; per the gate's own instruction (extract, never raise),
-the situation and timeline readers — the natural cohesive cut, the same
-shape P3 made with ``substrate_temporal.py`` — moved here as module-level
+``substrate_query_port.py`` crossed its module-size headroom when the event
+tools landed; per the gate's own instruction (extract, never raise), the
+situation and timeline readers — the natural cohesive cut, the same shape as
+``substrate_temporal.py`` — moved here as module-level
 functions taking the pool as their first argument. The port keeps thin
 ``self``-delegating wrappers (docstrings intact, signatures unchanged), so
 the ``SubstrateQueryPort`` Protocol, the consult dispatcher, the pack
 handlers and every test see the same surface.
 
-P6 then adds the two event readers to this SAME sibling — an event is a
+The two event readers live in this SAME sibling — an event is a
 bounded frame (``[time_start, time_end]``) where a situation is an ongoing
 one, so the cluster stays cohesive:
 
   * ``query_events`` — the filtered event list. Its default (no ``as_of``)
     read is the OPEN gate — :func:`origin.live_gate_sql` (the 0032 pair +
-    the P7 origin-class leg), so a backfilled event can never read as live.
+    the origin-class leg), so a backfilled event can never read as live.
     ``as_of`` swaps to the validity predicate
     (:func:`origin.as_of_gate_sql`) — ``include_origin`` there, and only
     there, widens the class set (default ``LIVE_CLASSES`` — history must be
@@ -70,7 +70,7 @@ EVENT_LIFECYCLE_STATES: tuple[str, ...] = (
 #: The ``situations.status`` vocabulary. There is no CHECK constraint on the
 #: column; these are the three values the clustering handler writes
 #: (``situation_clustering._situation_status`` — active / dormant / closed)
-#: and the three the live table holds (2026-09-27: dormant 241, closed 43,
+#: and the three the live table holds (measured: dormant 241, closed 43,
 #: active 12). A ``status`` filter outside them can only ever return nothing,
 #: so :func:`list_situations` names it in ``why_empty`` rather than handing
 #: back a silent empty the reader will take for "no such frames".
@@ -85,7 +85,7 @@ SITUATION_STATUSES: tuple[str, ...] = ("active", "dormant", "closed")
 
 
 # ---------------------------------------------------------------------------
-# list_situations — moved verbatim from substrate_query_port (P6 extraction)
+# list_situations — moved verbatim from substrate_query_port
 # ---------------------------------------------------------------------------
 
 
@@ -136,8 +136,8 @@ async def list_situations(
         "       valid_from "
         "FROM situations "
         f"WHERE {where} "
-        # ORDER BY updated_at DESC returned NONE of the 12 ACTIVE frames on
-        # 2026-09-28: the hourly re-cluster stamps updated_at on every row it
+        # ORDER BY updated_at DESC returned NONE of the 12 ACTIVE frames once:
+        # the hourly re-cluster stamps updated_at on every row it
         # touches, so the column orders by "when the clusterer last ran over
         # this frame", which is the same instant for hundreds of rows, and a
         # LIMIT 20/30 took an arbitrary slice of 296 mostly-dormant frames.
@@ -224,7 +224,7 @@ def _situations_why_empty(
 
 
 # ---------------------------------------------------------------------------
-# get_timeline — moved verbatim from substrate_query_port (P6 extraction)
+# get_timeline — moved verbatim from substrate_query_port
 # ---------------------------------------------------------------------------
 
 
@@ -436,7 +436,7 @@ async def get_timeline(
 
 
 # ---------------------------------------------------------------------------
-# query_events (V3/P6) — the filtered event list
+# query_events — the filtered event list
 # ---------------------------------------------------------------------------
 
 
@@ -491,7 +491,7 @@ async def query_events(
 ) -> dict[str, Any]:
     """The ``query_events`` body — see the port method's docstring.
 
-    ``known_at`` (lane E2, evaluation harness only): events recorded before K,
+    ``known_at`` (evaluation harness only): events recorded before K,
     read by validity at ``min(as_of, K)``; lifecycle state (filter and value)
     from the ledger at K, counts over links recorded before K, timestamps
     after K masked (:mod:`legba.runtime.substrate_record_known_at`).
@@ -640,7 +640,7 @@ async def query_events(
 
 
 # ---------------------------------------------------------------------------
-# inspect_event (V3/P6) — the one-event dossier
+# inspect_event — the one-event dossier
 # ---------------------------------------------------------------------------
 
 #: Cap on each detail section (ranked signals / actors / edges / situations /
@@ -657,7 +657,7 @@ async def inspect_event(
 ) -> dict[str, Any]:
     """The ``inspect_event`` body — see the port method's docstring.
 
-    ``known_at`` (lane E2, evaluation harness only): the event and every
+    ``known_at`` (evaluation harness only): the event and every
     section row must have been recorded before K (``$3``; the event read
     ``$2``); the event's lifecycle and counts are rebuilt at K and its
     timestamps after K masked (:mod:`legba.runtime.substrate_record_known_at`).

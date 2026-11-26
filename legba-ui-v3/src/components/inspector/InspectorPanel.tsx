@@ -37,6 +37,8 @@ import { useReadContentions } from '@/lib/contentionsModel'
 import { unwrapEnvelope } from '@/lib/proseText'
 import { ScaleStamp } from '@/components/ScaleStamp'
 import { readScaleStamp } from '@/lib/scaleStamp'
+import { useBelowAdminPassive as useBelowAdmin } from '@/auth/roles'
+import { asOfLabel } from '@/lib/deskBriefPage'
 import type { PanelProps } from '@/types'
 import SubjectReadState from '@/components/inspector/SubjectReadState'
 import { selectionKindLabel } from '@/lib/subjectNoun'
@@ -277,12 +279,15 @@ function asOfOf(body: Record<string, unknown>): string | null {
 
 function DetailView({ detail }: { detail: InspectorDetail }) {
   const report = pickReport(detail.body)
+  // The scale stamp and the record's raw fields are the engine's view of it:
+  // an admin sees them; a reader sees the report, its links and its as-of.
+  const belowAdmin = useBelowAdmin()
   // H12/K3 — the instrument stamps, read off the top level or out of `data`
   // by the one shared reader (`lib/scaleStamp`), so the Inspector and the
   // panels can never disagree about where a stamp lives.
   const stamp = readScaleStamp(detail.body)
   const asOf = asOfOf(detail.body)
-  // P1-T3: pull the finding's citation list out of the merged body
+  // Pull the finding's citation list out of the merged body
   // (`body.data.citations`). Empty for a legacy / uncited finding — the card
   // then renders the prose plainly with an honest "uncited" marker.
   const citations = detail.kind === 'finding' ? extractCitations(detail.body) : []
@@ -315,10 +320,10 @@ function DetailView({ detail }: { detail: InspectorDetail }) {
           method revision computed them, with the as-of they were read at.
           A pre-stamp row says so in words rather than showing a guess. */}
       <div className="flex items-center gap-2">
-        <ScaleStamp stamp={stamp} testId="inspector-scale-stamp" />
+        {!belowAdmin && <ScaleStamp stamp={stamp} testId="inspector-scale-stamp" />}
         {asOf && (
-          <span className="text-label text-ink-3" data-testid="inspector-stamp-asof">
-            as of {asOf}
+          <span className="text-label text-ink-3" data-testid="inspector-stamp-asof" title={asOf}>
+            as of {belowAdmin ? (asOfLabel(asOf) ?? asOf) : asOf}
           </span>
         )}
       </div>
@@ -343,15 +348,17 @@ function DetailView({ detail }: { detail: InspectorDetail }) {
         </Section>
       )}
 
-      {Object.keys(detail.core).length > 0 && (
+      {!belowAdmin && Object.keys(detail.core).length > 0 && (
         <Section label="Core">
           <CoreFields core={detail.core} />
         </Section>
       )}
 
-      <Section label="Body">
-        <DescriptorView body={metaBody} primaryKeys={BODY_PRIMARY} />
-      </Section>
+      {!belowAdmin && (
+        <Section label="Body">
+          <DescriptorView body={metaBody} primaryKeys={BODY_PRIMARY} />
+        </Section>
+      )}
 
       {detail.refs.length > 0 && (
         <Section label="Derived from / linked">

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The console address a page opens — never the JSON lineage route (roll 84).
+"""The console address a page opens — never the JSON lineage route.
 
 A push's tap target (ntfy ``X-Click``) used to be the receipt,
 ``/api/v1/lineage/{kind}/{id}``: a JSON route, so tapping a page on a phone

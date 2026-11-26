@@ -38,6 +38,25 @@ components once from `.env`:
 Editing these variables later changes nothing; the registry row is the source of truth after
 bring-up.
 
+**Read at use time.** A component field may name an environment variable instead of a value:
+`raw: "${env:NAME}"`. The registry stores the reference as written, so the stored body and its
+hash are the same on every instance; the runtime and the registry read the value each time they
+build the component. An unset or empty variable fails loudly, naming the variable and the
+component; there is no default. The model-gateway components in `descriptors/` use this:
+
+| Variable | Read by |
+|---|---|
+| `LEGBA_GATEWAY_API_ENDPOINT` | every gateway component's endpoint (base URL including `/v1`) |
+| `LEGBA_GATEWAY_JUDGE_MODEL` | `llm.verify.gateway_judge.openai_compat` `model_name` |
+| `LEGBA_GATEWAY_JUDGE_THINK_MODEL` | `llm.judge.gateway_rung2_think.openai_compat` `model_name` |
+| `LEGBA_GATEWAY_GOLD_DRAFTER_MODEL` | `llm.verify.gateway_gold_drafter.openai_compat` `model_name` |
+| `LEGBA_GATEWAY_GRADER_MODEL` | `llm.grader.gateway_third_family.openai_compat` `model_name` |
+| `LEGBA_GATEWAY_DECIDE_MODEL` | `llm.decide.gateway_typed_choice` `model_name` |
+| `LEGBA_GATEWAY_TRANSLATE_MODEL` | `nlp.gateway.bearer` `translate_model` |
+
+A changed value takes effect when the component is next built: restart the services that use it.
+A value written inline, without `${env:...}`, works as before.
+
 **After bring-up.** Change or add a component with a registry PUT (or the console's settings panel):
 
 ```bash
@@ -78,9 +97,14 @@ runtime is recreated.
 | anything else | OpenAI-compatible | as above (or by endpoint host for `api.anthropic.com` / `api.openai.com`) |
 
 All handlers retry rate limits and server errors with backoff and honour `Retry-After`, count
-prompt, completion and reasoning tokens on the receipt, and send temperature 1.0. The core plane
-sends no `max_tokens` unless `LEGBA_LLM_SEND_MAX_TOKENS=1`; set that when the core plane is a hosted
-API whose default output limit would cut findings short.
+prompt, completion and reasoning tokens on the receipt, and send temperature 1.0. No handler sends a
+caller's `max_tokens`. The Anthropic handler sends the model's documented maximum output. The
+OpenAI-compatible handler sends the maximum output the stack component declares for the alias a call
+names (`max_output_tokens`, and `thinking_max_output_tokens` for the thinking alias), less only when
+the counted input leaves less room in the declared `context_window_tokens`; an alias with no declared
+maximum gets no `max_tokens` and the endpoint's default applies. `LEGBA_LLM_SEND_MAX_TOKENS=0` turns
+sending off. The declared window also sizes the input budgets (`LEGBA_LLM_INPUT_TOKEN_BUDGET`
+overrides them when set).
 
 **Pointing an analyst at a component.** A descriptor binds through `method.llm.primary`,
 `method.llm.verify` or `method.llm.narrate`, each a stack reference. Component ids are stable names;
@@ -104,7 +128,7 @@ signal through un-enriched and mark itself degraded; ingestion does not stop. An
 failure is a separate error, because an admin has to fix the credential.
 
 The runtime binds one NLP component, named by `LEGBA_NLP_COMPONENT_ID` (default
-`nlp.local.legba_models`), read once at start. A second client (`provider: innoai_gateway` on the
+`nlp.local.legba_models`), read once at start. A second client (`provider: bearer_gateway` on the
 component, `data/stack/nlp_service/gateway.py`) speaks the same contract to a gateway that serves
 `/relations`, `/entities`, `/classify` and an OpenAI-compatible chat route; it translates through
 the chat model the component names as `translate_model` and does not summarise.

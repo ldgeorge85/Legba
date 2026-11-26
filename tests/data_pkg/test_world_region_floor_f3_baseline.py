@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""ARC F-3 (W3 design lane) — the per-subject-group floor on the world read,
-pinned BEFORE the build so the build lane starts from proven ground.
+"""The per-subject-group floor on the world read,
+pinned BEFORE the build so the build starts from proven ground.
 
 Three things are pinned here, and none of them touches ``src/``:
 

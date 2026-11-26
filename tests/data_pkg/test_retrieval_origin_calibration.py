@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""R-3b Task 3 — the retrieval-origin axis + the calibration guardrail.
+"""Task 3 — the retrieval-origin axis + the calibration guardrail.
 
 THE FAILURE THIS PREVENTS (and the test that would not have caught it)
 -----------------------------------------------------------------------
@@ -70,7 +70,7 @@ def _row(resolved_by: str | None = None, **extra) -> dict:
 def test_web_evidence_is_not_headline_exogenous():
     """A web-resolved hypothesis must NEVER count as strong exogenous grading.
 
-    Fails on the pre-R-3b tree: `web_evidence` is not empty, not "unknown", not
+    Fails on the pre-tree: `web_evidence` is not empty, not "unknown", not
     in _SELF_CONSISTENCY_SOURCES and not in _WEAK_LEXICAL_SOURCES, so
     `_is_exogenous` returned True and it fed the headline Brier.
     """
@@ -176,7 +176,7 @@ def test_source_class_was_not_overloaded():
     from typing import get_args
 
     members = set(get_args(SourceClass))
-    # C-1 added `claim` — an EDITORIAL class (what the content is: a party's
+    # Added `claim` — an EDITORIAL class (what the content is: a party's
     # own claim), not a retrieval origin, so the rule above still holds.
     assert members == {"reporting", "analysis", "official", "state_media", "claim"}
     assert not any("web" in m or "search" in m for m in members)
@@ -289,9 +289,9 @@ def test_the_facet_and_the_gate_share_one_resolver():
 
 
 def test_migration_0112_exists_and_takes_only_its_assigned_slot():
-    """0112 stayed in its own lane while the coherence wave claimed its slots.
+    """0112 kept its own slot while a block of numbers was reserved.
 
-    The wave reserved 0109/0110/0111 up front. 0109 went to the C2 janitor
+    The block reserved 0109/0110/0111 up front. 0109 went to the C2 janitor
     (`0109_retention_policies.sql`) as planned; 0110/0111 were reserved for the
     C3 source-quality ledger, which landed at 0115 instead (0112-0114 had taken
     the intervening slots by then) and needed only ONE of them — so both stay

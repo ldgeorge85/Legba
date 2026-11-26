@@ -6,12 +6,12 @@ Reads ``descriptors/analyst_reenrich_translation.yaml`` and POSTs it to the
 registry. Idempotent: if a head row is already present we report it and exit 0
 without re-posting.
 
-This wires the ``reenrich_translation`` deterministic sweep as an ONGOING analyst
-(M13/T-1c). After this script runs, the runtime's reconciler spins up a
-deterministic actor that, on its cadence, translates the next batch of pre-T-1a
+This wires the ``reenrich_translation`` deterministic sweep as an ONGOING analyst.
+After this script runs, the runtime's reconciler spins up a
+deterministic actor that, on its cadence, translates the next batch of earlier
 non-Latin signals — the ~1.9k already-persisted rows whose payload language is in
 the translate set (ar/fa/he/ru/uk/zh/ja/ko/hi/th/ur) but that carry NO
-``payload.title_en`` (the M11/M12 NER lane translated them transiently for NER and
+``payload.title_en`` (the NER step translated them transiently for NER and
 DISCARDED the translation). The sweep translates the title (+ body when present)
 via the hosted /translate plane and side-writes ``payload.title_en`` /
 ``payload.text_en`` so readers narrate English, not a transliterated surface. It is

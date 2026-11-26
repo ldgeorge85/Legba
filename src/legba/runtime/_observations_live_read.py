@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The LIVE series read — ``live_series`` (lane E2).
+"""The LIVE series read — ``live_series``.
 
 WHAT IT READS. Since migration 0246 a source's ObservationSink writes live
 numeric series (chokepoint transits, central-bank policy rates) into

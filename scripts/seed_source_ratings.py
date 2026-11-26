@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """seed_source_ratings.py — catalog-seed CLI for the source assurance ledger.
 
-P3-1 (A6 layers 1+2). Ingests a curated per-source ratings YAML and upserts
+Ingests a curated per-source ratings YAML and upserts
 ``method='catalog_seed'``, ``visibility_class='public'`` rows into
 ``source_ratings`` (migration 0094), with supersession history — see
 ``src/legba/data/seed/source_ratings_loader.py`` for the semantics.

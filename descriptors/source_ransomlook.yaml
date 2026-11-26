@@ -1,4 +1,4 @@
-# C-3 claims sources (2026-11-15) — draft SourceDescriptor. Ships DRAFT.
+# Draft SourceDescriptor. Ships DRAFT.
 # A claim source cannot go `active` until `scope.claim.sign_off` (who, when,
 # note) is recorded; the lifecycle route refuses the flip without it.
 #
@@ -41,7 +41,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: claims_c3
+  owner: owner@local
   created: "2026-11-15T00:00:00Z"
 
 scope:

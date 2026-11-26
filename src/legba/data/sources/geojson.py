@@ -30,7 +30,7 @@ no extraction model in the loop. The UI's ``application/geo+json`` renderer
 (``legba-ui-v3/src/lib/modalityRenderers.tsx``, reached via ``ModalityRef``)
 maps a feature payload to a MapLibre view — no ML at all on either side.
 
-Failure semantics (L-102 §7), mirroring the RSS handler:
+Failure semantics, mirroring the RSS handler:
 
   * Parse failure (not JSON, or not a GeoJSON object) → log, yield nothing,
     next ``health_check`` reports ``unhealthy`` (a malformed document does not
@@ -245,7 +245,7 @@ class GeoJSONSourceHandler:
       * Exposes ``health_check`` + lifecycle hooks (default no-op).
     """
 
-    # --- L-102 §1 class-vars ------------------------------------------------
+    # --- class-vars ------------------------------------------------
     kind: ClassVar[str] = "geojson"
     family: ClassVar[str] = "source"
     schema_version: ClassVar[str] = "legba/source.geojson/1-0-0"
@@ -887,7 +887,7 @@ def _parse_marker_datetime(value: str) -> datetime | None:
     if not value:
         return None
     text = value.strip()
-    # Lane N-U: an EPOCH number (USGS ``updated`` is epoch MILLISECONDS, so
+    # An EPOCH number (USGS ``updated`` is epoch MILLISECONDS, so
     # ``newest_entry_ts`` was always NULL and the empty streak read "unknown").
     # 1e12..1e13 is milliseconds (2001..2286), 1e9..1e10 seconds; else junk.
     if re.fullmatch(r"\d{10}(?:\.\d+)?|\d{13}(?:\.\d+)?", text):
@@ -912,7 +912,7 @@ def _newest_entry_ts(features: list[dict[str, Any]]) -> datetime | None:
     truncated. Future-skewed junk markers are excluded so one bad date can't
     poison the observation. ``None`` when no feature carries a parseable,
     sanely-dated marker — the watchdog's pre-existing no-evidence behavior. (USGS
-    ``updated`` is epoch milliseconds, parsed since lane N-U.)
+    ``updated`` is epoch milliseconds, parsed as an epoch.)
     """
     newest: datetime | None = None
     skew_ceiling = datetime.now(tz=timezone.utc) + _NEWEST_ENTRY_MAX_FUTURE_SKEW

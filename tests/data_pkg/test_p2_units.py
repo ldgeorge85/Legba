@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""P2-T2 — the 4 bounded-reasoning UNIT descriptors validate + are wired.
+"""the 4 bounded-reasoning UNIT descriptors validate + are wired.
 
 A glass-tower "unit" (T1 unit-factory pattern) is JUST an inline_target
 DESCRIPTOR — its OWN scope predicate (subscription.targets.predicate) + its OWN

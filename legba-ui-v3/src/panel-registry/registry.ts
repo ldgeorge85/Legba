@@ -86,7 +86,7 @@ const SystemReportExport = lazy(() => import('@/panels/system/ReportExport'))
 // The Inspector — unified detail surface (redesign Move 1, the keystone).
 const SystemInspector = lazy(() => import('@/components/inspector/InspectorPanel'))
 
-// The Journal — Legba's reflective voice + navigable index (Wave 3).
+// The Journal — Legba's reflective voice + navigable index.
 const SystemJournal = lazy(() => import('@/panels/system/Journal'))
 // GLASS-2 — the three unconsumed API surfaces get their consumers.
 const SystemJournalGate = lazy(() => import('@/panels/system/JournalGate'))
@@ -96,10 +96,10 @@ const SystemSourceHealth = lazy(() => import('@/panels/system/SourceHealth'))
 const SystemEvalBoards = lazy(() => import('@/panels/system/EvalBoards'))
 const SystemReadScoreboard = lazy(() => import('@/panels/system/ReadScoreboard'))
 
-// 7b-v — Program 6 L2's divergence map.
+// The divergence map.
 const SystemLayerDivergence = lazy(() => import('@/panels/system/LayerDivergence'))
 
-// Wave P lane B — the cross-framing comparison, scoped to one CLAIM.
+// The cross-framing comparison, scoped to one CLAIM.
 const AnalysisCrossFraming = lazy(() => import('@/panels/analysis/CrossFraming'))
 // W2 — the contrary-evidence pass's records as a list (`/v3/contentions`).
 const AnalysisContentions = lazy(() => import('@/panels/analysis/Contentions'))
@@ -328,7 +328,7 @@ export const PANEL_REGISTRY: Record<PanelKind, RegistryEntry> = {
     Component: SystemInspector,
   },
 
-  // --- The Journal — reflective voice + navigable product index (Wave 3) ---
+  // --- The Journal — reflective voice + navigable product index ---
   'system.journal': {
     definition: def('system.journal', 'system_journal', 'system', null, 'Journal', false, ['personal', 'cis'], 'BookOpen'),
     Component: SystemJournal,
@@ -377,7 +377,7 @@ export const PANEL_REGISTRY: Record<PanelKind, RegistryEntry> = {
     definition: def('system.eval_boards', 'system_eval_boards', 'system', null, 'Eval Boards', false, ['personal'], 'LayoutDashboard'),
     Component: SystemEvalBoards,
   },
-  // 7b-v — the DIVERGENCE MAP. Program 6 L2 writes no table: the series and the
+  // The DIVERGENCE MAP. It writes no table: the series and the
   // receipt ride the analyst payload, and a quiet run is suppressed to
   // trace-only, so until this panel there was no way to see that the instrument
   // was running at all. An ANALYSIS kind, not Engine Room: a layer-to-layer gap

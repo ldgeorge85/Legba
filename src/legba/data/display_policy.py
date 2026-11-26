@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The READER DISPLAY POLICY — one rule, every transport (X2 lane B4, W11-F19).
+"""The READER DISPLAY POLICY — one rule, every transport.
 
-WHY. Verified 2026-10-08: ``GET /api/v1/signals`` handed ``data.raw_body`` and
+WHY. ``GET /api/v1/signals`` handed ``data.raw_body`` and
 ``data.archived_text`` — the publisher's full text, and our archived copy of it
 — to any caller; ``analyst_outputs.data.citations[].source_text`` carries up to
 3.2 KB of the same text on every grounded finding; the events WebSocket relays

@@ -217,7 +217,7 @@ SELECT id, finding_id, unit_analyst_id, target_id, label, labeled_by,
  LIMIT $2
 """
 
-#: Who writes the sampling frame (lane 9): this code path, named once.
+#: Who writes the sampling frame: this code path, named once.
 _WRITTEN_BY = rule_handle("reference_validity_sampler")
 
 _INSERT_SAMPLE_SQL = f"""

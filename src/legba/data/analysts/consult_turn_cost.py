@@ -1,14 +1,14 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The per-TURN consult cost ceiling, enforced (lane Q-1, rule E; closes SEAMS #72).
+"""The per-TURN consult cost ceiling, enforced.
 
-THE TURN THAT SHOWED IT MISSING. Consult turn e749e301 (2026-11-14, route
+THE TURN THAT SHOWED IT MISSING. One consult turn (route
 ``llm.anthropic.fable_5_1``) made 15 drilling rounds and a forced synthesis —
 16 calls, 1,837,359 input tokens, 30,844 output tokens — and cost $20.26.
 Every round re-sent the whole transcript, so each round cost more than the
 last ($0.21 for round 1, $2.11 for round 15, $3.28 for the synthesis). The
 per-RUN drilling ceilings (``consult_spend_guard``) were present and lifted by
-the operator's pins (``LEGBA_CONSULT_MAX_COST_USD_PER_RUN=1000000``,
+deployment pins (``LEGBA_CONSULT_MAX_COST_USD_PER_RUN=1000000``,
 ``LEGBA_CONSULT_MAX_INPUT_TOKENS_PER_RUN=100000000``); the per-TURN knob
 (``LEGBA_CONSULT_TURN_COST_CEILING_USD``) was declared and refused every turn
 when set, because nothing enforced it.
@@ -32,10 +32,9 @@ ceiling (the receipt says so: ``turn_ceiling_usd: null``); $10 is the
 recommended value (docs/TUNABLES.md). A positive number = the ceiling. Zero, a negative number or an unparseable value is refused at the
 front door (``registry/consult_turn_ceiling.py``) so a typo never reads as off.
 
-THE PROJECTED OUTPUT IS AN ESTIMATE, NOT A CAP (roll 87). Since roll 86's
-follow-up no route sends a caller's output limit, so "the per-call output
-budget" no longer exists to project from. Assuming the model's whole maximum
-(128,000 tokens on the Claude routes) made a priced turn under the owner's soft
+THE PROJECTED OUTPUT IS AN ESTIMATE, NOT A CAP. No route sends a caller's output limit, so "the per-call
+output budget" no longer exists to project from. Assuming the model's whole maximum
+(128,000 tokens on the Claude routes) made a priced turn under a soft
 ceiling stop after about one call. The projection now takes the LARGEST output
 actually observed on that route over the last ``PROJECTION_HISTORY_DAYS`` days
 (the consult turns' per-call receipts and the flow runs' ``llm_calls``), else
@@ -78,7 +77,7 @@ TURN_STOP_PREFIX = "the turn's cost ceiling"
 _GROWTH = 1.5
 _MIN_GROWTH_TOKENS = 20_000
 #: The projected output of one call when the route has no observed history:
-#: the figure the projection used before roll 86's no-output-caps change. An
+#: the figure the projection used before output caps were removed. An
 #: ESTIMATE for the soft ceiling only, never sent on any wire.
 PROJECTION_FALLBACK_OUTPUT_TOKENS = 32_768
 #: "Recent" for the observed-output history.
@@ -87,8 +86,8 @@ PROJECTION_HISTORY_DAYS = 14
 _HISTORY_TIMEOUT_S = 3.0
 
 #: The largest single-call output on one route: the consult turns' per-call
-#: receipts (``consult_usage/1`` ``call_receipts``, roll 86) and the flow
-#: runs' ``analyst_traces.llm_calls`` (R11). Successful calls only.
+#: receipts (``consult_usage/1`` ``call_receipts``) and the flow
+#: runs' ``analyst_traces.llm_calls``. Successful calls only.
 _OBSERVED_OUTPUT_SQL = """
 SELECT max(o) AS largest, count(*) AS calls FROM (
   SELECT (r->>'completion_tokens')::bigint AS o

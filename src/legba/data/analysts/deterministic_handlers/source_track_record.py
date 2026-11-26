@@ -2,8 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """``source_track_record`` sub-handler — A6 layer 3, the EARNED source record.
 
-The MEASURED half of the source assurance ledger (P3-3;
-planning/PROGRAM_RECOMMENDATIONS_2026-07-24.md §A6). Layers 1+2 (dossiers +
+The MEASURED half of the source assurance ledger Layers 1+2 (dossiers +
 Admiralty rubrics, migration 0094) are ASSERTED facts/opinions about a source.
 This layer is the operator's key insight made concrete: a source's grade should
 be EARNED — "when this source's claims were contested, how often did
@@ -91,8 +90,7 @@ from ...provenance.origin import origin_class_clause
 
 logger = logging.getLogger(__name__)
 
-#: P7/7g-1 — the origin-class legs on the earned-record read (SEAMS #57
-#: sweep; `source_health` in the collection firewall). A source's earned
+#: The origin-class legs on the earned-record read (`source_health` in the collection firewall). A source's earned
 #: weight is what it got right in the LIVE contest; a provider whose
 #: numbers were imported never entered that contest and must not be
 #: credited or debited by it.

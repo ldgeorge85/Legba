@@ -72,7 +72,7 @@ async def test_handle_deps_none_returns_zero_summary():
     data = result.finding.data
     assert data["sub_handler"] == "hypothesis_lifecycle"
     assert data["hypotheses_created"] == 0
-    # DQ P6 — the receipt reports WORKING-state moves (supported/weakened); this
+    # The receipt reports WORKING-state moves (supported/weakened); this
     # handler never confirms/refutes from intensity drift (self-consistency).
     assert data["supported"] == 0
     assert data["weakened"] == 0
@@ -262,7 +262,7 @@ async def test_test_step_confirms_on_later_supporting_evidence(pg_pool):
             "FROM hypotheses WHERE analyst_id = $1 AND situation_id = $2",
             analyst_id, sid,
         )
-    # DQ P6 — two later supporting findings → balance >= K → the WORKING state
+    # Two later supporting findings → balance >= K → the WORKING state
     # 'supported' (NOT a terminal 'confirmed': intensity drift is a
     # self-consistency proxy, so hypothesis_lifecycle caps at working states and
     # reserves terminal confirmed/refuted for the exogenous subsequent_facts

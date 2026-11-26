@@ -6,11 +6,11 @@ Validates that the compose file's runtime profile activates exactly
 the services specified in the multi-image containerization brief, as
 re-cut by the source-first pivot:
 
-  * Temporal is GONE (L-205 / P-16): the optimizer kind's durable GEPA
+  * Temporal is GONE: the optimizer kind's durable GEPA
     loop now runs as a Dapr Workflow on the existing daprd sidecar.
     No temporal-init-db/temporal-server/temporal-ui cluster, no
     legba-temporal-worker app image, no docker/Dockerfile.temporal-worker.
-  * The `dapr` profile gained `dapr-init-db` (P-14 — isolates Dapr actor
+  * The `dapr` profile gained `dapr-init-db` (isolating Dapr actor
     state to its own database on the shared Postgres cluster), so it now
     activates 5 services.
 
@@ -43,7 +43,7 @@ import yaml
 
 # Resolve relative to this file so the test validates the checked-out tree it
 # lives in (worktree-safe). The previous hardcoded deployment path made the
-# test silently validate a DIFFERENT tree than the one under test (B-1).
+# test silently validate a DIFFERENT tree than the one under test.
 REPO_ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_FILE = REPO_ROOT / "docker-compose.yml"
 
@@ -135,7 +135,7 @@ def test_dapr_profile_activates_5_dapr_services(compose_doc: dict) -> None:
     )
 
 
-# Temporal was cut (L-205 / P-16) — the optimizer kind's GEPA loop runs as a
+# Temporal was cut — the optimizer kind's GEPA loop runs as a
 # Dapr Workflow on the existing daprd sidecar. There is no temporal profile,
 # no temporal-init-db/temporal-server/temporal-ui cluster, and no
 # legba-temporal-worker app image, so the old
@@ -144,7 +144,7 @@ def test_dapr_profile_activates_5_dapr_services(compose_doc: dict) -> None:
 
 def test_runtime_profile_activates_app_services(compose_doc: dict) -> None:
     """The `runtime` profile is the canonical bring-up. After the Temporal
-    cut (P-16) it activates 3 app surfaces (registry + runtime-dapr +
+    cut it activates 3 app surfaces (registry + runtime-dapr +
     ui-build), and transitively activates the dapr substrate (sidecar +
     placement + scheduler + init-db) because those services declare BOTH
     `runtime` and `dapr` so either spelling brings them up.
@@ -232,7 +232,7 @@ def test_mcp_profile_activates_legba_mcp(compose_doc: dict) -> None:
     [
         ("legba-registry", ".", "docker/Dockerfile.registry"),
         ("legba-runtime-dapr", ".", "docker/Dockerfile.runtime"),
-        # legba-temporal-worker retired (Temporal cut, P-16).
+        # legba-temporal-worker retired (Temporal cut).
         ("legba-mcp", ".", "docker/Dockerfile.mcp"),
         ("legba-ui-build", "./legba-ui-v3", "Dockerfile"),
     ],
@@ -266,7 +266,7 @@ def test_service_build_context_and_dockerfile(
     [
         "legba-registry",
         "legba-runtime-dapr",
-        # legba-temporal-worker retired (Temporal cut, P-16).
+        # legba-temporal-worker retired (Temporal cut).
         "legba-mcp",
     ],
 )
@@ -286,7 +286,7 @@ def test_app_services_reach_substrate_by_service_name(compose_doc: dict) -> None
     """The host-mode env vars used `127.0.0.1`; container-mode must use
     docker service names (`postgres`, `nats`, etc.). Catches the
     accidental copy-paste of host-mode env."""
-    # legba-temporal-worker retired (Temporal cut, P-16).
+    # legba-temporal-worker retired (Temporal cut).
     for service in ["legba-registry", "legba-runtime-dapr"]:
         env = compose_doc["services"][service].get("environment", {})
         host = env.get("LEGBA_DATA_PG_HOST")

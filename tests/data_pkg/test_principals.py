@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Principal handles (data-model lane 9): the kinds are the type registry's,
+"""Principal handles (data model): the kinds are the type registry's,
 handles are validated before SQL, and every server-stamped audit actor maps
 to exactly one principal — never a guessed one. Pure: no database."""
 

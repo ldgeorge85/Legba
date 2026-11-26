@@ -1,4 +1,4 @@
-# P-17 — new-model consult_on_demand analyst: consult_default.
+# New-model consult_on_demand analyst: consult_default.
 #
 # Fresh re-register of the consult analyst on the source-first model.  Distinct
 # from the legacy descriptors/analyst_legba_consult.yaml (which carries the
@@ -13,7 +13,7 @@
 
 identity:
   id: consult_default
-  name: Legba Consult (P-17 source-first)
+  name: Legba Consult (source-first)
   schema_uri: legba/analyst/1.0.0
   version: "0000000000000000"        # placeholder — registry stamps content hash
   kind: consult_on_demand
@@ -21,7 +21,7 @@ identity:
     input_type: legba.runtime.ConsultQuestion
     output_type: legba.runtime.ConsultResponse
   state: active
-  owner: p17_reregister
+  owner: owner@local
 
 subscription:
   substrate:
@@ -40,32 +40,24 @@ method:
     # critic, is on the core plane). TO REVERT to the core plane: set raw back
     # to llm.primary.openai_compat.
     #
-    # 2026-08-15: max_tokens is the OPERATIVE per-call output budget — the
-    # deps builder threads it into the ReAct loop (resolve_output_budget),
-    # replacing the old env-defaulted 2048. LEGBA_CONSULT_MAX_TOKENS is now an
-    # emergency override only (logged loudly when it wins). 32768 is enabled
-    # by the Anthropic handler STREAMING every generation (the old 2048 sweet
-    # spot existed only because a non-streaming 4k+ generation outran the
-    # provider HTTP window → 504); it sits well under the Opus line's
-    # documented 128k per-request output ceiling (the handler clamps + logs
-    # if a descriptor ever exceeds that).
+    # max_tokens is an output-token ESTIMATE, never sent and bounding nothing:
+    # the bake-off spend guard projects one call's worst-case output from it.
+    # Every handler sends the model's own maximum output (the gateway: the
+    # alias's declared maximum, the thinking alias's own when thinking).
     primary:
       factory_kind: stack_ref
-      raw: llm.primary.openai_compat   # 2026-10-03 DEC-17a: the free core plane is the default; Opus/Fable by explicit pick (consult_api override)
+      raw: llm.primary.openai_compat   # the free core plane is the default; Opus/Fable by explicit pick (consult_api override)
       expected_family: llm_provider
     max_tokens: 32768
-    # T-1 (2026-11-14, the owner: "Deep is just thinking on … use it for a lot,
-    # especially consult"). On the core plane the tool rounds, the forced final
+    # Thinking is on for consult. On the core plane the tool rounds, the forced final
     # and a recovery synthesis call the component's thinking alias; the
     # contract's repair call does not (data/analysts/consult_thinking.py). On a
     # plane with no thinking alias (the paid pick) the turn runs as before and
     # its trace says so. Quoted: an unquoted YAML `on` is a boolean.
     thinking: "on"
-  # W11-F133 — consult 6cd91190 (2026-10-29): the forced final died on a
-  # transient network error after 19 minutes and the actor's default transient
-  # retry (3 attempts) re-ran the WHOLE consult from scratch on the same
-  # request id — 19 more rounds, 162 tool calls, re-spent unasked, and that run
-  # failed too. A consult runs ONCE: its failure (or its partial answer) goes to
+  # The actor's default transient retry (3 attempts) would re-run the WHOLE
+  # consult from scratch on the same request id (every round and tool call
+  # re-spent unasked). A consult runs ONCE: its failure (or its partial answer) goes to
   # the operator, who decides whether to ask again.
   retry:
     transient:
@@ -74,12 +66,9 @@ method:
   # consults (~150-250k tokens each across 10 rounds); raised to 5M for headroom
   # (the wall-clock loop budget also trims per-consult usage). Tune to taste —
   # this is a real Opus cost ceiling.
-  options:
-    # 2026-10-29 W11-F133: a core-plane consult outran the model window (229k of
-    # 262k tokens over 19 rounds with compaction pinned off) and vLLM refused the
-    # call; the ceiling withholds the oldest refs instead. 262,144 − 32,768 out −
-    # a margin. Remove once the loop derives it from the component (lane F133).
-    context_ceiling_tokens: 200000
+  # No context_ceiling_tokens: the loop derives its input ceiling from the
+  # route's declared context window, leaving room for the thinking alias's
+  # full output (consult_context_ceiling.derive_ceiling).
   budget_tokens_per_day: 0
 
 cadence:
@@ -89,17 +78,17 @@ cadence:
   # floor 502s rapid chat turns (Piece 1 live-proof, 2026-06-15).
   cooldown_seconds: 0
 
-# Agency grant — the substrate_read pack (A-3a): every consult tool call
+# Agency grant — the substrate_read pack: every consult tool call
 # is resolved + governed + ledgered through the agency plane.
 #
-# R-3d — `web_access` is the GRANT leg only. The operator-facing consult surface
+# `web_access` is the GRANT leg only. The operator-facing consult surface
 # is where "the substrate does not know this, go look it up" is asked most
 # directly, so it carries the grant. NOTE the honest limit: the consult binding
 # in runtime/dapr_host.py builds ONE AgencyToolBinding, over substrate_read
 # only, so this grant is INERT until that path binds the web_access pack too —
 # it is a descriptor-side preparation, not an activation.
 #
-# C-1b — `workstation_drive` is the grant leg for "present a case": the nine
+# `workstation_drive` is the grant leg for "present a case": the nine
 # workstation actions an ARMED turn (ConsultRequest.present_case) may emit. The
 # runtime binds it beside substrate_read (runtime/consult_bindings.py); an
 # unarmed turn is never offered its tools, and an armed turn without the
@@ -108,9 +97,9 @@ action_packs:
   - pack_id: substrate_read
   - pack_id: web_access
   - pack_id: workstation_drive
-  # C-2b-1 — the write plane (bound only for a turn the operator armed with
+  # The write plane (bound only for a turn the operator armed with
   # allow_writes; the registry's LEGBA_CONSULT_WRITES and the pack's own state
-  # are the kill switches). The operator PUTs this grant after the roll.
+  # are the kill switches). The operator PUTs this grant after a runtime update.
   - pack_id: consult_write
 
 outputs:

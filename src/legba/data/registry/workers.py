@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The registry at ``LEGBA_REGISTRY_WORKERS = N`` — what is shared, what runs
-once, and what stays per process (W11-F85).
+once, and what stays per process.
 
 The registry ran ONE uvicorn worker. Every analyst run's descriptor GET, every
 stack-component GET, the UI's panels and consult all queue behind it. This

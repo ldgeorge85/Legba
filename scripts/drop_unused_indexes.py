@@ -4,7 +4,7 @@
 """Drop (or re-create) the unused indexes of migration 0264 out of
 transaction — DRY RUN by default.
 
-Lane P-8, the out-of-transaction half of 0264 (the create_read_latency_indexes
+The out-of-transaction half of 0264 (the create_read_latency_indexes
 pattern, reversed). 0264 drops each index only on a small table; on the live
 large tables (signals, entity_profiles, analyst_traces, entity_edges,
 governor_events) the drop is this script's job, because the runner holds

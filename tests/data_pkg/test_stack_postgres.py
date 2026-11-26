@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Integration tests for the L-125 AGE-aware Postgres stack handler.
+"""Integration tests for the AGE-aware Postgres stack handler.
 
 Real Postgres+AGE container. The session fixtures in
 `tests/data_pkg/conftest.py` create a fresh per-session test database;

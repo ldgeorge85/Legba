@@ -177,6 +177,30 @@ export function washStep(n: number): 0 | 1 | 2 | 3 {
   return 3
 }
 
+/** At or above this share of its baseline a place reads as a multiple, not a percentage. */
+export const SERIES_MULTIPLE_FROM = 1000
+
+/**
+ * A series place's value as it is printed: a percentage of its 30-day
+ * baseline; "≥10×" at ten times the baseline or more, where a percentage
+ * looks like a measurement but only says the baseline was small; and "no
+ * baseline" when the route gave no percentage (no earlier days, or too few
+ * of them above zero to divide by). Never a dash, which reads as a value.
+ */
+export function seriesPctText(pct: number | null | undefined): string {
+  if (pct == null || !Number.isFinite(pct) || pct < 0) return 'no baseline'
+  if (pct >= SERIES_MULTIPLE_FROM) return '≥10×'
+  return `${Math.round(pct)} %`
+}
+
+/** The same, as a sentence for a hover card or an aria label. */
+export function seriesPctSentence(pct: number | null | undefined): string {
+  const t = seriesPctText(pct)
+  if (t === 'no baseline') return 'No usable 30-day baseline'
+  if (t === '≥10×') return 'Ten times its 30-day baseline or more'
+  return `${t} of its 30-day baseline`
+}
+
 export function seriesStatus(pct: number | null): SeriesStatus {
   if (pct == null || !Number.isFinite(pct)) return 'none'
   if (pct < 50) return 'critical'

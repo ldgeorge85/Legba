@@ -1,11 +1,11 @@
 /**
- * Roll 86: are the flat World map's signal points drawn at the signal's own
+ * Are the flat World map's signal points drawn at the signal's own
  * point, not at a country centroid?
  *
  * The map places a signal at `data.geo.{lat, lon}` and falls back to its first
  * country's centroid only when the row carries no point. Before 0b8b0484 the
- * light `/signals` row dropped `data.geo`, so every point silently fell back:
- * roll 86 checked only the API rows. This reads what the map DREW.
+ * light `/signals` row dropped `data.geo`, so every point silently fell back,
+ * and a check of only the API rows missed it. This reads what the map DREW.
  *
  * `signalPlacement` runs in the browser (`page.evaluate`, by its source), so
  * it is self-contained: no imports, no closures over module state.

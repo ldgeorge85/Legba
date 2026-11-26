@@ -2,8 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Pure (no-DB) unit tests for the D6/D13 hardened ingestion fact gate.
 
-Covers the VERBATIM live-garbage triples from
-``planning/PLATFORM_HEALTH_RESULTS.md`` (D6/D13): adjective / demonymic-plural
+Covers the VERBATIM live-garbage triples (D6/D13): adjective / demonymic-plural
 values, reflexive-after-canon triples, source-publication subjects, inverted
 relation direction, and the sports-roster / topic noise (the World-Cup feed
 flooding geopolitical extraction). No database, no network — only the pure

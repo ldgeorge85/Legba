@@ -1,5 +1,5 @@
 /**
- * REAL-MOUNT tests for the CONTESTED-BY-RETRIEVAL chip (Program 7a).
+ * REAL-MOUNT tests for the CONTESTED-BY-RETRIEVAL chip.
  *
  * WHAT THIS CLOSES. Every other fold chip beside a claim describes how the
  * platform assembled that claim — the wire fold, the single-source mark, the

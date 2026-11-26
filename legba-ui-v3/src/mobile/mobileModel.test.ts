@@ -43,7 +43,7 @@ function summaryOf(r: ReadFindingRow): ReadFindingRow {
   return { id, analyst_id, target_id, title, produced_at, severity, confidence }
 }
 
-describe('M-0a / roll 84: the full read is read by id', () => {
+describe('the full read is read by id', () => {
   const rows = [WORLD, COUNTRY, THEMATIC, ASSESSMENT].map((r) => toReportRow(summaryOf(r), null)!)
 
   it('asks GET /findings/{id} for exactly the opened row, with no list filters', () => {
@@ -101,7 +101,7 @@ describe('navigator rows', () => {
     expect(row).not.toHaveProperty('verifyScore')
   })
 
-  it('M-0a: the World read\'s card is titled for the world, never for the first block\'s country', () => {
+  it('The World read\'s card is titled for the world, never for the first block\'s country', () => {
     const assembly = projectAssembly(WORLD)!
     expect(assembly.blocks.some((b) => b.target_name)).toBe(true)
     const full = toReportRow(WORLD, assembly)!
@@ -114,7 +114,7 @@ describe('navigator rows', () => {
     expect(toReportRow(summaryOf(COUNTRY), null)!.target).not.toMatch(/country_watch_tw/)
   })
 
-  it('M-0a: a summary row (no blocks, no body) leads with its title\'s headline', () => {
+  it('A summary row (no blocks, no body) leads with its title\'s headline', () => {
     const row = toReportRow(summaryOf(WORLD), null)!
     expect(row.leadThread).toMatch(/^Saudi Arabia remains under high energy/)
     expect(row.leadThread).not.toMatch(/World read|3 Sep|“|”/)
@@ -232,7 +232,7 @@ describe('one selection, everything follows', () => {
   })
 })
 
-describe('reader names, never machine ids (U-1)', () => {
+describe('reader names, never machine ids', () => {
   // Synthetic: a read whose blocks name no target, titled by the engine.
   const MACHINE: ReadFindingRow = {
     ...WORLD,
@@ -276,7 +276,7 @@ describe('reader names, never machine ids (U-1)', () => {
   })
 })
 
-describe('U-1 — a block stored with its machine id as its name', () => {
+describe('A block stored with its machine id as its name', () => {
   it('names the subject when target_name is itself an id, and keeps a real name', () => {
     expect(readerBlockName('country_zz_qq', 'country_zz_qq', (id) => (id === 'country_zz_qq' ? 'Qualia' : null))).toBe('Qualia')
     expect(readerBlockName('country_zz_qq', 'country_zz_qq')).not.toMatch(/_/)

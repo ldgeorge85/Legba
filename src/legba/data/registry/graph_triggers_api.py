@@ -57,8 +57,7 @@ SITTING_DATE = "2026-11-03"
 #: The pre-registered rule, restated on the wire so the reading cannot be
 #: mistaken for "one gauge firing buys an engine".
 DECISION_RULE = (
-    "An engine is warranted when any TWO of E1-E5 fire (pre-registered, "
-    "JUDGE_SYNTHESIS 2026-08 §4.2)."
+    "An engine is warranted when any TWO of E1-E5 fire (pre-registered)."
 )
 
 # --- thresholds, verbatim from JUDGE_SYNTHESIS §4.2 --------------------------
@@ -369,7 +368,7 @@ def gauge_e4(meta_row: Optional[dict[str, Any]], *, table_present: bool) -> Trig
                 # AGE_PROBE_REPORT §5.2's measured ~8 us/edge — the reason the
                 # sitting cares about this number, quoted as extrapolation.
                 "extrapolation": (
-                    "~8 us/edge (AGE_PROBE_REPORT 2026-08-03 §5.2): 60 s at "
+                    "~8 us/edge (measured in the graph-engine probe): 60 s at "
                     "~7.8M arcs; ~32 s at the ~4.0M-arc projection"
                 ),
             },

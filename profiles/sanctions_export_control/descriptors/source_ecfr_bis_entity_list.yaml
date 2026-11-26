@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# Sanctions / export-control profile SKELETON (PROFILE-1; DEC-11) — X2/E2.
+# Sanctions / export-control profile SKELETON.
 # The BIS Entity List as the INSTRUMENT itself: 15 CFR Part 744, Supplement
 # No. 4, from the electronic Code of Federal Regulations (kind
 # instrument_snapshot). The Federal Register binding
@@ -9,8 +9,8 @@
 # binding keeps the consolidated text those rules produce, and diffs it.
 #
 # Ships DRAFT and UNPROBED: the eCFR renderer URL below (the `current`
-# point-in-time, the one supplement) was NOT fetched by this lane (X2/E2 made
-# one real fetch, of the OFAC SDN list). The operator probes it before
+# point-in-time, the one supplement) was NOT fetched (one real fetch was made,
+# of the OFAC SDN list). Probe it before
 # activating. Read as TEXT — a unified line diff of the rendering.
 #
 # US Government work: public domain.

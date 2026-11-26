@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W11 SWEEP-2 - the FINAL frame's marker never reaches the persisted answer.
+"""The FINAL frame's marker never reaches the persisted answer.
 
 Two live Opus answers (consult_turns d8d95f90 / 2794032b, 10-04) persisted a
 literal ``<<<FINAL>>`` and the whole header block above the prose: the

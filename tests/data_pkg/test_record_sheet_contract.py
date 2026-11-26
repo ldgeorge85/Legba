@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane U-10 — the Record sheet's contract pieces, no database.
+"""The Record sheet's contract pieces, no database.
 
 * the reads route and its leaf import in the SLIM registry image (nothing
   from ``legba.data.analysts`` / ``legba.runtime``), mounted by the app;

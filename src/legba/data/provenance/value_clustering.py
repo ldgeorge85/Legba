@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Fuzzy value clustering — group "same-claim" fact VALUES (Holes-B Wave 3).
+"""Fuzzy value clustering — group "same-claim" fact VALUES.
 
 The shared `(subject, predicate)` value-grouping primitive. Real sources phrase
 the SAME claim differently ("Russian" vs "Russia", "Kyiv" vs "Kiev",
 "de-escalating" vs "de escalating"), so EXACT-string grouping is dormant: it
 finds 0 same-triple groups across the live corpus. This helper does the
-two-stage normalize-then-cluster that BOTH the Holes-B contested-claims arbiter
-(`fact_contention_arbiter`) AND the Holes-A noisy-OR corroboration leg need:
+two-stage normalize-then-cluster that BOTH the contested-claims arbiter
+(`fact_contention_arbiter`) AND the noisy-OR corroboration leg need:
 
   1. **Canonicalize** each raw value via :func:`canonicalize_entity` — the shared
      canon that already collapses national demonyms ("Russian" -> "Russia"),

@@ -1,5 +1,5 @@
 /**
- * Unit test for the citations data layer (P1-T3).
+ * Unit test for the citations data layer.
  *
  * Locks the LIVE citation shapes: the finding payload nests its data under the
  * `data` envelope, so citations live at `body.data.citations`. Two shapes

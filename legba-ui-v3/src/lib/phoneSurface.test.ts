@@ -55,7 +55,7 @@ describe('phoneRedirectTarget', () => {
     expect(phoneRedirectTarget(at(390, { desktopChosen: true }))).toBeNull()
   })
 
-  it('the WHOLE address rides to the phone (M-2): an invite, #signin, a record, a point, the query', () => {
+  it('the WHOLE address rides to the phone: an invite, #signin, a record, a point, the query', () => {
     expect(phoneRedirectTarget(at(390, { hash: '#invite=abc123' }))).toBe('/m/#invite=abc123')
     expect(phoneRedirectTarget(at(390, { hash: '#signin' }))).toBe('/m/#signin')
     expect(phoneRedirectTarget(at(390, { hash: '#ws=desk&sel=target:x' }))).toBe('/m/#ws=desk&sel=target:x')
@@ -63,7 +63,7 @@ describe('phoneRedirectTarget', () => {
     expect(phoneRedirectTarget(at(390, { search: '?case=s:1', hash: '#win=7d' }))).toBe('/m/?case=s:1#win=7d')
   })
 
-  it('the shorter side of the screen decides (M-2): a landscape phone goes, a narrow desktop window with a mouse stays', () => {
+  it('the shorter side of the screen decides: a landscape phone goes, a narrow desktop window with a mouse stays', () => {
     // a phone held sideways: 844 wide, its screen's short side 390
     expect(phoneRedirectTarget(at(844, { screenShort: 390 }))).toBe('/m/')
     // a desktop window dragged narrow: 420 wide on a 1080 screen, mouse
@@ -75,7 +75,7 @@ describe('phoneRedirectTarget', () => {
   })
 })
 
-describe("index.html's inline redirect is this module's rule (M-2)", () => {
+describe("index.html's inline redirect is this module's rule", () => {
   const html = readFileSync(join(__dirname, '..', '..', 'index.html'), 'utf8')
   const body = /<script id="legba-phone-redirect">([\s\S]*?)<\/script>/.exec(html)?.[1] ?? ''
 

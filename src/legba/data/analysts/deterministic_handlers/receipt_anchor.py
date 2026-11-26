@@ -13,10 +13,10 @@ timestamp closes that: once a day this handler
     resolutions, sorted by kind then id — leaf =
     ``sha256(kind ':' id || content_sha256)``, ``forecast_ledger.ledger_leaf``),
     so a forecast number is externally timestamped from the night after it
-    was stated (ST0-A, D-15), then ONE leaf for the administrative audit
+    was stated, then ONE leaf for the administrative audit
     log's chain head (migration 0248: leaf =
     ``ledger_leaf("descriptor_audit_log", str(chain_seq), row_hash)``), so an
-    outside witness covers administrative history too (audit A-06),
+    outside witness covers administrative history too,
   * folds them into a single 32-byte Merkle root (duplicate-last padding on an
     odd level — the deterministic textbook fold, so the root is recomputable
     by anyone holding the same head set; the fold lives in
@@ -150,7 +150,7 @@ async def _ledger_leaf_rows(conn: Any, warnings: list[str]) -> list[AnchorLeaf]:
         warnings.append(f"receipt_anchor.ledger_unavailable:{type(exc).__name__}")
         return []
     leaves = leaves_from_rows(rows)
-    # ST1: the resolution records (0244) fold after the 0242 leaves, read on
+    # The resolution records (0244) fold after the 0242 leaves, read on
     # their own so a missing 0244 never drops the ledger's leaves.
     try:
         recs = await conn.fetch(RECORD_LEAVES_SQL)

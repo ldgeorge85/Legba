@@ -29,7 +29,7 @@ On either route "prose plus JSON" cannot be ambiguous, because the two travel
 in different fields:
 
 * a reply with ``tool_use`` blocks is a tool round, full stop;
-* a reply with none is the answer, full stop — its text is the §28.4 markdown
+* a reply with none is the answer, full stop — its text is the markdown
   FINAL, and if it doesn't carry the sentinel header block we take the prose as
   the answer rather than burning a round asking for a re-format.
 
@@ -67,7 +67,7 @@ than the text route even where native isn't really there.
 The loop had a drilling budget (``LEGBA_CONSULT_WALL_BUDGET_SECONDS``, 210s)
 that stops it *requesting more tools*. What it did not have was a ceiling on
 the whole run: the forced-final synthesis after that check was unbounded, and a
-single LLM call had no deadline at all. That is the shape of the 2026-09-16
+single LLM call had no deadline at all. That is the shape of an observed
 failure — the budget check passed at round 6, the final synthesis started at
 269s, and the front door's clock ran out while it was still generating.
 
@@ -95,6 +95,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..stack.llm import tool_rounds as _tr
+from . import consult_answer_format as _af
+from .consult_reply_parsing import FINAL_SENTINEL
 
 # The three clock defaults and their env readers live in the stdlib-only leaf
 # ``legba.data.consult_clocks`` so the registry can derive its invoke timeout
@@ -246,7 +248,7 @@ def settle_final_reply(
     elapsed_s: float,
     last_tool_incorporated: bool,
 ) -> tuple[dict[str, Any] | None, str, dict[str, Any] | None]:
-    """``(payload, synthesis_status, step)`` for one terminal answer reply (W11-F160).
+    """``(payload, synthesis_status, step)`` for one terminal answer reply.
 
     * No answer body — a sentinel and header lines only, or nothing — is NOT an
       answer: ``(None, "none", step)``, so the turn stores an empty answer and
@@ -298,7 +300,7 @@ def provenance_hold(census: Mapping[str, Any] | None) -> tuple[str, str] | None:
     because a reader scanning a long answer must learn what it is before they
     act on it, not after.
 
-    THE CASE IT CATCHES, from the 2026-09-28 review: the core-plane run
+    THE CASE IT CATCHES: the core-plane run
     fabricated a tool RESULT into its own ARGS, quit at round 3 of 10, and
     wrote a confident answer citing six ids that do not exist. Nothing in the
     platform said a word. The answer rested on the model's own knowledge and
@@ -502,14 +504,33 @@ def render_tools_for(wire: str, known_tools: Any) -> list[dict[str, Any]]:
     return _tr.render_tools(wire, native_tool_specs(known_tools))
 
 
-def native_system_suffix(final_sentinel: str) -> str:
-    """Protocol override appended to the system prompt on the native route.
+def final_header_names(*, watch_header: bool = True, quote: str = "") -> str:
+    """The FINAL header names as the model is told them, ``a / b / c``.
 
-    The descriptor's prompt describes the JSON-in-text protocol. On this route
-    that protocol is replaced, not extended, so the suffix says so plainly —
-    otherwise the model reads two contradictory contracts and picks one at
-    random, which is its own source of malformed rounds.
+    The names the FINAL parser reads (``consult_reply_parsing``), so a path
+    that restates the answer format never drops one. ``watch_header=False``
+    leaves out ``watch_candidates``: a bake-off arm keeps the text it was
+    measured with, byte for byte.
     """
+    names = ["uncertainty", "cited_refs", "unanswered_aspects"]
+    if watch_header:
+        names.append("watch_candidates")
+    return " / ".join(f"{quote}{n}{quote}" for n in names)
+
+
+def native_system_suffix(final_sentinel: str, *, watch_header: bool = True) -> str:
+    """Protocol override a bake-off arm gets on the native route.
+
+    The arms keep the prompt they were measured with, which describes the
+    JSON-in-text protocol, so on this route the suffix replaces it in words.
+    The live consult does not use this: its system prompt is built per route
+    (``consult_answer_format.compose_system_prompt``), so it reads one
+    contract instead of a contract and an override.
+
+    The header names are :func:`final_header_names`, so an answer written on
+    this route keeps ``watch_candidates``.
+    """
+    headers = final_header_names(watch_header=watch_header, quote="`")
     return (
         "\n\n## Round protocol override (native tools)\n\n"
         "On THIS plane you have a real tool-calling channel, and it replaces "
@@ -519,9 +540,55 @@ def native_system_suffix(final_sentinel: str) -> str:
         "a single round.\n\n"
         "To ANSWER, simply reply with text and call no tool. Keep the answer "
         f"format exactly as described above: the `{final_sentinel}` line, the "
-        "`uncertainty` / `cited_refs` / `unanswered_aspects` header lines, "
+        f"{headers} header lines, "
         "then your answer as plain markdown. Never put the answer inside a "
         "tool call, and never wrap it in JSON."
+    )
+
+
+def run_system_prompt(base: str, run_context: str, *, native: bool, frozen: bool) -> str:
+    """The system prompt one consult run sends.
+
+    A bake-off arm (``frozen``) keeps the shape it was measured with: its
+    prompt, the run context, and on the native route the override suffix.
+    A live run gets one answer format for its route, after the run context
+    (``consult_answer_format.compose_system_prompt``).
+    """
+    if frozen:
+        return base + run_context + (
+            native_system_suffix(FINAL_SENTINEL, watch_header=False) if native else ""
+        )
+    return _af.compose_system_prompt(base, run_context, native=native)
+
+
+def unreadable_nudge(content: str | None, *, frozen: bool) -> str:
+    """The user message after a reply that matched neither reply shape."""
+    if not frozen:
+        return _af.unreadable_reply_nudge(_af.unreadable_reason(content))
+    return (
+        "Your reply matched neither reply shape. To CALL "
+        "TOOLS, respond with ONLY a strict-JSON object "
+        '({"tool": ..., "args": ...} or {"tools": [...]}). '
+        "To ANSWER, do not use JSON at all — reply with the "
+        f"line {FINAL_SENTINEL}, then the "
+        f"{final_header_names(watch_header=False)} header lines, then "
+        "your answer as plain markdown. If your last reply "
+        "WAS the answer, re-send it in that form: the prose "
+        "does not need to be shortened or escaped."
+    )
+
+
+def no_tool_nudge(*, frozen: bool) -> str:
+    """The user message after a JSON reply with neither ``tool`` nor ``tools``."""
+    if not frozen:
+        return _af.unreadable_reply_nudge('the JSON object had neither "tool" nor "tools"')
+    return (
+        "Your JSON had neither `tool` nor `tools`. To call "
+        'tools emit {"tool": ..., "args": ...} or '
+        '{"tools": [{"tool": ..., "args": ...}, ...]}. To '
+        f"answer, emit the {FINAL_SENTINEL} line + header "
+        "lines + markdown instead — the final answer is NOT "
+        "JSON."
     )
 
 
@@ -678,7 +745,11 @@ __all__ = [
     "degraded_final_payload",
     "native_assistant_message",
     "native_round_summary",
+    "final_header_names",
     "native_system_suffix",
+    "no_tool_nudge",
+    "run_system_prompt",
+    "unreadable_nudge",
     "native_tool_result_messages",
     "native_tool_specs",
     "render_tools_for",

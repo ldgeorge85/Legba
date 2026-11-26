@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""X4 ALERTS (W11-F17) on the REAL driver — every claim read back from the rows.
+"""X4 ALERTS on the REAL driver — every claim read back from the rows.
 
 The lane's done test, one test per line:
 
@@ -430,7 +430,7 @@ async def test_the_volume_route_counts_per_topic_and_kind(pool) -> None:
     assert bad.status_code == 422
     body = r.json()
     assert body["measured"] is True and body["window_days"] == 1
-    assert body["caps"] == {"world": 50, "engine": 50, "nightly": 50}  # L-1: nightly is ledgered now
+    assert body["caps"] == {"world": 50, "engine": 50, "nightly": 50}  # Nightly is ledgered now
     assert body["cap_env"]["world"] == "LEGBA_ALERT_VOLUME_DAILY_CAP_WORLD"
     kinds = {(k["topic"], k["kind"]): k for k in body["kinds"]}
     w = kinds[("world", world_kind)]

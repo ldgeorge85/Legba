@@ -1,6 +1,5 @@
 # lens_isolationist — the Retrencher: one of the SIX stance-typed LEAN lenses (VOICES). The
-# lean priors are planning/VOICES_LEAN_PRIORS_2026-09-21.md, accepted as DRAFTS by
-# operator decision D-4 on 2026-09-21.
+# lean priors are DRAFTS.
 #
 # Rides the SAME journal_assessor kind as the four function-typed faculties
 # (lens_trend / lens_baserate / lens_capability / lens_intent): the kind module
@@ -15,7 +14,7 @@
 # measured effect.
 #
 # The declared prior LIVES in the persona module (legba_geopolitics.lens_isolationist) — the
-# descriptor content hash IS the prior version (DL-2). Re-authoring the prior is a
+# descriptor content hash IS the prior version. Re-authoring the prior is a
 # descriptor PUT with a visible hash change; these six are DRAFTS and expected to
 # be re-authored.
 #
@@ -40,7 +39,7 @@ identity:
     output_type: legba.runtime.Journal
     deps_type: legba.runtime.deps.StandardDeps
   state: draft
-  owner: voices_leans
+  owner: owner@local
 
 subscription:
   # No `targets` block → META analyst: ONE global run per cadence tick.
@@ -58,7 +57,7 @@ method:
   # default and loses the entire lens stance + declared prior.
   prompt_module: "legba_geopolitics.lens_isolationist:LENS_SYSTEM"
   llm:
-    # Model-card sampling (gpt-oss ships generation_config temperature=1.0; the vLLM
+    # Model-card sampling (the core model ships generation_config temperature=1.0; the vLLM
     # client always sends temperature, so the card default can never apply on its own).
     # Fleet-wide per the 2026-07-24 sampling audit + A/B (+0.055 faith at 1.0).
     temperature: 1.0
@@ -89,16 +88,16 @@ cadence:
   cooldown_seconds: 79200             # 22h — below the 24h interval (below-interval guard)
 
 grounding:
-  enabled: false                      # OFF by default (§4.3) — a lens cites tower
+  enabled: false                      # OFF by default — a lens cites tower
                                       # conclusions (already grounding-corrected
                                       # upstream) or weighs them; revisit if live
                                       # reads show stale-fact creep into fact claims
 
-# Grant invariant (§7.6 / §4.2): journal_read ONLY — the tower-top read surface
+# Grant invariant: journal_read ONLY — the tower-top read surface
 # (assessments, findings, situations, contentions, journal delta). substrate_read
 # is DELIBERATELY OMITTED: a lean interprets the tower's verified conclusions, it
 # does not reach past them into the raw corpus (widening the grant is the inquiry
-# kind's job — Program 5 step 2, after v3 P3/P6 land the as-of and event tools).
+# kind's job, once the as-of and event tools exist).
 # NO journal_propose (a lens proposes nothing) and NO publish sink.
 action_packs:
   - pack_id: journal_read

@@ -114,7 +114,7 @@ FEDERAL_REGISTER_WALL_TEXT = (
 
 
 def federal_register_wall() -> bytes:
-    """W11-F259: the page www.federalregister.gov redirected to (roll 79) —
+    """The page www.federalregister.gov redirected to —
     the wall's own sentences, about 800 chars of text, a CAPTCHA."""
     paras = "".join(f"<p>{s.strip()}.</p>" for s in FEDERAL_REGISTER_WALL_TEXT.split(". ") if s.strip())
     return ("<!doctype html><html lang='en'><head><title>Request Access</title></head><body>"

@@ -12,11 +12,11 @@ flips the descriptor active) the runtime's reconciler spins up a deterministic
 actor that, on its ~30-minute cadence, bins the rolling 24h of geolocated
 signals (1°×1° cells for point-trustworthy coordinates, country bins for ISO2
 tags) and fires ``kind='alert'`` rows on the FORMATION/DISSOLUTION edges of
-≥3-distinct-source-family convergence, fanned outward through the shared P1-1
+≥3-distinct-source-family convergence, fanned outward through the shared
 alert-sink dispatcher. Watermarks live under
 ``trigger_class='geo_convergence'`` in the EXISTING
 ``alert_trigger_watermarks`` table (migration 0091 — already applied for the
-P1-3 trigger scan; NO new migration); the first scan seeds silently.
+trigger scan; NO new migration); the first scan seeds silently.
 
 Env:
   * ``LEGBA_REGISTRY_URL``   — defaults to http://127.0.0.1:8090/api/v1/registry

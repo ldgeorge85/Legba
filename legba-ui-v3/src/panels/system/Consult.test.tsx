@@ -21,6 +21,7 @@ import { resetScope, useScope } from '@/state/scope'
 import { scopeFromTarget } from '@/lib/scopeFromReport'
 import { selectRow, useSelection } from '@/state/selection'
 import { SCOPE_PIN_ORIGIN } from '@/lib/consultContext'
+import { openConsultMenu } from '@/test/consultMenu'
 
 function reg(overrides: Partial<PanelRegistration> = {}): PanelRegistration {
   return {
@@ -104,12 +105,14 @@ describe('ConsultPanel (chat)', () => {
   it('renders the composer; Send disabled until typed', () => {
     render(wrap(<ConsultPanel registration={reg()} scope={{}} mode="personal" />))
     expect(screen.getByTestId('consult-question')).toBeInTheDocument()
+    openConsultMenu()
     expect(screen.getByTestId('consult-scope')).toBeInTheDocument()
     expect(screen.getByTestId('consult-submit')).toBeDisabled()
   })
 
   it('defaults max_tool_rounds to 10', () => {
     render(wrap(<ConsultPanel registration={reg()} scope={{}} mode="personal" />))
+    openConsultMenu()
     expect(screen.getByTestId('consult-max-rounds')).toHaveValue(10)
   })
 
@@ -275,6 +278,7 @@ describe('ConsultPanel (F1 model picker)', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     render(wrap(<ConsultPanel registration={reg()} scope={{}} mode="personal" />))
+    openConsultMenu()
     const select = screen.getByTestId('consult-model') as HTMLSelectElement
     expect(select.value).toBe('core')
 
@@ -303,6 +307,7 @@ describe('ConsultPanel (F1 model picker)', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     render(wrap(<ConsultPanel registration={reg()} scope={{}} mode="personal" />))
+    openConsultMenu()
     fireEvent.change(screen.getByTestId('consult-model'), { target: { value: 'core' } })
     expect(localStorage.getItem('legba_consult_model')).toBe('core')
 
@@ -319,6 +324,7 @@ describe('ConsultPanel (F1 model picker)', () => {
   it('restores the persisted plane on mount', () => {
     localStorage.setItem('legba_consult_model', 'core')
     render(wrap(<ConsultPanel registration={reg()} scope={{}} mode="personal" />))
+    openConsultMenu()
     expect((screen.getByTestId('consult-model') as HTMLSelectElement).value).toBe('core')
   })
 
@@ -327,6 +333,7 @@ describe('ConsultPanel (F1 model picker)', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     render(wrap(<ConsultPanel registration={reg()} scope={{}} mode="personal" />))
+    openConsultMenu()
     fireEvent.change(screen.getByTestId('consult-model'), { target: { value: 'fable' } })
     expect(localStorage.getItem('legba_consult_model')).toBe('fable')
 
@@ -343,14 +350,16 @@ describe('ConsultPanel (F1 model picker)', () => {
     localStorage.setItem('legba_consult_model', 'fable')
     localStorage.setItem('legba_consult_model_chosen', '1') // an explicit pick
     render(wrap(<ConsultPanel registration={reg()} scope={{}} mode="personal" />))
+    openConsultMenu()
     expect((screen.getByTestId('consult-model') as HTMLSelectElement).value).toBe('fable')
   })
 
-  it('a stored paid plane that was never explicitly picked reads as core (roll 84)', () => {
+  it('a stored paid plane that was never explicitly picked reads as core', () => {
     for (const paid of ['opus', 'fable']) {
       localStorage.clear()
       localStorage.setItem('legba_consult_model', paid) // an older build's default, no pick marker
       const { unmount } = render(wrap(<ConsultPanel registration={reg()} scope={{}} mode="personal" />))
+      openConsultMenu()
       expect((screen.getByTestId('consult-model') as HTMLSelectElement).value).toBe('core')
       unmount()
     }
@@ -358,6 +367,7 @@ describe('ConsultPanel (F1 model picker)', () => {
 
   it('a pick in the picker is remembered as explicit, and opus stays selectable', () => {
     render(wrap(<ConsultPanel registration={reg()} scope={{}} mode="personal" />))
+    openConsultMenu()
     const picker = screen.getByTestId('consult-model') as HTMLSelectElement
     expect([...picker.options].map((o) => o.value)).toEqual(expect.arrayContaining(['core', 'opus', 'fable']))
     fireEvent.change(picker, { target: { value: 'opus' } })
@@ -368,6 +378,7 @@ describe('ConsultPanel (F1 model picker)', () => {
   it('falls back to core for a garbage / stale stored value', () => {
     localStorage.setItem('legba_consult_model', 'some-old-raw-component-id')
     render(wrap(<ConsultPanel registration={reg()} scope={{}} mode="personal" />))
+    openConsultMenu()
     expect((screen.getByTestId('consult-model') as HTMLSelectElement).value).toBe('core')
   })
 })
@@ -415,6 +426,7 @@ describe('ConsultPanel — scope auto-pins, focus pins by hand', () => {
 
     for (const id of ['f1', 'f2', 'f3']) {
       act(() => selectRow('finding', id, id))
+      openConsultMenu()
       fireEvent.click(screen.getByTestId('consult-pin'))
     }
 

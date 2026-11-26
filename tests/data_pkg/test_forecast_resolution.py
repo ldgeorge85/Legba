@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""ST1-A — the resolution record, the job, the handler, the consult tool and
+"""The resolution record, the job, the handler, the consult tool and
 the anchor, over the store fakes (the production SQL constants answer).
 
   * the job proposes on due questions only, writes once per reading

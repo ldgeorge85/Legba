@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The forecast ledger's resolvers — deterministic RULES, never a verdict (ST1-A).
+"""The forecast ledger's resolvers — deterministic RULES, never a verdict.
 
 A resolver reads a sealed question (its resolver kind, spec, window, due date,
 grace, condition and void rules) and the evidence rows a search collected, and

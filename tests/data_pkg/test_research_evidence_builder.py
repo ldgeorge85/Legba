@@ -408,7 +408,7 @@ def test_content_hash_is_over_the_stored_text_and_empty_is_never_a_key():
     row = _row(hit=_hit(text="body text"))
     assert row["content_hash"] == rev.content_hash_for("body text")
     assert len(row["content_hash"]) == 64
-    # The schema default "no hash" — the S-4 dedup path refuses it as a key
+    # The schema default "no hash" — the dedup path refuses it as a key
     # (`content_hash <> ''`), and fabricating one over a title would make two
     # unrelated teasers look like the same content.
     assert _row(hit=_hit(text=""))["content_hash"] == ""

@@ -1,10 +1,10 @@
-# P-FS — Finding Supersession analyst descriptor (PIVOT_BUILD_PLAN §12, W3).
+# Finding Supersession analyst descriptor.
 #
 # A first-class `deterministic`-kind analyst over the SHARED analyst-output pool.
 # It fixes the live duplicate-findings problem: analysts re-assess an evolving
 # situation each cadence cycle and re-emit near-duplicate findings (the
 # finding_supersessions table is otherwise EMPTY and analyst_outputs.
-# situation_signature / superseded_by never get set). P-09's dedup is
+# situation_signature / superseded_by never get set). The cross-source dedup is
 # *signal*-level and does NOT cover this — supersession is the *analysis-plane*
 # mechanism.
 #
@@ -41,7 +41,7 @@
 #
 # Cadence:
 #   * fallback_schedule = "*/20 * * * *" — re-cluster the live finding pool every
-#     20 min (a touch slower than P-09 dedup at */15 — supersession reasons over
+#     20 min (a touch slower than cross_source_dedup at */15 — supersession reasons over
 #     the *output* of analysts that themselves run on cadence).
 #   * cooldown_seconds = 300 — 5-min floor between runs (the sweep is idempotent).
 #
@@ -59,7 +59,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: active
-  owner: pfs_finding_supersession
+  owner: owner@local
 
 subscription:
   # No `targets` block → META analyst: one global sweep per cadence tick over

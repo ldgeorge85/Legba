@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for the V3/P6 event read API (spec §6.2).
+"""Tests for the event read API.
 
 Covers :mod:`legba.data.registry.events_api`:
 
@@ -375,7 +375,7 @@ async def test_cursor_pagination(client: AsyncClient, events_app):
 async def test_a_summary_read_answers_the_light_row_and_the_default_stays_whole(
     client: AsyncClient, events_app,
 ):
-    """Roll 87: the Watch page 2.01 MB against 2.00, its largest read
+    """With the Watch page at 2.01 MB against a 2.00 MB budget, its largest read
     ``/v3/events?limit=500`` (0.42 MB). The map and the time band ask
     ``fields=summary``; an omitted ``fields`` is the whole row as before."""
     from legba.data.registry.event_list_weight import EventSummaryRow

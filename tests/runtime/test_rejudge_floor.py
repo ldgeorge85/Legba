@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W11-F102 — re-judging an outage's floor critiques (SEAMS #69's apply half).
+"""re-judging an outage's floor critiques (SEAMS #69's apply half).
 
 ``legba.runtime.rejudge_floor`` re-runs the critic's verify pass over a floor
 critique's STORED finding against the CURRENT judge chain, writes an adjudicated
@@ -548,7 +548,7 @@ def test_script_dry_run_render_names_the_built_seam_and_the_preview():
 
 
 # ---------------------------------------------------------------------------
-# 7. W11-F84 — the MISSING mode: findings whose verify leg never ran
+# 7. The MISSING mode: findings whose verify leg never ran
 # ---------------------------------------------------------------------------
 
 

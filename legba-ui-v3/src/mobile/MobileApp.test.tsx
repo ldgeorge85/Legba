@@ -110,7 +110,7 @@ function stubFetch(opts: StubOptions = {}) {
       findingsUrls.push(u)
       if (reads === 'fail') throw new TypeError('network down')
       if (opts.failAfter != null && findingsUrls.length > opts.failAfter) throw new TypeError('network down')
-      // roll 84: GET /findings/{id} answers ONE full row (P-8)
+      // GET /findings/{id} answers ONE full row
       const byId = /\/findings\/([^/?]+)/.exec(new URL(u, 'http://x').pathname)
       if (byId) {
         const row = reads.find((r) => String(r.id) === decodeURIComponent(byId[1]))
@@ -179,7 +179,7 @@ describe('the Reports navigator', () => {
     expect(screen.getAllByTestId('report-row').length).toBe(ALL_READS.length)
   })
 
-  it('shows the lead on a row, and no unexplained verify pill (M-0a)', async () => {
+  it('shows the lead on a row, and no unexplained verify pill', async () => {
     stubFetch()
     render(wrap(<MobileApp />))
 
@@ -192,7 +192,7 @@ describe('the Reports navigator', () => {
     expect(row.textContent).not.toMatch(/\d\.\d\d/)
   })
 
-  it('M-0a: the navigator reads the summary projection, never the full rows', async () => {
+  it('The navigator reads the summary projection, never the full rows', async () => {
     stubFetch()
     render(wrap(<MobileApp />))
     await screen.findByTestId('tier-group-world')
@@ -203,7 +203,7 @@ describe('the Reports navigator', () => {
     expect(q.get('analyst_id_in')).toContain('world_assessor')
   })
 
-  it('M-0a: the World read is titled for the world, not for its first block\'s country', async () => {
+  it('The World read is titled for the world, not for its first block\'s country', async () => {
     stubFetch()
     render(wrap(<MobileApp />))
     const world = await screen.findByTestId('tier-group-world')
@@ -213,7 +213,7 @@ describe('the Reports navigator', () => {
     expect(title).toMatch(/world/i)
   })
 
-  it('M-0a: the journal row is plain words, no raw markdown', async () => {
+  it('The journal row is plain words, no raw markdown', async () => {
     stubFetch()
     const consol = { ...CONSOLIDATION, title: '**Anchor held.** The week in brief' }
     vi.stubGlobal(
@@ -277,23 +277,23 @@ describe('selecting a report', () => {
     })
   })
 
-  it('renders the record, without the engine line (M-0a)', async () => {
+  it('renders the record, without the engine line', async () => {
     const view = await openWorldReport()
     expect(within(view).queryByTestId('verify-line')).toBeNull()
     expect(within(view).queryByTestId('drop-ledger')).toBeNull()
     expect(within(view).getAllByTestId('record-block').length).toBeGreaterThan(0)
   })
 
-  it('M-0a: opening a report fetches that one read at full weight, once', async () => {
+  it('Opening a report fetches that one read at full weight, once', async () => {
     await openWorldReport()
     expect(findingsUrls).toHaveLength(2)
-    // roll 84: by id, exact — GET /findings/{id}, no list filters
+    // by id, exact — GET /findings/{id}, no list filters
     const u = new URL(findingsUrls[1], 'http://x')
     expect(u.pathname).toBe(`/api/v1/findings/${encodeURIComponent(String(WORLD.id))}`)
     expect([...u.searchParams.keys()]).toEqual([])
   })
 
-  it('M-0a: an Assessment fetches its underlying world read beside it when it is in the window', async () => {
+  it('An Assessment fetches its underlying world read beside it when it is in the window', async () => {
     stubFetch()
     render(wrap(<MobileApp />))
     const group = await screen.findByTestId('tier-group-assessment')
@@ -360,7 +360,7 @@ describe('selecting a report', () => {
 
 // ── 4 · offline ──────────────────────────────────────────────────────────────
 
-describe('offline (M-0a: nothing of the record is stored on the device)', () => {
+describe('offline (nothing of the record is stored on the device)', () => {
   it('deletes the list and the report bodies an earlier build stored', async () => {
     localStorage.setItem(__LEGACY_KEYS.list, JSON.stringify({ v: 1, savedAt: 'x', rows: [] }))
     localStorage.setItem(`${__LEGACY_KEYS.reportPrefix}abc`, JSON.stringify({ v: 1, savedAt: 'x', row: WORLD }))

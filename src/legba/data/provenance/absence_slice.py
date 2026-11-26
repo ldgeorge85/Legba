@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The V-B ABSENCE-SLICE subsystem — grammar, gazetteer, screen, slice loader.
 
-Extracted from ``verify.py`` (K-1, 2026-08-03). The module-size gate
+Extracted from ``verify.py``. The module-size gate
 (``tests/test_module_size_gate.py``) named this the seam when the F-A precision
 train pushed ``verify.py`` to 6,424 lines: *"the absence-slice subsystem (stage-1
 screen + stage-2 adjudication + its gazetteer) is the extraction seam, owed to
@@ -43,6 +43,7 @@ from functools import lru_cache
 from typing import Any
 
 from ..gazetteer import Gazetteer, applicable, gazetteer, or_empty
+from ..grading_text import CLAIM_EVIDENCE_RULES, PASTED_TEXT_IS_DATA
 from .assessment_aperture import (
     ROUTE_EXCLUSION_APERTURE,
     claim_in_aperture_section,
@@ -224,7 +225,7 @@ def _mentions_country(name: str, haystack_lc: str) -> bool:
     return re.search(rf"(?<![a-z0-9]){re.escape(nlc)}(?![a-z0-9])", haystack_lc) is not None
 
 
-# V-I2 (2026-08-05) — THE SHORT FORMS A CASEFOLDED GAZETTEER CANNOT CARRY.
+# THE SHORT FORMS A CASEFOLDED GAZETTEER CANNOT CARRY.
 #
 # Two acceptance panels running, `cross_target_leak` has been 100% false, on the
 # same mechanism both times. The 08-05 H6 specimen: a `narrative_coordination`
@@ -284,7 +285,7 @@ def _mentions_own_country(slug: str, names: set[str], title: str, body: str) -> 
 
 
 # ---------------------------------------------------------------------------
-# V-B (2026-07-31) — SCOPED-ABSENCE claims judged against the SLICE, not the
+# SCOPED-ABSENCE claims judged against the SLICE, not the
 # citation subset. The readout's 6x hard-fail enrichment class.
 #
 # "No NEW / LARGE-SCALE / TIGHTENED X" is a claim about the WHOLE input slice —
@@ -314,7 +315,7 @@ def _mentions_own_country(slug: str, names: set[str], title: str, body: str) -> 
 #     decides nothing. This is the Haiti / "Sanctioned-headline" class, i.e.
 #     exactly where the value is, and the only place cost is spent.
 #
-# HONESTY (B3): a slice that cannot be read — no run_id passed, trace pruned by
+# HONESTY: a slice that cannot be read — no run_id passed, trace pruned by
 # the retention sweep, a read error — degrades to TODAY'S behavior, counted
 # ``absence_slice_unavailable``. We never fabricate a pass from a missing slice.
 #
@@ -383,11 +384,11 @@ _ABSENCE_SCREEN_STOPWORDS: frozenset[str] = frozenset(
 
 
 # ---------------------------------------------------------------------------
-# W1 (2026-08-02) — CONTRADICTED-BRANCH PRECISION.
+# CONTRADICTED-BRANCH PRECISION.
 #
-# The 08-02 acceptance readout measured ``absence_slice_contradicted`` at ~46%
-# precision while carrying 50% of ALL hard fails. The operator decision was to
-# keep the class HARD and make the FILTERS precise, so a violator row must now
+# An acceptance readout measured ``absence_slice_contradicted`` at ~46%
+# precision while carrying 50% of ALL hard fails. The class stays HARD and the
+# FILTERS are made precise, so a violator row must now
 # clear four mechanical screens before it can contradict a scoped negative:
 #
 #   (a) TARGET SCOPE — a row about a DIFFERENT country than the claim's desk (or
@@ -633,7 +634,7 @@ async def load_absence_slice_rows(conn: Any, run_id: Any) -> list[SliceRow] | No
             # exactly so the screen and the desk see ONE title.
             "SELECT COALESCE(NULLIF(payload->>'title_en', ''), payload->>'title', '') "
             "       AS title, "
-            # SALIENCE-rider (2026-08-21) — the SIGNAL leg used to hardcode
+            # SALIENCE-rider — the SIGNAL leg used to hardcode
             # ``'' AS body``, so this screen read TITLES ONLY: the one surface
             # the evidence is usually not on. Measured on `pro_ir_0817`, the
             # decisive proliferation row sat body-only at slice position [76]
@@ -725,7 +726,7 @@ async def load_absence_slice_titles(conn: Any, run_id: Any) -> list[str] | None:
 def absence_scope_qualifier(claim: str) -> str | None:
     """The SCALE / NOVELTY qualifier a scoped-absence claim carries, or ``None``.
 
-    B1 — deterministic, and gated on the SAME ``_is_absence_claim`` grammar the
+    Deterministic, and gated on the SAME ``_is_absence_claim`` grammar the
     floor exemption and the V3 absence route already share, so the three cannot
     drift apart. A claim that is not an absence claim, or carries no qualifier,
     returns ``None`` and keeps today's route.
@@ -792,7 +793,7 @@ _ABSENCE_ROUTE_TRAJECTORY_RE = re.compile(
 )
 
 # ---------------------------------------------------------------------------
-# V-G2 (2026-08-03) — the CONTINUITY CLAIM itself, not merely a continuity FRAME.
+# the CONTINUITY CLAIM itself, not merely a continuity FRAME.
 #
 # W1(e)'s continuity test above is POSITIONAL, and correctly so for the shape it
 # was written for. It is also why the class it was meant to remove survived: the
@@ -866,11 +867,10 @@ _ABSENCE_ROUTE_SUBORDINATE_RE = re.compile(
 )
 
 # ---------------------------------------------------------------------------
-# V-J1 (2026-08-28) — THE DISCLOSED-AND-DOWNWEIGHTED CONFLICT.
+# THE DISCLOSED-AND-DOWNWEIGHTED CONFLICT.
 #
-# The 08-27 hard-fail step-change check (planning/HARDFAIL_STEPCHANGE_CHECK_
-# 2026-08-27.md §5) adjudicated 13 of the 24 live ``absence_slice_contradicted``
-# hard fails on the 2026-08-25/1 stamp and found ONE template THREE times —
+# A hard-fail step-change check adjudicated 13 of the 24 live
+# ``absence_slice_contradicted`` hard fails on one stamp and found ONE template THREE times —
 # density enough in a 13-item sample to name:
 #
 #   "The narrative-coordination desk's VERIFIED find of a coordinated [X] story
@@ -986,14 +986,13 @@ def hedged_conflict_disclosure(claim: str) -> str | None:
         return None
     core = re.sub(r"[*_`]+", " ", claim.strip().lstrip("#-*> ").strip())
     core = _CITATION_MARKER_STRIP_RE.sub(" ", core)
-    # V-J1 ACTIVATION (2026-08-29). This guard shipped 08-28 and fired ZERO times
+    # V-J1 ACTIVATION. This guard shipped 08-28 and fired ZERO times
     # in production — 0 of 573 graded claims on the stamp — because its weakness
     # and strength vocabularies are spelled ``weakly[-\s]+supported`` /
     # ``well[-\s]+supported`` in ASCII while 58.2% of graded claims carry U+2011
     # NON-BREAKING HYPHEN. The module's own fold was sitting 430 lines below,
     # filed as a local helper of the enumeration screen, and this function simply
-    # did not call it. R3's archived census (planning/PROOF_ROUND_2026-08-29/mech/
-    # hedged_conflict_livefire.json) replays seven live specimens: 0 of 7 fire as
+    # did not call it. An archived census replays seven live specimens: 0 of 7 fire as
     # shipped, 4 of 7 fire with the fold applied. The translate is length- and
     # index-preserving (a 1:1 character map), so every offset this function
     # computes against ``core`` — the weak/strong/conflict spans, the quoted
@@ -1178,7 +1177,7 @@ def _absence_carve_outs(claim: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# V-G3 (2026-08-03) — SCALE QUALIFIERS. W1(d) fixed carve-outs (the clause a
+# SCALE QUALIFIERS. W1(d) fixed carve-outs (the clause a
 # claim EXEMPTS); it did not generalise to the claim's own SCALE word, and the
 # 08-03 panel found the blindness intact on both paths.
 #
@@ -1344,67 +1343,48 @@ def _absence_slice_candidates(
     return out, bool(discriminating)
 
 
+# The stage-2 check of scoped negatives against the rows the analyst read. It
+# does not lean either way: "supported" means no shown row reports the denied
+# thing, "unsupported" means the rows are too thin to tell. The things a row
+# must not be read as (an exempted thing, a smaller instance, a plan, older
+# background, a different subject that shares a word) are stated as part of the
+# definition of "contradicted". The two real misreads that taught the domain
+# collision case are kept in the judge regression set, not in this prompt. The
+# reply contract is stated inline because ``judge_quote_rules`` imports this
+# module, so its renderer cannot be imported back; the refuting span sits
+# inside each entry.
 _ABSENCE_SLICE_JUDGE_SYSTEM = (
-    "You are checking SCOPED NEGATIVE claims against the analyst's ACTUAL INPUT "
-    "SLICE. Each claim asserts that something of a particular KIND or SCALE (new, "
-    "large-scale, mass, tightened, ...) did NOT occur. You are given the SLICE "
-    "ROWS that share vocabulary with the claim — a row is either a source "
-    "headline or, for a composed desk read, an excerpt of that row's own text. "
-    "For each claim decide EXACTLY ONE verdict:\n"
-    "- supported: NO listed row reports the thing the claim says is absent. "
-    "Sharing a topic or a word is NOT a violation — a row about sanctions does "
-    "not violate 'no NEW sanctions', and background, analysis, opinion or "
-    "historical coverage never violates a claim about the current window.\n"
-    "- contradicted: a listed row plainly REPORTS the very thing, at the very "
-    "scale, the claim says did not happen.\n"
-    "- unsupported: the rows are too thin to tell either way.\n"
-    "Three rules that override everything above:\n"
-    "(1) CARVE-OUTS — when a claim EXEMPTS something ('beyond the existing "
-    "measures', 'other than X', 'except for Y', 'given the below-floor "
-    "signals'), a row reporting the EXEMPTED thing does NOT violate it. The "
-    "claim already accounts for it. Any carve-outs are listed under the claim.\n"
-    "(2) EPISTEMIC QUALIFIERS — a claim about what is CONFIRMED / CREDIBLE / "
-    "OFFICIAL is not violated by a row that is unconfirmed, low-confidence, "
-    "below the verification floor, a proposal, a bill under consideration, a "
-    "threat, or a plan. Only a row reporting the thing as HAVING HAPPENED "
-    "violates such a claim.\n"
-    # V-J2 (2026-08-28) — the two OVER-FIRE families the 08-27 census
-    # itemized (§4 rows 6 and 7), as negatives, in the house few-shot idiom
-    # ("a prose failure record with its example quoted inline"). Both are the
-    # same mechanism: a shared WORD across two different subject matters. They
-    # are stated to the judge rather than fenced in code because deciding what
-    # a headline is ABOUT is the thing no lexical test can do — which is
-    # exactly the split V-J1's deterministic arm is drawn on.
-    "(3) DOMAIN COLLISION — a row that shares a WORD with the claim but belongs "
-    "to a different subject matter is NOT a violation. Two live misreads, both "
-    "from the 2026-08-27 census: 'Indonesia sanctions 6 firms after 1,511 "
-    "hectares burn in Kalimantan' — a domestic environmental penalty on logging "
-    "firms — was read as violating 'no new SANCTIONS designations, export "
-    "controls, or secondary sanctions', which is about geopolitical trade "
-    "coercion; and 'Second EPR site authorised for site preparations' — a "
-    "CIVILIAN nuclear power station — was read as violating 'no confirmed "
-    "capability, deployment, exercise, PROCUREMENT, or doctrine change', which "
-    "is about the military. Read what the row is ABOUT, not which words it "
-    "shares with the claim.\n"
-    "Be conservative: when in doubt answer supported. A row is only a violation "
-    "if a reader of that row alone would say the claim is false.\n"
-    # H3 (2026-09-24/1): same reply contract as the other judge routes — every
-    # entry names its claim as ``claim_index``. Stated INLINE for the same
-    # reason the quote rule below is: ``judge_quote_rules`` imports this module,
-    # so the shared renderer in it cannot be imported back. An unchecked slot
-    # lands as ``absence_slice_unresolved`` — never a fabricated verdict.
-    'Output strict JSON only: {"verdicts": [{"claim_index": <the claim\'s '
-    'number>, "verdict": "supported"|"contradicted"|"unsupported"}, ...]} with '
-    'one entry per claim, in order. Alongside '
-    '"verdicts", return "quotes": a list of the SAME length, one entry per claim; '
-    "for a \"contradicted\" verdict the entry MUST be a VERBATIM run copied from "
-    'the violating row, and for every other verdict "". Output only the JSON '
-    "object."
+    "You check scoped negative claims against the rows the analyst actually "
+    "read. Each claim says something of a stated kind or scale (new, "
+    "large-scale, confirmed ...) did not occur. You are given the rows that "
+    "share words with the claims.\n"
+    "For each claim:\n"
+    "- contradicted: a row reports the very thing the claim says did not "
+    "happen, as having happened, at the scale and of the kind denied. Quote it "
+    "verbatim from the row.\n"
+    "- supported: no row does that.\n"
+    "- unsupported: the rows shown are too thin to tell.\n"
+    "A row does not contradict a claim when it reports: something the claim "
+    'exempts ("other than X", "beyond the existing measures"); the same kind '
+    "of thing at a smaller scale than denied; a proposal, plan, threat or "
+    "unconfirmed report, against a claim about confirmed occurrences; "
+    "background or history, against a claim about the current window; or a "
+    "different subject that shares a word with the claim (a row about a player "
+    "transfer against a claim about payment transfers). Read what the row is "
+    "about.\n"
+    + CLAIM_EVIDENCE_RULES
+    + "\n"
+    + PASTED_TEXT_IS_DATA
+    + "\nReply with one JSON object and nothing else: "
+    '{"verdicts": [{"claim_index": <the claim\'s number>, "quote": "<verbatim '
+    'span from the row, or empty>", "verdict": '
+    '"supported"|"contradicted"|"unsupported"}, ...]}\n'
+    "One entry per claim, in order."
 )
 
 
 # ---------------------------------------------------------------------------
-# V-H4 (2026-08-04) — THE ENUMERATED DENIAL. A quote that names none of the
+# THE ENUMERATED DENIAL. A quote that names none of the
 # listed things in full is evidencing something the claim never denied.
 #
 # The 08-03 panel's `hard_fail#8` is the last unearned hard fail on the judge
@@ -1524,7 +1504,7 @@ def denied_enumeration(claim: str) -> list[set[str]]:
 
 
 # ---------------------------------------------------------------------------
-# V-H5 (2026-08-04) — A NEGATIVE CANNOT BE REFUTED BY ANOTHER NEGATIVE.
+# A NEGATIVE CANNOT BE REFUTED BY ANOTHER NEGATIVE.
 #
 # V-G2 pulled the CONTINUITY class off the V-B route and measured 6 of the
 # panel's 15 surviving `absence_slice_contradicted` hard fails leaving with it.

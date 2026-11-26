@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Planted POSITIONS for calibrating panel judges (lane G-6).
+"""Planted POSITIONS for calibrating panel judges.
 
 A judge on a round panel rules on positions shown as a sentence table. This
 module builds, deterministically and by code only, positions whose right

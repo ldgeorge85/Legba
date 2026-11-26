@@ -1,5 +1,5 @@
 /**
- * REAL-MOUNT tests for `analysis.cross_framing` (wave P lane B).
+ * REAL-MOUNT tests for `analysis.cross_framing`.
  *
  * `framingModel.test.ts` proves the derivation. The derivation can be right
  * while the panel still renders a bare cell, so these mount the real component

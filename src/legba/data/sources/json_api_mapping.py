@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Declarative record mapping for the ``json_api`` kind (lane N-R).
+"""Declarative record mapping for the ``json_api`` kind.
 
 Two OPTIONAL config keys a ``json_api`` source may declare; a source that
 declares neither emits exactly what it emitted before (pinned by
@@ -27,7 +27,7 @@ declares neither emits exactly what it emitted before (pinned by
     Braces are reserved: a literal ``{`` or ``}`` outside a placeholder is
     refused at validation, as is a template with no placeholder.
 
-``body_template`` (lane K-1)
+``body_template``
     The same grammar and rules, rendered by the same function, for the
     signal's body (``payload.raw_body``): a register record (the KEV
     catalogue) carries its meaning in several fields, and a labelled

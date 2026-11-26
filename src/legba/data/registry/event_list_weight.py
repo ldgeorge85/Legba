@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """``GET /v3/events`` answers a light row when asked for it by name.
 
-Roll 87's live walk: the Watch page weighed 2.01 MB against its 2.00 MB budget
+On a live walk the Watch page weighed 2.01 MB against its 2.00 MB budget
 and its largest response was ``/v3/events?limit=500`` at 0.42 MB. Two readers
 share that one read — the world map's events layer (``v4/world/mapData.ts``:
 a point, its countries, severity, lifecycle, subject, one clock and the title)

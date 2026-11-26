@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""P4-T8 honesty contract #2 — a degenerate / under-sample pilot never asserts
+"""A degenerate / under-sample pilot never asserts
 bare positive skill.
 
 Two layers, both grounded and pure (no DB):

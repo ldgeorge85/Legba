@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Integration tests for L-196 — `legba.data.outputs.webhook`.
+"""Integration tests for `legba.data.outputs.webhook`.
 
 The HTTP boundary is exercised through :class:`httpx.MockTransport` —
 no real network calls — so we cover happy-path, 4xx-no-retry,
@@ -719,7 +719,7 @@ def test_dlq_subject_sanitises():
 
 
 # ---------------------------------------------------------------------------
-# SSRF egress guard on the webhook OUTPUT client (S-3)
+# SSRF egress guard on the webhook OUTPUT client
 # ---------------------------------------------------------------------------
 #
 # The runtime now builds the shared output client via

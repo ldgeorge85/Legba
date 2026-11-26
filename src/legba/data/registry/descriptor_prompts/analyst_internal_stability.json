@@ -1,8 +1,8 @@
 {
   "prompts": {
     "internal_stability": {
-      "chars": 22753,
-      "sha256": "551777df81074af05411fb3cb077cf2bc3adba952989fd4f64f9a0abc2a2c016",
+      "chars": 24187,
+      "sha256": "051764578f233551785207d20509c56bbccc3a83533cfd6e61cd778951ccc6b4",
       "source": "analyst_internal_stability.yaml"
     }
   },

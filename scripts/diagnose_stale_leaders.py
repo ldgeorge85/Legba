@@ -236,7 +236,7 @@ async def _run(*, fixture_path: str | None, as_json: bool, limit: int | None) ->
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="READ-ONLY: preview which current officeholder facts a "
-        "wikidata_leaders re-seed would supersede (S-3)."
+        "wikidata_leaders re-seed would supersede."
     )
     parser.add_argument(
         "--fixture",

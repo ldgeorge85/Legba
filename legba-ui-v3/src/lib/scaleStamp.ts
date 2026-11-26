@@ -1,8 +1,8 @@
 /**
- * scaleStamp — read the scale + method stamps off an instrument row (K3).
+ * scaleStamp — read the scale + method stamps off an instrument row.
  *
  * Every number the platform publishes is a reading on some scale, and until
- * K3 the reader had no way to know WHICH. Migration 0188 re-based every stored
+ * scale stamps the reader had no way to know WHICH. Migration 0188 re-based every stored
  * `intensity_score` in August 2026 by the split frame's share of the members —
  * an instrument change with no code change at all — so an intensity of 59 in
  * July and 59 today are readings on two different scales, and nothing on the
@@ -11,9 +11,9 @@
  * THE TWO STAMPS ANSWER DIFFERENT QUESTIONS, which is why both are shown and
  * neither substitutes for the other:
  *
- *   * `method_version` (H12) — was this number produced by the same CODE?
+ *   * `method_version` — was this number produced by the same CODE?
  *     Bumps on any rule change. `situation_clustering/2026-09.1`.
- *   * `scale_version`  (K3)  — does this number MEAN the same thing? Bumps
+ *   * `scale_version` — does this number MEAN the same thing? Bumps
  *     only when the comparability frame moves, and is named for the QUANTITY
  *     rather than the module, because a scale outlives the handler publishing
  *     onto it. `intensity/2026-08`.
@@ -23,7 +23,7 @@
  * server-flattened projection that has no scale of its own yet); a row carrying
  * neither and written BEFORE the stamps existed is `unstamped` and renders as
  * **"unstamped (pre-2026-09)"** — an absence rendered as absence. A row carrying
- * neither but written AFTER the stamps existed (W11-F9: a 2026-10 country
+ * neither but written AFTER the stamps existed (a 2026-10 country
  * composition) is `undeclared` and renders as **"no declared scale"**: its
  * producer is not an instrument that publishes onto a declared scale, and
  * calling it "pre-2026-09" would date it wrongly. What there is NOT is a state where a missing
@@ -59,12 +59,11 @@ export const UNSTAMPED_LABEL = 'unstamped (pre-2026-09)'
 
 /** The label a row with no stamps earns when it was written AFTER the stamps
  *  existed — its producer declares no scale, which is not the same absence as
- *  "written before the platform recorded one" (W11-F9). */
+ *  "written before the platform recorded one". */
 export const UNDECLARED_LABEL = 'scale not stated'
 
-/** When the stamps began: roll 12 (2026-09-24 02:21Z) applied migration 0211
- *  and shipped H12's `method_version` on every instrument (docs/ANALYSIS.md
- *  §10.9's "Since 2026-09-24"). A row produced before this instant can only be
+/** When the stamps began: 2026-09-24 02:21Z, when migration 0211 applied and
+ *  `method_version` shipped on every instrument (docs/ANALYSIS.md §10.9). A row produced before this instant can only be
  *  unstamped; a row produced after it with no stamp is undeclared. */
 export const STAMP_ERA_START = '2026-09-24T02:21:00Z'
 
@@ -125,7 +124,7 @@ function producedMs(row: unknown): number | null {
  *      `DeskBaselineRow` or `ForecastDue`; the projection the server chose;
  *   2. nested under `data` — a raw `situations` payload, or an instrument
  *      payload handed over on its own;
- *   3. nested under `data.data` — a `/findings` row (W11-F9). The route serves
+ *   3. nested under `data.data` — a `/findings` row. The route serves
  *      `analyst_outputs.data` as `row.data`, and that column holds the WHOLE
  *      finding envelope (`{title, body, data, …}`); the instrument's stamp
  *      rides the envelope's own `data` (docs/ANALYSIS.md §10.9: "It rides

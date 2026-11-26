@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""A consult turn's cited claims, judged the way a finding is (X2 lane C1).
+"""A consult turn's cited claims, judged the way a finding is.
 
-THE DEFECT (W11-F5, W11-F27). Every finding a desk writes passes the
+THE DEFECT. Every finding a desk writes passes the
 faithfulness verify — the deterministic floor, then the LLM judge over the
 JUDGE-2 failure chain — and carries the verdict on its critique row. A consult
 answer, the surface readers actually ask, passed nothing and said nothing: no
@@ -24,7 +24,7 @@ signal — ``consult_provenance_census``). Only sentences carrying such a marker
 are judged: an unmarked sentence is model knowledge, which the census already
 counts and which a judge told to grade "against the cited evidence" has
 nothing to grade against. An answer with no cited sentence is UNASSESSABLE —
-never scored, and never 0.5 (W11-F29: the fleet's averaging folds unassessable
+never scored, and never 0.5 (the fleet's averaging folds unassessable
 rows at 0.5; a consult stamp has no number at all in that state).
 
 THE THREE STATES (the turn header prints one of them, never nothing):
@@ -48,7 +48,7 @@ LLM-judged.
 
 Never raises into the run: an answer is never lost to its own verification.
 
-W11-F93 — WHEN, AND WITHIN WHAT (2026-10-15: a capped consult turn printed a
+WHEN, AND WITHIN WHAT (a capped consult turn once printed a
 bare "not judged · judge unavailable"). What the code did, read against the
 three ways the judge could have been wrong about a capped turn:
 
@@ -141,7 +141,7 @@ CONSULT_JUDGE_TIMEOUT_ENV = "LEGBA_CONSULT_JUDGE_TIMEOUT_SECONDS"
 DEFAULT_CONSULT_JUDGE_TIMEOUT_SECONDS = 90.0
 CONSULT_JUDGE_MAX_CLAIMS_ENV = "LEGBA_CONSULT_JUDGE_MAX_CLAIMS"
 DEFAULT_CONSULT_JUDGE_MAX_CLAIMS = 40
-#: W11-F93 — the judge's OWN input budget (claims + evidence, estimated tokens),
+#: The judge's OWN input budget (claims + evidence, estimated tokens),
 #: separate from the run's spend ceiling, which never applies to the judge.
 CONSULT_JUDGE_MAX_INPUT_TOKENS_ENV = "LEGBA_CONSULT_JUDGE_MAX_INPUT_TOKENS"
 DEFAULT_CONSULT_JUDGE_MAX_INPUT_TOKENS = 12_000
@@ -195,7 +195,7 @@ def _now() -> str:
 def not_judged(reason: str, **extra: Any) -> dict[str, Any]:
     """The explicit label: no judge adjudicated this turn, and why.
 
-    A label that is a failure to judge also says WHY in the closed W11-F93
+    A label that is a failure to judge also says WHY in a closed
     vocabulary (``judge_unavailable_reason``); ``extra`` may pass it explicitly.
     """
     stamp = {
@@ -482,7 +482,7 @@ async def _judge(
             rungs, first_handler=first, factory=judge_resolver, route_class="consult",
         )
     session = open_session(judge)
-    # W11-F93 — the judge's OWN budget, never the run's spend ceiling: a turn
+    # The judge's OWN budget, never the run's spend ceiling: a turn
     # the cap stopped is the biggest turn there is, and is judged on as much of
     # it as the judge route can read, from the head.
     fitted = fit_judge_input(body.split("\n\n"), await _bridge(pg_pool, ordered))
@@ -520,7 +520,7 @@ async def _judge(
         "claims_judged": len(claims),
         "claims_truncated": truncated or fit["claims_dropped_for_budget"] > 0,
         **fit,
-        # W11-F93 — what was graded, so the front door can prove it persists
+        # What was graded, so the front door can prove it persists
         # the same answer (``consult_turn_stamps.verification_stamp``).
         "settled_sha256": _stamps.settle_digest(answer, cited_refs),
         "judge_model": judge_model or None,
@@ -594,7 +594,7 @@ async def judge_settled_result(
     deps: Any,
     record: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
 ) -> Any:
-    """The SETTLE POINT (W11-F93): judge the result ``run_method`` returns.
+    """The SETTLE POINT: judge the result ``run_method`` returns.
 
     Called last on both paths — after every text edit, the census, the floor
     and the watch mint — so the answer and cited refs judged are the ones the

@@ -126,6 +126,13 @@
       "voice"
     ]
   ],
+  "levels": [
+    "low",
+    "moderate",
+    "elevated",
+    "high",
+    "critical"
+  ],
   "profile": "geopolitics",
   "reference_subject_tags": [
     "supply_chain"

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""R-2 — the operator review surface: ``/api/v1/v3/collection-requirements``.
+"""The operator review surface: ``/api/v1/v3/collection-requirements``.
 
 List (status/desk filter, priority order), get-one, and the disposition-only
 PATCH (status + reviewed_by + note) over rows the ``collection_gap`` analyst

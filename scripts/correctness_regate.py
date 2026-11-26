@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""G3 — RE-GATE the correctness instrument on a FRESH draw.
+"""RE-GATE the correctness instrument on a FRESH draw.
 
 The grader refuses to publish a number unless a passing ``grader_calibrations``
 row covers its rubric sha AND every model id it would use
-(``_correctness_calibration.py``). That refusal is the whole of G3's mechanism:
+(``_correctness_calibration.py``). That refusal is the whole of the mechanism:
 change the rubric, repoint a family at another model, or move the claim grain,
 and the instrument STOPS until somebody re-measures whether the families still
 read the rubric the same way. This script is that re-measurement.
@@ -50,7 +50,7 @@ flag, no key ever printed.
 
   # the same gate on the FROZEN v4 packet instead of a live draw
   PYTHONPATH=/app/src python3 /app/scripts/correctness_regate.py \\
-      --packet planning/PROGRAM1_2026-09-16/calibration_v4/packet_F0.json \\
+      --packet <frozen_packet.json> \\
       --grade --cap 0.05 --notes "F3 repoint to mistral-medium-3.1"
 
 ``--packet`` — THE FROZEN ATOM SET, and why it is worth having beside the live
@@ -87,6 +87,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 from uuid import uuid4
 
 sys.path.insert(
@@ -117,7 +118,7 @@ from legba.data.analysts.deterministic_handlers._correctness_rubric import (  # 
     RUBRIC_SHA256,
 )
 
-# H12 — the gate method version rides the row (draw + coverage rule it ran
+# The gate method version rides the row (draw + coverage rule it ran
 # under); _correctness_calibration.METHOD_VERSION is its single source.
 from legba.data.analysts.deterministic_handlers._correctness_calibration import (  # noqa: E402
     METHOD_VERSION as CALIBRATION_METHOD_VERSION,
@@ -287,7 +288,7 @@ async def run(args: argparse.Namespace) -> int:
         print(f"  as_of     : {as_of.isoformat()}")
     print(f"  models    : {json.dumps(models, sort_keys=True)}")
     print(f"  bars      : pooled >= {ADJ.POOLED_BAR}, every pair >= "
-          f"{ADJ.PAIRWISE_BAR}  (PREREG_P1 §6)")
+          f"{ADJ.PAIRWISE_BAR}")
 
     # Read and CHECK the frozen packet before anything opens a connection: a
     # packet this script would refuse must cost nothing at all.
@@ -459,6 +460,26 @@ async def _gate(store, args, packet, packet_sha, drawn, seed, as_of, models):
         spend[family] = round(spent, 6)
         print(f"  {family}: {len(rows)} atom(s), ${spent:.6f}")
 
+    if args.labels_out:
+        # Per-claim labels, so a failed gate can be read claim by claim
+        # instead of only as agreement totals.
+        per_claim = []
+        for item in packet["items"]:
+            pid = str(item["p1_id"])
+            entry = {
+                k: v for k, v in item.items()
+                if isinstance(v, (str, int, float)) and len(str(v)) <= 2000
+            }
+            entry["labels"] = {
+                fam: rows.get(pid) for fam, rows in labels_by_family.items()
+            }
+            per_claim.append(entry)
+        Path(args.labels_out).write_text(
+            json.dumps({"models": models, "claims": per_claim}, indent=1),
+            encoding="utf-8",
+        )
+        print(f"  per-claim labels written to {args.labels_out}")
+
     agreement = ADJ.family_agreement(labels_by_family)
     print(f"\n  AGREEMENT")
     for pair in agreement["pairs"]:
@@ -543,7 +564,7 @@ def build_parser() -> argparse.ArgumentParser:
                         help="ISO instant (default: now)")
     parser.add_argument("--n", type=int, default=None,
                         help=f"atoms drawn (default {CAL.DEFAULT_DRAW_N}, "
-                             "PREREG_P1 §2's n)")
+                             "the preregistered n)")
     parser.add_argument("--seed", default=None,
                         help="override the DERIVED seed. Use only for a "
                              "deliberate re-draw; a seed somebody picks is a "
@@ -558,6 +579,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dry-run", action="store_true",
                         help="grade but do not write the calibration row")
     parser.add_argument("--notes", default=None)
+    parser.add_argument("--labels-out", default=None,
+                        help="write each drawn claim with every family's "
+                             "label to this JSON file")
     return parser
 
 

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W2 through ``_tensions``: the desk/indicator gate reaches the declared tensions."""
+"""Through ``_tensions``: the desk/indicator gate reaches the declared tensions."""
 from __future__ import annotations
 
 from tests.data_pkg.test_composition_assembly_d2 import _assembly, _row

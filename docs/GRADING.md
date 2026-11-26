@@ -195,9 +195,12 @@ counted in the coverage denominator only.
 
 ### The rubric
 
-The rubric is `src/legba/data/analysts/rubrics/ANNEX_C_v4.md`, with three labels: `contains` (a development states
+The rubric is `src/legba/data/analysts/rubrics/ANNEX_C_v5.md`, with three labels: `contains` (a development states
 the claim's matter), `contradicts` (a development states something incompatible, including a reported change against
-"no material change"), and `silent` (nothing bears on it). Its sha256 is checked at import against the pin in
+"no material change"), and `silent` (nothing bears on it). Scale and limiting words ("mass", "new") are part of the
+claim: a smaller-scale report of the same kind of event contradicts a large-scale claim and contains its denial. v5 has
+no passing calibration row yet, so the grader refuses to grade until one is recorded; `ANNEX_C_v4.md` stays in the tree
+for the rows graded under it. Its sha256 is checked at import against the pin in
 `_correctness_rubric.py` and stored on every row as `unit_correctness.rubric_sha`. Changing the rubric takes three
 changes together: the file, the pin, and a new passing calibration row.
 
@@ -307,7 +310,7 @@ Each tick writes one `analyst_outputs` row, with structured fields on `data.data
 
 ```
 Correctness grader — graded <n> unit(s) across <n> target(s) for <cost>.
-  as_of=… rubric=ANNEX_C_v4.md sha=… pipeline=…
+  as_of=… rubric=ANNEX_C_v5.md sha=… pipeline=…
   ceiling=<ceiling>/day spent_before=<spent> targets=[…]
   reference grace=7d (LEGBA_GRADER_REFERENCE_GRACE_DAYS) — current until window_end + grace
   calibration: pooled=… packet=… n_atoms=…

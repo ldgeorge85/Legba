@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Homonym census (B6, W11-F13) — READ-ONLY, one-off.
+"""Homonym census — READ-ONLY, one-off.
 
 For every target whose ``scope.geo`` carries a code the profile gazetteer's
 ``subject_homonyms`` declares (``src/legba/data/subject_homonyms.py``):
@@ -11,7 +11,7 @@ For every target whose ``scope.geo`` carries a code the profile gazetteer's
       homonym forms ("Khyber Pakhtunkhwa" on the North Korea desk), with
       whether the title is homonym-only (names no subject once the forms are
       cut) and how many body sentences are. The orchestrator-verified KP 16
-      (W11-F13) must appear.
+      must appear.
   (2) SLICE — how many canonical signals on the code in the last ``--days``
       the desk's slice now EXCLUDES, counted by running the slice's own
       ``HomonymSliceFilter`` clause (``NOT (<clause>)``) — the SQL the reader

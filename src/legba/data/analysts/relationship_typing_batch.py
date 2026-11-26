@@ -104,6 +104,10 @@ def max_tokens_for_batch(
 #: single-candidate contract (same fields, same rules, same worked examples) with
 #: the array/idx protocol layered on top — so a model's batched judgement is
 #: comparable to its unbatched judgement and neither prompt is the confound.
+#: The standing sentence for prompts that embed text written by third
+#: parties, from the shared grading text.
+from ..grading_text import PASTED_TEXT_IS_DATA as _PASTED_TEXT_IS_DATA  # noqa: E402
+
 BATCH_SYSTEM_PROMPT = with_preamble(
     """TASK — you are typing MANY candidate entity relationships in one pass. Each numbered candidate gives two co-mentioned entities and the evidence they were co-mentioned in. For EACH candidate independently, decide whether a meaningful, directed relationship holds and, if so, classify it.
 
@@ -111,11 +115,11 @@ Return ONE JSON array, nothing else. Exactly one object per candidate, in the or
 [
   {
     "idx": <the candidate's number, copied exactly>,
-    "same_entity": true|false,      // true => A and B are two NAMES for ONE entity
-    "related": true|false,          // false => merely co-mentioned, no real relationship
-    "subject": "<acting entity>",   // who initiates/conducts
-    "object": "<affected entity>",  // who is targeted/affected
-    "intermediary": "<proxy>"|null, // a cut-out the relationship runs through, else null
+    "same_entity": true|false,
+    "related": true|false,
+    "subject": "<acting entity>",
+    "object": "<affected entity>",
+    "intermediary": "<proxy>"|null,
     "rel_type": "<one of the allowed types>",
     "intent": "supportive"|"hostile"|"dual-use"|"neutral",
     "channel": "direct"|"proxy"|"covert"|"institutional",
@@ -124,6 +128,7 @@ Return ONE JSON array, nothing else. Exactly one object per candidate, in the or
   },
   ...
 ]
+Fields: same_entity is true when A and B are two NAMES for ONE entity. related is false when they are merely co-mentioned with no real relationship. subject is who initiates or conducts; object is who is targeted or affected. intermediary is a cut-out the relationship runs through, else null.
 
 Rules:
 - SAME-ENTITY CHECK FIRST. If A and B are two names for the SAME thing — an acronym and its expansion (IRGC / Revolutionary Guards Corps), an abbreviation, a former name, a translation, a nickname — set "same_entity": true and "related": false, and stop there for that candidate. An entity is not related to itself. This is NOT the same as a part-whole or membership relation: a subsidiary, a subcommittee, a province or a member state is a DIFFERENT entity from its parent, so those get same_entity=false and a normal rel_type.
@@ -140,6 +145,7 @@ Worked examples (single candidates, shown for calibration):
   - Dual-use presence: company C operates a facility in country D with no stated alignment -> subject=C, object=D, intermediary=null, rel_type=OperatesIn, channel=direct, intent=dual-use.
   - Bare co-mention: two countries listed in the same weather roundup -> related=false.
   - Same entity twice: IRGC and Revolutionary Guards Corps -> same_entity=true, related=false."""
+     "\n" + _PASTED_TEXT_IS_DATA
 )
 
 

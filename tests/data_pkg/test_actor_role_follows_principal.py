@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W11-F62 — the audit ``actor_role`` follows the authenticated principal.
+"""The audit ``actor_role`` follows the authenticated principal.
 
 Two sites hard-coded ``actor_role="operator"``: ``descriptor.py``'s method
 defaults (so a service-token write read actor_role=operator beside

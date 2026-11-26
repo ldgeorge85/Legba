@@ -1,17 +1,16 @@
 # Supply-chain domain — top-10 first registrations (2026-07-29). Draft
 # SourceDescriptor. Ships DRAFT (operator activates).
 #
-# REGISTRATION STEP (main session): register via a Wave-A-style direct-DB
+# REGISTRATION STEP: register via a direct-DB
 # registrar — see scripts/bringup_register_supply_chain_sources.py in this
 # same commit — then, on the live instance:
 #   docker exec -e LEGBA_DATA_PG_DB=legba legba-legba-registry-1 \
 #     python scripts/bringup_register_supply_chain_sources.py
 #
 # DIGITIMES — Taiwan-based semiconductor/electronics trade press, explicitly
-# billed as "Global Supply Chain" news. Fills the S-1 semiconductor
-# trade-press gap slot (planning/SUPPLY_CHAIN_PACK_PLAN_2026-07-29.md §5.2)
-# feeding `flow_semiconductors` (geo TW,KR,JP,NL,SG). Verified live 2026-07-29
-# per planning/SUPPLY_CHAIN_SOURCES_2026-07-29.md §2.C (§5 rank #6): HTTP 200,
+# billed as "Global Supply Chain" news. Fills the semiconductor
+# trade-press gap, feeding `flow_semiconductors` (geo TW,KR,JP,NL,SG). Verified live
+# 2026-07-29: HTTP 200,
 # same-day items, robots.txt clean. Free daily tier — deeper proprietary
 # research is paywalled separately, but the RSS headline/summary feed is open
 # (same posture as JOC in the shortlist's NICE tier).
@@ -29,7 +28,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: supply_chain_top10
+  owner: owner@local
   created: "2026-07-29T00:00:00Z"
 
 scope:
@@ -40,7 +39,7 @@ scope:
   languages: [en]
   tags: [supply_chain, semiconductor, technology, economic]
   source_class: reporting
-  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
+  access_class: public          # free no-auth feed, no separate reuse agreement
 
 acquisition: poll
 
@@ -66,7 +65,7 @@ pipeline:
   enrichment:
     # language_detect FIRST so ner_multilingual uses the detected language.
     # No fact_extractor on the draft: the operator adds it after confirming the
-    # route yields full article text (mirrors the Wave-A conservative default).
+    # route yields full article text (mirrors the other RSS sources' conservative default).
     - kind: language_detect
       config: {}
     - kind: ner_multilingual

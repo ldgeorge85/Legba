@@ -4,7 +4,7 @@
 
 WHY THIS CLASS EXISTS
 ---------------------
-``planning/CAMPAIGN_2026-08-29/IL_BLINDNESS_DIAGNOSIS.md`` traced a whole desk's
+A diagnosis traced a whole desk's
 silence about the war it was fighting to a register that had never opened a
 frame for it: ingest, screening and the per-desk slice all passed clean (61
 Iran/Hormuz/Hezbollah-naming IL signals in 14 days, from IL's OWN papers of
@@ -65,15 +65,13 @@ An entity cluster breaches the coverage floor for a target when ALL hold:
    never writes "Russia's war on Ukraine", it writes "Ukrainian drone attacks"
    — and that IS coverage, so RU must not fire. Six of the nine targets that
    fire on the naive substring check are cleared by demonym matching alone.
-6. **The SA/Yemen soft-FP fix (2026-09-05, ``planning/COVERAGE_FLOOR_82_
-   2026-09-04.md`` §2.7's "named next refinement"; CORRECTED 2026-09-06,
-   ``planning/COVERAGE_FLOOR_OVERSUPPRESS_FIX_REPORT.md``).** Clause 5 alone
-   still fired on ``country_g20_sa``/Yemen even though SA's desks DO engage
+6. **The SA/Yemen soft-FP fix (a refinement of clause 5).** Clause 5 alone still
+   fired on ``country_g20_sa``/Yemen even though SA's desks DO engage
    (4/8): the register names the *actor* ("Houthi maritime embargo", "Houthi
    border and maritime attacks"), never the polity, so a pure name match
    cannot see the coverage.
 
-   The FIRST cut (df088954, 2026-09-05) walked ``situations.derived_from``
+   The FIRST cut walked ``situations.derived_from``
    (a frame's own member findings) out one more hop to each finding's own
    ``derived_from`` (that finding's raw grounding SIGNALS) and asked whether
    any of THOSE signals' NER entities represented the missing polity. It
@@ -104,11 +102,10 @@ An entity cluster breaches the coverage floor for a target when ALL hold:
    frames; SA's two genuinely-covering Houthi frames had 2, 5 and 6). See
    :data:`_FRAME_FINDING_TITLES_SQL` and :func:`candidate_clusters`.
 
-THE NAMING-ONLY COUNTER (R1-e, ``planning/R1_FRAME_REPAIR_AMENDMENT_2026-09-06
-.md`` §3)
---------------------------------------------------------------------------
-Clause 6 and R-1's own anchor bar are *the same question read in opposite
-directions*, and the amendment's F-11 says they are allowed to disagree: today
+THE NAMING-ONLY COUNTER
+-----------------------
+Clause 6 and the frame-anchor bar are *the same question read in opposite
+directions*, and they are allowed to disagree: today
 IL/Palestine breaches clause 6 (one qualifying title, one short of the
 recurrence bar) while the desks' own prose anchors Palestine twelve findings
 deep. The design's bar **B-1** ("the naming-only breach count reaches 0 BY
@@ -313,10 +310,8 @@ class CoverageFloorConfig:
     """Every knob, calibrated against the live fleet on 2026-09-03.
 
     At these defaults the detector would flag 3 of 32 country targets today
-    (IL / SA / TR, one cluster each after the share gate) — see
-    ``planning/COVERAGE_FLOOR_82_2026-09-04.md`` for the full would-flag census
-    and the threshold sweep behind each number. Loosening ``min_slice_share``
-    to 0.05 flags 3 targets and 5 clusters; removing it flags 5 targets;
+    (IL / SA / TR, one cluster each after the share gate). Loosening
+    ``min_slice_share`` to 0.05 flags 3 targets and 5 clusters; removing it flags 5 targets;
     dropping the country-class gate flags 17. Conservative on purpose: this
     fleet's paging was only just brought under control.
     """

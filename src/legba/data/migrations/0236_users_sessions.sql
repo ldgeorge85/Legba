@@ -3,15 +3,15 @@
 --
 -- 0236_users_sessions.sql
 --
--- LOCAL USERS + SIGN-IN (X3 lane B3; OP-1008-IDP, W11-F16's viewer half).
+-- LOCAL USERS + SIGN-IN.
 --
 -- WHY
 -- ---
 -- Until now every viewer was the operator: caddy's basic_auth perimeter
 -- injected the operator bearer upstream for every browser. A dozen invited
 -- people need their own identity, private consult sessions, usage per person
--- and a ROLE (the X2-B2 route gate's three classes). The operator decided
--- (10-08): "we build it with local users but auth external" — so the users
+-- and a ROLE (the route gate's three classes). Local users with external
+-- auth: so the users
 -- table is OURS (an internal id every other row keys on) and how a person
 -- proves who they are is PLUGGABLE (`legba.data.users`: `local_password`
 -- now, `oidc` declared — it maps provider + subject onto a row here and
@@ -140,7 +140,7 @@ COMMENT ON TABLE public.user_invites IS
 CREATE INDEX IF NOT EXISTS idx_user_invites_user
     ON public.user_invites (user_id);
 
--- The own-sessions read (X3-B3): a signed-in user's history list is
+-- The own-sessions read: a signed-in user's history list is
 -- `WHERE principal = 'user:<id>' ORDER BY updated_at DESC LIMIT n`, and the
 -- consult usage read filters on the same column. An index on an EXISTING
 -- table — the only one this migration touches; additive, IF NOT EXISTS.

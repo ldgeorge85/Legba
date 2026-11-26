@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane N-H — the evidence gate reads every inline citation form.
+"""The evidence gate reads every inline citation form.
 
 The N-G gate counted only ``cited_substrate_refs`` (filled from the
 ``[[ref:<uuid>]]`` form alone), so lens 5b0b4ecc — ten resolving ``[[uuid]]``

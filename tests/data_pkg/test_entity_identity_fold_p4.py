@@ -201,7 +201,7 @@ def test_estimated_quantifier_rejected(junk):
 
 
 # ---------------------------------------------------------------------------
-# articles / stopwords are junk (DQ P4 §E — "the" must never be a fold survivor)
+# articles / stopwords are junk ("the" must never be a fold survivor)
 # ---------------------------------------------------------------------------
 
 

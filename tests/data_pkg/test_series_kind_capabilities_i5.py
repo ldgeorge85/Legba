@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""I-5 — the series-kind capabilities and the descriptors they unlock.
+"""The series-kind capabilities and the descriptors they unlock.
 
 * ``series_api`` reads a top-level array (``$``), an indexed element
   (``[meta, rows]`` → ``1``) and positional rows (``row_columns``); a wider,
@@ -14,7 +14,7 @@
 * the record differ keys on an ATTRIBUTE (``@logicalId``) and reads
   attribute labels/summaries; an entry's own attributes are field ``@``.
 * the currency-pair unit; series_change's named family rules (2026-11.3).
-* the six I-5 descriptors validate through the real models and their
+* the six descriptors validate through the real models and their
   handler's config schema, ship draft, walk to configured, and parse
   hand-made bodies in the documented shapes (invented values; no real data
   file is committed).
@@ -497,7 +497,7 @@ def test_the_option_catalog_takes_the_proposed_rules_and_refuses_others() -> Non
 
 
 def test_the_shipped_descriptor_carries_the_proposed_rules() -> None:
-    # Roll 84 registered the proposed rules: the tree's descriptor names exactly
+    # The proposed rules are registered: the tree's descriptor names exactly
     # them, in order, beside the 2026-11.2 options it kept.
     from legba.data.analysts.deterministic_handlers.series_change import PROPOSED_SERIES_RULES
 
@@ -507,7 +507,7 @@ def test_the_shipped_descriptor_carries_the_proposed_rules() -> None:
 
 
 # ---------------------------------------------------------------------------
-# The I-5 descriptors
+# The descriptors
 # ---------------------------------------------------------------------------
 
 I5: dict[str, str] = {
@@ -517,7 +517,7 @@ I5: dict[str, str] = {
     "source_boe_bank_rate_daily.yaml": "series_api",
     "source_eurostat_hicp_ea_monthly.yaml": "series_api",
     "source_jma_quake_list.yaml": "json_api",
-    # roll 84: the NBU key rates, written as I-5 wrote its siblings
+    # The NBU key rates, written as wrote its siblings
     "source_nbu_key_rates.yaml": "series_api",
 }
 _SCHEMA = {"series_api": SeriesApiConfig, "json_api": JsonApiConfig}
@@ -592,7 +592,7 @@ def test_nbu_top_level_array_with_dotted_dates() -> None:
 
 
 def test_nbu_key_rates_compact_dates_and_one_series_per_id_api() -> None:
-    """Roll 84: YYYYMMDD read exactly (``ymd_compact``); each ``id_api`` feeds
+    """YYYYMMDD read exactly (``ymd_compact``); each ``id_api`` feeds
     its own series; rows before the window are not read (the endpoint has
     no verified date filter, so the window is applied here)."""
     cfg = _cfg("source_nbu_key_rates.yaml")

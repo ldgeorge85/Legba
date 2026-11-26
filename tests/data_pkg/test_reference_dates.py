@@ -2,23 +2,21 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The reference builder's DATE LADDER — six rungs, one precedence, no guesses.
 
-THE DEFECT (wave O, lane o2). The extractor read JSON-LD, a ``<meta>`` table
+THE DEFECT. The extractor read JSON-LD, a ``<meta>`` table
 and ``<time datetime>``, all of them in ISO only. That is what a newsroom CMS
 emits, and the top-ups measured what an OFFICIAL publisher emits instead:
-``bundestag.de`` ships ``<meta name="date" content="25.09.2026">`` (right key,
-refused value), ``radio.gov.pk`` ships nothing at all but a visible
-``September 26, 2026``, and ``opcw.org`` ships a visible ``9 July 2026`` with
-an HTTP ``Last-Modified`` that tracks its CDN. So a parliament, a state
-broadcaster and an IGO were inadmissible to a reference while an ordinary
-newspaper was not.
+a parliament ships ``<meta name="date" content="25.09.2026">`` (right key,
+refused value), a state broadcaster ships nothing at all but a visible
+``September 26, 2026``, and a treaty organisation ships a visible
+``9 July 2026`` with an HTTP ``Last-Modified`` that tracks its CDN. So a
+parliament, a state broadcaster and an IGO were inadmissible to a reference
+while an ordinary newspaper was not.
 
-THE FIXTURES ARE REAL PAGES, captured 2026-09-26 and committed so no test ever
-touches the network. Each one is the served HTML with the BODIES of its
-``<script>`` (except ``ld+json``), ``<style>`` and ``<svg>`` elements emptied
-and its comments dropped — every one of those is discarded by ``html_to_text``
-before the extractor sees it, so the extracted text and every ``<meta>``,
-``<time>`` and ``ld+json`` the ladder reads are byte-identical to what the host
-served. The captured response headers are pinned beside each fixture below.
+THE FIXTURES ARE SMALL INVENTED PAGES, committed so no test ever touches the
+network. Each reproduces the date signals of one publisher shape (hosts are
+``example`` names) and nothing else: the extracted text and every ``<meta>``,
+``<time>`` and ``ld+json`` the ladder reads are what the test asserts on. The
+response headers are pinned beside each fixture below.
 """
 
 from __future__ import annotations
@@ -45,38 +43,38 @@ from legba.data.analysts.deterministic_handlers._reference_page import (
 
 FIXTURES = Path(__file__).parent / "fixtures" / "reference_dates"
 
-#: ``(fixture, url, captured response headers)`` for each real page.
-BUNDESTAG = (
-    "bundestag_hib_kurzmeldung.html",
-    "https://www.bundestag.de/presse/hib/kurzmeldungen-1217778",
+#: ``(fixture, url, response headers)`` for each fixture page.
+PARLIAMENT = (
+    "parliament_brief.html",
+    "https://www.parliament.example.org/presse/hib/kurzmeldungen-1217778",
     {"content-type": "text/html;charset=UTF-8", "content-language": "de"},
 )
-RADIO_PK = (
-    "radio_gov_pk_news.html",
-    "https://www.radio.gov.pk/26-09-2026/"
+BROADCASTER = (
+    "broadcaster_news.html",
+    "https://www.radio.example.gov/26-09-2026/"
     "president-pm-condemn-terrorist-attack-in-di-khan",
     {"content-type": "text/html; charset=UTF-8"},
 )
-OPCW_ARTICLE = (
-    "opcw_news_article.html",
-    "https://www.opcw.org/media-centre/news/2026/07/"
+TREATY_ARTICLE = (
+    "treaty_body_article.html",
+    "https://www.treaty.example.int/media-centre/news/2026/07/"
     "executive-council-reinstates-rights-and-privileges-syria-under-chemical",
     {"content-language": "en", "last-modified": "Sat, 26 Sep 2026 15:33:20 GMT"},
 )
-OPCW_INDEX = (
-    "opcw_news_index.html",
-    "https://www.opcw.org/media-centre/news",
+TREATY_INDEX = (
+    "treaty_body_index.html",
+    "https://www.treaty.example.int/media-centre/news",
     {"content-language": "en", "last-modified": "Sat, 26 Sep 2026 15:38:33 GMT"},
 )
-UN_CHARTER = (
-    "un_charter_full_text.html",
-    "https://www.un.org/en/about-us/un-charter/full-text",
+UNION_CHARTER = (
+    "union_charter_full_text.html",
+    "https://www.union.example.int/en/about-us/charter/full-text",
     {"last-modified": "Sat, 26 Sep 2026 15:49:47 GMT"},
 )
 
 
 def _resolve(case: tuple[str, str, dict[str, str]]):
-    """Run the whole ladder over one captured page, exactly as a fetch does."""
+    """Run the whole ladder over one fixture page, exactly as a fetch does."""
     name, url, headers = case
     raw = (FIXTURES / name).read_text(encoding="utf-8")
     text, ldjson = coerce_page_text(raw)
@@ -209,7 +207,7 @@ def test_a_weekday_in_front_of_a_date_makes_it_a_masthead_not_a_dateline():
 
 
 def test_a_clock_after_a_date_makes_it_a_masthead_too():
-    """``radio.gov.pk``'s site clock, verbatim. It sits two lines above that
+    """A broadcaster's site clock. It sits two lines above that
     page's real dateline and on any page but a same-day one it would carry a
     DIFFERENT date — which would collapse the whole rung under the
     one-distinct-date rule if it were not discarded first."""
@@ -339,61 +337,61 @@ def test_the_language_hint_chooses_the_month_vocabulary():
 
 
 # ---------------------------------------------------------------------------
-# THE REAL PAGES. Captured 2026-09-26; no test here touches the network.
+# THE FIXTURE PAGES. No test here touches the network.
 # ---------------------------------------------------------------------------
 
 
-def test_bundestag_is_dated_by_the_meta_key_whose_VALUE_was_being_refused():
+def test_a_parliament_page_is_dated_by_the_meta_key_whose_VALUE_was_being_refused():
     """``<meta name="date" content="25.09.2026">``. The key was always in the
     table; only ``YYYY-MM-DD`` was ever parsed out of it, so the German federal
     parliament's press releases were undated and therefore inadmissible."""
-    dated = _resolve(BUNDESTAG)
+    dated = _resolve(PARLIAMENT)
     assert dated.value == "2026-09-25"
     assert dated.source == "meta:date"
     assert dated.disagreements == ()
     assert '<meta name="date" content="25.09.2026"/>' in (
-        (FIXTURES / BUNDESTAG[0]).read_text(encoding="utf-8")
+        (FIXTURES / PARLIAMENT[0]).read_text(encoding="utf-8")
     )
 
 
-def test_radio_pakistan_is_dated_by_its_visible_dateline_and_nothing_else():
+def test_a_broadcaster_page_is_dated_by_its_visible_dateline_and_nothing_else():
     """No JSON-LD, no dated ``<meta>``, no ``<time>``, and a ``DD-MM-YYYY`` URL
     that ``url_embedded_date`` does not read. The article's own
     ``September 26, 2026`` is the only date the page has."""
-    raw = (FIXTURES / RADIO_PK[0]).read_text(encoding="utf-8")
+    raw = (FIXTURES / BROADCASTER[0]).read_text(encoding="utf-8")
     assert "ld+json" not in raw
     assert "<time" not in raw.lower()
-    dated = _resolve(RADIO_PK)
+    dated = _resolve(BROADCASTER)
     assert dated.value == "2026-09-26"
     assert dated.source == "dateline:en"
 
 
-def test_opcw_prefers_its_dateline_over_a_last_modified_that_is_79_days_late():
+def test_a_treaty_body_prefers_its_dateline_over_a_last_modified_that_is_79_days_late():
     """The whole reason rung 6 is last. The page's dateline says 9 July 2026;
     its ``Last-Modified`` is whenever the CDN last refreshed the object. The
     dateline wins and the header rides the row as recorded dissent."""
-    dated = _resolve(OPCW_ARTICLE)
+    dated = _resolve(TREATY_ARTICLE)
     assert (dated.value, dated.source) == ("2026-07-09", "dateline:en")
     assert dated.disagreements == ("http_last_modified=2026-09-26",)
 
 
-def test_the_opcw_index_is_dated_by_its_time_elements_not_by_its_listing():
+def test_a_treaty_body_index_is_dated_by_its_time_elements_not_by_its_listing():
     """An index page lists many articles, so its opening carries many dates —
     the dateline rung refuses it outright — and a ``<time datetime>`` above it
     answers first anyway."""
-    dated = _resolve(OPCW_INDEX)
+    dated = _resolve(TREATY_INDEX)
     assert dated.source == "time-datetime"
-    assert dateline_date(_text_of(OPCW_INDEX), "en") is None
+    assert dateline_date(_text_of(TREATY_INDEX), "en") is None
 
 
-def test_the_un_charter_is_dated_by_its_header_because_nothing_else_answers():
+def test_a_static_charter_is_dated_by_its_header_because_nothing_else_answers():
     """A static official document: no JSON-LD, no publish ``<meta>``, no
     ``<time>``, no dated URL, and a text whose opening carries several dates so
     the dateline rung refuses it. The weakest rung is the only one left, and it
     NAMES itself on the row rather than passing as a publication date."""
-    raw = (FIXTURES / UN_CHARTER[0]).read_text(encoding="utf-8")
+    raw = (FIXTURES / UNION_CHARTER[0]).read_text(encoding="utf-8")
     assert "ld+json" not in raw
-    dated = _resolve(UN_CHARTER)
+    dated = _resolve(UNION_CHARTER)
     assert (dated.value, dated.source) == ("2026-09-26", DATE_SOURCE_LAST_MODIFIED)
 
 

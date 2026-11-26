@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """pytest fixtures for legba.data integration tests.
 
-Per L-001 brief item 6: tests run against real running containers (the
+Per brief item 6: tests run against real running containers (the
 dormant `legba-postgres-1` etc.) — no mocks for substrate boundaries. If
 containers aren't up, the fixture brings them up via `docker compose`.
 
@@ -13,7 +13,7 @@ Setup pattern:
   3. Yield connection bundles to each test.
 
 Teardown: the test database is dropped at session end. The containers are
-left running for the next test session — same approach as the L-091 audit.
+left running for the next test session — same approach as the audit.
 """
 
 from __future__ import annotations
@@ -115,8 +115,8 @@ def substrate_up():
 #: checkout AND from a container bind-mounting a worktree at its own path,
 #: resolves to a directory that never holds a ``.env`` — it lands two levels
 #: above any repo root), or the HARDCODED
-#: ``/usr/local/deployments/active/legba/.env`` — the operator's LIVE
-#: production file. In practice candidate 3 always wins: this process's env
+#: the live deployment's
+#: production ``.env``. In practice candidate 3 always wins: this process's env
 #: never gets its own ``.env``, so every LEGBA_* program flag the operator
 #: has live-tuned (python-dotenv's ``load_dotenv`` sets any var not already
 #: in ``os.environ`` — true here, since nothing exports these in a bare
@@ -125,12 +125,9 @@ def substrate_up():
 #: test rather than what it is: an ambient host file the test process was
 #: never supposed to see.
 #:
-#: This bit the tree SEVEN times before today, one flag at a time (each a
-#: separate dated fixture below, in git history) — B0-1, W-2, C-TIER, D-2,
-#: P2-1, W-3g twice. Today it was ``LEGBA_EXTERNAL_GRADING_WIDTH`` (4 of
-#: ``test_standing_auditor.py``'s failures — see
-#: planning/TEST_ENV_ISOLATION_REPORT.md). Rather than wait for flag #9,
-#: this pins the whole enumerated family of LEGBA_* PROGRAM flags (regime
+#: This has leaked one flag at a time before (``LEGBA_EXTERNAL_GRADING_WIDTH``
+#: broke several ``test_standing_auditor.py`` tests). Rather than wait for the
+#: next one, this pins the whole enumerated family of LEGBA_* PROGRAM flags (regime
 #: switches / behavior gates with a documented shipped default — NOT
 #: bootstrap/connection/credential vars, which the fixtures above already
 #: force to test-appropriate values, or endpoints/refs exercised outside
@@ -143,21 +140,21 @@ def substrate_up():
 #: Each entry: (env var, shipped/code default, one line on why).
 _PROGRAM_FLAG_DEFAULTS: tuple[tuple[str, str, str], ...] = (
     ("LEGBA_COMPOSITION_VERIFY_FLOOR", "0.0",
-     "B0-1: composition verify floor; live .env carries 0.50"),
+     "Composition verify floor; live .env carries 0.50"),
     ("LEGBA_ANALYST_TRACES_TTL_DAYS", "unset (disabled)",
-     "W-2: analyst-trace retention TTL opt-in"),
+     "Analyst-trace retention TTL opt-in"),
     ("LEGBA_SIGNALS_RETENTION_TTL_DAYS", "unset (disabled)",
-     "W-2: signal retention TTL opt-in"),
+     "Signal retention TTL opt-in"),
     ("LEGBA_COMPOSITION_TIERED_EVIDENCE", "off",
      "C-TIER: legacy single verify-floored gather vs. tiered periphery"),
     ("LEGBA_COMPOSITION_ASSEMBLY", "off",
-     "D-2: legacy composition path vs. the deterministic assembly read"),
+     "Legacy composition path vs. the deterministic assembly read"),
     ("LEGBA_STRUCTURAL_VERIFY_GATE", "off",
-     "P2-1: compute-and-show vs. structural-gate demotion"),
+     "Compute-and-show vs. structural-gate demotion"),
     ("LEGBA_ALERT_SINK_COOLDOWN_SECONDS", "60",
-     "W-3g: AlertSinkDispatcher cooldown window; live .env carries 15"),
+     "AlertSinkDispatcher cooldown window; live .env carries 15"),
     ("LEGBA_CONTENTION_EARNED_WEIGHT", "0.0",
-     "W-3g: A6 earned-track-record weight in the contention arbiter"),
+     "A6 earned-track-record weight in the contention arbiter"),
     ("LEGBA_EXTERNAL_GRADING_WIDTH", "off",
      "2026-09-06: standing_auditor's WIDTH grading sweep vs. the shipped "
      "6-claim sweep (today's break — see TEST_ENV_ISOLATION_REPORT.md)"),
@@ -167,7 +164,7 @@ _PROGRAM_FLAG_DEFAULTS: tuple[tuple[str, str, str], ...] = (
     ("LEGBA_DESK_REFERENCE_ENABLED", "off",
      "2026-09-06: desk_reference analyst kill switch"),
     ("LEGBA_REFERENCE_GAP_DISPATCH_ENABLED", "off",
-     "A-4: the reference_gap collection-requirement + open-question "
+     "The reference_gap collection-requirement + open-question "
      "side-write; off, desk_reference's payload is byte-identical but for "
      "reference_gap_dispatch={enabled:false}"),
     ("LEGBA_FACT_CONTENTION", "off",
@@ -180,9 +177,8 @@ _PROGRAM_FLAG_DEFAULTS: tuple[tuple[str, str, str], ...] = (
      "situation_tracker's env dial WINS over the descriptor by design"),
     ("LEGBA_EGRESS_ALLOW_HOSTS", "unset (deny all internal hosts)",
      "SSRF-guard internal-sidecar allowlist"),
-    # 2026-09-06 follow-up: the four flags TEST_ENV_ISOLATION deliberately excluded
-    # (see planning/TEST_ENV_ISOLATION_REPORT.md's "Deliberately excluded" note,
-    # and the exclusions comment below, which is now updated to match). Each of
+    # The four flags deliberately excluded above (see the exclusions comment
+    # below). Each of
     # these gates code exercised from BOTH tests/data_pkg AND tests/runtime, so
     # the table lives once in tests/_env_isolation_shared_flags.py and is
     # imported by both conftests rather than duplicated — see that module's
@@ -203,23 +199,22 @@ _PROGRAM_FLAG_DEFAULTS: tuple[tuple[str, str, str], ...] = (
      "is (0, 0.10]. The descriptor option "
      "meta_findings_synthesizer.rollup_mass_floor wins over it"),
     ("LEGBA_EVENTS", "off",
-     "V3/P0 (2026-09-21): the event write path ships dark; the flag's "
+     "the event write path ships dark; the flag's "
      "default-off state is what the byte-identical contract requires"),
     ("LEGBA_EDGE_TRANSITION_LEDGER", "off",
-     "V3/P3 (2026-09): the entity_edge_events ledger ships dark; a leaked ON "
+     "the entity_edge_events ledger ships dark; a leaked ON "
      "from the live .env would silently write ledger rows inside every "
      "nexus-write byte-identity test"),
     ("LEGBA_GRAPH_PROJECTION", "off",
-     "V3/P4b (2026-09-23): the graph_arcs projection ships dark; the live .env "
-     "turned it ON at roll 10 and every graph_mining / structural_balance test "
+     "the graph_arcs projection ships dark; the live .env "
+     "turned it ON once and every graph_mining / structural_balance test "
      "that seeds entity_edges then read an empty projection instead of the "
      "legacy substrate path — flag-off is the byte-identical baseline"),
     ("LEGBA_EVENT_CITATIONS", "off",
-     "V3/P2 (2026-09-23): the event:<uuid> ref kind ships dark; a leaked ON "
+     "the event:<uuid> ref kind ships dark; a leaked ON "
      "would expand event refs inside every citation-builder test"),
-    # 2026-09-07 wave: the three knobs whose lanes registered them in the X-1 guard but not here — the live .env now
-    # carries SLICE_GEO_V2=1, WINDOW_BASIS=evidence, GRACE=96, and two standing_auditor tests asserting the
-    # heads/0 width stamp (2026-09-06/1) read the live values and saw 2026-09-07/1.
+    # Slice-geo and external-audit window knobs: a live .env that sets them
+    # changes the width stamp standing_auditor tests assert.
     ("LEGBA_SLICE_GEO_V2", "off",
      "J: desk slices admit title-named polities (flag-on changes input_row_refs)"),
     ("LEGBA_JOURNAL_CLUSTER_FIRST", "off",
@@ -227,9 +222,9 @@ _PROGRAM_FLAG_DEFAULTS: tuple[tuple[str, str, str], ...] = (
     ("LEGBA_JOURNAL_SLICE_V2", "off",
      "journal salience-aware fetch leg (journal_slice_v2, 2026-09-10) — flag-off keeps the 360-newest leg every substrate_slice test asserts"),
     ("LEGBA_EXTERNAL_AUDIT_WINDOW_BASIS", "heads",
-     "width G-3 window basis; evidence re-bases the drained claims' window and moves the width stamp"),
+     "width window basis; evidence re-bases the drained claims' window and moves the width stamp"),
     ("LEGBA_EXTERNAL_AUDIT_WINDOW_GRACE_HOURS", "0",
-     "width G-3 grace before window.oldest; >0 moves the width stamp"),
+     "width grace before window.oldest; >0 moves the width stamp"),
     # 2026-09-16 (S3). Appended LAST, per the discipline noted above.
     ("LEGBA_FETCH_IMPERSONATE", "off",
      "S3 (a): browser-fingerprint impersonation on the page-fetch client "
@@ -255,7 +250,7 @@ _PROGRAM_FLAG_DEFAULTS: tuple[tuple[str, str, str], ...] = (
     # whole consult family at once rather than the three that happened to
     # break. The live .env carries ROUND_RESULT_BYTES=40000 (code default
     # 16_000), KEEP_FULL_ROUNDS=1000 (code default 1) and NATIVE_BATCH_CAP=5
-    # (code default 4) — the operator's deliberate "let a consult run wide"
+    # (code default 4) — a deliberate "let a consult run wide"
     # tuning. Leaked in, the compaction leg never fires (nothing is ever old
     # enough to digest), the round bound is 2.5x what the test asserts, and a
     # five-call batch is admitted where the shipped cap is four. That is
@@ -281,15 +276,15 @@ _PROGRAM_FLAG_DEFAULTS: tuple[tuple[str, str, str], ...] = (
      "sibling knob; live .env carries 100000000, i.e. the guard lifted"),
     ("LEGBA_CONSULT_MAX_COST_USD_PER_RUN", "3.00 (consult_spend_guard.DEFAULT_MAX_COST_USD_PER_RUN)",
      "sibling knob; live .env carries 1000000, i.e. the ceiling lifted"),
-    # Q-1: the per-TURN ceiling (now enforced by consult_turn_cost) and the
+    # The per-TURN ceiling (now enforced by consult_turn_cost) and the
     # turn contract's default window — a leaked live value would move every
     # stop and every window line a contract test asserts.
     ("LEGBA_CONSULT_TURN_COST_CEILING_USD", "unset = no per-turn ceiling",
-     "Q-1: per-turn ceiling on a priced route; stop drilling + synthesise"),
+     "Per-turn ceiling on a priced route; stop drilling + synthesise"),
     ("LEGBA_CONSULT_DEFAULT_WINDOW_HOURS", "168 (consult_window.DEFAULT_WINDOW_HOURS)",
-     "Q-1: the declared default window when no window is stated or pinned"),
-    # 2026-10-29 (W11-F132, run 9b902fec): the registry's invoke timeout is
-    # now DERIVED from the loop's budget + final floor, so both clocks and the
+     "The declared default window when no window is stated or pinned"),
+    # The registry's invoke timeout is
+    # DERIVED from the loop's budget + final floor, so both clocks and the
     # pin itself are pinned here — a leaked live value moves every assertion
     # on the derived floor.
     ("LEGBA_CONSULT_FINAL_FLOOR_SECONDS", "240.0 (consult_clocks.DEFAULT_FINAL_FLOOR_SECONDS)",
@@ -311,7 +306,7 @@ _PROGRAM_FLAG_DEFAULTS: tuple[tuple[str, str, str], ...] = (
 def _pin_program_flags_to_shipped_defaults(monkeypatch):
     """Strip every :data:`_PROGRAM_FLAG_DEFAULTS` key from the process env
     before each test, so this suite is deterministic regardless of what the
-    live ``/usr/local/deployments/active/legba/.env`` happens to carry (see
+    live deployment ``.env`` happens to carry (see
     the module docstring above). A test that wants a flag's overridden/ON
     path sets it explicitly via ``monkeypatch.setenv(...)`` — that always
     wins over this fixture (monkeypatch layers per-test) and self-reverts."""
@@ -325,7 +320,7 @@ def _pin_program_flags_to_shipped_defaults(monkeypatch):
 #
 # A handful of acceptance tests (analyst cross-source dedup / finding
 # supersession / entity resolution, source-actor acquisition, the
-# subscription engine, the P-13 discovery rig) connect DIRECTLY to a fixed
+# subscription engine, the discovery rig) connect DIRECTLY to a fixed
 # ``legba_pivot_test`` database rather than the per-session ephemeral
 # ``legba_test_<uuid>`` DB, and SKIP themselves when it is unreachable. So
 # the test recipe is self-standing — and not silently degraded to "lots of
@@ -438,9 +433,7 @@ async def migrated_pg(test_pg_config: PostgresConfig) -> PostgresConfig:
 # clean_tables — centralized, opt-in truncation primitive.
 # ---------------------------------------------------------------------------
 #
-# Root-caused by the 2026-08-29 shuffle-pollution-class train
-# (planning/CAMPAIGN_2026-08-29/CODE_STATUS.md §4 / LOG_FORENSICS.md finding
-# 3): 134 of ~398 tests/data_pkg/ files depend on `migrated_pg`, which is
+# Root cause of the shuffle-pollution class: 134 of ~398 tests/data_pkg/ files depend on `migrated_pg`, which is
 # session-scoped by necessity (re-applying all migrations per-file/per-test
 # is a measured 130x/1929x runtime multiplier — not viable). Only 14 of those
 # 134 had ANY cleanup fixture, each a bespoke, file-local `clean_slate`
@@ -509,8 +502,7 @@ def clean_tables(migrated_pg: PostgresConfig):
 #
 # Lifted out of two independently-written, file-local inlined copies
 # (tests/data_pkg/agency/test_research_web_evidence_e2e.py and
-# test_research_slice_and_gather.py) added during the 2026-09-05 merge-wave
-# hygiene pass. Both files' reset fixtures run an UNSCOPED
+# test_research_slice_and_gather.py) added during a hygiene pass. Both files' reset fixtures run an UNSCOPED
 # ``DELETE FROM source_credibility`` that commits on the SHARED
 # session-scoped test database (``migrated_pg`` above is session-scoped for
 # performance reasons — see the ``clean_tables`` docstring), which poisoned

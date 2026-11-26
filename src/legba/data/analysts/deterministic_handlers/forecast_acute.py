@@ -11,7 +11,7 @@ word "forecast" with an exogenously-resolved Brier / Brier-skill score:
     UPSTREAM source's own event timestamp.  Score (p - o)^2; report it against
     the per-country climatological base rate p_base.
 
-Design: planning/FORECAST_METRIC_DESIGN_2026-06-24.md. The pilot lives in its
+The pilot lives in its
 own ``acute_forecasts`` table (migration 0047) — fully isolated from the live
 findings feed and from the existing CI-coverage prediction resolver, so its
 number is never pooled into the honest headline calibration Brier.

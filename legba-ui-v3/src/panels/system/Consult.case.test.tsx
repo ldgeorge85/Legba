@@ -20,6 +20,7 @@ import { parseCaseRecord } from '@/lib/caseModel'
 import { resetScope, useScope } from '@/state/scope'
 import { useSelection } from '@/state/selection'
 import type { PanelRegistration } from '@/types'
+import { openConsultMenu } from '@/test/consultMenu'
 
 const PANEL = 'singleton:system.consult'
 
@@ -151,11 +152,12 @@ function ask(text: string) {
 }
 
 describe('the "Drive the view" mode (U-2; was the per-turn "Present as a case", D1)', () => {
-  it('is off by default, beside Send, and a plain turn sends no present_case key', () => {
+  it('is off by default, in the ⋯ menu, and a plain turn sends no present_case key', () => {
     render(<ConsultPanel registration={reg()} scope={{}} mode="personal" />)
+    openConsultMenu()
     const toggle = screen.getByTestId('consult-drive-toggle')
     expect(toggle.getAttribute('aria-checked')).toBe('false')
-    expect(toggle.parentElement).toBe(screen.getByTestId('consult-submit').parentElement)
+    expect(screen.getByTestId('consult-more-menu').contains(toggle)).toBe(true)
     ask('plain question')
     expect(postBodies()).toHaveLength(1)
     expect('present_case' in postBodies()[0]).toBe(false)
@@ -164,22 +166,30 @@ describe('the "Drive the view" mode (U-2; was the per-turn "Present as a case", 
 
   it('sends present_case while it is on, and STAYS on — it is a mode, not a per-turn choice', () => {
     render(<ConsultPanel registration={reg()} scope={{}} mode="personal" />)
+    openConsultMenu()
     fireEvent.click(screen.getByTestId('consult-drive-toggle'))
+    openConsultMenu()
     expect(screen.getByTestId('consult-drive-toggle').getAttribute('aria-checked')).toBe('true')
     ask('present this')
     expect(postBodies()[0].present_case).toBe(true)
     // A case turn left at the panel's default cap goes out at the case default.
     expect(postBodies()[0].max_tool_rounds).toBe(20)
+    openConsultMenu()
     expect(screen.getByTestId('consult-drive-toggle').getAttribute('aria-checked')).toBe('true')
     expect(localStorage.getItem('legba_consult_drive')).toBe('on')
   })
 
-  it('says in its label and one plain line what on and off do (U-3)', () => {
+  it('says in its label and one plain line what on and off do', () => {
     render(<ConsultPanel registration={reg()} scope={{}} mode="personal" />)
+    openConsultMenu()
     expect(screen.getByTestId('consult-drive-toggle')).toHaveTextContent('Drive the view: off')
+    openConsultMenu()
     expect(screen.getByTestId('consult-drive-hint')).toHaveTextContent('Off: answers only reply; nothing on screen moves.')
+    openConsultMenu()
     fireEvent.click(screen.getByTestId('consult-drive-toggle'))
+    openConsultMenu()
     expect(screen.getByTestId('consult-drive-toggle')).toHaveTextContent('Drive the view: on')
+    openConsultMenu()
     expect(screen.getByTestId('consult-drive-hint')).toHaveTextContent('Undo puts the view back')
   })
 
@@ -193,6 +203,7 @@ describe('the "Drive the view" mode (U-2; was the per-turn "Present as a case", 
 describe('while a case plays', () => {
   it('renders the rail, the census line per step, and a visible STOP', async () => {
     render(<ConsultPanel registration={reg()} scope={{}} mode="personal" />)
+    openConsultMenu()
     fireEvent.click(screen.getByTestId('consult-drive-toggle'))
     ask('present this')
     const es = FakeEventSource.instances.at(-1)!
@@ -209,11 +220,13 @@ describe('while a case plays', () => {
     expect(screen.getByTestId('case-narration')).toHaveTextContent('look at the desk')
     expect(screen.getByTestId('case-step-counter')).toHaveTextContent('step 2 of 2')
     // The mode cannot be flipped under a running case.
+    openConsultMenu()
     expect(screen.getByTestId('consult-drive-toggle')).toBeDisabled()
   })
 
   it('STOP latches: a later frame renders not executed — stopped', async () => {
     render(<ConsultPanel registration={reg()} scope={{}} mode="personal" />)
+    openConsultMenu()
     fireEvent.click(screen.getByTestId('consult-drive-toggle'))
     ask('present this')
     const es = FakeEventSource.instances.at(-1)!
@@ -231,6 +244,7 @@ describe('while a case plays', () => {
 
   it('the player owns the stream: unmounting the tile mid-case keeps actions flowing', async () => {
     const view = render(<ConsultPanel registration={reg()} scope={{}} mode="personal" />)
+    openConsultMenu()
     fireEvent.click(screen.getByTestId('consult-drive-toggle'))
     ask('present this')
     const es = FakeEventSource.instances.at(-1)!

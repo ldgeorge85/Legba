@@ -1,4 +1,4 @@
-# S2-T4 — THEMATIC composition pilot: escalation_composition.
+# THEMATIC composition pilot: escalation_composition.
 #
 # A composition that fuses ONE dimension — the `escalation` UNIT — ACROSS every
 # g20+watch desk into ONE global escalation read:
@@ -11,7 +11,7 @@
 # `escalation`-unit HEAD for EVERY desk (analyst_id='escalation', one head per
 # desk, post-supersession) and synthesizes a cross-desk thematic escalation
 # picture. It is the SAME meta_findings_synthesizer kind (no new Python kind) —
-# the thematic behavior is descriptor + the S2-T4 READ_SLICE thematic branch.
+# the thematic behavior is descriptor + the READ_SLICE thematic branch.
 #
 # ── why this is a target-LESS (global) run ──────────────────────────────────
 # There is NO `subscription.targets` block, so `_cadence_targets` fires ONE
@@ -46,7 +46,7 @@
 # `data.correlation_guard`. The composition faithfulness verify (below) enforces
 # the same anti-double-counting at grade time via the shared T7 floor.
 #
-# ── supersession (per S8-T3) ────────────────────────────────────────────────
+# ── supersession ────────────────────────────────────────────────
 # This run WRITES its finding target-less (target_id NULL), so the composition
 # supersession signature is `composition:escalation_composition:world` — a fresh
 # global escalation head supersedes the prior one, independent of every other
@@ -70,7 +70,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: active
-  owner: s2_t4
+  owner: owner@local
 
 subscription:
   # NO `targets` block ⇒ ONE global run (`target_filter=None`). The read is keyed
@@ -88,7 +88,7 @@ subscription:
       time_window: 24h
   substrate:
     direct_queries: false        # reads via the kind's READ_SLICE, not ad-hoc SQL
-    # THEMATIC discriminator (S2-T4). PRESENCE routes this target-less, verify-
+    # THEMATIC discriminator. PRESENCE routes this target-less, verify-
     # declaring run to the thematic READ_SLICE branch (one head per desk of the
     # named UNIT dimension across ALL desks) instead of the world-over-regions
     # branch. Value = the UNIT analyst_id this composition fuses.
@@ -104,7 +104,7 @@ method:
   # chat_complete shape the kind uses (same as analyst_region_composition.yaml).
   kind: llm_planner
   prompt_module: "legba.prompts.meta_findings_synthesizer.v1"
-  # F-3 (DEMOTION_D1_SPEC §7) — no method.bounded_question here, deliberately.
+  # No method.bounded_question here, deliberately.
   # This is the thematic (cross-region) tier; it synthesizes across many
   # countries' escalation reads and does not answer a single bounded question
   # itself. The fallback per the spec's ruling is the desk display name
@@ -121,7 +121,7 @@ method:
       factory_kind: stack_ref
       raw: llm.primary.openai_compat
       expected_family: llm_provider
-    # S2-T4: faithfulness VERIFY judge over the THEMATIC composition itself.
+    # Faithfulness VERIFY judge over the THEMATIC composition itself.
     # Currently the SAME core reasoning model that writes the units + the other
     # compositions — NOT a cross-family judge (the same TEMPORARY limitation the
     # country/region/world compositions carry; a dedicated reasoning judge is
@@ -135,7 +135,6 @@ method:
       factory_kind: stack_ref
       raw: llm.primary.openai_compat
       expected_family: llm_provider
-    max_tokens: 768            # the kind's DEFAULT_MAX_TOKENS (narrower context)
   budget_tokens_per_day: 0
   retry:
     budget:
@@ -147,12 +146,12 @@ cadence:
   # AFTER the freshest per-desk escalation heads have landed (a ~90m margin for
   # the fan-out + verify to complete).
   fallback_schedule: "30 8,20 * * *"
-  # P7-F3(c): 6h — well UNDER the 12h cron interval. The prior 11h (39600s) left
+  # 6h — well UNDER the 12h cron interval. The prior 11h (39600s) left
   # only a ~1h margin against the 12h fire, so any completion drift (run duration +
   # reminder jitter, absorbed by the runtime's small cooldown-slack) risked pushing
   # cooldown_until past the next scheduled tick and silently halving the cadence.
   # 6h keeps a full 6h margin while still suppressing a burst of rapid re-fires
-  # (the cooldown only ever stamps on an ORGANIC tick now — see dapr_actors P7-F3a).
+  # (the cooldown only ever stamps on an ORGANIC tick — see dapr_actors).
   cooldown_seconds: 21600
 
 outputs: []

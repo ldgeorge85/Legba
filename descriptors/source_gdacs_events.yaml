@@ -1,0 +1,99 @@
+# Draft SourceDescriptor. Ships DRAFT; the reference host walks it to
+# CONFIGURED (descriptors/LIFECYCLE.md), never active — activation is an
+# admin's call.
+#
+# GDACS (Global Disaster Alert and Coordination System, a UN / European
+# Commission cooperation) — the event list as GeoJSON: earthquakes, tropical
+# cyclones, floods, volcanoes, droughts and wildfires at Orange or Red alert,
+# one point per event with the alert level, the affected countries, the
+# GDACS report address and the severity data. Beside the GDACS RSS feed the
+# source catalogue already carries (the text of an alert): this one is the
+# structured event with its coordinates, which the map renders directly.
+#
+# Checked 2026-11-25 (one GET, generic client identity):
+# https://www.gdacs.org/gdacsapi/api/events/geteventlist/SEARCH?eventlist=EQ,TC,FL,VO,DR,WF&alertlevel=Orange;Red
+# -> HTTP 200, application/json, ~116 KB, a FeatureCollection of 80 Point
+# features. Each feature has no top-level `id`; its properties carry
+# `eventtype`, `eventid`, `episodeid`, `name` (the title, e.g. "Drought in
+# ..."), `description`, `alertlevel`, `iso3` (one country), `country`,
+# `fromdate`, `todate`, `datemodified`, `url` (geometry / report / details),
+# `severitydata`. The window is not date-bound: the list holds the events of
+# the last year, including ones that have ended (`iscurrent` false). `eventid`
+# identifies the event and is the id here; a changed episode of the same event
+# changes the feature and is re-emitted as an update, an unchanged one is not.
+# `eventid` is numbered per event type, so two types could in principle share
+# a number; the feature content hash still tells the two apart downstream.
+#
+# Licence, in the publisher's words (the feed's own items,
+# https://www.gdacs.org/xml/rss.xml): "(CC BY 4.0), reuse is allowed,
+# provided appropriate credit to GDACS is given." The feed channel also states
+# `copyright: public domain`. robots.txt was not read.
+#
+# Cadence: events change over minutes to hours; hourly.
+
+identity:
+  id: source.gdacs.events
+  name: GDACS — disaster alert events (GeoJSON)
+  kind: geojson
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: owner@local
+  created: "2026-11-25T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  # geo intentionally OMITTED — a global feed; the feature's own `iso3` and
+  # geometry file each event.
+  geo: []
+  languages: [en]
+  tags: [gis, geospatial, structured, hazard, disaster, humanitarian, global]
+  source_class: official
+  license_class: cc_by            # GDACS items: CC BY 4.0
+  attribution: "Source: GDACS (Global Disaster Alert and Coordination System), CC BY 4.0"
+  access_class: public
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "23 * * * *"
+  cooldown_seconds: 300
+  jitter_seconds: 60
+  expect_quiet: true             # a poll with no changed event is normal
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://www.gdacs.org/gdacsapi/api/events/geteventlist/SEARCH?eventlist=EQ,TC,FL,VO,DR,WF&alertlevel=Orange;Red"
+  feature_id_key:
+    factory_kind: text
+    raw: "eventid"
+  max_features:
+    factory_kind: number
+    raw: 500
+  timeout_seconds:
+    factory_kind: number
+    raw: 60                      # a ~120 KB document
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL/id-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 604800
+  delivery: lossy
+
+subscription_policy: open

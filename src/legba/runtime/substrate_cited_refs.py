@@ -72,7 +72,7 @@ CITED_REF_TABLES: tuple[tuple[str, str | None], ...] = (
     # The event drill tool (``substrate_frame_reads`` get_event) hands out the
     # ids of an event's lifecycle ledger rows, its edges and its actors as
     # citable refs. Without these a consult that cites one was counted
-    # "fabricated" (W11-F155). ``situation_events`` is the situation ledger.
+    # "fabricated". ``situation_events`` is the situation ledger.
     ("event_lifecycle_events", "event_lifecycle"),
     ("event_edges", "event_edge"),
     ("entity_profiles", "entity"),

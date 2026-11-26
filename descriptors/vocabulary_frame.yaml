@@ -1,4 +1,4 @@
-# The `frame` vocabulary family — THIS INSTANCE's subject groups (W7 FRAME-1).
+# The `frame` vocabulary family — THIS INSTANCE's subject groups.
 #
 # Seeded by the descriptor walker (scripts/bringup_register_descriptors.py,
 # "vocabulary seeds"): every row is upserted into `vocabulary_entries`, the

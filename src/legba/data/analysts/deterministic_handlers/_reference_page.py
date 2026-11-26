@@ -2,14 +2,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """R2 — one fetched page: its TEXT, its DATE, its ARCHIVE, its SPAN normaliser.
 
-Ported from ``planning/PROGRAM2_2026-09-16/R1/build_core_reference.py``, which
-measured every rule below on two live runs. Nothing here is new invention; what
-changed is that the archive is the platform's content-addressed store rather
-than a directory beside a planning file, and that the publish-date extractor is
-now load-bearing rather than informational — it is the DATE GATE's only input.
+Every rule below was measured on live runs. The archive is the
+platform's content-addressed store, and the publish-date extractor is
+load-bearing: it is the DATE GATE's only input.
 
-WHY THE DATE EXTRACTOR IS THE MOST IMPORTANT FUNCTION IN THIS SUBSYSTEM. R1
-run 2 shipped a FALSE development: "Israel Katz… has been named the new Defence
+WHY THE DATE EXTRACTOR IS THE MOST IMPORTANT FUNCTION IN THIS SUBSYSTEM. An
+earlier run shipped a FALSE development: "Israel Katz… has been named the new Defence
 Minister", dated 2026-09-16, span verbatim, URL really fetched — and the page
 carried no publish date in any metadata, so the model read the site's MASTHEAD
 ("Wednesday, Sep 16, 2026") as the article date. The article was from November
@@ -64,14 +62,14 @@ logger = logging.getLogger(__name__)
 #: EXTRACTED TEXT — the exact bytes a span is checked against.
 ARCHIVE_SUBDIR = "reference"
 
-#: The page text handed to the model per fetch. R1 measured the whole loop at
+#: The page text handed to the model per fetch. Measured, the whole loop at
 #: ~1–1.7M prompt tokens with this at 7,000; it is the single largest lever on
 #: core-plane time and it is an option on the descriptor.
 DEFAULT_PAGE_CHARS_TO_MODEL = 7000
 
 #: Below this many characters a 200 is almost certainly a consent wall, a
-#: paywall stub or a challenge interstitial rather than an article. R1 measured
-#: the failure this catches: the S3 review found the evidence_archiver's own
+#: paywall stub or a challenge interstitial rather than an article. The failure this
+#: catches: the evidence_archiver's own
 #: challenge detector capped at 500 chars and missing 5–13 kB interstitials, so
 #: a block read as "the web had nothing" — a FALSE ABSENCE.
 THIN_PAGE_CHARS = 1000

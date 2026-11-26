@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The raw readers' ``known_at`` cut — the MACHINERY (lane E0).
+"""The raw readers' ``known_at`` cut — the MACHINERY.
 
 What each raw reader does under ``known_at`` is classified in
 :mod:`legba.data.raw_reader_known_at`; this module is the shared code

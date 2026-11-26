@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Program 5 lane 2 — the `inquiry` KIND, its options, its persona and the
-pilot descriptor (planning/PROGRAM5_INQUIRY_DESIGN_2026-09-24.md §2/§3/§7.2).
+"""The `inquiry` KIND, its options, its persona and the
+pilot descriptor.
 
 No DB and no live pack: the LLM is a scripted double and the `inquiry_state`
 pack is a fake binding keyed by tool name (the pack-double idiom

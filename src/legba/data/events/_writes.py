@@ -51,7 +51,7 @@ EVENT_INSERT_SQL: str = """
         $22, $23, $24::uuid[],
         $25, $26, $27, $28,
         $29, $30::jsonb, $31,
-        -- V3/P7: events are minted by the live lane only; 'live' is a
+        -- events are minted by the live lane only; 'live' is a
         -- literal, not a parameter, so no caller can stamp history.
         'live'
     )

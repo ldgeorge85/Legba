@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # vLLM auto-recovery watchdog — FOR THE MODELS HOST, container edition.
 #
-# Failure history this codifies (2026-07-28..30, four incidents):
+# Failure modes this codifies (seen 2026-07-28..30):
 #   MODE A — the model server dies inside its container while supervisord
 #            (which runs INSIDE the container) reports RUNNING. In-container
 #            probe refuses; everything external 404/502s.
 #   MODE B — the model server is HEALTHY but a container restart changed its
 #            network address and the aiproxy layer in front kept resolving
 #            the stale upstream: external 404/502 against a live model
-#            (2026-07-30 16:05, four hours of fleet outage over a proxy
-#            that needed a bounce).
+#            (four hours of fleet outage over a proxy that needed a
+#            bounce).
 # Therefore: probe BOTH layers, remediate the RIGHT one, and after ANY
 # model-container restart ALWAYS bounce the proxy layer too.
 #

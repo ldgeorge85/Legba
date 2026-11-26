@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The runtime wiring of the contract-v2 desk shadow (lane D-1): OFF unless the
+"""The runtime wiring of the contract-v2 desk shadow: OFF unless the
 switch names the desk; ON only with both seat descriptors registered and the
 unpriced core route; every refusal logged and the desk untouched."""
 from __future__ import annotations

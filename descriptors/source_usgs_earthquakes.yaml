@@ -27,7 +27,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: active
-  owner: gis_bringup
+  owner: owner@local
   created: "2026-06-08T00:00:00Z"
 
 scope:
@@ -38,7 +38,7 @@ scope:
   languages: [en]
   tags: [gis, geospatial, structured, hazard, seismic, global]
   source_class: official           # S1-T8 — USGS (US government scientific agency)
-  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
+  access_class: public          # free no-auth feed, no separate reuse agreement
 
 acquisition: poll
 

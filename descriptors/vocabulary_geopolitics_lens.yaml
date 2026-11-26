@@ -1,4 +1,4 @@
-# The `geopolitics.lens` vocabulary family — THIS PROFILE's lean lenses (W9 SPLIT-2).
+# The `geopolitics.lens` vocabulary family — THIS PROFILE's lean lenses.
 #
 # Seeded by the descriptor walker (scripts/bringup_register_descriptors.py,
 # "vocabulary seeds"): every row is upserted into `vocabulary_entries`, the

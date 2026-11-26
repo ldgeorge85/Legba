@@ -1,14 +1,14 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# Sanctions / export-control profile SKELETON (PROFILE-1; DEC-11) — X2/E2.
+# Sanctions / export-control profile SKELETON.
 # The UK Sanctions List (FCDO) as the INSTRUMENT itself (kind
 # instrument_snapshot). OFSI's Consolidated List closed 2026-01-28; the UK
 # Sanctions List is the single UK list of record since.
 #
 # Ships DRAFT and UNPROBED: the URL below is the FCDO's published download
-# path and was NOT fetched by this lane (X2/E2 made one real fetch, of the
-# OFAC SDN list). The operator probes it before activating.
+# path and was NOT fetched (one real fetch was made, of the
+# OFAC SDN list). Probe it before activating.
 #
 # Read as TEXT (a unified line diff) until the first probe confirms the
 # list's XML entry element and its own identifier; switching to

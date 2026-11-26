@@ -261,9 +261,9 @@ CEILINGS: dict[str, int] = {
     # ``PolitySurfaceIndex`` is self-contained and moves next door cleanly.
     "data/_frame_anchor.py": 790,  # 718 @ 2026-09-06 (R1-a, birth)
     "runtime/dapr_actors.py": 4110,  # 3735 @ 2026-08-02
-    "runtime/liveness_watchdog.py": 1501,  # roll-86 follow-up: _evaluate_empty_streaks -> source_quiet_evidence.py (1604 before); roll 86: honest-quiet rules -> source_quiet_evidence.py; 1507 @ 2026-08-30 — merge-wave entrant (honest-quiet dynamic window + prolonged-streak escalation)
+    "runtime/liveness_watchdog.py": 1501,  # _evaluate_empty_streaks and the honest-quiet rules -> source_quiet_evidence.py (1604 before); 1507 @ 2026-08-30 (honest-quiet dynamic window + prolonged-streak escalation)
     "data/analysts/inline_target.py": 3915,  # 3909 @ 2026-08-25 — the per-clean render RECEIPT (_slice_render_stats) extracted to slice_render.py beside the render it describes, paying for the task-#57 wire-pair collapse hook; ceiling re-seeded down again (was 3930)
-    "runtime/substrate_query_port.py": 3840,  # 3800 @ 2026-09-28 (wave Q) — get_source_health extracted to substrate_source_health.py; re-seeded down from 3910
+    "runtime/substrate_query_port.py": 3840,  # 3800 @ 2026-09-28 — get_source_health extracted to substrate_source_health.py; re-seeded down from 3910
     "data/analysts/journal_assessor.py": 3000,  # 2723 @ 2026-09-23 (H10 — the PROPOSE phase [_propose_phase/_propose_phase_prompt], its constants, and _JOURNAL_PROPOSE_TOOL_SCHEMAS extracted verbatim to journal_propose_phase.py and re-exported, after H10's write-time shape-validator prompt text pushed the module 9 lines past the ceiling); 2859 @ 2026-09-09 (B5 — the ref-repair pre-REFLECT step + its honesty-flag/data wiring); 2828 @ 2026-09-09 (B2 — the [routine] DISCIPLINE line + honesty-flag wiring for T1.4); 2813 @ 2026-09-09 (B1 — the [instrument] window tag + DISCIPLINE line + the honesty-flag wiring for T1.2); 2767 @ 2026-09-09 (B0 — the priming-slice SELECTION machinery extracted verbatim to journal_slice.py and re-exported); 2831 @ 2026-09-09 (T1.0 — the REFLECT claim machinery extracted verbatim to journal_reflect.py and re-exported); 2965 @ 2026-08-11 (leak guards extracted)
     # BIRTH 2026-09-09 (T1.0): the REFLECT claim machinery pulled out of
     # journal_assessor.py (see its ceiling comment above) when three follow-on
@@ -306,7 +306,7 @@ CEILINGS: dict[str, int] = {
     "data/analysts/journal_clusters.py": 760,  # 690 @ 2026-09-10 (T2.2 birth)
     "runtime/grounding.py": 3000,  # 2719 @ 2026-08-02
     # LOWERED 2026-09-06 (extract-deps-and-options): the two per-kind WIRING
-    # blocks the 09-05 merge wave added — standing_auditor's (D5) LLM leg +
+    # blocks standing_auditor's (D5) LLM leg +
     # web_access leg + W-4 grader wiring, and desk_reference's (A-1) matching
     # two-leg wiring — moved to the new `runtime/analyst_deps_kinds.py` leaf,
     # which this module imports ONE WAY and re-exports, so
@@ -318,7 +318,7 @@ CEILINGS: dict[str, int] = {
     # already uses) rather than imported back, so the new module depends on
     # nothing in this one. Ratchet closes on the new floor.
     "runtime/analyst_deps_builder.py": 3000,  # 2984 @ 2026-09-06 (standing_auditor + desk_reference WIRING extracted to analyst_deps_kinds.py); 2715 @ 08-02; 3035 @ 09-05 merge wave (W-4 grader + A-1 desk_reference wiring)
-    "runtime/dapr_host.py": 2909,  # roll 86: /healthz -> runtime_healthz.py; 2676 @ 2026-08-02
+    "runtime/dapr_host.py": 2909,  # /healthz -> runtime_healthz.py; 2676 @ 2026-08-02
     # LOWERED 2026-08-03 (K-2): the API KERNEL — the B-2 bearer gate, the C3
     # ``sunset_headers`` stamp and the ``RegistryAPIDeps`` bundle + ``_get_deps``
     # — moved to the leaf ``data/registry/_deps.py`` (254 lines), which this
@@ -382,7 +382,7 @@ CEILINGS: dict[str, int] = {
     # fraction of the total). NOT split for the same reason V-J1's entry
     # below gives for its own file. Seeded at measured + ~10%.
     # LOWERED 2026-09-06 (extract-deps-and-options): the three per-feature
-    # blocks the 09-05 merge wave added — external grading width (W-9),
+    # blocks external grading width (W-9),
     # desk_reference (A-1), research_measurement (R-D) — moved to the new
     # `data/analysts/handler_options_programs.py`, which THIS module imports
     # (with underscore-aliased names, so the public surface — everything
@@ -397,8 +397,8 @@ CEILINGS: dict[str, int] = {
     # its ONLY importer, so the partial circular import always resolves; see
     # `handler_options_programs.py`'s own docstring. Ratchet closes on the new
     # floor.
-    # LOWERED 2026-09-24 (H15, wave G). The file sat AT its 1,660 ceiling:
-    # every lane that added a knob or a kind fought the line count. Both
+    # LOWERED 2026-09-24. The file sat AT its 1,660 ceiling:
+    # every change that added a knob or a kind fought the line count. Both
     # assembled catalogs — `HANDLER_OPTIONS` and `ANALYST_KIND_OPTIONS` — plus
     # their catalog-local spec constructors (`_nonneg_int` / `_unit_float` /
     # `_nonneg_float` / `_pos_float` / `_flag` / `_edge_families`) and the
@@ -514,6 +514,7 @@ CEILINGS: dict[str, int] = {
     # way the events/inquiry/programs catalogs already do. Seeded at the
     # measured count + ~10%, the first-touch allowance.
     "data/option_catalog/handler_options_catalog.py": 1670,  # 1515 @ 2026-11-04
+    "data/analysts/relationship_reifier.py": 1680,  # 1525 @ 2026-11-25
 }
 
 _EXTRACT_DONT_RAISE = (
@@ -521,7 +522,7 @@ _EXTRACT_DONT_RAISE = (
     "into a sibling module and re-seed the ceiling downward in the same "
     "commit — the section banners in these files are already the seams, and "
     "a split that re-exports the moved names from the original module is "
-    "invisible to every importer (see planning/"
+    "invisible to every importer (see the design notes"
     "CODE_CLEANUP_ANALYSIS_2026-08-02.md section 4.2). If a ceiling raise is "
     "genuinely the right call, raising it here is a deliberate, reviewable "
     "line in the diff — say why in the commit message."

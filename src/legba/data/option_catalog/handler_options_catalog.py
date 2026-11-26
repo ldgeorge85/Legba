@@ -8,7 +8,7 @@ dataclasses, the resolve/degrade traversal) rather than also carrying
 
 **Why this module exists.** ``handler_options.py`` sat at its own
 module-size-gate ceiling, and every lane that added a knob or a kind fought
-the line count — the events catalog, the programs spec tuple and Program 5's
+the line count — the events catalog, the programs spec tuple and the
 inquiry catalog already moved to their own siblings for the same reason (see
 ``handler_options_events.py`` / ``handler_options_programs.py`` /
 ``handler_options_inquiry.py``). This module is the next brick: it is where
@@ -463,7 +463,7 @@ HANDLER_OPTIONS: dict[str, tuple[OptionSpec, ...]] = {
             "the analytic method actually running.",
             maximum=1000.0,
         ),
-        # -- desk_head_staleness (FRAME-1 §6, 2026-08-20) ------------------
+        # -- desk_head_staleness ---------------------------------------
         _pos_float(
             "gauge_staleness_max_head_age_hours",
             "production gauge: age (hours) of the OLDEST head a composition "
@@ -519,7 +519,7 @@ HANDLER_OPTIONS: dict[str, tuple[OptionSpec, ...]] = {
         OptionSpec("min_baseline_points", "int", "Fewest baseline values a pair needs to be judged.",
                    minimum=2, maximum=_MAX_WINDOW_DAYS),
         OptionSpec("source_ids", "str_list", "Live series sources to read (empty = every live source)."),
-        # lane S-1 — rule-judged series (prices, policy rates): a level
+        # Rule-judged series (prices, policy rates): a level
         # entered/left, or a step change; such a series is never band-judged.
         OptionSpec("level_rules", "str_list",
                    "'<series glob><op><level>' (op >= > <= <): an event when a value enters or leaves it.",
@@ -528,7 +528,7 @@ HANDLER_OPTIONS: dict[str, tuple[OptionSpec, ...]] = {
                    "Series globs whose every change between consecutive values is an event.",
                    pattern=re.compile(r"^[a-z0-9_.*?]+$")),
         _nonneg_float("step_min", "Smallest absolute change a step_series event needs (0 = any change)."),
-        # lane I-5 — a series FAMILY given a named rule from the handler's
+        # A series FAMILY given a named rule from the handler's
         # closed table (series_change.NAMED_RULES): policy_rate | fx_move.
         OptionSpec("series_rules", "str_list",
                    "'<series glob>=<rule name>' (policy_rate: every change is an event; fx_move: a "
@@ -644,12 +644,12 @@ HANDLER_OPTIONS: dict[str, tuple[OptionSpec, ...]] = {
             "F5 (v4.1.0). A matched question the forward consumption walk "
             "finds NO consumer for writes ONE open SELF-flag (output_id = "
             "founded_on_id = the hypothesis id, reason "
-            "new_evidence_bears_on_unconsumed_question) — K-4 R4 measured "
+            "new_evidence_bears_on_unconsumed_question) — the gold-set replay measured "
             "output_consumption at 0 rows for ALL 112 watched questions, so "
             "the consumer-only walk left review_flags empty ALL-TIME and the "
             "watcher's detect surface invisible. One open flag per question "
             "(the 0107 partial unique index), shared flag_cap. CHOICE-LOCKED: "
-            "'on' / 'off'; ships 'off' — the X-1 byte-identical contract, "
+            "'on' / 'off'; ships 'off' — the byte-identical contract, "
             "armed by the same descriptor PUT that arms the bearing gate.",
             choices=("on", "off"),
         ),
@@ -688,9 +688,9 @@ HANDLER_OPTIONS: dict[str, tuple[OptionSpec, ...]] = {
         OptionSpec(
             "deictic_guard",
             "str",
-            "CW-3. Refuse to match a thesis that leans on a referent it does "
+            "Refuse to match a thesis that leans on a referent it does "
             "not carry (\"the incident\", \"the alleged Ukrainian attack\") — "
-            "K-4 R3 measured the class at 0.133 because the string every "
+            "the gold-set replay measured the class at 0.133 because the string every "
             "plane reads does not contain the proposition. Skipped and "
             "counted (skipped_deictic_questions), never down-weighted; the "
             "questions stay open in every other read path. The durable fix is "
@@ -702,10 +702,10 @@ HANDLER_OPTIONS: dict[str, tuple[OptionSpec, ...]] = {
         OptionSpec(
             "contention_subject_anchor",
             "str",
-            "CW-5. Require a fact_contention question's SUBJECT to be present "
+            "Require a fact_contention question's SUBJECT to be present "
             "in the signal — literally or through a resolved canonical alias "
             "— before the pair can edge. Without it the matcher edges off the "
-            "contested VALUE alone: K-4 R3's \"which value of 'located in' "
+            "contested VALUE alone: the gold-set replay's \"which value of 'located in' "
             "for texas\" matched a SpaceX story with no Texas token in it. "
             "Counted contention_subject_unanchored. CHOICE-LOCKED: 'on' "
             "(default) / 'off'.",
@@ -713,10 +713,10 @@ HANDLER_OPTIONS: dict[str, tuple[OptionSpec, ...]] = {
         ),
         _nonneg_float(
             "contention_liveness_days",
-            "CW-4. A fact_contention question is only watched while its "
+            "A fact_contention question is only watched while its "
             "dispute is live: not arbiter-collapsed, and carrying a non-junk "
             "value asserted within this many days. DEFAULT 0 = DISABLED, and "
-            "deliberately so: replayed over the K-4 R3 gold set the filter "
+            "deliberately so: replayed over the gold set the filter "
             "removed 7 correct matches for 8 false ones against a 60% base "
             "false rate, because a group COLLAPSES once the arbiter resolves "
             "the dispute — i.e. downstream of the evidence arriving. Built, "
@@ -770,15 +770,15 @@ HANDLER_OPTIONS: dict[str, tuple[OptionSpec, ...]] = {
         _nonneg_int(
             "bearing_confirm_cap",
             "Core-plane confirm judgments per run over gate-YES edges only. "
-            "Sized to bearing_gate_cap since CW-1 made the confirm a DECIDER: "
+            "Sized to bearing_gate_cap since the confirm became a DECIDER: "
             "an over-cap pair is un-adjudicated, not merely un-annotated. "
             "0 disables the leg (every gate survivor writes 'unconfirmed').",
         ),
         OptionSpec(
             "bearing_confirm_mode",
             "str",
-            "What a confirm verdict does. 'blocking' (default, CW-1) DROPS a "
-            "confirm-NO candidate the way a gate-NO is dropped — K-4 R3 "
+            "What a confirm verdict does. 'blocking' (default) DROPS a "
+            "confirm-NO candidate the way a gate-NO is dropped — the gold-set replay "
             "measured confirm-yes 0.667 vs confirm-no 0.085 on the live "
             "gated stream. 'advisory' restores the 3.3.0 stamp-only leg. "
             "CHOICE-LOCKED: a typo must fail the catalog loudly rather than "
@@ -1022,9 +1022,9 @@ HANDLER_OPTIONS: dict[str, tuple[OptionSpec, ...]] = {
         ),
         _pos_int("max_signals", "Signals examined per run."),
     ),
-    # V3/P1 event-plane knobs — the cohesive sibling keeps the catalog under
+    # Event-plane knobs — the cohesive sibling keeps the catalog under
     # its module-size ceiling (same split idiom as handler_options_programs).
-    **_EVENTS_CATALOG, **_INQUIRY_CATALOG, **_ENRICHMENT_CATALOG,  # V3 P1/P1b/P4b+H13 event-plane knobs (handler_options_events.py) + Program 5 lane 1's inquiry_yield (handler_options_inquiry.py) + W11-F118 reenrich_pending (handler_options_enrichment.py)
+    **_EVENTS_CATALOG, **_INQUIRY_CATALOG, **_ENRICHMENT_CATALOG,  # event-plane knobs (handler_options_events.py) + inquiry_yield (handler_options_inquiry.py) + reenrich_pending (handler_options_enrichment.py)
     "archive_retention": (
         _pos_int(
             "retention_days",
@@ -1097,7 +1097,7 @@ HANDLER_OPTIONS: dict[str, tuple[OptionSpec, ...]] = {
     ),
     # The PER-PROGRAM entries — research_measurement (R-D), desk_reference
     # (A-1), correctness_grader (G1), reference_builder (R2) and
-    # layer_divergence (Program 6 L2) — each declared beside its own
+    # layer_divergence — each declared beside its own
     # OptionSpecs in handler_options_programs.PROGRAM_CATALOG and spliced in
     # here whole, the **_EVENTS_CATALOG idiom two lines up. Same keys, same
     # specs, same known_option_names answers; what changed is that the NEXT
@@ -1126,7 +1126,7 @@ HANDLER_OPTIONS: dict[str, tuple[OptionSpec, ...]] = {
     ) + _EXTERNAL_GRADING_WIDTH_OPTIONS,
     "indicator_tracker": (
         _window_days("lookback_days", "Run-over-run diff window."),
-        # W11-F55 — the flip debounce (docs/TUNABLES.md §3).
+        # The flip debounce (docs/TUNABLES.md).
         _pos_int("hysteresis_runs", "Consecutive source runs a status must be "
                  "observed in before a change to it counts (default 2; 1 = no "
                  "debounce)."),
@@ -1152,7 +1152,7 @@ HANDLER_OPTIONS: dict[str, tuple[OptionSpec, ...]] = {
         _window_days(
             "frame_content_gauge_engagement_days",
             "frame-content gauge: the `desks_engaging` window — latest head "
-            "per analyst inside it (design §2.2).",
+            "per analyst inside it.",
         ),
         _nonneg_float(
             "frame_content_gauge_min_interval_hours",
@@ -1216,14 +1216,14 @@ HANDLER_OPTIONS: dict[str, tuple[OptionSpec, ...]] = {
         ),
         _flag(
             "prefer_ingest_copy",
-            "N-L: when the signal's article page was kept at ingest (a fetch "
+            "When the signal's article page was kept at ingest (a fetch "
             "receipt, role 'page' or the response itself), archive THOSE bytes "
             "instead of re-fetching; the re-fetch becomes the fallback for "
             "signals with no ingest-time copy. Default true.",
         ),
         _flag(
             "fetch_via_intake",
-            "I-1: route the re-fetch (a cited signal with no ingest-time copy) "
+            "Route the re-fetch (a cited signal with no ingest-time copy) "
             "through the ingestion intake as a 'backfill' receipt request under "
             "intake_pipeline, and archive the version it produces on a later "
             "tick; hosts with their own fetch policy, refused or failed requests "
@@ -1233,13 +1233,13 @@ HANDLER_OPTIONS: dict[str, tuple[OptionSpec, ...]] = {
         OptionSpec(
             "intake_pipeline",
             "str",
-            "I-1: the page pipeline (a source descriptor whose kind takes an "
+            "The page pipeline (a source descriptor whose kind takes an "
             "address) the routed re-fetch runs under — the instance's default "
-            "is source.page.default (kind 'page', I-2). Empty = not routed.",
+            "is source.page.default (kind 'page'). Empty = not routed.",
         ),
         _pos_int(
             "intake_wait_minutes",
-            "I-1: how long a routed re-fetch may stay pending before the "
+            "How long a routed re-fetch may stay pending before the "
             "archiver fetches it itself (default 60).",
         ),
     ),
@@ -1415,7 +1415,7 @@ ANALYST_KIND_OPTIONS: dict[str, tuple[OptionSpec, ...]] = {
             "Brier). Absent ⇒ the module default (ON). false ⇒ labels move "
             "only on subsequent facts.",
         ),
-        # W11-F139 — the ACH balance weighs diagnosticity, not consistency:
+        # The ACH balance weighs diagnosticity, not consistency:
         # an item's support toward each hypothesis it is consistent with is
         # divided by the count of live hypotheses it fits, so evidence shared
         # by several competing theses can no longer carry them all over +K.
@@ -1427,7 +1427,7 @@ ANALYST_KIND_OPTIONS: dict[str, tuple[OptionSpec, ...]] = {
             "the item's unit support by the number of live hypotheses it fits "
             "— evidence consistent with all N rows banks 1/N in each, while "
             "refutations keep the spread-diagnosticity subtraction; 'off' "
-            "restores the pre-W11-F139 spread-weighted sign count for "
+            "restores the earlier spread-weighted sign count for "
             "side-by-side comparison.",
             choices=("shared", "off"),
         ),
@@ -1454,10 +1454,9 @@ ANALYST_KIND_OPTIONS: dict[str, tuple[OptionSpec, ...]] = {
             "slice_focus; same re-order-never-filter contract.",
             pattern=_FOCUS_TOKEN_PATTERN,
         ),
-        # V3/P2 — THE GRANT. The plan's acceptance step is "the flag on and ONE
-        # analyst granted event citations", so the offer is a per-analyst
-        # descriptor knob rather than an env flag: a process-wide switch cannot
-        # express "escalation only". Read by the SLICE READER
+        # THE GRANT. The offer is a per-analyst descriptor knob rather than an
+        # env flag: a process-wide switch cannot express "escalation only"
+        # (one analyst granted event citations). Read by the SLICE READER
         # (``runtime.actor_substrate_slice``), which is where the grounding
         # gather fires — earlier than run_method, which is why it resolves the
         # descriptor's block itself rather than reading the merged run options.
@@ -1510,7 +1509,7 @@ ANALYST_KIND_OPTIONS: dict[str, tuple[OptionSpec, ...]] = {
             maximum=40,
         ),
         _SLICE_PER_SOURCE_CAP_SPEC,
-        # Lane N-B — the WATERMARK window (data/slice_coverage.py), read by the
+        # The WATERMARK window (data/slice_coverage.py), read by the
         # SLICE READER: everything since the desk's last successful run,
         # salience-selected when it overflows, the cut declared on the finding.
         _flag(
@@ -1536,7 +1535,7 @@ ANALYST_KIND_OPTIONS: dict[str, tuple[OptionSpec, ...]] = {
         ),
         *_NARRATIVE_SPREAD_BLOCK_OPTIONS,  # narrative_coordination's SPREAD BLOCK knob
         *_FEED_ROSTER_OPTIONS,  # K-2: a desk's declared FEED ROSTER
-        # X4 LEVEL (W11-F36) — which canonical indicators measure a LEVEL; W11-F91 — the GATHER evidence cap.
+        # X4 LEVEL — which canonical indicators measure a LEVEL; The GATHER evidence cap.
         *_LEVEL_INDICATOR_OPTIONS, *_GATHER_CONTEXT_OPTIONS,
         # J2 — the unit findings are the SAMPLED verify population (the tree
         # default rides the unit descriptors at 0.10).
@@ -1557,10 +1556,10 @@ ANALYST_KIND_OPTIONS: dict[str, tuple[OptionSpec, ...]] = {
     "cross_target_raw": (_SLICE_PER_SOURCE_CAP_SPEC,),
     "situation_tracker": _JUDGE_SAMPLING_OPTION_SPECS,
     "journal_assessor": _JUDGE_SAMPLING_OPTION_SPECS,
-    # Program 5 — the `inquiry` KIND's descriptor-borne mandate (brief /
+    # The `inquiry` KIND's descriptor-borne mandate (brief /
     # target_scope / pre_pass_module), read by inquiry.run_method at PLAN. No
     # judge-sampling specs: this kind's verify gate rides identity.kind like the
-    # journal family's, and its scoring instrument is YIELD (design §4), not the
+    # journal family's, and its scoring instrument is YIELD, not the
     # sampled faithfulness population.
     "inquiry": _INQUIRY_KIND_OPTIONS,
     # K-G2. The reifier's throughput and quality dials — the specs themselves
@@ -1579,14 +1578,16 @@ ANALYST_KIND_OPTIONS: dict[str, tuple[OptionSpec, ...]] = {
             "tool results are withheld OLDEST FIRST, never one whose refs the "
             "planner named, never the last round, never the question or the "
             "system prompt; data['context_compaction'] stamps what it did. "
-            "Absent or 0 => DERIVED (W11-F133): the route's context window - max_tokens "
-            "- 4,096, else LEGBA_LLM_INPUT_TOKEN_BUDGET (consult_context_ceiling."
-            "derive_ceiling); the stamp's ceiling_source says which. A value here wins.",
+            "Absent or 0 => DERIVED: LEGBA_LLM_INPUT_TOKEN_BUDGET when set, else "
+            "the route's context window - its largest maximum output (at most half "
+            "the window) - 4,096, else the input budget's default (consult_context_"
+            "ceiling.derive_ceiling); the stamp's ceiling_source says which. A value "
+            "here wins.",
             maximum=2_000_000,
         ),
         _flag(
             "mint_watch_candidates",
-            "F-4: mint each accepted answer's watch candidates as standing "
+            "Mint each accepted answer's watch candidates as standing "
             "open questions (hypotheses status='open_question', created_by "
             "consult) that claim_watch matches new signals against; a "
             "candidate with no resolution test or no future horizon is "

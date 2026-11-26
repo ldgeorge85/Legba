@@ -4,9 +4,7 @@
 """Dump, then delete, the relationship candidates that reached a final state.
 DRY RUN by default.
 
-Owner decision 2026-11-15 (data-model lane DM-G, design note
-DATA_LAYERS_2026-11-14 section 6 item 7 and question 4): the rejected or
-retired relationship candidates (``proposed_edges`` rows, about a million, over
+The rejected or retired relationship candidates (``proposed_edges`` rows, about a million, over
 a gigabyte) may be permanently deleted, each batch dumped to a file first.
 Never anything that was fetched, anything a published sentence rested on, or
 any published judgement.
@@ -53,6 +51,11 @@ Modes:
                   rehearsal. ``--vacuum-full`` (off) then rewrites the table to
                   hand the space back to the disk: it takes an EXCLUSIVE lock
                   for the length of the rewrite, so run it in a quiet window.
+
+A row is deleted only when its pair has a row in ``proposed_edge_markers``
+(the trigger writes one for every new final state;
+``scripts/marker_final_rejections.py`` writes them for the older rows and is the
+script to run to remove them). A row without a marker is left in place.
 
 DELETE frees space for the table's own reuse but does not shrink the file; only
 VACUUM FULL (or pg_repack) returns it to the disk.
@@ -285,9 +288,16 @@ async def delete_batches(statuses: list[str], ids: list[str], *, batch: int,
             chunk = todo[i:i + batch]
             async with conn.transaction():
                 await conn.execute("SET LOCAL lock_timeout = '5s'")
+                # Only a row whose pair has a marker may go: the marker is what
+                # keeps the pair from being proposed again.
                 res = await conn.execute(
-                    "DELETE FROM proposed_edges WHERE id = ANY($1::uuid[]) "
-                    "AND status = ANY($2::text[])", chunk, statuses)
+                    "DELETE FROM proposed_edges pe WHERE pe.id = ANY($1::uuid[]) "
+                    "AND pe.status = ANY($2::text[]) "
+                    "AND EXISTS (SELECT 1 FROM proposed_edge_markers m "
+                    "WHERE m.source_key = lower(pe.source_entity) "
+                    "AND m.target_key = lower(pe.target_entity) "
+                    "AND m.relationship_type = pe.relationship_type)",
+                    chunk, statuses)
             n = int(res.split()[-1])
             done += n
             print(f"  batch {i // batch + 1}: deleted {n} (total {done}/{len(todo)})")

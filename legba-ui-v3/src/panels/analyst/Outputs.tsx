@@ -11,6 +11,7 @@
  * latest emission time. Rows deep-link to Lineage (`legba:open-lineage`).
  */
 
+import { useAsOf, withAt } from '@/lib/asOf'
 import { useQuery } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { PanelChrome } from '@/components/PanelChrome'
@@ -58,13 +59,16 @@ export default function OutputsPanel({ registration, scope }: PanelProps) {
   const [live, setLive] = useState<OutputRow[]>([])
   const [tailOn, setTailOn] = useState(true)
 
+  // AS RECORDED: the instant rides the read (`lib/asOf.ts`); while one is set
+  // the read is not polled and the live tail is off (it only brings now).
+  const asOfMs = useAsOf()
   const { data, isLoading, error, refetch } = useQuery<FindingsResponse>({
-    queryKey: ['analyst-outputs-feed', analyst_id],
+    queryKey: ['analyst-outputs-feed', analyst_id, asOfMs],
     enabled: bound,
-    refetchInterval: 30_000, // poll backstop; live-tail handles real-time
+    refetchInterval: asOfMs === null ? 30_000 : false, // poll backstop; live-tail handles real-time
     queryFn: async () => {
       const r = await apiGet<FindingsResponse>(
-        `/findings?analyst_id=${encodeURIComponent(analyst_id)}&limit=50&fields=full`,
+        withAt(`/findings?analyst_id=${encodeURIComponent(analyst_id)}&limit=50&fields=full`, asOfMs),
       )
       setLive([])
       return r
@@ -75,7 +79,7 @@ export default function OutputsPanel({ registration, scope }: PanelProps) {
   const analystRef = useRef(analyst_id)
   analystRef.current = analyst_id
   useEffect(() => {
-    if (!bound || !tailOn) return
+    if (!bound || !tailOn || asOfMs !== null) return
     const sub = subscribeRegistryEvents(FINDINGS_TAIL_FILTER, (ev) => {
       if (ev.type !== 'event') return
       const row = mapTailEnvelope(ev.payload)
@@ -86,7 +90,7 @@ export default function OutputsPanel({ registration, scope }: PanelProps) {
       })
     })
     return () => sub.close()
-  }, [bound, tailOn])
+  }, [bound, tailOn, asOfMs])
 
   const rows = useMemo(() => {
     const seen = new Set<string>()

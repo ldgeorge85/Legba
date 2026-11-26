@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# THE SOURCE CATALOG of the geopolitics exemplar (ROSTER-1): the 46 verified
+# THE SOURCE CATALOG of the geopolitics exemplar: the 46 verified
 # no-auth rss / geojson feeds the descriptor walker registers beside the
-# descriptor files, with each feed's source_credibility seed. Exemplar DATA
-# (planning/PLATFORM_VS_EXEMPLAR_2026-09-29.md §1): the loader that reads it,
+# descriptor files, with each feed's source_credibility seed. Exemplar DATA:
+# the loader that reads it,
 # the descriptor builder and the credibility seeding are platform code in
 # scripts/bringup_register_source_catalog.py; profile.yaml names this file at
 # rosters.source_catalog.
@@ -14,10 +14,10 @@
 #   language en · geo [] (global) · tier wire · state_affiliation false
 #   extra_config {} · enrich_text false · fact_extract false · snapshot false
 #   access_class public · cred_score 0.5 · cred_rationale "" · classifications []
-#   (W10 TAX-2: <family>:<value> tags of registered families, stamped on
+#   (<family>:<value> tags of registered families, stamped on
 #   every signal the feed writes)
 #   source_class (none: derived from tier — thinktank analysis, gov official,
-#   else reporting; a state-CONTROLLED outlet says state_media, ROSTER-2)
+#   else reporting; a state-CONTROLLED outlet says state_media)
 # An unknown key is refused at load.
 #
 # License note: feed URLs are facts. Every feed below was probed live by us
@@ -45,7 +45,7 @@ entries:
     state_affiliation: true
     snapshot: true
     # The live head is `restricted` (every other catalog head is `public`);
-    # folded as-is 2026-10-04 (W6 SPLIT-1) — the reason is not recorded in
+    # kept as-is — the reason is not recorded in
     # the tree, so a review may well flip it to `public`.
     access_class: "restricted"
   - id: "source.crisisgroup.latest"
@@ -61,7 +61,7 @@ entries:
   - id: "source.newhumanitarian.all"
     name: "The New Humanitarian"
     kind: "rss"
-    # folded from the live head 2026-10-04 (W6 SPLIT-1); was /rss.xml
+    # was /rss.xml
     url: "https://www.thenewhumanitarian.org/rss/all.xml"
     tags: ["crisis", "humanitarian", "news"]
     cadence_minutes: 120
@@ -165,7 +165,7 @@ entries:
     cred_score: 0.8
     cred_rationale: "RAND Corporation — peer-reviewed policy research."
     tier: "thinktank"
-    # The live head sends this user agent (folded from the live head 2026-10-04 (W6 SPLIT-1)).
+    # The live head sends this user agent (taken from the live head).
     extra_config: {user_agent: "Mozilla/5.0 (compatible; LegbaBot/2.0; +https://www.rand.org/news/press.xml)"}
   - id: "source.atlanticcouncil.all"
     name: "Atlantic Council"
@@ -505,7 +505,7 @@ entries:
     url: "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/significant_week.geojson"
     tags: ["gis", "geospatial", "structured", "hazard", "seismic", "global"]
     cadence_minutes: 30
-    # Lane N-U: days with no new significant quake are the norm — exempt from
+    # Days with no new significant quake are the norm — exempt from
     # the empty-poll streak page (a NEW descriptor head must be registered).
     expect_quiet: true
     cred_host: "usgs.gov"

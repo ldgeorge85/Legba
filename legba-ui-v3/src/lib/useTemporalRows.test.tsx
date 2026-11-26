@@ -40,7 +40,7 @@ describe('useTemporalRows', () => {
     expect(findings).toEqual(['/api/v1/findings?limit=200&fields=summary'])
   })
 
-  it('asks /v3/events for the light row — the same read as the map events layer (roll 87: 0.42 MB whole, the Watch page over budget)', async () => {
+  it('asks /v3/events for the light row — the same read as the map events layer (0.42 MB whole, the Watch page over budget)', async () => {
     const { WORLD_EVENTS_PATH } = await import('./queryKeys')
     expect(WORLD_EVENTS_PATH).toBe('/v3/events?limit=500&fields=summary')
     const fetchMock = vi.fn(async (url: string) => {

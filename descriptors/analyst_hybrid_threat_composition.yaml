@@ -1,16 +1,15 @@
-# W5 (2026-11-07) — THEME-FILTERED thematic composition: hybrid_threat_composition.
+# THEME-FILTERED thematic composition: hybrid_threat_composition.
 #
 # Cross-border hybrid activity: hoax bomb threats, sabotage of rail, cables and
 # energy infrastructure, arson attributed to state proxies, GPS/GNSS jamming,
-# drone incursions over infrastructure, cyber-physical disruption. On
-# 2026-11-07 the European aviation bomb-hoax wave had 126 signals and 39 desk
-# findings across IT, GB, FR, AU and region_europe, and the world read did not
-# carry it: it lived in Italy's desks, Italy's head ranked 31 of 33, and no
-# composition gathered the campaign across borders
-# (planning/reviews/WORLD_READ_DIG_2026-11-07 item 7).
+# drone incursions over infrastructure, cyber-physical disruption. A
+# European aviation bomb-hoax wave once had 126 signals and 39 desk findings
+# across IT, GB, FR, AU and region_europe, and the world read did not carry it:
+# it lived in one country's desks, that head ranked 31 of 33, and no
+# composition gathered the campaign across borders.
 #
 # ── what is new, and what is not ────────────────────────────────────────────
-# The SAME meta_findings_synthesizer kind and the SAME S2-T4 thematic READ_SLICE
+# The SAME meta_findings_synthesizer kind and the SAME thematic READ_SLICE
 # branch as escalation_composition: target-less (one global run), one head per
 # (unit, desk), verify-floored, T7 correlation guard, desk coverage. Two things
 # differ, both declared below as data:
@@ -63,7 +62,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: draft
-  owner: w5_hybrid
+  owner: owner@local
 
 subscription:
   # NO `targets` block ⇒ ONE global run (`target_filter=None`). 24h holds the
@@ -89,7 +88,7 @@ subscription:
       time_window: 24h
   substrate:
     direct_queries: false        # reads via the kind's READ_SLICE, not ad-hoc SQL
-    # THEMATIC discriminator (S2-T4): routes this target-less, verify-declaring
+    # THEMATIC discriminator: routes this target-less, verify-declaring
     # run to the thematic branch. Its value names the THEME (no unit is called
     # hybrid_threat; the units are other_analysts above).
     thematic_dimension: hybrid_threat
@@ -159,7 +158,7 @@ method:
       raw: llm.primary.openai_compat
       expected_family: llm_provider
     # PRESENCE of this block is the verify opt-in the dispatch keys on (and the
-    # S2-T4 thematic branch requires a verify-declaring descriptor).
+    # thematic branch requires a verify-declaring descriptor).
     verify:
       factory_kind: stack_ref
       raw: llm.primary.openai_compat

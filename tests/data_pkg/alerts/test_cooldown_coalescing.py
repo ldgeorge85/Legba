@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Cooldown coalescing + unconfigured-sink noise gate (operator feedback 07-28).
+"""Cooldown coalescing + unconfigured-sink noise gate.
 
 Suppressed-in-cooldown alerts must be DISTILLED onto the next allowed POST
 (count + bounded preview), and unconfigured sinks must drop out of the fan-out
-whenever a configured sibling exists (the no-sinks case keeps the P1-1
+whenever a configured sibling exists (the no-sinks case keeps the
 visibility rows).
 """
 from __future__ import annotations
@@ -97,7 +97,7 @@ def test_all_unconfigured_keeps_visibility_rows():
     a = _FakeSink(kind="webhook", configured=False)
     b = _FakeSink(kind="ntfy", configured=False)
     d = AlertSinkDispatcher(sinks=[a, b])
-    assert len(d.sinks) == 2  # P1-1 guarantee intact
+    assert len(d.sinks) == 2  # Guarantee intact
 
 
 def test_env_cooldown_knob(monkeypatch):

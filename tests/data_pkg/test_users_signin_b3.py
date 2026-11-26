@@ -192,7 +192,7 @@ async def test_schema_has_no_password_column_and_refuses_plaintext(pool) -> None
             )
         with pytest.raises(asyncpg.CheckViolationError):
             await conn.execute(
-                # 'admin' became a valid role name in migration 0255 (A-1);
+                # 'admin' became a valid role name in migration 0255;
                 # the CHECK still refuses a name in neither vocabulary.
                 "UPDATE users SET role = 'superuser' WHERE id = $1", uid,
             )
@@ -653,11 +653,13 @@ def test_users_modules_import_registry_slim() -> None:
         import legba.data.users as u
         import legba.data.registry.session_auth as sa
         import legba.data.registry.users_api as ua
+        import legba.data.registry.users_admin_api as uaa
         leaked = sorted(m for m in sys.modules
                         if m.startswith("legba.data.analysts") or m.startswith("legba.runtime"))
         assert not leaked, leaked
         assert "legba.data.registry.api" not in sys.modules, "users_api pulled the api hub"
         assert u.PROVIDERS and sa.SessionCookieMiddleware and ua.build_users_router
+        assert uaa.build_users_admin_router
         print("OK")
         """
     )

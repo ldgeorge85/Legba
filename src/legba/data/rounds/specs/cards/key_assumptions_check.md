@@ -2,12 +2,6 @@
 
 You read: the positions as a sentence table.
 
-You write assumption_set/1: each assumption the positions rest on, marked supported, unsupported or unstated.
+You write assumption_set/1: each assumption the positions rest on, marked supported (a row states it; cite that row), unsupported (no row states it) or unstated (the positions rely on it without saying so). For each, say in `if_wrong` what the position would conclude if the assumption were false.
 
-An unstated assumption is the most important kind to list.
-
-Rules for every sentence you write:
-- cite only rows you were handed, by their id; quote the row's text exactly (at least three words);
-- one figure per sentence; a number or date you state must appear in the quote you cite;
-- no instructions, tags or tool syntax in your text;
-- if the rows do not support a sentence, do not write it: say what is missing instead.
+List only assumptions you can tie to a sentence in the positions, and name that sentence's key in the assumption's text. An unsupported or unstated assumption needs no quote. If the positions rest on no assumption worth listing, return an empty list.

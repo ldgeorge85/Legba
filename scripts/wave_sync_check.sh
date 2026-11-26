@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # wave_sync_check.sh — the orchestrator's check after a remote wave is rsynced back.
 #
-# A remote agent works on a synced copy of this tree (planning/WAVES_REMOTE_2026-09-29.md)
+# A remote agent works on a synced copy of this tree
 # and the operator rsyncs it back with --delete. Before anything is reviewed, merged or
 # rolled, this refuses on the ways a round trip can hurt the live host:
 #   1. a dirty tree (the agent must end clean on its wave branch);
 #   2. a commit in the wave range touching deploy/ (rsync-excluded; shows deleted remotely)
-#      or README.md (the logo block — the operator's standing order);
+#      or README.md (the logo block);
 #   3. the logo block missing at HEAD;
 #   4. .env keys that differ from the RUNNING runtime container's environment
-#      (the 09-23 reversed-sync incident dropped two flags silently);
+#      (a reversed sync once dropped two flags silently);
 #   5. a deploy/ tracked file missing on disk;
 #   6. a prepush-scan hit.
 # Then it prints the wave branch, its commits and the diff stat, and leaves the suite to you.

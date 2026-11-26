@@ -16,13 +16,13 @@ would not take notes":
      404 of 202 bytes; the first is 6,538 characters dated ``2026-09-17`` in
      JSON-LD. It did it twice. The run's only in-window page, lost to ``www.``.
   2. Four of the eight fetches went to ``reuters.com`` and ``bloomberg.com``,
-     both measured unreadable to this lane. They were dropped from search
+     both measured unreadable to this builder. They were dropped from search
      RESULTS and fetched anyway, from URLs written out of the model's head.
-  3. Thirteen queries named an outlet this lane cannot read, six carried a
+  3. Thirteen queries named an outlet this builder cannot read, six carried a
      ``site:`` operator, eight carried a date literal.
-  4. The model wrote one span-carrying NOTE (round 66) and the loop discarded
+  4. The model wrote one span-carrying NOTE (loop round 66) and the loop discarded
      it, because it arrived beside a tool call.
-  5. At round 58, 230 s in, the model emitted the complete final JSON as a
+  5. At loop round 58, 230 s in, the model emitted the complete final JSON as a
      plain-text turn. It lacked the words REFERENCE COMPLETE, so the loop
      replied "Noted. Continue." and bought thirteen more calls.
   6. The forced commit turn said "commit the reference now from the notes you
@@ -235,7 +235,7 @@ def _in_window_pages(prompt: str) -> list[tuple[str, str]]:
 
 def _au_gathering_replies() -> list[Any]:
     """The 06:43Z model's own habits, replayed: site:, dates, outlet names,
-    the www-less URL, and fetches of two hosts this lane cannot read."""
+    the www-less URL, and fetches of two hosts this builder cannot read."""
     return [
         _Reply(calls=[_Call(
             "web_search",
@@ -477,7 +477,7 @@ def test_an_unknown_dimension_still_gets_patterns():
 @pytest.mark.asyncio
 async def test_an_unfetchable_host_never_reaches_a_fetch_call():
     """The discovery drop had no fetch fence behind it, so the 06:43Z build
-    spent four of its eight fetch calls on hosts this lane cannot read."""
+    spent four of its eight fetch calls on hosts this builder cannot read."""
     assert is_unfetchable(BLOOMBERG_URL), "D6 added bloomberg.com, measured"
     binding = _ReplayBinding()
     plane = ToolPlane(binding=binding, archive=ReferenceArchive(None),
@@ -600,7 +600,7 @@ async def test_two_searches_without_a_fetch_inject_the_fetch_first_rule():
 
 @pytest.mark.asyncio
 async def test_a_note_beside_a_tool_call_is_recorded_and_satisfies_the_gate():
-    """Round 66 of the 06:43Z build wrote a real span-carrying NOTE beside a
+    """Loop round 66 of a build wrote a real span-carrying NOTE beside a
     tool call and the loop discarded it, then refused the call for skipping the
     note it had just written."""
     binding = _ReplayBinding()
@@ -634,7 +634,7 @@ def test_the_note_gate_refuses_at_most_once_per_fetch():
 
 @pytest.mark.asyncio
 async def test_a_reference_emitted_without_the_phrase_enters_the_commit_turn():
-    """Round 58: the complete final JSON, as prose, answered with 'Noted.
+    """Loop round 58: the complete final JSON, as prose, answered with 'Noted.
     Continue.' and thirteen more calls."""
     binding = _ReplayBinding()
     empty = json.dumps({

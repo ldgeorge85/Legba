@@ -121,11 +121,11 @@ async def test_the_response_bag_round_trips_on_the_real_driver(pg_pool):
         "model": "core",
         "context_compaction": None,
         "watch_minted": None,
-        # C-1b — the case key; None = the turn presented no case.
+        # The case key; None = the turn presented no case.
         "case": None,
         # C-2b-1 — the writes key; None = the turn was not armed for changes.
         "writes": None,
-        # Q-1 — the turn contract; None = the run carried none.
+        # The turn contract; None = the run carried none.
         "contract": None,
     }
 
@@ -152,7 +152,7 @@ async def test_the_response_bag_round_trips_on_the_real_driver(pg_pool):
 
 @pytest.mark.asyncio
 async def test_the_context_ceiling_stamp_round_trips_on_the_real_driver(pg_pool):
-    """W2 / F-6 — ``data["context_compaction"]`` is lifted by the front door's
+    """``data["context_compaction"]`` is lifted by the front door's
     projection, written on the response bag, and read back onto the turn."""
     from legba.data.registry.consult_api import _project_consult_response
 

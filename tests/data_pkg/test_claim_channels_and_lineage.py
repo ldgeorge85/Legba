@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""C-2 — a per-channel claim class, claim lineage one hop up, and the bearing
+"""A per-channel claim class, claim lineage one hop up, and the bearing
 path (pure tests; every channel, group and organisation INVENTED).
 
 * A Telegram channel marked ``claim`` (``config.classes`` + its own

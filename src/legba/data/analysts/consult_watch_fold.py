@@ -21,7 +21,7 @@ THE RULE. A candidate folds onto an OPEN consult watch when all three hold:
     embeddings (the platform's own ``embed.primary.openai_compat``, the plane
     claim_watch's vector gate uses) sit at cosine >= :data:`FOLD_COSINE_THRESHOLD`.
 
-WHY A CLAIM CORE, measured not assumed (live embedder ``embedding-inno1``,
+WHY A CLAIM CORE, measured not assumed (the live embedder, bge-m3,
 1024-d, 2026-10-03). On the RAW indicator texts the embedder cannot separate the
 duplicate from a different claim: the arms pair scores 0.71, and so does
 "major-arms-acquisition indicator observed" against "naval-buildup indicator

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W11-F150 — ``list_findings`` survey mode and paging, pinned.
+"""``list_findings`` survey mode and paging, pinned.
 
 The 2026-11-05 consult dig: all 44 targets had a live desk read, and the
 consult saw about twelve. An unscoped ``list_findings`` returned the 30 newest

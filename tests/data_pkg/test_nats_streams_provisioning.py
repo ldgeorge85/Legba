@@ -74,7 +74,7 @@ def stream_name_suffix() -> str:
 
 async def test_ensure_runtime_event_streams_creates_all_three(nats_store, stream_name_suffix):
     # Start clean — delete any pre-existing streams so we get `created=True`.
-    # NOTE: the helper now provisions five streams (L-221 added
+    # NOTE: the helper now provisions five streams (added
     # LEGBA_DLQ_EVENTS; 3f7f4728 "feat(vault): rotation eviction hook" added
     # LEGBA_VAULT_EVENTS for the RUST-5 vault-rotation cache-invalidation
     # hook); this test still focuses on the original three, but we delete +

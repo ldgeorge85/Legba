@@ -477,7 +477,7 @@ def render_tension_block(contradictions: Sequence[ClaimContradiction]) -> str:
 # The PUBLIC polarity surface (7a)
 # ---------------------------------------------------------------------------
 #
-# The contrary-evidence pass (Program 7a) formulates a counter-query by
+# The contrary-evidence pass formulates a counter-query by
 # NEGATING a claim's position in this module's vocabulary, and derives a
 # retrieved page's stance the same way. It needs the polarity machinery, and it
 # needs this module's calibration to travel with it.

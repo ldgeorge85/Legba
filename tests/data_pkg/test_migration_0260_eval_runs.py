@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""0260 — the published evaluation record on the REAL driver (E-3).
+"""0260 — the published evaluation record on the REAL driver.
 
 * the migration is idempotent: applied twice, two tables, the guard and the
   indexes, and no column that could hold a question or an answer;

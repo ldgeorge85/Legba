@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""A-1 — the sign-in switch (``LEGBA_AUTH_SIGNIN``), the parts that need no
+"""The sign-in switch (``LEGBA_AUTH_SIGNIN``), the parts that need no
 database: the credential list, the stamps, the minimum-role table and its
 generator check, the same-origin rule, the session read's SQL, the author
 rule, the client's own service token.
@@ -153,8 +153,8 @@ def test_on_a_named_service_is_refused_on_human_only_routes(creds, on) -> None:
 def test_min_role_table_counts_and_defaults() -> None:
     counts = rp.role_counts()
     assert sum(counts.values()) == len(rp.ROUTE_MIN_ROLES)
-    # 7 + S-2's ack / snooze (POST+DELETE each) + F-1's queue, confirm, reject,
-    # judgement + U-11's resolution records (roll 84: contributor); correct is admin.
+    # 7 + ack / snooze (POST+DELETE each) + queue, confirm, reject,
+    # judgement + resolution records (contributor); correct is admin.
     assert counts["contributor"] == 16
     assert rr.required_min_role("GET", "/api/v1/registry/descriptors") == "admin"
     assert rr.required_min_role("HEAD", "/api/v1/v3/timeline") == "reader"

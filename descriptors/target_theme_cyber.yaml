@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# K-1 (2026-11-14) — the CYBER desk: a thematic target with NO PLACE.
+# The CYBER desk: a thematic target with NO PLACE.
 #
 # `theme_*` = a desk defined by what it is about rather than where (a sibling
 # of `lane_*` / `flow_*`, whose shape rationale is in target_lane_hormuz.yaml).
@@ -14,16 +14,15 @@
 #      signal from the desk's own feeds (the CISA catalogue and advisories,
 #      NCSC, CERT-FR, CERT-EU, BSI, three trade outlets, four provider status
 #      feeds) carries that key, stamped at ingest from each source's
-#      `scope.classifications` (W10 TAX-2);
-#   2. the TEXT arm, `scope.signal_text_terms` (lane K-1,
-#      data/signal_slice_scope.py) — any OTHER signal whose title + summary
+#      `scope.classifications`;
+#   2. the TEXT arm, `scope.signal_text_terms` (data/signal_slice_scope.py) — any OTHER signal whose title + summary
 #      names one of the terms below: the general-news report of a ransomware
 #      attack on a hospital, a national outage blamed or not blamed on a
 #      cyberattack, a CVE identifier. Word-start, case-insensitive; a space or
 #      hyphen in a term matches either or nothing ("cyber attack" =
 #      cyberattack / cyber-attack); "cve-" matches every CVE identifier.
 #   Rendered: `(tags && $n OR <title+summary> ~* $m)`. Measured read-only on
-#   the reference host 2026-11-13: 5,068 canonical signals in 24 h; an early
+#   the reference host: 5,068 canonical signals in 24 h; an early
 #   draft of the term list matched 35, about 85% on-topic in a 72 h title
 #   sample (the misses: "leaked government data" stories, a Scottish-bog
 #   summary). EXPLAIN ANALYZE of the rendered 24 h statement: an index range
@@ -59,14 +58,12 @@
 # ── NO `g20` / `watch` / `supply_chain` / `nuclear_watch` / `region` TAG ────
 # Those tags fan whole unit families onto a desk (country units, the
 # disruption unit, proliferation_watch, region composition). `cyber` and
-# `theme` fan nothing today: NO unit subscribes to this desk yet. The units it
-# needs, and which existing kinds map, are in the lane report and
-# planning/reviews/CYBER_DESK_2026-11-14/ (owner decision; nothing here
-# pretends a unit exists).
+# `theme` fan nothing today: NO unit subscribes to this desk yet. Nothing here
+# pretends a unit exists.
 #
 # ── ABSENCE CONTRACT (what this desk does NOT collect) ─────────────────────
 #   * claims channels (hacktivist / ransomware leak-site / persona channels):
-#     none, until the owner chooses from the reviewed shortlist; an actor's
+#     none yet (a reviewed shortlist awaits an operator choice); an actor's
 #     claim reaches this desk only as a trade outlet or agency reports it;
 #   * provider status HISTORY: the Azure feed lists open incidents only and
 #     the Google feeds keep recent ones; an incident opened and closed between
@@ -91,7 +88,7 @@ identity:
   abstraction_level: L1
   inherits: []
   state: draft
-  owner: cyber_desk_k1
+  owner: owner@local
   created: "2026-11-14T00:00:00Z"
 
 scope:

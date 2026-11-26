@@ -1,11 +1,10 @@
-# The `geopolitics.topic` vocabulary family — THIS PROFILE's thematic beats (K-1).
+# The `geopolitics.topic` vocabulary family — THIS PROFILE's thematic beats.
 #
 # What a SOURCE's stream is about, declared on the source descriptor as
-# `scope.classifications: ["geopolitics.topic:<value>"]` (W10 TAX-2,
-# src/legba/data/source_classification.py). The baseline stamps the key on
+# `scope.classifications: ["geopolitics.topic:<value>"]` (src/legba/data/source_classification.py). The baseline stamps the key on
 # every signal the source writes (`signals.tags`, first, so the 64-tag cap
 # never drops it), where a thematic desk's `scope.signal_tags` selects it in
-# SQL (W8 TAX-1, src/legba/data/signal_slice_scope.py). A desk with no place
+# SQL (src/legba/data/signal_slice_scope.py). A desk with no place
 # routes by this, not by geography.
 #
 # Seeded by the descriptor walker (scripts/bringup_register_descriptors.py,

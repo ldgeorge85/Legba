@@ -10,7 +10,7 @@ pieces, "the X"/"X" article-twins) and mis-types ~half of them (the title-case�
 person heuristic). E1 stopped NEW fragments at the write path; the researcher is
 the retroactive cleanup: it CONSUMES the blocked candidate pairs from E3
 (:func:`legba.data._entity_candidates.generate_candidates`), ADJUDICATES the
-gray band with the core-plane LLM ($0 gpt-oss-120b), and records a verdict per
+gray band with the core-plane LLM ($0 core model), and records a verdict per
 pair in ``entity_judgement`` (an audit row + a re-adjudication cache keyed by
 ``pair_key``).
 
@@ -42,7 +42,6 @@ from ..provenance.models import FindingPayload
 from .. import rosters as _rosters
 from .._entity_candidates import CandidatePair
 from ..tags import tag_vocabulary_index
-from ._tradecraft import with_preamble
 
 logger = logging.getLogger(__name__)
 
@@ -65,9 +64,9 @@ _VALID_VERDICTS = frozenset({"same", "not_same", "unsure"})
 
 @dataclass(frozen=True)
 class ClassCorrection:
-    """An OPTIONAL adjudicator-surfaced class-label correction (P4 Class 6
-    Observation 2, planning/prompt_gallery/p4_judge_bearing.md §Class 6): the
-    adjudicator is fed the UPSTREAM (possibly wrong) ``entity_class`` label as
+    """An OPTIONAL adjudicator-surfaced class-label correction.
+
+    The adjudicator is fed the UPSTREAM (possibly wrong) ``entity_class`` label as
     ground truth framing, and routinely reasons PAST that wrong label to the
     correct read ("Women's Africa Cup of Nations" typed ``person`` for both
     sides, but the model's own "why" — "word order variant, same tournament" —
@@ -96,12 +95,14 @@ class Verdict:
     justification: str
     decided_by: str = "llm"
     model_id: str | None = None
-    #: P4 Class 6 Obs. 2 — optional, parsed from the model's reply when it
+    #: Optional, parsed from the model's reply when it
     #: flags a wrong upstream entity_class label (see :class:`ClassCorrection`).
     class_correction: ClassCorrection | None = None
 
 
-_ADJ_SYSTEM = with_preamble(
+#: No house analyst preamble here: this seat returns a bare JSON array, and the
+#: preamble's object-only reply rule and BLUF rule contradict that.
+_ADJ_SYSTEM = (
     """TASK — decide whether two entity NAMES denote the SAME real-world entity, for a knowledge-graph de-duplication pass.
 
 You are given a numbered list of candidate PAIRS. For EACH pair return one verdict. Output ONE JSON array, nothing else — one object per pair, in order. ECHO the two names verbatim in "a" and "b" so the verdict is unambiguously bound to the right pair:
@@ -199,7 +200,7 @@ def _norm_name(s: object) -> str:
 def _coerce_class_correction(
     raw: object, valid_classes: frozenset[str] | None = None,
 ) -> ClassCorrection | None:
-    """Parse the OPTIONAL ``class_correction`` field (P4 Class 6 Obs. 2).
+    """Parse the OPTIONAL ``class_correction`` field.
 
     Strict on purpose: a malformed/unrecognized ``side`` or ``correct_class``
     (e.g. a hallucinated class outside the closed taxonomy) drops the whole
@@ -333,7 +334,7 @@ async def _persist(conn, verdicts: list[Verdict], *, written_by: str | None = No
     """Upsert verdicts into entity_judgement (idempotent on pair_key). A
     re-adjudication overwrites the prior row but a HUMAN decision is never
     clobbered by an llm/rule pass. ``written_by`` is the running seat's
-    principal handle (lane 9; ``None`` = not known, the row names no writer)."""
+    principal handle (``None`` = not known, the row names no writer)."""
     for v in verdicts:
         await conn.execute(
             """
@@ -360,7 +361,7 @@ async def _record_class_correction_hint(
     conn, target_id: str, correction: ClassCorrection, *, pair_key: str,
 ) -> bool:
     """Best-effort: stamp the flagged side's ``entity_profiles.data`` with an
-    ``adjudicator_class_hint`` note (P4 Class 6 Obs. 2 — the adjudicator
+    ``adjudicator_class_hint`` note (the adjudicator
     routinely reasons past a WRONG upstream ``entity_class`` label it was fed
     as ground truth, with no channel to report it back to the reclassify
     pipeline). Reuses the SAME ``data`` jsonb column + ``jsonb_set`` idiom the
@@ -426,7 +427,7 @@ async def adjudicate_pairs(
     ``persist`` is true every NEW verdict is upserted (human decisions are
     preserved). Returns verdicts for ALL input pairs, cache + fresh.
 
-    ``apply_class_corrections`` (P4 Class 6 Obs. 2, default False — mirrors
+    ``apply_class_corrections`` (default False — mirrors
     ``reclassify_entities``'s own ``apply`` gate, so a dry-run pass mutates
     NO ``entity_profiles`` row, exactly like every other entity_profiles write
     in this module): when true, every parsed :class:`ClassCorrection` is
@@ -662,7 +663,7 @@ async def merge_pair(
         # V3/P0 — the same contract for the event-actor links (migration 0202):
         # repoint through resolve_entity() INSIDE this transaction, so an
         # event's actor can never keep pointing at the tombstone. NO guard, on
-        # purpose (review 2026-09-22): 0202 is in the chain the registry applies
+        # purpose: 0202 is in the chain the registry applies
         # before the runtime starts, so the function exists wherever this runs;
         # and a caught UndefinedFunctionError inside this OPEN transaction would
         # not degrade anyway — Postgres marks the transaction aborted and the
@@ -794,7 +795,7 @@ class ResearchReport:
     #: "changed": 12}, "entity": {"examined": 20, "changed": 5}}. Empty when
     #: reclassify_max == 0 or every pool it was given was allotted 0 rows.
     reclass_by_class: dict[str, dict[str, int]] = field(default_factory=dict)
-    #: P4 Class 6 Obs. 2 (QW1-D fix 3) — how many of THIS pass's adjudicated
+    #: How many of THIS pass's adjudicated
     #: verdicts carried an optional ``class_correction`` (a wrong upstream
     #: entity_class the adjudicator's own reasoning flagged). Counted
     #: regardless of ``mode`` (a pure observation, no mutation); the row-level
@@ -882,12 +883,12 @@ class ResearchReport:
 # drains across ticks and is never re-sent to the LLM. Mirrors the adjudication
 # machinery (batched, echo-bound parse, degrade-to-no-change).
 #
-# #219 (2026-07-23) — GENERIC-ENTITY EXTENSION. The generic `entity` bucket has
-# the SAME problem as `person` did: DQ M6 (2026-07-06 audit) measured 29.5% of
+# GENERIC-ENTITY EXTENSION. The generic `entity` bucket has
+# the SAME problem as `person` did: an audit measured 29.5% of
 # entity_profiles fall into it, and it is the fallback for BOTH a genuinely
 # unclear referent AND a real organization/location/event the deterministic
 # gazetteers (is_org_surface / is_region_surface / is_known_org_surface) never
-# caught — R-2 (`6f270a2`, 2026-07-21) made this WORSE on purpose: an article-
+# caught — a later change made this WORSE on purpose: an article-
 # prefixed surface that would land `person` now demotes to `entity` instead (the
 # safer of two imperfect buckets), which means `entity` is now also catching the
 # person-pool's overflow. `entity` never auto-merges either (the generic bucket
@@ -953,7 +954,7 @@ _EVENT_KEYWORDS = (
     r"protocol|convention|referendum|election|revolution|uprising|"
     r"offensive|operation|championship|olympics"
 )
-#: Corporate-suffix tokens — a DQ M6-flagged under-caught target the person
+#: Corporate-suffix tokens — a audit-flagged under-caught target the person
 #: pool never needed (a person-shaped name rarely carries one). Anchored to
 #: the STRING END (`\.?\s*$`, not a bare `\y...\y`) by the entity-pool SQL
 #: below — a review caught the word-boundary-only form matching short 2-3
@@ -971,13 +972,13 @@ _CORP_SUFFIX_KEYWORDS = (
 #: signals (article prefix, org/location/event keywords — the E6 census
 #: patterns) only affect ORDER: suspects jump the queue, then newest-first so
 #: fresh inflow gets its look within ~a cadence tick and the historical tail
-#: drains opportunistically. The 2026-07-21 review motivated the widening: the
+#: drains opportunistically. The widening was motivated by this: the
 #: suspect-only pool cleaned keyword-flagged junk but let quiet mis-types
 #: ("West Berlin", "Novaya Pošta", "Dodge", "Lesedi La Rona") sit typed person
 #: forever. The LLM makes the final call (conservative prompt, 0.75 gate,
 #: real persons kept) — the prefilter only orders the queue.
 #:
-#: P4 Class 6 Obs. 2 (QW1-D fix 3): a row carrying an ``adjudicator_class_hint``
+#: A row carrying an ``adjudicator_class_hint``
 #: (the adjudicator flagged this exact row's class as wrong while reasoning
 #: about a merge candidate — see ``_record_class_correction_hint``) queue-jumps
 #: AHEAD of the lexical heuristics below — an LLM-confirmed signal on THIS row
@@ -1009,10 +1010,10 @@ _RECLASS_SUSPECT_SQL = rf"""
 #:     already relies on, so this adds no new index and no new migration);
 #:   * ORDER (not FILTER — the LLM sees the whole pool, the prefilter only
 #:     queues it) reuses the SAME institutional/geographic/event keyword
-#:     families as the person predicate above (the DQ M6 (2026-07-06) curated
+#:     families as the person predicate above (the curated
 #:     categories: `is_org_surface` / `is_region_surface` / `is_known_org_surface`
 #:     in `_entity_canon.py`) that most often explain a row stuck generic, PLUS
-#:     a TRAILING corporate-suffix signal (`corporation` is a DQ M6-flagged
+#:     a TRAILING corporate-suffix signal (`corporation` is a audit-flagged
 #:     under-caught target the person pool never needed). A genuinely
 #:     ambiguous trailing short token ("General Sa") can still queue-jump —
 #:     this is an ORDER-only signal (never a filter; the conservative LLM
@@ -1023,7 +1024,7 @@ _RECLASS_SUSPECT_SQL = rf"""
 #:     article-prefix->entity demotion, `6f270a2`, which now feeds THIS pool)
 #:     gets its LLM look within ~a tick rather than waiting out the historical
 #:     backlog. `reclass_seen_at` drains the pool exactly as it does for person.
-#: P4 Class 6 Obs. 2 (QW1-D fix 3): same adjudicator-hint queue-jump as
+#: Same adjudicator-hint queue-jump as
 #: ``_RECLASS_SUSPECT_SQL`` above, applied to the generic-entity pool.
 _RECLASS_ENTITY_SUSPECT_SQL = rf"""
     SELECT id, canonical_name, entity_class
@@ -1088,7 +1089,7 @@ CLASS DEFINITIONS:
 - entity = a real referent that fits none of the above cleanly (a concept, a vessel/aircraft type, a programme), OR you are unsure."""
 
 #: The original 5 worked examples, UNCHANGED (this exact prompt scored 8/8 on
-#: the live gpt-oss classifier at reclassify_max=10 before flipping live,
+#: the live core-model classifier at reclassify_max=10 before flipping live,
 #: `9b53f00` — not touched, so the validated person-pool prompt stays byte-
 #: identical). The entity-pool prompt gets ONE extra example (#6, a genuinely-
 #: ambiguous concept that correctly stays `entity`) since that pool's whole
@@ -1138,7 +1139,8 @@ def _build_reclass_system(source_class: str) -> str:
     text. Unknown ``source_class`` falls back to the 'person' framing."""
     intro, rule, examples = _RECLASS_FRAMING.get(
         source_class, _RECLASS_FRAMING["person"])
-    return with_preamble(
+    # No house analyst preamble: the reply is a bare JSON array (see _ADJ_SYSTEM).
+    return (
         f"""TASK — assign the correct ENTITY CLASS to each name, for a knowledge-graph type-correction pass. {intro} Return the TRUE class.
 
 {_RECLASS_SCHEMA_AND_DEFS}
@@ -1429,7 +1431,7 @@ async def run_entity_research(
 
     verdicts = await adjudicate_pairs(
         conn, llm, gray, model_id=model_id, batch_size=adj_batch,
-        # P4 Class 6 Obs. 2 (QW1-D fix 3): the entity_profiles.data hint write
+        # The entity_profiles.data hint write
         # is gated on `apply`, mirroring reclassify_entities's own apply gate —
         # a dry-run pass mutates NO entity_profiles row, exactly like every
         # other write in this module. The COUNTER below is computed regardless.
@@ -1466,7 +1468,7 @@ async def run_entity_research(
             "why": (v.justification[:120] if v else f"auto_merge:{band}"),
         })
 
-    # P4 Class 6 Obs. 2 (QW1-D fix 3) — the COUNTER (always computed, no
+    # The COUNTER (always computed, no
     # mutation) + a small human sample naming which side + class was flagged.
     class_corrections_flagged = 0
     class_correction_sample: list[dict] = []
@@ -1593,7 +1595,7 @@ class EntityResearcherDeps:
     llm: LLMHandlerLike
     pg_pool: Any = None
     budget: _BudgetLike | None = None
-    #: The running seat's principal handle (lane 9), stamped on every
+    #: The running seat's principal handle, stamped on every
     #: entity_judgement row this run writes; ``None`` = not known.
     written_by: str | None = None
     apply: bool = False

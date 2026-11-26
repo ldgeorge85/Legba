@@ -3,7 +3,7 @@
 --
 -- 0040_situations_first_class.sql
 --
--- Phase 5a.1 — make SITUATIONS first-class objects (planning/PHASE5_SITUATIONS_PLAN.md).
+-- Phase 5a.1 — make SITUATIONS first-class objects.
 --
 -- WHY:
 --   Situations today are bottom-up aggregates: situation_clustering UPSERTs one

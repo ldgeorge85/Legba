@@ -2,9 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """R2 — the bounded tool loop the core plane runs to build ONE reference.
 
-Ported from ``planning/PROGRAM2_2026-09-16/R1/build_core_reference.py``, which
-is the measured implementation, with three platform changes and no behavioural
-invention:
+Ported from the measured prototype build script, with three platform changes
+and no behavioural invention:
 
   * **The transport is the platform's.** Search and fetch go through the
     ``web_access`` ACTION PACK binding (``binding.run_tool``) — the same
@@ -114,7 +113,7 @@ MAX_ROUNDS_PER_TOOL_CALL = 4
 TIER3_OPEN_AT = 0.5
 
 # ---------------------------------------------------------------------------
-# D3 — THE COMMIT WALL (2026-09-17)
+# THE COMMIT WALL
 # ---------------------------------------------------------------------------
 #
 # WHAT WENT WRONG, in one paragraph. The 00:43Z autonomous tick picked Argentina
@@ -160,7 +159,7 @@ TIER3_OPEN_AT = 0.5
 #: deadline and nothing useful could be — see ``tests`` for what is actually
 #: asserted and why.
 BUILD_MAX_SECONDS_ENV = "LEGBA_REFERENCE_BUILD_MAX_SECONDS"
-BUILD_MAX_SECONDS_DEFAULT = 900.0   # 2026-09-20 operator: was 420
+BUILD_MAX_SECONDS_DEFAULT = 900.0   # was 420
 
 #: Hard per-build token ceiling. THE lever on the defect that actually stamped
 #: the cooldown: one build may not eat the analyst's whole day bucket. At
@@ -243,7 +242,7 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "The search query."},
-                # W11-F11: no ``time_range`` — the pack refuses it by name and
+                # No ``time_range`` — the pack refuses it by name and
                 # every refusal cost the build; recency is the fence's job.
             },
             "required": ["query"],
@@ -354,7 +353,7 @@ class ToolPlane:
         args: dict[str, Any] = {
             "query": query, "limit": SEARCH_RESULTS_TO_MODEL * 3,
         }
-        # W11-F11: a ``time_range`` the model still emits is never forwarded;
+        # A ``time_range`` the model still emits is never forwarded;
         # it is recorded on the search ledger so the trace shows the ask.
         if time_range:
             self.searches.append({
@@ -1356,7 +1355,7 @@ async def run_loop(
 
 
 async def _execute(plane: ToolPlane, call: ToolCall) -> tuple[dict[str, Any], str]:
-    # gpt-oss leaks harmony channel markers into the tool NAME
+    # the core model leaks harmony channel markers into the tool NAME
     # ("web_search<|channel|>commentary"). R1 run 1 lost 2 of 80 calls to this;
     # strip it rather than fail the call.
     name = str(call.name or "").split("<|")[0].strip()

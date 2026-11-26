@@ -26,7 +26,7 @@ unchanged: same keys, same specs, same order.
 Later per-feature blocks join the same file for the same reason — one feature's
 knobs, no cross-reference to the rest of the catalog, spliced back into
 ``HANDLER_OPTIONS`` at the key they belong to. ``LAYER_DIVERGENCE_OPTIONS``
-(Program 6 L2, the layer-divergence unit) is the most recent.
+(the layer-divergence unit) is the most recent.
 
 This module imports ``OptionSpec`` and the three terse constructor helpers
 (``_pos_int`` / ``_window_hours`` / ``_window_days``) from
@@ -74,10 +74,10 @@ __all__ = [
 ]
 
 
-# R-D research measurement. `min_n` is gate G9 (spec §6.3) — the floor below
+# Research measurement. `min_n` is gate G9 — the floor below
 # which a rate publishes as null with a reason instead of as a number; it is
-# settable because regime-1 yield is the single number the operator may want
-# to move (F-10) and a code edit is the wrong place for that decision.
+# settable because regime-1 yield is the single number worth moving without
+# a code edit.
 RESEARCH_MEASUREMENT_OPTIONS: tuple[OptionSpec, ...] = (
     _window_days("window_days", "Research-signal window each counter reads."),
     _window_days(
@@ -97,7 +97,7 @@ RESEARCH_MEASUREMENT_OPTIONS: tuple[OptionSpec, ...] = (
 )
 
 
-# Lane narrative (Program 7 piece 7e) — narrative_coordination's SPREAD BLOCK
+# Narrative coordination — narrative_coordination's SPREAD BLOCK
 # (spread_block.build_spread_block), spliced onto the tail of the
 # ANALYST_KIND_OPTIONS["inline_target"] tuple in handler_options.py. Extracted
 # straight here rather than added in-line there: this module-size gate ratchet
@@ -117,7 +117,7 @@ NARRATIVE_SPREAD_BLOCK_OPTIONS: tuple[OptionSpec, ...] = (
 )
 
 
-# Lane K-2 — a desk's declared FEED ROSTER (feed_roster_block.py), spliced
+# A desk's declared FEED ROSTER (feed_roster_block.py), spliced
 # onto the inline_target kind tuple beside the SPREAD BLOCK knob, for the same
 # module-size reason. One entry per feed, "<source_id>=<kind>"; the kind is the
 # descriptor's own word (the block groups by it and attaches no meaning to it).
@@ -134,7 +134,7 @@ FEED_ROSTER_OPTIONS: tuple[OptionSpec, ...] = (
     ),
 )
 
-# Lane K-2 — the KEV digest's knobs (deterministic_handlers/kev_digest.py).
+# The KEV digest's knobs (deterministic_handlers/kev_digest.py).
 # None can make it say more than the register feed's own fields.
 KEV_DIGEST_OPTIONS: tuple[OptionSpec, ...] = (
     OptionSpec(
@@ -151,7 +151,7 @@ KEV_DIGEST_OPTIONS: tuple[OptionSpec, ...] = (
     _pos_int("max_entries", "Most new rows one digest reads.", maximum=2000),
 )
 
-# Lane E-1 — the due-and-absent detector's knobs
+# The due-and-absent detector's knobs
 # (deterministic_handlers/due_and_absent.py). Each one only moves a date's
 # tolerance or a read's bound; none can make it look at a row that carries no
 # explicit date, and none changes its wording.
@@ -266,7 +266,7 @@ EXTERNAL_GRADING_WIDTH_OPTIONS: tuple[OptionSpec, ...] = (
     # delegate declared above this tuple's splice point.
     OptionSpec(
         "window_grace_hours", "float",
-        "G-3's admissible-window grace: a decisive source published up to "
+        "The admissible-window grace: a decisive source published up to "
         "this many hours BEFORE the read's own evidence_window.oldest is "
         "still admitted (the AFTER bound never moves). Default 0 == "
         "today's exact rule, byte-identical. FLIPPING THIS ABOVE 0 IN "
@@ -284,7 +284,7 @@ EXTERNAL_GRADING_WIDTH_OPTIONS: tuple[OptionSpec, ...] = (
     # not-heads that would stamp rows 2026-09-07/1 for no reason.
     OptionSpec(
         "window_basis", "str",
-        "G-3's admissible-window basis. 'heads' (default, byte-identical to "
+        "The admissible-window basis. 'heads' (default, byte-identical to "
         "today): oldest == the oldest consumed head's produced_at, as the "
         "read stamped it. 'evidence': oldest == the oldest signals.fetched_at "
         "under those heads' own derived_from lineage — the read's real "
@@ -332,7 +332,7 @@ DESK_REFERENCE_OPTIONS: tuple[OptionSpec, ...] = (
 )
 
 
-# G1 CORRECTNESS GRADER (LEDGER_RESET_2026-09-16 §3, Program 2). Every knob
+# G1 CORRECTNESS GRADER. Every knob
 # here bounds a COST — LLM calls, DB reads, the size of the graded sample — so
 # an operator widens or narrows the instrument with a PUT and no code edit.
 #
@@ -351,7 +351,7 @@ _ISO_INSTANT_RE = re.compile(
 )
 
 
-# R2 REFERENCE BUILDER (LEDGER_RESET_2026-09-16 §3, Program 2). Every knob
+# R2 REFERENCE BUILDER. Every knob
 # below bounds either the SIZE of one build (tool calls, page text, the
 # development target) or the SHAPE of the schedule (cadence, window, how many
 # targets a tick may take). None of them can move a FENCE: the fetched-URL
@@ -401,7 +401,7 @@ REFERENCE_BUILDER_OPTIONS: tuple[OptionSpec, ...] = (
     _window_days(
         "cadence_days",
         "How stale a target's newest reference must be before it is due "
-        "again. Raising it stretches the roster's cycle and lowers ai1 load; "
+        "again. Raising it stretches the roster's cycle and lowers models-host load; "
         "lowering it below `window_days` makes consecutive references overlap, "
         "which the grader resolves by newest build wins.",
     ),
@@ -409,7 +409,7 @@ REFERENCE_BUILDER_OPTIONS: tuple[OptionSpec, ...] = (
         "max_targets_per_run",
         "Targets one tick may build. SHIPPED AT 1, and that is the stagger: "
         "R1 measured one reference at ~1-1.7M core-plane prompt tokens and ~8 "
-        "minutes of ai1, so a 33-target roster is affordable only if at most "
+        "minutes of the models host, so a 33-target roster is affordable only if at most "
         "one runs at a time. Raising this puts several builds on the box at "
         "once.",
     ),
@@ -574,7 +574,7 @@ CORRECTNESS_GRADER_OPTIONS: tuple[OptionSpec, ...] = (
 
 
 # ---------------------------------------------------------------------------
-# Program 6 L2 — layer_divergence (the divergence-baseline unit)
+# layer_divergence (the divergence-baseline unit)
 # ---------------------------------------------------------------------------
 #
 # The instrument turns a loaded layer map (`source_layers` / `desk_apertures`,
@@ -718,7 +718,7 @@ LAYER_DIVERGENCE_OPTIONS: tuple[OptionSpec, ...] = (
 )
 
 
-# Program 7a CONTRARY-EVIDENCE PASS (`contrary_evidence_pass`). Every knob here
+# CONTRARY-EVIDENCE PASS (`contrary_evidence_pass`). Every knob here
 # bounds a COST — claims contended, searches issued, pages fetched — or the
 # SHELF LIFE of a record, so an operator can widen, narrow or quieten the pass
 # with a descriptor PUT and no code edit.
@@ -885,11 +885,11 @@ REFERENCE_DETERMINISTIC_OPTIONS: tuple[OptionSpec, ...] = (
 #: R2 (`reference_builder`) — the reference unit. Knobs bound the SIZE of a
 #: build and the SHAPE of the schedule; no fence is settable from here.
 #:
-#: Program 6 L2 (`layer_divergence`) — the divergence-baseline unit. The
+#: `layer_divergence` — the divergence-baseline unit. The
 #: statistic / honesty / bounds split, and the two rules that are deliberately
 #: NOT knobs, are documented on the block itself above.
 #:
-#: Program 7a (`contrary_evidence_pass`) — the contrary-evidence unit. Caps, a
+#: `contrary_evidence_pass` — the contrary-evidence unit. Caps, a
 #: record shelf life, and the one knob that can cost money (`paid_rung`, OFF by
 #: default and fenced twice). What is deliberately NOT a knob: the stance
 #: vocabulary, the paraphrase gate, and the rule that only a polarity-derived
@@ -907,8 +907,7 @@ PROGRAM_CATALOG: dict[str, tuple[OptionSpec, ...]] = {
 }
 
 
-# Program 5 (planning/PROGRAM5_INQUIRY_DESIGN_2026-09-24.md §2) — the `inquiry`
-# analyst KIND's three knobs. They ride this module rather than the catalog for
+# The `inquiry` analyst KIND's three knobs. They ride this module rather than the catalog for
 # the module-size-gate reason its docstring gives: `handler_options.py` sat at
 # 1,660 against a 1,660 ceiling when this landed, and the ratchet is honoured by
 # splitting, never by raising the number.

@@ -44,7 +44,9 @@
  * `setScope` pushes the outgoing scope onto `history` and CLEARS `future`;
  * `back()` moves the current scope onto `future`; `forward()` reverses it.
  */
+import { useMemo } from 'react'
 import { create } from 'zustand'
+import { useSelection } from '@/state/selection'
 
 /**
  * What kind of thing the wall is scoped to.
@@ -237,4 +239,65 @@ export function inScope(
 /** Test/teardown helper — a pristine, history-free scope store. */
 export function resetScope(): void {
   useScope.setState({ scope: null, history: [], future: [] })
+}
+
+// ---------------------------------------------------------------------------
+// THE POINT — the one subject the console is focused on.
+//
+// The scope store above is its only holder: a subject picked anywhere lands
+// here (directly, or through the desk bridge in `lib/scopeFromReport.ts`), and
+// every region that names or filters by "the point" reads it from here — the
+// top bar, the Board list, the subject page, the Ledger's forecasts, the
+// Watch log, Consult's "asking about" line. No region keeps its own copy, so
+// none can disagree with another.
+// ---------------------------------------------------------------------------
+
+/** The point's subject: an id and the label to print. */
+export interface PointSubject {
+  id: string
+  label: string
+}
+
+/** The subject a scope makes the point, or null (no point, or not a subject). */
+export function pointSubjectOf(scope: Scope | null): PointSubject | null {
+  if (!scope || scope.kind !== 'target' || !scope.id) return null
+  return { id: scope.id, label: scope.label || scope.id }
+}
+
+/** React: the point's subject, live. */
+export function usePointSubject(): PointSubject | null {
+  const id = useScope((s) => (s.scope?.kind === 'target' && s.scope.id ? s.scope.id : null))
+  const label = useScope((s) => (s.scope?.kind === 'target' ? s.scope.label : null))
+  return useMemo(() => (id ? { id, label: label || id } : null), [id, label])
+}
+
+/**
+ * Clear the point everywhere: the scope and the selection that set it. A
+ * region that follows the point then shows everything, Consult asks about
+ * everything in view, and the top bar names no subject.
+ */
+export function clearPoint(): void {
+  useScope.getState().setScope(null)
+  useSelection.getState().select(null)
+}
+
+/** Where the last subject the reader looked at is remembered (per viewer). */
+export const LAST_SUBJECT_KEY = 'legba_last_subject'
+
+/** The last subject the reader looked at, or null. */
+export function readLastSubject(): string | null {
+  try {
+    return localStorage.getItem(LAST_SUBJECT_KEY)
+  } catch {
+    return null
+  }
+}
+
+/** Remember a subject as the last one looked at (a per-viewer convenience). */
+export function rememberLastSubject(id: string): void {
+  try {
+    localStorage.setItem(LAST_SUBJECT_KEY, id)
+  } catch {
+    // storage blocked: nothing is remembered, nothing breaks
+  }
 }

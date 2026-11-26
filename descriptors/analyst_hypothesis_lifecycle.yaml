@@ -34,7 +34,7 @@ identity:
   # retired (was draft) so a stray re-register cannot resurrect a retired
   # analyst — descriptor_state_drift reconciliation 2026-09-06.
   state: retired
-  owner: hypothesis_activation
+  owner: owner@local
 
 subscription:
   # META analyst: one global sweep per tick over the shared finding/situation

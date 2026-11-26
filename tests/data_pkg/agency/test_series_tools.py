@@ -258,7 +258,7 @@ async def test_an_ungranted_analyst_cannot_reach_the_series_tools(pool):
 
 
 async def test_the_consult_per_call_entry_reaches_series_history_governed(pool):
-    """R-0 — the consult's own dispatch entry (``_run_one_call``) over the REAL
+    """The consult's own dispatch entry (``_run_one_call``) over the REAL
     binding: the scope_predicate it injects, the three-way gate, the pack
     handler, the port, and the ledger row. The router-only path is pinned
     without a database in ``tests/data_pkg/test_consult_series_dispatch.py``."""

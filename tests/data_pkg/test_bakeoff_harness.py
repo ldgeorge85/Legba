@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""X3/G0 — the bake-off harness, built (never run) to planning/reviews/BAKEOFF_DESIGN.md v1.0.
+"""The bake-off harness, built to the frozen bake-off design.
 
 DB-free. The real-driver half (verified_only, the receipt scope, the governed
 bindings over the DRAFT packs) is ``tests/runtime/test_bakeoff_verified_readers.py``.
@@ -113,12 +113,17 @@ def test_prompt_variant_names_only_its_arm_tools(prompt, arm_pack):
 
 
 def test_prompt_variants_share_the_stock_contract_byte_for_byte():
-    head = _SYSTEM_PROMPT[: _SYSTEM_PROMPT.index("Available tools:")]
+    # The arms are cut from the frozen stock prompt they were measured with,
+    # not from the live consult prompt, which has moved on.
+    from legba.data.analysts.consult_bakeoff_stock import FROZEN_STOCK_PROMPT as stock
+
+    assert stock != _SYSTEM_PROMPT
+    head = stock[: stock.index("Available tools:")]
     tail_marker = "Answer quality:"
     for p in (bp.RAW_SYSTEM_PROMPT, bp.VERIFIED_SYSTEM_PROMPT):
         assert p.startswith(head)
         assert "OUTPUT CONTRACT —" in p and "<<<FINAL>>>" in p
-        assert p[p.index(tail_marker):].startswith(_SYSTEM_PROMPT[_SYSTEM_PROMPT.index(tail_marker):][:200])
+        assert p[p.index(tail_marker):].startswith(stock[stock.index(tail_marker):][:200])
         assert "EVIDENCE FLOOR" in p and "WHAT WOULD CHANGE MY MIND" in p
     assert bp.prompt_sha256(bp.RAW_SYSTEM_PROMPT) != bp.prompt_sha256(bp.VERIFIED_SYSTEM_PROMPT)
 
@@ -470,7 +475,7 @@ def test_design_loader_refuses_drift(tmp_path):
 def test_the_pinned_hash_is_v1_2():
     """v1.2 (2026-11-11): the normaliser revised under §5.4 (v1.1 2026-11-05: Opus 5.5, graders on the gateway)."""
     assert design_mod.PINNED_SHA256 == "47e364ce845701597b65fa10f648cd2451eb07c7490ea6f45431abfc2a3fa6ff"
-    real = pathlib.Path("/usr/local/deployments/active/legba/planning/reviews/BAKEOFF_DESIGN.md")
+    real = pathlib.Path("BAKEOFF_DESIGN.md")
     if real.is_file():  # the main checkout's planning tree (not mounted in the container)
         dz = design_mod.load_design(real)
         assert dz.sha256 == design_mod.PINNED_SHA256
@@ -846,7 +851,7 @@ def test_the_verified_findings_leaf_imports_in_the_slim_image():
 
 
 # ---------------------------------------------------------------------------
-# W11-G1 — bake-off readiness after the consult-plane changes of rolls 55–57
+# Bake-off readiness after the consult-plane changes of rolls 55–57
 # ---------------------------------------------------------------------------
 
 #: The Opus 5.5 list price (design v1.1 §7; the prices file of 2026-11-05).
@@ -869,8 +874,6 @@ def test_bakeoff_descriptors_run_once_and_validate_under_the_walker_stamp(fname)
     assert d.method.retry.transient.max_attempts == 1
     stock = _yaml("analyst_consult_default.yaml")["method"]["retry"]
     assert body["method"]["retry"] == stock
-    text = (DESCRIPTORS / fname).read_text()
-    assert "6cd91190" in text and "W11-G1" in text
 
 
 def _stack_yaml(name):
@@ -910,23 +913,27 @@ def test_the_frontier_component_mirror_pins_opus_5_5():
     assert 'os.environ.get("LEGBA_CONSULT_MODEL_NAME"' not in src
 
 
-def test_the_gold_drafter_component_is_a_draft_gemma_think_mirror():
+def test_the_gold_drafter_component_is_a_draft_thinking_mirror_of_the_judge():
     from legba.runtime.external_grader_route import GRADER_FAMILY_BY_COMPONENT
 
-    body, m = _stack_yaml("stack_component_llm_verify_innoai_gemma_think.yaml")
-    gemma, _ = _stack_yaml("stack_component_llm_verify_innoai_gemma.yaml")
+    body, m = _stack_yaml("stack_component_llm_verify_gateway_gold_drafter.yaml")
+    gemma, _ = _stack_yaml("stack_component_llm_verify_gateway_judge.yaml")
     assert m.id == grade_sheet.GOLD_DRAFTER_COMPONENT
     assert m.state.value == "draft"
-    assert m.config.model_name.raw == grade_sheet.GOLD_DRAFTER_ALIAS == "gemma-think"
+    # The alias is deployment data: the descriptor names a variable, and the
+    # pin check reads the alias through it.
+    assert m.config.model_name.raw == "${env:LEGBA_GATEWAY_GOLD_DRAFTER_MODEL}"
+    assert grade_sheet.GOLD_DRAFTER_ALIAS == os.environ["LEGBA_GATEWAY_GOLD_DRAFTER_MODEL"]
     for k in ("api_endpoint", "api_key", "tier", "max_concurrent"):
         assert body["config"][k] == gemma["config"][k], k
-    assert "stack_component_llm_verify_innoai_gemma_think.yaml" in _registrar_files()
+    assert "stack_component_llm_verify_gateway_gold_drafter.yaml" in _registrar_files()
     # Same family as the Gemma judge: the fence refuses it as a grader.
     assert GRADER_FAMILY_BY_COMPONENT[m.id] == GRADER_FAMILY_BY_COMPONENT[
-        "llm.verify.innoai_gemma.openai_compat"] == "google_gemma"
-    _, grader = _stack_yaml("stack_component_llm_judge_innoai_lightning_think.yaml")
+        "llm.verify.gateway_judge.openai_compat"] == "google_gemma"
+    _, grader = _stack_yaml("stack_component_llm_judge_gateway_rung2_think.yaml")
     assert grader.id == grade_sheet.GRADER_COMPONENT
-    assert grader.config.model_name.raw == grade_sheet.GRADER_ALIAS == "lightning-think"
+    assert grader.config.model_name.raw == "${env:LEGBA_GATEWAY_JUDGE_THINK_MODEL}"
+    assert grade_sheet.GRADER_ALIAS == os.environ["LEGBA_GATEWAY_JUDGE_THINK_MODEL"]
 
 
 def _listing(alias, **extra):
@@ -936,42 +943,42 @@ def _listing(alias, **extra):
 
 def _grader_inputs(grader_extra=None, drafter_extra=None, grader_version="a" * 16):
     comps = {
-        grade_sheet.GRADER_COMPONENT: {"model_name": "lightning-think", "version": grader_version,
+        grade_sheet.GRADER_COMPONENT: {"model_name": grade_sheet.GRADER_ALIAS, "version": grader_version,
                                        "state": "active", "api_endpoint": "https://gw/v1"},
-        grade_sheet.GOLD_DRAFTER_COMPONENT: {"model_name": "gemma-think", "version": "b" * 16,
+        grade_sheet.GOLD_DRAFTER_COMPONENT: {"model_name": grade_sheet.GOLD_DRAFTER_ALIAS, "version": "b" * 16,
                                              "state": "active", "api_endpoint": "https://gw/v1"},
     }
     listings = {
-        grade_sheet.GRADER_COMPONENT: _listing("lightning-think", **(grader_extra or {})),
-        grade_sheet.GOLD_DRAFTER_COMPONENT: _listing("gemma-think", **(drafter_extra or {})),
+        grade_sheet.GRADER_COMPONENT: _listing(grade_sheet.GRADER_ALIAS, **(grader_extra or {})),
+        grade_sheet.GOLD_DRAFTER_COMPONENT: _listing(grade_sheet.GOLD_DRAFTER_ALIAS, **(drafter_extra or {})),
     }
     return comps, listings
 
 
 def test_pin_grader_records_the_served_model_and_voids_a_route_change():
-    comps, listings = _grader_inputs({"root": "nvidia/nemotron-lightning-x"})
+    comps, listings = _grader_inputs({"root": "nvidia/nemotron-x"})
     pin = grade_sheet.grader_pin(comps, listings, probed_at="T1")
-    assert pin["primary_grader"]["served_model"] == "nvidia/nemotron-lightning-x"
-    assert pin["gold_drafter"]["served_model"] == "gemma-think"  # no root: the alias
+    assert pin["primary_grader"]["served_model"] == "nvidia/nemotron-x"
+    assert pin["gold_drafter"]["served_model"] == grade_sheet.GOLD_DRAFTER_ALIAS  # no root: the alias
     assert pin["second_rater"] == "operator"
     run = {}
     assert grade_sheet.grading_refusal(run) is not None  # not pinned yet
     assert grade_sheet.apply_pin(run, pin) == []
-    assert run["grader_model_served"] == "nvidia/nemotron-lightning-x"
+    assert run["grader_model_served"] == "nvidia/nemotron-x"
     assert grade_sheet.grading_refusal(run) is None
     # A re-probe of the same route is clean …
     assert grade_sheet.apply_pin(run, grade_sheet.grader_pin(comps, listings, probed_at="T2")) == []
     # … a different model behind the alias voids the run.
-    comps2, listings2 = _grader_inputs({"root": "nvidia/nemotron-lightning-y"})
+    comps2, listings2 = _grader_inputs({"root": "nvidia/nemotron-y"})
     drift = grade_sheet.apply_pin(run, grade_sheet.grader_pin(comps2, listings2, probed_at="T3"))
     assert drift and "served_model" in drift[0]
-    assert run["grader_model_served"] == "nvidia/nemotron-lightning-x"  # the pin never moves
+    assert run["grader_model_served"] == "nvidia/nemotron-x"  # the pin never moves
     assert "void" in grade_sheet.grading_refusal(run)
 
 
 def test_pin_grader_refuses_a_wrong_alias_or_a_missing_route():
     comps, listings = _grader_inputs()
-    comps[grade_sheet.GRADER_COMPONENT]["model_name"] = "lightning"  # think off
+    comps[grade_sheet.GRADER_COMPONENT]["model_name"] = "think-off-alias"
     with pytest.raises(grade_sheet.SheetRefused, match="pins the alias"):
         grade_sheet.grader_pin(comps, listings, probed_at="T")
     comps, listings = _grader_inputs()
@@ -1175,7 +1182,7 @@ def test_a_round_cut_by_its_deadline_is_recorded_partial_with_its_text_and_cost(
     "stream_interrupted", RuntimeError("connection reset by peer"),
 ])
 def test_a_stream_cut_or_any_exception_with_text_delivers_the_partial(exc):
-    """(c) W11-F133: a ``StreamInterruptedFailure`` — or ANY exception — after
+    """(c) a ``StreamInterruptedFailure`` — or ANY exception — after
     answer text delivers that text; no forced final; the harness records it."""
     import run_arm
     from legba.data.stack.llm.base import StreamInterruptedFailure
@@ -1271,3 +1278,11 @@ def test_every_harness_chat_endpoint_goes_through_chat_url():
             continue
         src = py.read_text(encoding="utf-8")
         assert "/chat/completions" not in src, f"{py.name} builds a chat URL by hand; use common.chat_url"
+
+
+@pytest.fixture(autouse=True)
+def _gateway_env(monkeypatch):
+    """The gateway descriptors name their endpoint and models as ${env:NAME}."""
+    from tests._gateway_env import set_gateway_env
+
+    set_gateway_env(monkeypatch)

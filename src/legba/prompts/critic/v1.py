@@ -2,15 +2,14 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """L-175 ``critic`` DSPy prompt module — v1.
 
-Per L-105 §2.3.  Wraps the rubric-grader LLM call that the critic analyst
+Wraps the rubric-grader LLM call that the critic analyst
 kind dispatches against another analyst's output.
 
 The deterministic envelope (read analyzed output + rubric, assemble the
 prompt, parse the LLM's scored JSON into a :class:`CritiquePayload`,
 enforce the model-heterogeneity guard) lives in the kind handler in
 :mod:`legba.data.analysts.critic`. This module is the optimization
-surface twin (per Wave B prereq #4 — canonical
-``legba.prompts.<kind>.v1`` path).
+surface twin (canonical ``legba.prompts.<kind>.v1`` path).
 
 Cycle shape
 -----------
@@ -20,8 +19,8 @@ Critic is a single-LLM-call analyst kind. The LLM receives:
                           confidence + evidence + tags), rendered as a
                           single text block.
   * ``rubric``          — the analyzed analyst's
-                          ``descriptor.eval.rubric`` string (free-form
-                          per L-101 §4; convention is a JSON block with
+                          ``descriptor.eval.rubric`` string (free-form;
+                          convention is a JSON block with
                           named dimensions but plain text is accepted).
   * ``analyzed_analyst_id``
                         — the id of the analyst being graded (the LLM
@@ -63,7 +62,7 @@ class CriticSignature(dspy.Signature):
                                 body, confidence, evidence, tags).
         rubric               — the analyzed analyst's
                                 ``descriptor.eval.rubric`` string.  Free-
-                                form per L-101 §4; the LLM is asked to
+                                form; the LLM is asked to
                                 identify named dimensions inside it.
         analyzed_analyst_id  — the id of the analyzed analyst (for the
                                 LLM to echo in the critique narrative).

@@ -1,0 +1,71 @@
+# THE BAKE-OFF GOLD DRAFTER — Gemma 4 with thinking ON behind the model
+# gateway (kind: llm_provider). DRAFT.
+#
+# Gemma 4 with thinking on (gateway alias `gemma-think`) drafts gold through
+# the governed web pack; Gemma is the faithfulness judge, not a grader, and a
+# person verifies and signs every gold row. The gold builder NEVER grades and
+# the grader never builds gold: the primary grader is the Nemotron think judge
+# (`llm.judge.gateway_rung2_think.openai_compat`), the second rater the
+# operator.
+#
+# A MIRROR of `stack_component_llm_verify_gateway_judge.yaml` — the same
+# gateway, key, concurrency and tier — with two differences: `model_name` is
+# the `gemma-think` alias (the `gemma` alias is thinking OFF, which suits a
+# judge's short verdict and not a gold draft that weighs sources), its output
+# limit is the thinking alias's own maximum, and the stall allowance is the
+# thinking judge's (`llm.judge.gateway_rung2_think.openai_compat`: 240 s),
+# because a thinking model spends tokens and time before its first answer
+# token.
+#
+# Its own component so the verify judge's `gemma` head is untouched: the judge
+# chain, the consult judge and the bearing gate keep reading the think-off
+# alias. Nothing binds this id until the operator activates it for the
+# bake-off's gold step (scripts/bakeoff/README.md) and retires it after.
+#
+# NAMING IS LOAD-BEARING: the id ends in `.openai_compat` so
+# `infer_llm_subprovider` routes it to the vLLM handler (Chat Completions +
+# Bearer). FAMILY `google_gemma`, declared in `GRADER_FAMILY_BY_COMPONENT`
+# (src/legba/runtime/external_grader_route.py) — the fence therefore refuses it
+# as a grader beside the Gemma judge, which is the design's rule.
+# PRICE: our own box behind the gateway — $0 per token (no list price).
+id: llm.verify.gateway_gold_drafter.openai_compat
+name: Gemma 4, thinking on, via the model gateway (bake-off gold drafter)
+schema_uri: legba/stack/llm_provider/1.0.0
+version: "0000000000000000"
+state: draft
+owner: owner@local
+config:
+  api_endpoint:
+    factory_kind: text
+    raw: "${env:LEGBA_GATEWAY_API_ENDPOINT}"
+  # VAULT REF — the gateway token, the same secret id every gateway component
+  # reads; never the plaintext.
+  api_key:
+    factory_kind: secret
+    raw: llm.gateway.api_key
+  model_name:
+    factory_kind: text
+    raw: "${env:LEGBA_GATEWAY_GOLD_DRAFTER_MODEL}"
+  # The alias's maximum output as the gateway states it (/v1/models
+  # `max_output_tokens`), sent as max_tokens on every call so the gateway's
+  # lower per-alias default never cuts an answer short. A number of the
+  # model's, never a limit of ours; per instance because the alias is.
+  max_output_tokens:
+    factory_kind: text
+    raw: "${env:LEGBA_GATEWAY_GOLD_DRAFTER_MAX_OUTPUT_TOKENS}"
+  # The window, input plus output, the gateway states for this alias
+  # (its /v1/models `context_tokens`); it sizes the input budgets and keeps
+  # max_tokens inside the window when the input is large.
+  context_window_tokens:
+    factory_kind: text
+    raw: "${env:LEGBA_GATEWAY_CONTEXT_WINDOW_TOKENS}"
+  timeout_seconds:
+    factory_kind: number
+    raw: 240
+  tier:
+    factory_kind: dropdown_static
+    raw: cheap
+    options: [primary, fallback, cheap]
+  max_concurrent:
+    factory_kind: number
+    raw: 8

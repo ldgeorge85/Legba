@@ -4,8 +4,7 @@
 
 A Legba instance is the platform plus one *profile*: a directory under
 ``profiles/<id>/`` whose ``profile.yaml`` names everything instance-specific
-the bring-up needs. The design is planning/reviews/PLATFORM_SEAMS_2026-09-29.md
-Part 2 §2.1; the reference is ``profiles/geopolitics/``, whose paths point at
+the bring-up needs. The reference is ``profiles/geopolitics/``, whose paths point at
 today's tree (``descriptors/``) and whose ``prompts/`` holds its own prose (the
 six political-lean lenses, moved there by W9 SPLIT-2).
 
@@ -476,6 +475,11 @@ class Constants(_Closed):
         beside the scored ones (INST-1): the reference builder builds them a
         reference, the grader grades them, over the units scoped to the tag.
         Each must be a ``rosters.subject_tags`` entry.
+    ``levels``
+        The level words a desk's typed read may give its subject, lowest
+        first (the desk-rows seat's ``severity``). ``none`` is reserved for
+        "nothing in this window bears on the question" and is not a level.
+        Left out ⇒ the seat that needs them refuses by name.
     """
 
     audit_tier_order: tuple[_Slug, ...] = ()
@@ -487,6 +491,7 @@ class Constants(_Closed):
     adjacency: dict[_Slug, tuple[tuple[_Code, _Code], ...]] = Field(default_factory=dict)
     applicability_tags: tuple[_Slug, ...] = ()
     reference_subject_tags: tuple[_Slug, ...] = ()
+    levels: tuple[_Slug, ...] = ()
 
     @field_validator("subject_frame", "anchor_class", "auto_merge_class", mode="before")
     @classmethod
@@ -500,6 +505,9 @@ class Constants(_Closed):
         _unique(list(self.translation_languages), "constants.translation_languages")
         _unique(list(self.applicability_tags), "constants.applicability_tags")
         _unique(list(self.reference_subject_tags), "constants.reference_subject_tags")
+        _unique(list(self.levels), "constants.levels")
+        if _NONE in self.levels:
+            raise ValueError("constants.levels: 'none' is reserved and is not a level")
         for family, edges in self.adjacency.items():
             loops = sorted({a for a, b in edges if a.upper() == b.upper()})
             if loops:

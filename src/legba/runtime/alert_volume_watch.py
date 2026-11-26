@@ -72,7 +72,7 @@ def alert_text(
         f"The '{topic}' topic sent {pushed} pushes in the last {CAP_WINDOW_HOURS} h, "
         f"above its declared cap of {cap} ({CAP_ENV_BY_TOPIC[topic]}). Loudest "
         f"kinds: {loudest}. Read /api/v1/v3/system/alerts/volume?days=1 for the "
-        "per-kind table; the knobs are docs/TUNABLES.md §5 (the daily page "
+        "per-kind table; the knobs are docs/TUNABLES.md (the daily page "
         "budget, the per-kind cap, the band batch, the level-only rule)."
     )
     return title, body

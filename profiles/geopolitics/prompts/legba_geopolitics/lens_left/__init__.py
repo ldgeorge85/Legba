@@ -2,8 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """legba_geopolitics.lens_left — the Structuralist lean's persona + prior.
 
-VOICES LEAN lens (planning/VOICES_LEAN_PRIORS_2026-09-21.md § lens_left; D-4,
-accepted as a DRAFT prior 2026-09-21). One of SIX stance-typed lenses riding the
+VOICES LEAN lens (a DRAFT prior). One of SIX stance-typed lenses riding the
 same ``journal_assessor`` kind as the four function-typed faculties — the same
 shared frame (``legba.prompts.lens_common``: tower-top only, never a new fact,
 collection health first, contradicted substrate is a warning), the same V1

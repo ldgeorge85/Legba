@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""ST0-A — the exogenous forecast ledger's model and store, with fakes only.
+"""The exogenous forecast ledger's model and store, with fakes only.
 
 Pins: the vocabularies against migration 0242's CHECKs; the resolver-spec
 rules; the clamp; the hash recipe (a number binds its question's words); the
@@ -233,15 +233,15 @@ async def test_the_seal_refuses_a_number_stated_on_an_earlier_wording():
     conn = FakeLedgerConn()
     _, qid = await fl.upsert_question(conn, _q(condition="<OPERATOR TO WRITE>"))
     await fl.state_number(conn, qid, _op(0.25))
-    await fl.state_number(conn, qid, _op(0.4, issuer_kind="clef_arm", issuer_ref="clef"))
+    await fl.state_number(conn, qid, _op(0.4, issuer_kind="clef_arm", issuer_ref="decision-model"))
     await fl.upsert_question(conn, _q(condition="if the talks fail by 11-20"))
     await fl.state_number(conn, qid, _op(0.25))  # the operator restates; the arm does not
     problems = await fl.seal_problems(conn, qid)
     assert problems == [
-        "FX1-klarvia-port-strike: the clef_arm number (clef) was stated on an earlier "
+        "FX1-klarvia-port-strike: the clef_arm number (decision-model) was stated on an earlier "
         "wording of the question; restate it"
     ]
-    await fl.state_number(conn, qid, _op(0.4, issuer_kind="clef_arm", issuer_ref="clef"))
+    await fl.state_number(conn, qid, _op(0.4, issuer_kind="clef_arm", issuer_ref="decision-model"))
     assert await fl.seal_problems(conn, qid) == []
 
 
@@ -312,7 +312,7 @@ async def test_the_ledger_reads_open_first_by_due_with_every_issuer():
     await fl.state_number(conn, early, _op(0.6))
     await fl.state_number(conn, early, _op(None, issuer_kind="tower", issuer_ref="tower",
                                            absent_reason="no analyst number"))
-    await fl.state_number(conn, early, _op(0.5, issuer_kind="clef_arm", issuer_ref="clef"))
+    await fl.state_number(conn, early, _op(0.5, issuer_kind="clef_arm", issuer_ref="decision-model"))
     _, closed = await fl.upsert_question(conn, _q(slug="FX9-closed", due_at=DUE - timedelta(days=40),
                                                    window_start=None, window_end=None,
                                                    resolver_spec={"class": "x", "window": ["a", "b"]}))

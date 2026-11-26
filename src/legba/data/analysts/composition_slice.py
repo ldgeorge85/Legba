@@ -82,7 +82,7 @@ def _is_region_target(target_filter: Any) -> bool:
 #
 # The target-less world_assessor now composes the FIVE region_composition HEADS
 # (5-6 inputs) instead of the ~24 country_composition heads — structurally
-# removing the MAX_WORLD_INPUT_FINDINGS cap pressure (the P4-C2 "Global without
+# removing the MAX_WORLD_INPUT_FINDINGS cap pressure (the "Global without
 # the United States" failure class). DEGRADE-NOT-DROP + absence-honest:
 #
 #   * a region WITH a region_composition head this window feeds that head
@@ -143,7 +143,7 @@ REGION_COMPOSITION_ANALYST_ID: str = "region_composition"
 ``other_analysts`` source; the region layer the world composes over."""
 
 COUNTRY_COMPOSITION_ANALYST_ID: str = "country_composition"
-"""The per-country composition analyst id (P3-T1). The world DEGRADE target: a
+"""The per-country composition analyst id. The world DEGRADE target: a
 region with no region head falls back to reading THIS analyst's member-country
 heads (the same source the region compose fuses)."""
 
@@ -165,7 +165,7 @@ regions. Verify-floored like every other input; a weak thematic head is
 floored out, never injected."""
 
 REGION_MODE_COUNTRIES: str = "countries"
-"""D-5 (§4.2) — the ASSEMBLY-REGIME world mode, and the retirement of a lie.
+"""The ASSEMBLY-REGIME world mode, and the retirement of a lie.
 
 Under the assembly regime the world read grounds a region DIRECTLY on its
 member country assemblies. There is no region head in the world's input any
@@ -238,15 +238,14 @@ unchanged). Only meaningful alongside ``THEMATIC_DIMENSION_KEY``. Lives in the o
 # (has_tag('g20') or has_tag('watch')).
 #
 # `supply_chain` = the subscription key for the `disruption_status` unit — the
-# supply-chain pack's `lane_*` / `flow_*` desks (2026-07-29,
-# planning/SUPPLY_CHAIN_PACK_PLAN_2026-07-29.md §3.5). Those desks deliberately
+# supply-chain pack's `lane_*` / `flow_*` desks. Those desks deliberately
 # carry NEITHER g20 nor watch (tagging a lane `watch` would fan all seven country
 # units onto non-country desks), so without this literal a supply-chain desk that
 # produced no head would be SILENTLY MISSING from ``data.desk_coverage`` instead
 # of NAMED as a gap. Nothing crashes and nothing is fabricated — but silent
 # coverage is the failure mode this platform exists to refuse.
 #
-# DELIBERATELY NOT WIDENED IN LOCKSTEP (plan §3.5 — this is a decision, not an
+# DELIBERATELY NOT WIDENED IN LOCKSTEP (a decision, not an
 # oversight): ``scorecard_producer._G20_TARGETS_SQL`` (supply-chain desks get NO
 # scorecard — a card with 7 country dimensions reading `insufficient-evidence`
 # plus one supply-chain dimension would misrepresent what the pack measures),
@@ -699,8 +698,8 @@ def _render_desk_coverage_block(coverage: Sequence[Mapping[str, Any]]) -> str:
     return "\n".join(lines)
 
 # ---------------------------------------------------------------------------
-# D-5 THE CASCADE — the world reads COUNTRY assemblies, and the region tier
-# becomes a rollup (planning/DEMOTION_D1_SPEC_2026-09-04.md §4)
+# THE CASCADE — the world reads COUNTRY assemblies, and the region tier
+# becomes a rollup
 # ---------------------------------------------------------------------------
 #
 # THE TRAP THIS DISSOLVES, stated where the code lives. ``read_other_analyst_
@@ -733,7 +732,7 @@ def world_reads_countries(*, world_analyst_id: Any) -> bool:
       * the REGION tier is in the regime ⇒ region rows are rollups with no
         faithfulness critique, so the world MUST stop reading them or it
         silently degrades every region to country-fallback forever;
-      * the WORLD tier is in the regime ⇒ the world assembles, and §4.2's whole
+      * the WORLD tier is in the regime ⇒ the world assembles, and the whole
         point is that its candidate pool becomes ~32 country lead spans instead
         of 6 already-crowned region BLUFs.
 
@@ -863,9 +862,8 @@ UNIT_NAMES_ROW_KEY: str = "_unit_names"
 async def resolve_unit_names(conn, target_ids: Sequence[str]) -> dict[str, str]:
     """``{slug: name}`` for the given units — ONE read, or none at all.
 
-    THE DEFECT THIS CLOSES (``planning/ASSESSMENT_TENSIONS_IN_MAP_REPORT.md``
-    §5.1). The spine carries ``target_name == target_id`` on every block and
-    every drop row, so the voice is handed ``country_watch_kp`` and writes
+    THE DEFECT THIS CLOSES: the spine carries ``target_name == target_id`` on every
+    block and every drop row, so the voice is handed ``country_watch_kp`` and writes
     "Pakistan" — ``kp`` is North Korea — and the judge fails the sentence,
     correctly, because no name at all is in the map to check it against.
 
@@ -1173,7 +1171,7 @@ async def _assemble_world_country_slice(
     verify_floor: float | None,
     basis_reader: BasisReader | None = None,
 ) -> list[dict[str, Any]]:
-    """D-5 §4.2 — the WORLD slice over COUNTRY assemblies.
+    """The WORLD slice over COUNTRY assemblies.
 
     Same contract as :func:`_assemble_world_region_slice` and the same output
     annotations (``_region_id`` / ``_region_mode`` / ``_region_coverage``), so
@@ -1182,7 +1180,7 @@ async def _assemble_world_country_slice(
     TIER, and with it three things worth naming:
 
       * **the candidate pool.** 6 already-crowned region BLUFs become ~32
-        country lead spans. The breadth win VOICE §4.4 predicted, and the
+        country lead spans. The breadth win, and the
         earned-lead test's real denominator: a test over six pre-selected
         headlines was measuring the region tier's choices, not the day's.
       * **the depth.** A world span is cut from a COUNTRY assembly whose own

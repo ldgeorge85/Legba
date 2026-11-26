@@ -1,5 +1,5 @@
 /**
- * Contested-claims data layer (Holes-B Wave 5 — #101).
+ * Contested-claims data layer.
  *
  * The backend `fact_contention` / `fact_contention_values` sidecar (migration
  * 0055) records every live dispute: when >= 2 credible sources disagree on a

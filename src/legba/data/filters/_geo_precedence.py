@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Geo PRECEDENCE for issuing-authority sources, multi-country geo, and the
-per-code derivation marks (lane N-O).
+per-code derivation marks.
 
-THE DEFECT (11-13, five new official sources): the geocoder REPLACED the
+THE DEFECT (five official sources): the geocoder REPLACED the
 country an official source speaks for. A US Federal Register export-control
 notice landed geo={FR} off the citation "91 FR 60505"; the US "Declaration of
 Freedom in Space" landed {FR} off an NER ``location`` "Space" the backend put
@@ -35,7 +35,7 @@ The host promote step (:func:`promoted_geo_codes`) lifts ``countries`` onto
 (``payload.geo_fallback``) is unchanged; :func:`geo_derivation` folds it in so
 a reader sees one map.
 
-AT SEA (lane N-R). A record that carries its OWN point and declares it
+AT SEA. A record that carries its OWN point and declares it
 authoritative (``payload.geometry_authoritative``, stamped by a json_api
 source's ``geometry`` block with ``off_land: no_country``) is never replaced
 by a text guess. When that point falls in no admin-0 polygon (the bundled
@@ -151,7 +151,7 @@ def point_is_authoritative(payload: Mapping[str, Any] | None) -> bool:
 def at_sea_block(payload: Mapping[str, Any], block: Mapping[str, Any] | None) -> dict[str, Any]:
     """The ``payload.geo`` block for an authoritative point in no country:
     the coordinates, ``at_sea``, the (possibly declared-only) countries, and
-    (lane N-S) ``inferred`` — the coastal states it lies off.
+    ``inferred`` — the coastal states it lies off.
 
     ``inferred`` is ``[{iso2, basis: "nearest_coast", distance_km}]``, nearest
     first, for states whose bundled 110m outline is within
@@ -220,7 +220,7 @@ def promote_payload_columns(sig: Any) -> Any:
     files the signal under is appended to ``geo`` (an issuer's declared state
     plus the subject), primary first. Mutates and returns ``sig``. Called by
     ``dapr_host``'s source enrichment stage, ahead of the document sink's
-    ``write_canonical_signal`` (roll 74 extracted it so a test can drive the
+    ``write_canonical_signal`` (split out so a test can drive the
     exact step and read the persisted row)."""
     pl = sig.payload if isinstance(sig.payload, dict) else {}
     for iso2 in promoted_geo_codes(pl.get("geo")):

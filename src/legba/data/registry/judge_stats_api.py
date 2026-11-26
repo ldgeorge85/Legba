@@ -78,7 +78,7 @@ straddles a judge-pipeline stamp change shows two rows instead of one pooled
 average. Pooling faithfulness across judge swaps is a known way to launder a
 regression into a flat line; this grain makes the swap visible in the data.
 
-X4 / ESC (W11-F52) - ``uncited``. A second, independent block: per analyzed unit
+X4 / ESC - ``uncited``. A second, independent block: per analyzed unit
 per day, the fact-asserting sentences the deterministic floor counts in the unit's
 bodies, how many carry no citation marker, and how many BLUFs went out without
 one (``provenance/uncited_share.py``, stamped on the critique by ``actor_critic``).
@@ -452,7 +452,7 @@ SELECT 'component', f.ref,
 
 
 # ---------------------------------------------------------------------------
-# X4 / ESC (W11-F52) - THE UNCITED-SENTENCE SHARE, per analyzed unit per day.
+# X4 / ESC - THE UNCITED-SENTENCE SHARE, per analyzed unit per day.
 # ---------------------------------------------------------------------------
 # ``actor_critic`` stamps ``fact_sentences`` / ``uncited_fact_sentences`` /
 # ``bluf_marker`` on every UNIT critique's ``verification`` block
@@ -718,7 +718,7 @@ class JudgeStatsOut(BaseModel):
     #: JUDGE-2 — the health fact (its own ``measured``: a failed health read
     #: leaves the cube intact and says so here).
     health: JudgeHealthOut = Field(default_factory=JudgeHealthOut)
-    #: X4 / ESC (W11-F52) - the uncited-sentence share per analyzed unit per day
+    #: X4 / ESC - the uncited-sentence share per analyzed unit per day
     #: (its own ``measured``, like ``health``).
     uncited: JudgeUncitedOut = Field(default_factory=JudgeUncitedOut)
 

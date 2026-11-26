@@ -3,8 +3,7 @@
 --
 -- 0103_desk_baselines.sql
 --
--- P3-7 (A7 borrowable #7 — the CAST-recipe per-desk STATISTICAL BASELINE;
--- planning/PROGRAM_RECOMMENDATIONS_2026-07-24.md §A7): a falsifiable
+-- The CAST-recipe per-desk STATISTICAL BASELINE: a falsifiable
 -- quantitative PRIOR per desk (g20 + watch) that each desk's LLM reads can
 -- agree or argue with, and that the P1-3 baseline_deviation trigger + the eval
 -- surfacing can read. Built over OUR OWN substrate (signals + analyst_outputs)

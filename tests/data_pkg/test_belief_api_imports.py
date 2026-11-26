@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The slim-image import guard for the V3/P3 belief route.
+"""The slim-image import guard for the belief route.
 
 ``belief_api`` ships in the REGISTRY image, which does not carry the
 analyst-runtime dependency stack. A route module that reaches

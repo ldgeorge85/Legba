@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Chronicle tier (planning/CHRONICLE_BUILD_2026-07-21.md) — the public-record
+"""Chronicle tier — the public-record
 third id on the journal_assessor kind.
 
 Locks the tier plumbing:

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""F-4 ``propose_watch`` — a consult's watch candidates become standing open questions.
+"""``propose_watch`` — a consult's watch candidates become standing open questions.
 
 What is proven here, and on what:
 
@@ -67,7 +67,7 @@ PAST = (datetime.now(timezone.utc) - timedelta(days=3)).date().isoformat()
     ("Baltic cable cuts exceed three", "Baltic cable cuts exceed three", None),
     ("by 2026-10-14", "", "2026-10-14"),
     ("  — ; ", "", None),
-    # The live roll-32 candidate (session 5cef6e9b): U+2011 non-breaking
+    # A live candidate: U+2011 non-breaking
     # hyphens in the date and the indicator — refused before the dash fold.
     ("major\u2011arms\u2011acquisition observed by 2026\u201110\u201117",
      "major-arms-acquisition observed", "2026-10-17"),

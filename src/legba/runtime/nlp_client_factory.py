@@ -65,11 +65,11 @@ deployments hit ``http://legba-models:8700`` with no auth).  Absent or
 without a BasicAuth wrapper — matching the
 :class:`NlpServiceClient` contract.
 
-Provider switch (W11-F107)
+Provider switch
 --------------------------
 
 ``config.provider`` picks the implementation: absent / ``legba_models`` builds
-the :class:`NlpServiceClient` exactly as before; ``innoai_gateway`` builds the
+the :class:`NlpServiceClient` exactly as before; ``bearer_gateway`` builds the
 :class:`~legba.data.stack.nlp_service.gateway.GatewayNlpClient` (Bearer
 ``api_key`` vault ref, ``/relations`` · ``/entities`` · ``/classify``, and
 translation on the chat model ``translate_model`` — absent = ``"fast"``, an
@@ -103,6 +103,8 @@ import logging
 import os
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Mapping
 
+from ..data.schemas.env_refs import EnvRefError, resolve_config_env_refs
+from ..data.schemas.legacy_name_digests import canonical_nlp_provider
 from .registry_client import RegistryClientError, RegistryHTTPClient
 from .source_factory import _unwrap_factory_dict
 
@@ -244,6 +246,12 @@ async def build_nlp_client_from_stack_component(
             f"nlp stack-component {component_id!r}: body.config is missing "
             f"or non-mapping (got {type(raw_config).__name__})"
         )
+    # Fields written as ${env:NAME} take their value from this process's
+    # environment; unset or empty fails loudly, naming the variable.
+    try:
+        raw_config = resolve_config_env_refs(raw_config, component_id=component_id)
+    except EnvRefError as exc:
+        raise NlpClientFactoryError(str(exc)) from exc
     cfg = _unwrap_factory_dict(raw_config)
 
     # ---- 3a. Endpoint (required).
@@ -254,16 +262,17 @@ async def build_nlp_client_from_stack_component(
             f"missing or non-string after unwrap (got {endpoint!r})"
         )
 
-    # ---- 3a'. Provider switch (W11-F107). Absent = legba_models, unchanged.
-    provider = cfg.get("provider") or "legba_models"
-    if provider == "innoai_gateway":
+    # ---- 3a'. Provider switch. Absent = legba_models, unchanged.
+    # A row registered under the retired provider value keeps working.
+    provider = canonical_nlp_provider(str(cfg.get("provider") or "legba_models"))
+    if provider == "bearer_gateway":
         return await _build_gateway_client(
             component_id, endpoint, raw_config, cfg, secrets_resolve,
         )
     if provider != "legba_models":
         raise NlpClientFactoryError(
             f"nlp stack-component {component_id!r}: unknown provider "
-            f"{provider!r} (expected 'legba_models' or 'innoai_gateway')"
+            f"{provider!r} (expected 'legba_models' or 'bearer_gateway')"
         )
 
     # ---- 3b. Secret refs (both-or-neither).
@@ -325,19 +334,19 @@ async def _build_gateway_client(
     cfg: Mapping[str, Any],
     secrets_resolve: Callable[[str], Awaitable[bytes]],
 ) -> "GatewayNlpClient":
-    """The ``provider: innoai_gateway`` branch: Bearer ``api_key`` (required,
+    """The ``provider: bearer_gateway`` branch: Bearer ``api_key`` (required,
     a vault ref), the gateway paths and label sets, no health probe."""
     key_secret_id = _coerce_secret_ref(raw_config.get("api_key"))
     if not key_secret_id:
         raise NlpClientFactoryError(
-            f"nlp stack-component {component_id!r}: provider 'innoai_gateway' "
+            f"nlp stack-component {component_id!r}: provider 'bearer_gateway' "
             "requires an api_key secret ref (Bearer)"
         )
     if _coerce_secret_ref(raw_config.get("api_user")) or _coerce_secret_ref(
         raw_config.get("api_pass")
     ):
         raise NlpClientFactoryError(
-            f"nlp stack-component {component_id!r}: provider 'innoai_gateway' "
+            f"nlp stack-component {component_id!r}: provider 'bearer_gateway' "
             "is Bearer-only; api_user/api_pass must be absent"
         )
     api_key = await _resolve_secret_text(secrets_resolve, key_secret_id, field="api_key")
@@ -356,7 +365,7 @@ async def _build_gateway_client(
             relation_labels=_coerce_labels(cfg.get("relation_labels")),
             entity_labels=_coerce_labels(cfg.get("entity_labels")),
             translate_model=_coerce_translate_model(cfg),
-            # W11-F113: absent = the client defaults ("min", 0.5); a bad value
+            # Absent = the client defaults ("min", 0.5); a bad value
             # fails the build loud (NlpClientFactoryError), never a call.
             relation_confidence=cfg.get("relation_confidence"),
             relation_threshold=cfg.get("relation_threshold"),
@@ -367,7 +376,7 @@ async def _build_gateway_client(
         ) from None
     logger.info(
         "nlp_client_factory.built component_id=%s endpoint=%s auth=bearer "
-        "provider=innoai_gateway translate_model=%s relation_confidence=%s "
+        "provider=bearer_gateway translate_model=%s relation_confidence=%s "
         "relation_threshold=%s",
         component_id, endpoint, client.translate_model or "off",
         client.relation_confidence,
@@ -377,9 +386,9 @@ async def _build_gateway_client(
 
 
 def resolve_nlp_component_id() -> str:
-    """The NLP stack component the runtime binds (W11-F107).
+    """The NLP stack component the runtime binds.
 
-    ``LEGBA_NLP_COMPONENT_ID`` names it (e.g. ``nlp.innoai.gateway``); unset or
+    ``LEGBA_NLP_COMPONENT_ID`` names it (e.g. ``nlp.gateway.bearer``); unset or
     blank = :data:`DEFAULT_NLP_COMPONENT_ID`. Read once at host bring-up, so a
     switch is one env line and a runtime restart. A wrong id fails loud at the
     first filter build (component not found), never silently.

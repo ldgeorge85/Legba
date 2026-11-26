@@ -1,4 +1,4 @@
-# C-3 claims sources (2026-11-15) — draft SourceDescriptor. Ships DRAFT (operator activates).
+# Draft SourceDescriptor. Ships DRAFT (operator activates).
 #
 # Check Point Research — the vendor's threat-intelligence blog: named actor
 # tracking (including state-linked hack-and-leak personas and hacktivist
@@ -21,7 +21,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: claims_c3
+  owner: owner@local
   created: "2026-11-15T00:00:00Z"
 
 scope:
@@ -29,7 +29,7 @@ scope:
   geo: []
   languages: [en]
   # `cyber_desk` = on the cyber desk's feed roster (analyst_cyber_watch
-  # method.options.feed_roster, kind vendor_research); the owner put it there 2026-11-16.
+  # method.options.feed_roster, kind vendor_research).
   tags: [cyber, news, vendor, hacktivism, cyber_desk]
   classifications: ["geopolitics.topic:cyber"]
   source_class: reporting

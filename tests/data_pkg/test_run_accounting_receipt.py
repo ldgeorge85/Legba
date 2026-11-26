@@ -353,7 +353,7 @@ async def test_prompt_rendered_is_capped_with_a_truncation_marker():
 
 
 async def test_prompt_tail_pins_head_32k_tail_4k_sha_and_length():
-    """W2-F1 — a 150k-char prompt: ``prompt_rendered`` keeps the head 32k (cap
+    """A 150k-char prompt: ``prompt_rendered`` keeps the head 32k (cap
     NOT raised), ``input_payload.prompt_tail`` keeps the LAST 4,000 chars (the
     grounding block's ordinals) + the total length + the sha256 of the FULL
     prompt. Driven through the real receipt chain and read back off the INSERT.

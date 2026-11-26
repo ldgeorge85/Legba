@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """R-B — the COVERAGE-FLOOR DISPATCH and the corpus researcher's web leg.
 
-``planning/RESEARCH_PROGRAM_SPEC_2026-09-05.md`` §2.2 / §2.3. Four claims, and
+The research-dispatch spec §2.2 / §2.3. Four claims, and
 each one is a claim about a SEAM rather than about a function in isolation:
 
   * **The dispatch writes ONE standing question per newly-breaching gap**,
     carrying the target + its geo, the named gap, the desk's bounded question
-    (F-6) and the dispatching alert id — and it does so from the alert scan's
+    and the dispatching alert id — and it does so from the alert scan's
     REAL binding path (``deterministic.run_method`` routed by
     ``options.sub_handler``), never a direct call into the sub-module.
   * **It is idempotent under re-detection.** A persisting breach mints no
@@ -182,7 +182,7 @@ def test_dispatch_marker_reads_as_coverage_floor_through_the_shared_reader():
 
 
 def test_reference_gap_ranks_second_behind_coverage_floor_and_ahead_of_harvest():
-    """A-4's class in the SAME table, at ordinal 1.
+    """The reference-gap class in the SAME table, at ordinal 1.
 
     The ordinals are RELATIVE — the tier-3 assertion is that the sequence is
     sorted, not that any integer is pinned — so the check that matters is the
@@ -212,7 +212,7 @@ def test_reference_gap_ranks_second_behind_coverage_floor_and_ahead_of_harvest()
 
 
 def test_reference_gap_marker_reads_through_the_shared_reader():
-    """A-4 stamps the SAME four-key vocabulary through the SAME builder.
+    """The reference-gap leg stamps the SAME four-key vocabulary through the SAME builder.
 
     ``origin`` stays ``harvest`` — it is not a parameter, precisely because it
     is the only value for which ``harvest_class_of`` reads an explicit class
@@ -328,7 +328,7 @@ def test_marker_carries_the_whole_dispatch_contract():
 
 
 def test_marker_omits_a_desk_it_could_not_resolve():
-    """F-6's cheaper fallback: a target with no dimension-signed open frame, or
+    """The cheaper fallback: a target with no dimension-signed open frame, or
     whose hottest desk declares no bounded_question, carries the gap ALONE.
     Never a fabricated question."""
     marker = rd.dispatch_marker(
@@ -353,7 +353,7 @@ def test_thesis_states_the_gap_the_measurement_and_the_desks_question():
     assert "235 signals" in thesis and "over 15 days" in thesis
     assert "20.0% of its entity-bearing slice" in thesis
     assert "none of its 8 open frames name it" in thesis
-    # The desk's question rides as explicitly labelled CONTEXT (F-6): the gap
+    # The desk's question rides as explicitly labelled CONTEXT: the gap
     # is a COLLECTION gap, not that desk's gap.
     assert "hottest open desk (internal_stability)" in thesis
     # It says out loud why the corpus is the wrong instrument.
@@ -761,7 +761,7 @@ async def test_dispatched_row_ranks_q1_ahead_of_a_stale_live_reaching_backlog_ro
     exactly that competition (a stale row with genuine ``live_reach`` plus a
     fresh dispatch) through the real recursive-CTE backlog query and confirm
     the dispatch now wins Q1 — the geo it carries is what the researcher's
-    ``web_evidence`` call must quote back per §1.3/F-8."""
+    ``web_evidence`` call must quote back per §1.3."""
     async with pg_pool.acquire() as conn:
         # The stale competitor: a 35-day-old unit_payload row a LIVE
         # (non-superseded) finding still consumes — before this fix, tier 1
@@ -887,7 +887,7 @@ async def test_dispatch_degrades_and_never_raises(pg_pool, clean_slate, flag_on)
 
 
 def _gap(**over: Any) -> dict[str, Any]:
-    """One A-4 candidate, shaped as ``_reference_diff.reference_gap_candidates``
+    """One reference-gap candidate, shaped as ``_reference_diff.reference_gap_candidates``
     emits it."""
     candidate = {
         "reference_id": str(uuid4()),
@@ -918,7 +918,7 @@ async def _gap_questions(conn: Any) -> list[Any]:
 async def test_reference_gap_dispatch_writes_through_the_shared_write_path(
     pg_pool, clean_slate, flag_on
 ):
-    """A-4 leg 2 through the SAME writer, probe and marker builder as R-B —
+    """The reference-gap leg through the SAME writer, probe and marker builder as the coverage-floor leg —
     only the class, the question source and the analyst id differ."""
     async with pg_pool.acquire() as conn:
         n = await rd.dispatch_open_questions(
@@ -951,7 +951,7 @@ async def test_reference_gap_dispatch_writes_through_the_shared_write_path(
 async def test_reference_gap_row_drains_and_classes_through_the_live_backlog(
     pg_pool, clean_slate, flag_on
 ):
-    """The end of the carrier chain against the REAL schema: the row A-4 wrote
+    """The end of the carrier chain against the REAL schema: the row the reference-gap leg wrote
     is found by the actual recursive-CTE backlog query, classed
     ``reference_gap``, and renders the geo the researcher's ``web_evidence``
     call has to quote back."""
@@ -975,7 +975,7 @@ async def test_a_coverage_floor_gap_still_outranks_a_reference_gap(
     pg_pool, clean_slate, flag_on
 ):
     """Both classes in the backlog at once, both fresh: the ordinal decides,
-    and it says coverage_floor first. A-4 must not displace R-B."""
+    and it says coverage_floor first. The reference-gap leg must not displace the coverage-floor leg."""
     async with pg_pool.acquire() as conn:
         await rd.dispatch_open_questions(
             conn, [rgd.build_dispatch_entry(_gap())], alert_output_id=None,
@@ -1184,7 +1184,7 @@ async def _seed_breaching_evidence(conn: Any, desk: str) -> None:
                 sid.hex, _SOURCE,
             )
     # The register: dimension-SIGNED frames, none of which names Iran. The
-    # signature is what F-6's hottest-desk selector reads — situations
+    # signature is what the hottest-desk selector reads — situations
     # .analyst_id names the PRODUCER, never the desk.
     for name, dim, intensity in (
         ("Coalition splinters as right-wing bloc forms", _DESK_ANALYST, 8.65),
@@ -1198,7 +1198,7 @@ async def _seed_breaching_evidence(conn: Any, desk: str) -> None:
             "        $5, 'situation_clustering')",
             uuid4(), name, desk, intensity, f"sig:{desk}#dim:{dim}",
         )
-    # The desk descriptor carrying the bounded question F-6 quotes — read from
+    # The desk descriptor carrying the bounded question carries — read from
     # the REGISTRY, because descriptors/ is in neither container image.
     await conn.execute(
         "INSERT INTO analyst_descriptors "
@@ -1238,7 +1238,7 @@ async def test_coverage_floor_alert_dispatches_exactly_one_open_question(
     assert marker["geo"] == ["IL"]
     assert marker["target_id"] == desk
     assert marker["dispatched_by"] == str(alert)
-    # F-6: the HOTTEST desk's bounded question, chosen off the 0188 signature.
+    # The HOTTEST desk's bounded question, chosen off the 0188 signature.
     assert marker["desk_id"] == _DESK_ANALYST
     assert marker["bounded_question"] == _BOUNDED_Q
     assert _BOUNDED_Q in rows[0]["thesis"]
@@ -1319,7 +1319,7 @@ def test_prompt_makes_the_web_leg_mandatory_at_a_null_result():
 
 
 def test_prompt_states_f8_as_a_rule_not_a_hope():
-    """F-8: a run that does not carry the question's scope reaches NO desk. The
+    """A run that does not carry the question's scope reaches NO desk. The
     prompt has to say that as a consequence the model can act on, not as an
     aspiration."""
     prompt = _corpus_researcher().method.system_prompt
@@ -1405,7 +1405,7 @@ def test_select_returns_none_for_a_purely_harvested_backlog():
 
 def test_select_skips_a_dispatched_row_that_carries_no_target():
     """Without a target the tool can resolve no geo, so such a row would send a
-    run to fetch evidence no desk can ever read (F-8). It stays on the ordinary
+    run to fetch evidence no desk can ever read. It stays on the ordinary
     backlog and can still be self-selected; it does not get to command a run."""
     scopeless = _dispatched_q(target_id=None, geo=())
     real = _dispatched_q()

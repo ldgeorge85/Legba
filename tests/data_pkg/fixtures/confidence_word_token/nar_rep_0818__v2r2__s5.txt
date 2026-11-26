@@ -1,0 +1,61 @@
+{
+  "title": "Coordinated narratives surround the Harbour Authority summons",
+  "body": "*As of 2026-08-18; slice covers the trailing 3 days to that date; 111 signals.*\n\n**BLUF:** Coordinated state-linked narratives are evident across foreign outlets, with Halden media synchronously framing the summons of Veldmark's envoy over remarks on the Eastmere dredging visit, and Northvale media jointly condemning the berth-fee announcement on the anniversary of the trade treaty.\n\n## What changed\n- Halden outlets (Halden Foreign Office, Example Wire) published near-identical reports on 18 August that Veldmark's envoy Mara Kessler was summoned after \"hostile remarks\" by the Minister and the Harbour Authority chair regarding the Eastmere dredging visit [3][4][9][36][39][44].\n- Northvale state-linked outlets (Northvale Daily, Quay Voice, Example Gazette) released coordinated condemnations on 15-16 August describing the berth-fee announcement as \"historically oblivious\" and a \"challenge to the treaty order\" [84][101][92][99].\n\n## Why it matters\n- The identical phrasing and timing across distinct Halden-linked publishers indicate a lockstep diplomatic push that amplifies Halden's stance on the dredging rights, potentially pressuring Veldmark's policy and public perception.\n- The parallel Northvale narratives reinforce its criticism of the fee politics, shaping regional sentiment ahead of anniversary commemorations and influencing bilateral relations with neighbours.\n\n## What would change this read\n- Direct reporting from independent Veldmark outlets echoing the same state-crafted language would raise confidence that the narrative is being adopted domestically; this desk does not collect systematic state-media monitoring, so such evidence is currently absent.\n\n## Indicators\n- synchronised-hashtag-surge: not_observed\n- cross-platform-message-cloning: not_observed\n- state-media-amplification: triggered (citations: [3][4][9][84][101])\n- inauthentic-account-cluster: not_observed",
+  "confidence": 0. nine,
+  "evidence": [
+    3,
+    4,
+    9,
+    36,
+    39,
+    44,
+    84,
+    101,
+    92,
+    99
+  ],
+  "tags": [
+    "severity:moderate",
+    "topic:narrative_coordination"
+  ],
+  "indicators": [
+    {
+      "id": "synchronized-hashtag-surge",
+      "statement": "Coordinated surge of an identical hashtag/slogan across many accounts in a short window",
+      "status": "not_observed",
+      "horizon_date": "2026-09-01",
+      "first_seen": "2026-08-18",
+      "citations": []
+    },
+    {
+      "id": "cross-platform-message-cloning",
+      "statement": "Near-identical framing appearing simultaneously across two or more platforms/outlets",
+      "status": "not_observed",
+      "horizon_date": "2026-09-18",
+      "first_seen": "2026-08-18",
+      "citations": []
+    },
+    {
+      "id": "state-media-amplification",
+      "statement": "State or state-linked media amplifies the narrative in lockstep with the online push",
+      "status": "triggered",
+      "horizon_date": "2026-09-18",
+      "first_seen": "2026-08-18",
+      "citations": [
+        "[3]",
+        "[4]",
+        "[9]",
+        "[84]",
+        "[101]"
+      ]
+    },
+    {
+      "id": "inauthentic-account-cluster",
+      "statement": "A cluster of new/low-history/bot-like accounts drives a measurable share of the volume",
+      "status": "not_observed",
+      "horizon_date": "2026-09-01",
+      "first_seen": "2026-08-18",
+      "citations": []
+    }
+  ]
+}

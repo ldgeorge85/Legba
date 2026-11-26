@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""R-3b Task 2 — degradation must be LOUD, and distinct from "found nothing".
+"""Task 2 — degradation must be LOUD, and distinct from "found nothing".
 
 The failure this file exists to make impossible:
 
@@ -23,7 +23,7 @@ ABSENCE EVIDENCE. So:
     an empty success — because ``completed`` + ``count: 0`` is exactly the
     shape a planner summarizes as "no results found".
 
-R-3d changed the DEFAULT for the remaining case. A clean-looking empty (zero
+Changed the DEFAULT for the remaining case. A clean-looking empty (zero
 results, NO engine reported unresponsive) is no longer treated as citable true
 absence: over a multi-engine meta-search a genuinely empty result set is close
 to impossible, so that shape usually means BROKEN. Absence is now MEASURED —
@@ -128,7 +128,7 @@ def test_all_engines_refused_is_degraded_empty_not_empty():
 
 
 def test_a_clean_empty_is_suspect_until_liveness_is_measured():
-    """R-3d: the parse layer can only report WHAT CAME BACK. Zero results with
+    """The parse layer can only report WHAT CAME BACK. Zero results with
     no admitted degradation is EMPTY — suspect, NOT claimable — because nothing
     has yet shown the engine set was answering at all."""
     resp = parse_searxng_payload(_TRUE_EMPTY, query="sanctions")
@@ -504,7 +504,7 @@ async def test_legacy_liveness_verified_empty_stays_a_completion(
 async def test_legacy_silently_dead_instance_is_a_failure_not_an_absence(
     search_fixture, allow_local_egress, monkeypatch,
 ):
-    """THE R-3d case, end-to-end. HTTP 200 + [] + NO degradation signal, for
+    """THE case, end-to-end. HTTP 200 + [] + NO degradation signal, for
     every query including the control probe. Byte-identical to a true absence
     at the wire; only the probe tells them apart."""
     monkeypatch.setenv("LEGBA_WEB_SEARCH_ENDPOINT", f"{search_fixture}/search-dead")

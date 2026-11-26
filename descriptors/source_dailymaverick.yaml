@@ -1,13 +1,12 @@
-# sources_wave_2 — draft SourceDescriptor. Ships DRAFT (operator activates).
+# Draft SourceDescriptor. Ships DRAFT (operator activates).
 #
 # Daily Maverick — South African investigative/politics daily (Scorpio
 # investigative unit, national politics, PAPER TRAIL series). Chosen over
-# TimesLive for the ZA-desk seat named in the brief ("TimesLive or Daily
-# Maverick"): both validated live, but Daily Maverick's editorial angle
+# TimesLive for the ZA-desk seat: both validated live, but Daily Maverick's editorial angle
 # (accountability journalism, PIC/state-capture-adjacent investigations)
 # complements GroundUp's community/social-justice beat rather than
-# duplicating it — together they close the audit-flagged Durban raid gap
-# (planning/COVERAGE_VS_SELECTION_AUDIT_2026-09-07.md item #6) from two
+# duplicating it — together they close the Durban raid coverage gap
+# from two
 # distinct angles. Verified live 2026-09-07: valid RSS 2.0, title
 # "Daily Maverick - Latest News", newest item same-day (includes a live
 # PAPER TRAIL investigative piece), language en-ZA.
@@ -26,7 +25,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: sources_wave_2
+  owner: owner@local
   created: "2026-09-07T00:00:00Z"
 
 scope:
@@ -35,7 +34,7 @@ scope:
   languages: [en]
   tags: [news, africa, south_africa, sources_wave_2]
   source_class: reporting
-  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
+  access_class: public          # free no-auth feed, no separate reuse agreement
 
 acquisition: poll
 
@@ -60,7 +59,7 @@ pipeline:
   enrichment:
     # language_detect FIRST so ner_multilingual uses the detected language.
     # No fact_extractor on the draft: the operator adds it after confirming the
-    # route yields full article text (mirrors the RSSHub-lane conservative default).
+    # route yields full article text (mirrors the other RSSHub routes' conservative default).
     - kind: language_detect
       config: {}
     - kind: ner_multilingual

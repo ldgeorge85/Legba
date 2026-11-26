@@ -1,4 +1,4 @@
-# S-1 — BIS central bank policy rates, daily, as SERIES. Ships DRAFT.
+# BIS central bank policy rates, daily, as SERIES. Ships DRAFT.
 # Kind: series_api (the generic series kind, no provider code).
 #
 # WHY: the blind test's lost facts named central-bank policy rates as the
@@ -32,7 +32,7 @@
 # The underlying figures are communicated to the BIS by the national central
 # banks (SOURCE_REF).
 #
-# Register / activate: see the S-1 lane report (orchestrator steps). Keyless.
+# Register / activate: through the registry (see LIFECYCLE.md). Keyless.
 
 identity:
   id: source.bis.policy_rates_daily
@@ -42,7 +42,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: s_1_series_sources
+  owner: owner@local
   created: "2026-11-13T00:00:00Z"
 
 scope:

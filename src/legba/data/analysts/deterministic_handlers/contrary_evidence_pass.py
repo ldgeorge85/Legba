@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""``contrary_evidence_pass`` — the CONTRARY-EVIDENCE pass (Program 7a).
+"""``contrary_evidence_pass`` — the CONTRARY-EVIDENCE pass.
 
 THE GAP THIS CLOSES, STATED EXACTLY. This platform already runs four kinds of
 disagreement machinery and not one of them goes looking for opposition:
@@ -15,7 +15,7 @@ disagreement machinery and not one of them goes looking for opposition:
     claim's own, and NOT_FOUND is its honest common answer.
 
 Every one of them is passive about opposition. Nothing in the tree formulates
-the COUNTER-query. The operator's 2026-09-23 capture names the model — IARPA
+the COUNTER-query. The model is IARPA
 REASON: "for material claims, actively retrieve the strongest counter-evidence,
 not only supporting evidence. Emit contention records, never verdicts." This
 analyst is that act, and the whole of it.
@@ -44,7 +44,7 @@ WHAT IT DOES, ONCE PER DAY, ON THE $0 CORE PLANE
    publication date that is never invented — so a counter-ref this platform
    cites is a page this platform actually holds, hashed with the same function
    the research plane hashes a landed page with.
-5. FENCES THE STANCE. The first live run (2026-09-25, 60 claims, $0) produced
+5. FENCES THE STANCE. The first live run (60 claims, $0) produced
    three ``contradicts`` rows and ALL THREE WERE FALSE — two encyclopedia
    articles and a lone think-tank piece from another month. So a counter page
    now has to be a REPORTING page (not an encyclopedia / dictionary host),
@@ -74,8 +74,8 @@ WHAT IT NEVER DOES, AND THESE ARE THE DESIGN
   counted on the heartbeat.
 
 THE HEARTBEAT, AND WHY. A run with no LLM wired, no search binding or no new
-reads still ends ``analyst_traces.status='success'`` — the exact shape of the
-08-12 judge outage that stayed invisible for three days. So every run, including
+reads still ends ``analyst_traces.status='success'`` — the exact shape of a
+judge outage that once stayed invisible for three days. So every run, including
 one that contended nothing, upserts a row into the existing
 ``alert_trigger_watermarks`` table under this pass's own ``trigger_class``,
 carrying what it did: claims selected, queries issued, searches run, pages

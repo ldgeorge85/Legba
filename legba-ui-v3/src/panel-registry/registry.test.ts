@@ -213,7 +213,7 @@ describe('U-3 layout-compat — old panel ids resolve through the alias table', 
  * a brand-new capability (not a folded-away original). UI-B1/merges landed its
  * Table B row: it is the Wall's Movers tab now, still fully reachable by id.
  */
-describe('U-4 — system.wall_movers landed on the Wall\'s Movers tab, still fully reachable', () => {
+describe('System.wall_movers landed on the Wall\'s Movers tab, still fully reachable', () => {
   it('is no longer a registry row; its id and panel_id resolve onto the Wall, on Movers', () => {
     expect(PANEL_REGISTRY['system.wall_movers' as PanelKind]).toBeUndefined()
     expect(resolveKind('system.wall_movers')).toEqual({ kind: 'system.wall', tab: 'movers' })
@@ -363,9 +363,9 @@ describe('registry size ratchet', () => {
     // map". Three of those four had a surface already; this was the one with
     // none.
     //
-    // It is also the only way the unit is READABLE AT ALL. Program 6 L2 writes
-    // no table: its series and receipt ride the analyst payload, and a run that
-    // fires nothing is suppressed to trace-only so an idempotent re-run does
+    // It is also the only way the unit is READABLE AT ALL. The layer-measure unit
+    // writes no table: its series and receipt ride the analyst payload, and a
+    // run that fires nothing is suppressed to trace-only so an idempotent re-run does
     // not repeat "no gap change" in the feed. The consequence is that on every
     // quiet day — the overwhelming majority, and the ones that prove the
     // instrument is running rather than merely not complaining — the measure
@@ -376,7 +376,7 @@ describe('registry size ratchet', () => {
     // Re-armed at 59, same rule for the next one. The §7 merge trains still owe
     // this number a reduction, and this row is not an argument against that.
     //
-    // 59 → 60: a FIFTH documented exception, wave P lane B's
+    // 59 → 60: a FIFTH documented exception,
     // `analysis.cross_framing`, and it is the first one that costs the SIDEBAR
     // nothing.
     //
@@ -387,7 +387,7 @@ describe('registry size ratchet', () => {
     // offers are earn / fold / hide, and this row takes the third — it is
     // registered `hidden`, reached from the claim it is about (the Claims
     // panel's action, a situation row, ⌘K), so the 26-row sidebar budget is
-    // untouched by this lane and no visible row was bought.
+    // untouched by this row and no visible row was bought.
     //
     // Folding it into an existing surface was considered and does not work.
     // The Inspector reads ONE record; the gap strip reads one desk's units as
@@ -409,7 +409,7 @@ describe('registry size ratchet', () => {
     // that: it is the cheapest form of the same debt.
 
     //
-    // 60 → 61: a SIXTH documented exception, wave P lane A's
+    // 60 → 61: a SIXTH documented exception,
     // `target.desk_brief_page`, argued the same way the fourth was — the row
     // is the only way an existing product is READABLE AT ALL.
     //
@@ -478,8 +478,8 @@ describe('registry size ratchet', () => {
     // 45 → 38: UI-B3's subject half (W11) — the eight per-subject reads
     // retired into `subject.page`'s tabs, the one kind it registered.
     //
-    // 38 → 39: N-J (2026-11-13), `system.flow` — a documented exception the
-    // operator asked for by name: a read-only canvas over the descriptors as
+    // 38 → 39: `system.flow` — a documented exception:
+    // a read-only canvas over the descriptors as
     // the working surface for redesigning the agents. It is not observability
     // over the plumbing; it renders the registry's own objects (every edge a
     // declared field, every relation the registry cannot express listed as
@@ -520,7 +520,7 @@ describe('registry size ratchet', () => {
     }
   })
 
-  it('the desk brief page EXPIRED as a row: it is the subject page\'s Brief tab (UI-B3)', () => {
+  it('the desk brief page EXPIRED as a row: it is the subject page\'s Brief tab', () => {
     // The 61st row's own terms: "the moment a merged desk surface carries it
     // as a tab, this exception expires". `subject.page` carries it.
     expect('target.desk_brief_page' in PANEL_REGISTRY).toBe(false)

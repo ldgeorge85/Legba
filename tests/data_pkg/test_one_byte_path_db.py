@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""B-1 — one byte path on the REAL driver (isolated test stack only).
+"""One byte path on the REAL driver (isolated test stack only).
 
 * migration 0266 is idempotent (applied twice) and admits role ``archived``;
 * the poll's link writer persists the item ``locator`` (single and batched);

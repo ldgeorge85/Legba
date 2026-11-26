@@ -4,13 +4,13 @@
 -- 0238_decision_shadow_ledger.sql
 --
 -- `decision_shadow_ledger` — one row per decision a SHADOW model was asked
--- beside the model that actually decided (W11-F108).
+-- beside the model that actually decided.
 --
 -- WHY
 -- ---
 -- claim_watch's bearing gate asks a small chat model, per candidate edge,
 -- whether new evidence bears on an open question (≈ 32,000 calls a week). A
--- DECISION model behind the same gateway (clef-flash, `POST /decide`) answers
+-- DECISION model behind the same gateway (`POST /decide`) answers
 -- that shape of question as a typed choice with a probability per option. It
 -- is measured before it decides anything: with `bearing_shadow_ref` set, every
 -- pair the gate asked is asked of the shadow too, AFTER the gate's edges are

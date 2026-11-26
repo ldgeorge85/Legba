@@ -1,4 +1,4 @@
-# journal_read action pack (Journal Assessor, plan §5 / §12 Wave 1).
+# journal_read action pack (Journal Assessor).
 #
 # The journal_assessor's GOVERNED read surface — the WHOLE ANIMAL + its OWN
 # instruments. This is what makes the journal the self-narrating analyst: it reads
@@ -7,11 +7,11 @@
 # what fired vs went quiet, budget pressure) — and narrates a coherent point of
 # view over all of it.
 #
-# WHY a SEPARATE pack (not just granting substrate_read): the §7.6 grant
+# WHY a SEPARATE pack (not just granting substrate_read): the grant
 # invariant. The journal must be granted ONLY this read pack (and later the
 # journal_proposals pack) so it is structurally NOT effective for any pack whose
 # tools call write_fact / write_nexus / write_hypothesis — the grant-layer
-# backstop for the never-write-a-fact invariant (§3.1).
+# backstop for the never-write-a-fact invariant.
 #
 # Universally applicable BY DESIGN (no applies_to_tags, no predicate): the
 # journal is a META analyst with target_filter=None, so the runtime binds it
@@ -35,7 +35,7 @@ identity:
   version: "<content-hash stamped at register time>"
   abstraction_level: L1
   state: active
-  owner: journal_revival
+  owner: owner@local
   created: "2026-06-25T00:00:00Z"
 
 tools:

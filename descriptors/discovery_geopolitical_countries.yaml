@@ -1,10 +1,10 @@
-# L-200 — Discovery descriptor: materialise N country targets via L-181.
+# Discovery descriptor: materialise N country targets.
 #
-# Per legba_topology_redesign.md §5.2 + legba_discovery.md, this is the
+# This is the
 # *discovery half* of the L2 abstraction: the country_list_discovery
 # kind emits one CandidateTarget per ISO 3166-1 row, the relabel chain
 # rewrites the candidate's raw label_set into per-country bindings, and
-# the registry materialisation loop (L-181 / L-182) writes the resulting
+# the registry materialisation loop writes the resulting
 # bodies into target_descriptors with provenance pointer
 # `discovered_from = "discovery_geopolitical_countries"`.
 #

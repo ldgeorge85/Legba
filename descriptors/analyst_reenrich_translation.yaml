@@ -1,11 +1,11 @@
-# reenrich_translation — TRANSLATION backfill over the pre-T-1a non-Latin backlog.
+# reenrich_translation — TRANSLATION backfill over the pre-fix non-Latin backlog.
 #
-# A `deterministic`-kind META analyst over the SHARED raw signal pool. The M11/M12
-# NER lane translated a non-Latin signal to English transiently, NERed the
-# translation, and DISCARDED it — so every signal ingested BEFORE T-1a landed
+# A `deterministic`-kind META analyst over the SHARED raw signal pool. The earlier
+# NER step translated a non-Latin signal to English transiently, NERed the
+# translation, and DISCARDED it — so every signal ingested BEFORE that fix landed
 # carries payload.title_en = NULL (the exact rows the journal/chronicle narrator
-# read raw + a transliterated NER surface and inverted — the Rubio-inversion class,
-# j7 review). T-1a fixes the FORWARD path (every new non-Latin signal now stamps
+# read raw + a transliterated NER surface and inverted — a name-inversion class).
+# The fix covers the FORWARD path (every new non-Latin signal now stamps
 # title_en/text_en at ingest). This analyst is the BACKFILL leg: every time it
 # fires it translates the next batch of candidate signals (payload language in the
 # non-Latin translate set AND payload.title_en IS NULL), draining the ~1.9k backlog
@@ -44,7 +44,7 @@
 # self-draining title_en-is-marker predicate needs no new column or scan index.
 #
 # ONE-TIME: once the ~1.9k backlog drains (no new candidates arrive — the forward
-# T-1a fix stamps every new non-Latin signal at ingest), this analyst idles cheaply
+# fix stamps every new non-Latin signal at ingest), this analyst idles cheaply
 # (examined=0 per tick). It may be retired via PUT /descriptors once the backlog is
 # confirmed empty, or left running as a self-healing backstop.
 
@@ -59,7 +59,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: active
-  owner: reenrich_translation
+  owner: owner@local
 
 subscription:
   # No `targets` block → META analyst: one global sweep per cadence tick over the

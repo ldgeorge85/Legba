@@ -1,4 +1,4 @@
-# Composition Lineage Sweep analyst descriptor (P3-T6).
+# Composition Lineage Sweep analyst descriptor.
 #
 # The system's lineage-integrity VERIFICATION over the composition roots.
 # A NEW deterministic sub-handler (NOT an extension of integrity_sweep — that is
@@ -45,7 +45,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: active
-  owner: composition_lineage_sweep
+  owner: owner@local
 
 subscription:
   # No `targets` block → META analyst: one global sweep per cadence tick. The

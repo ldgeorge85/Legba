@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""``inquiry_yield`` — the H12 weekly instrument (Program 5 lane 1,
-planning/PROGRAM5_INQUIRY_DESIGN_2026-09-24.md §4).
+"""``inquiry_yield`` — the H12 weekly instrument.
 
 Mirrors ``test_sealed_forecast_ledger.py``'s own two-layer proof:
 

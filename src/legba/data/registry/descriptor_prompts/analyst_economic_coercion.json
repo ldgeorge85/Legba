@@ -1,8 +1,8 @@
 {
   "prompts": {
     "economic_coercion": {
-      "chars": 24902,
-      "sha256": "26b12fa40dccc2d205f2c92fb1f259555ec03301babb98f1c4d1bf075ebd240c",
+      "chars": 26254,
+      "sha256": "55691e653943ce403f76d8eb3fa99aa7cda1bf0293dcfb1f6b8ef394e4898570",
       "source": "analyst_economic_coercion.yaml"
     }
   },

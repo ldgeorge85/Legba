@@ -107,7 +107,7 @@ fi
 # 5. Pre-push secret/codename scan.
 stage "5/7 pre-push secret/codename scan"
 if ! bash scripts/prepush_scan.sh 2>&1 | tee -a "${LOG}"; then
-  die "pre-push secret/codename scan (resolve the hits — see RUNBOOK §19/§20)"
+  die "pre-push secret/codename scan (resolve the hits — see the runbook)"
 fi
 
 # 6. Release manifest regen (fold-in so it tracks the tag).

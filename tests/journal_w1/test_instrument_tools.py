@@ -263,7 +263,7 @@ async def test_get_calibration_reads_nested_metrics_from_live_writer_shape(pg_po
         })
     out = await port.get_calibration()
     assert out["available"] is True
-    # Lane E: each Brier beside ITS OWN n; the pooled count is renamed and is
+    # Each Brier beside ITS OWN n; the pooled count is renamed and is
     # never beside a Brier that is not over it; the figure is stale + labelled.
     assert "brier" not in out and "sample_size" not in out
     assert out["brier_exogenous"] == 0.3976

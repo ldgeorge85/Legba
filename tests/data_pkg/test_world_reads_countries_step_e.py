@@ -628,7 +628,7 @@ def test_the_country_tier_is_untouched_by_the_world_parameter() -> None:
     assert plain == handed
     assert asp.context_spans(plain["blocks"][0])[0]["origin"]["head_id"] == (
         rows[0]["id"]
-    ), "the country tier's context is its OWN desk head, as P3-A shipped"
+    ), "the country tier's context is its OWN desk head, as shipped"
 
 
 def test_an_empty_assessment_body_fails_LOUD_never_a_hole_in_the_read() -> None:
@@ -709,7 +709,7 @@ def test_a_world_record_with_context_gets_the_v6_voice_and_version() -> None:
     payload = _world(candidates, context_heads=_context_heads(candidates))
 
     assert apr.has_context_spans(payload) is True
-    assert apr.prompt_version_for(payload) == "assessment_prompt.v6"
+    assert apr.prompt_version_for(payload) == "assessment_prompt.v6.1"
     assert apr.prompt_version_for(payload) == apr.PROMPT_VERSION_V6
     assert apr.system_prompt_for(payload) is apr.WORLD_ASSESSMENT_SYSTEM_V6
     assert apr.PROMPT_VERSION_V4 == "assessment_prompt.v4"
@@ -765,7 +765,7 @@ def test_a_world_record_WITHOUT_context_is_byte_identical_to_v3() -> None:
 
     assert apr.has_context_spans(plain) is False
     assert apr.prompt_version_for(plain) == apr.PROMPT_VERSION
-    assert apr.prompt_version_for(plain) == "assessment_prompt.v3"
+    assert apr.prompt_version_for(plain) == "assessment_prompt.v3.1"
     assert apr.system_prompt_for(plain) is apr.ASSESSMENT_SYSTEM
     assert apr.desk_reads_in_full(plain) == ""
     assert "READS IN FULL" not in apr.build_assessment_prompt(plain)
@@ -779,8 +779,8 @@ def test_the_country_voice_and_the_v3_world_voice_are_BYTE_UNCHANGED() -> None:
     def _h(s):
         return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
-    assert apr.PROMPT_VERSION == "assessment_prompt.v3"
-    assert apr.COUNTRY_PROMPT_VERSION == "country_assessment_prompt.v1"
+    assert apr.PROMPT_VERSION == "assessment_prompt.v3.1"
+    assert apr.COUNTRY_PROMPT_VERSION == "country_assessment_prompt.v1.1"
     assert apr.CONTEXT_SECTION_HEADER == "THE DESK READS IN FULL"
     assert apr.COUNTRY_SECTION_HEADER == "THE COUNTRY READS IN FULL"
     # The five constants are five distinct voices; none of v4/v5/v6 is a copy.
@@ -902,7 +902,7 @@ def test_the_evidence_map_carries_the_country_read_not_just_the_sentence() -> No
     for block in plain["blocks"]:
         assert au.spine_span_text(plain)[block["ordinal"]] == (
             block["spans"][0]["text"]
-        ), "a payload with no context is byte-identical to D-6's map"
+        ), "a payload with no context is byte-identical to the earlier map"
 
 
 def test_the_citation_carries_context_origin_id_so_the_drill_can_open_it() -> None:

@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""L-176 optimizer analyst-kind tests.
+"""Optimizer analyst-kind tests.
 
 Covers:
 
   * Kind identity — KIND_NAME, OUTPUT_KIND, build_prompt_module() returns
-    None (Wave B exempt).
+    None (exempt).
   * READ_SLICE — joins analyst_traces + analyst_critiques, filters by
     analyzed_analyst_id, returns empty on no target.
   * run_method happy path — dispatches the durable workflow (via
@@ -160,7 +160,7 @@ async def test_dispatch_workflow_timeout_yields_observable_result(monkeypatch) -
 # ---------------------------------------------------------------------------
 
 
-#: K-3 — pin the parent prompt to a module that actually imports.
+#: Pin the parent prompt to a module that actually imports.
 #:
 #: ``optimizer.py`` used to derive the parent path by convention as
 #: ``legba.prompts.{analyzed_analyst_id}.v1``, and the synthetic analyst id
@@ -251,7 +251,7 @@ def test_output_kind_is_prompt_module_candidate() -> None:
 
 
 def test_build_prompt_module_returns_none() -> None:
-    """Wave B prereq: the optimizer is exempt — it COMPILES prompts."""
+    """The optimizer is exempt — it COMPILES prompts."""
     assert build_prompt_module() is None
 
 

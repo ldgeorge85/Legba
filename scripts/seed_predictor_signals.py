@@ -57,7 +57,7 @@ async def _seed(*, target_id: str, days: int, pg_dsn: dict) -> None:
             day = now - timedelta(hours=23.0 - offset_hours)
             new_id = uuid4()
             data = {
-                "summary": f"K-3 synthetic predictor seed slot {d}",
+                "summary": f"synthetic predictor seed slot {d}",
                 "sentiment": 0.05 * (d - days / 2),
                 "descriptor_source_id": "k3_predictor_synth",
             }
@@ -77,7 +77,7 @@ async def _seed(*, target_id: str, days: int, pg_dsn: dict) -> None:
                 )
                 """,
                 new_id, json.dumps(data),
-                f"K-3 synthetic Brazil signal slot {d}",
+                f"synthetic Brazil signal slot {d}",
                 f"https://example.invalid/{GUID_PREFIX}/{d}-{new_id}",
                 f"{GUID_PREFIX}-{new_id}",
                 target_id, target_version,

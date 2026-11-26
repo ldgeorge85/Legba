@@ -30,7 +30,7 @@ afterEach(() => {
   delete document.documentElement.dataset.pwaBanner
 })
 
-describe('offline (P-3)', () => {
+describe('offline', () => {
   it('online and nothing to offer: no banner at all', () => {
     mount()
     expect(screen.queryByTestId('pwa-banners')).toBeNull()
@@ -67,7 +67,7 @@ describe('offline (P-3)', () => {
   })
 })
 
-describe('update available (P-1)', () => {
+describe('update available', () => {
   it('shows "Update available" with Reload, and the tap asks the waiting worker to take over', () => {
     const waiting = Object.assign(new EventTarget(), { postMessage: vi.fn(), state: 'installed' })
     const sw = Object.assign(new EventTarget(), { controller: {} })
@@ -89,7 +89,7 @@ describe('update available (P-1)', () => {
   })
 })
 
-describe('the install hint (P-1)', () => {
+describe('the install hint', () => {
   it('appears only when the browser offers install, prompts on tap, and "Not now" hides it for good', async () => {
     mount()
     expect(screen.queryByTestId('pwa-install')).toBeNull()

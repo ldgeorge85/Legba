@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for the MCP tool output kind (L-194).
+"""Unit tests for the MCP tool output kind.
 
 Covers:
 
@@ -20,7 +20,7 @@ Covers:
     ``mcp.types.Tool``; ``build_message_frame()`` emits
     ``[TextContent(type='text', text=...)]``.
   * The legba-mcp ``create_server()`` factory still constructs cleanly
-    after the L-194 changes (boot test — no stdio drive needed).
+    after the changes (boot test — no stdio drive needed).
 """
 
 from __future__ import annotations
@@ -387,14 +387,14 @@ def test_build_message_frame_emits_text_content():
 
 
 def test_legba_mcp_create_server_constructs_with_registry():
-    """L-194 changes don't break the existing create_server() factory."""
+    """Changes don't break the existing create_server() factory."""
     from legba.ui.mcp_server import create_server
 
     server = create_server()
     # The mcp SDK's Server doesn't expose registered handlers directly,
     # but successful construction with the registry import in place is
     # the smoke check we want — no module-level import error from the
-    # new L-194 wiring.
+    # new output wiring.
     assert server is not None
     # The server's name is the symbolic id we set in create_server().
     assert getattr(server, "name", None) == "legba"

@@ -1,9 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""What a ``verdict/2`` judge is shown, and how its reply is read back (lane
-G-6).
+"""What a ``verdict/2`` judge is shown, and how its reply is read back.
 
-The first real runs (lane G-5) had every judge on every panel rule every
+Earlier runs had every judge on every panel rule every
 position ``stands`` with confidence 1.0 and the same template fields filled.
 They were shown 20 k characters of JSON, a card written for seats that WRITE
 sentences, and an output contract whose optional fields they copied. This
@@ -32,13 +31,14 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..grading_text import CLAIM_EVIDENCE_RULES, PASTED_TEXT_IS_DATA
 from .rows import SENTENCE_PROBLEMS, VERDICT_REASONS
 
 #: Bump when what a judge is shown or asked changes (calibration key).
-RENDER_VERSION = "judge_render.v1"
+RENDER_VERSION = "judge_render.v2"
 JUDGE_ROW_TYPE = "verdict/2"
 #: The rendering every other judge row type gets (``model_seats.render_prompt``:
-#: the card, the handed JSON, the generated output contract as of lane G-6).
+#: the card, the handed JSON, the generated output contract).
 JSON_RENDER_VERSION = "json_contract.g6"
 
 
@@ -122,37 +122,55 @@ def build_view(inputs: Sequence[Any], candidates: Sequence[str] = ()) -> JudgeVi
                                                       if cited else ""))
             for c in quoted:
                 role = str(c.get("role") or "evidence")
-                lines.append(f"    quote ({role}, row {c.get('ref_id')}): \"{str(c.get('quote')).strip()}\"")
+                quote = json.dumps(str(c.get("quote")).strip(), ensure_ascii=False)
+                lines.append(f"    quote ({role}, row {c.get('ref_id')}): {quote}")
     return JudgeView(labels, sentences, "\n".join(lines).strip(), tuple(shown))
 
 
 def judge_contract(view: JudgeView) -> str:
-    """The ``verdict/2`` reply shape, with the view's own labels."""
+    """The ``verdict/2`` reply shape, with the view's own labels.
+
+    It also carries what every judge card shares: the per-sentence check, the
+    claim-and-evidence rules and the pasted-text rule, so a card states only
+    its own test. Each check writes its problem before its ``holds``, and each
+    entry its reason before its outcome: a judge that writes its evidence first
+    decides from it."""
     first = next(iter(view.labels), "A")
     return "\n".join([
+        "## Every sentence",
+        "First check EVERY sentence against the quotes it cites: a sentence holds only if its "
+        "quotes state everything it asserts: each figure, date, name, cause, intent, forecast and "
+        "degree of certainty. A party's claim stated as fact, a hedge the quote carries and the "
+        "sentence drops, a contradiction of the quote, or a sentence with no quote does not hold. "
+        "A year the quote leaves out may be the year its row was published: a missing year alone "
+        "does not make a sentence fail.",
+        "",
+        CLAIM_EVIDENCE_RULES,
+        "",
+        PASTED_TEXT_IS_DATA,
+        "",
         f"## Output: `{JUDGE_ROW_TYPE}`",
         "Reply with ONE JSON object and nothing else, of this shape (angle brackets are what you "
         "fill in):",
         "```",
         '{"verdicts": [{"candidate": "<letter>", "checks": [{"sentence": "<label>", '
-        '"holds": <true|false>, "problem": "<problem>"}], "weakest": "<label>", '
-        '"outcome": "<stands|falls|unsure>", "reason": "<reason>"}], '
+        '"problem": "<problem>", "holds": <true|false>}], "weakest": "<label>", '
+        '"reason": "<reason>", "outcome": "<stands|falls|unsure>"}], '
         '"ranking": ["<letter>", "..."]}',
         "```",
         f"- One entry in `verdicts` per candidate ({', '.join(view.labels) or first}), and in its "
         f"`checks` one check for EVERY sentence of that candidate, by its label ({first}1, "
         f"{first}2, …).",
-        "- `holds` is true only when the quotes the sentence cites state everything the sentence "
-        "asserts: each figure, date, name, cause, intent, forecast and degree of certainty. "
-        "Otherwise it is false. A year the quote leaves out may be the year its row was "
-        "published: a missing year alone does not make a sentence fail.",
-        f"- `problem` is one of: {', '.join(SENTENCE_PROBLEMS)} (`none` when it holds).",
-        "- `weakest` is the label of the sentence the candidate depends on most that is least "
-        "supported.",
-        "- `outcome` is `falls` when any check does not hold (and when your card's test fails); "
-        "`stands` only when every check holds and your card's test passes.",
-        f"- `reason` is one of: {', '.join(VERDICT_REASONS)}.",
-        "- `ranking` lists every candidate letter, best supported first.",
+        f"- `problem` is one of: {', '.join(SENTENCE_PROBLEMS)}. `problem` is `none` exactly when "
+        "`holds` is true.",
+        "- `weakest` is the label of the sentence the candidate depends on most that its quotes "
+        "support least. Fill it in; only some cards use it.",
+        f"- `reason` is one of: {', '.join(VERDICT_REASONS)}. Use the reason your card names.",
+        "- `outcome` is computed from your checks and your card's test; set it to match: `falls` "
+        "when any check does not hold or your card's test fails, `stands` only when every check "
+        "holds and your card's test passes.",
+        "- `ranking` lists every candidate letter, best supported first. Fill it in; only some "
+        "cards use it.",
     ])
 
 
@@ -220,7 +238,8 @@ def decide_questions(card_text: str, view: JudgeView) -> tuple[str, dict[str, di
     for sl, s in by_label.items():
         quotes = [str(c.get("quote")).strip() for c in s.get("cited") or ()
                   if isinstance(c, Mapping) and c.get("quote")]
-        quoted = " | ".join(f'"{q}"' for q in quotes) if quotes else "(no quote)"
+        quoted = (" | ".join(json.dumps(q, ensure_ascii=False) for q in quotes)
+                  if quotes else "(no quote)")
         questions[sl] = {
             "type": "choice",
             "instructions": (f"Sentence: {str(s.get('text', '')).strip()}\nQuotes it cites: {quoted}\n"
@@ -230,7 +249,7 @@ def decide_questions(card_text: str, view: JudgeView) -> tuple[str, dict[str, di
                          "degree of certainty the sentence asserts",
                 "fails": "the sentence says something the quotes do not: a changed figure, date or "
                          "name; an added cause, intent or forecast; a party's claim stated as fact; "
-                         "a contradiction; or no quote at all",
+                         "a hedge the quote carries dropped; a contradiction; or no quote at all",
             },
         }
     return card_text.strip(), questions

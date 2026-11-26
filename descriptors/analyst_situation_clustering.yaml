@@ -32,7 +32,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: active
-  owner: situation_clustering
+  owner: owner@local
 
 subscription:
   # No `targets` block → META analyst: one global sweep per cadence tick over the

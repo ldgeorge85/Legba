@@ -2,10 +2,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """G1/G3 — THE CALIBRATION INTERLOCK: no passing gate, no grading.
 
-Program 1's whole finding is that a correctness number means nothing until the
-INSTRUMENT agrees with itself. R4 measured pooled agreement 0.42 on a five-label
-rubric and the verdict was instrument-limited; ANNEX C v4 measured 0.8444 on a
-fresh draw and the gate PASSED. The difference between those two rounds is the
+A correctness number means nothing until the INSTRUMENT agrees with itself.
+Pooled agreement of 0.42 on a five-label rubric was instrument-limited; 0.8444
+on a fresh draw passed the gate. That difference is the
 only thing standing between a published share and a number nobody should read.
 
 So the job REFUSES TO GRADE unless a ``grader_calibrations`` row exists that
@@ -153,7 +152,7 @@ async def resolve_calibration(
 #     refuses to write a second row for a draw already scored, so a second roll
 #     of the same dice cannot be presented as independent confirmation.
 
-#: PREREG_P1 §2's n. Thirty atoms is what the two gates that have run were run
+#: The pre-registered n. Thirty atoms is what the two gates that have run were run
 #: on, and changing it changes what the pooled rate is comparable to.
 #: H12 — the METHOD/SCALE version of the calibration GATE this module enforces,
 #: stamped ``method_version`` on each ``grader_calibrations`` row the regate /
@@ -184,7 +183,7 @@ def draw_calibration_sample(
 ) -> list[dict[str, Any]]:
     """A seeded UNIFORM draw of ``n`` claims, in id order.
 
-    No stratification by unit or grain, exactly as PREREG_P1 §3 registered it:
+    No stratification by unit or grain, exactly as pre-registered:
     the realised per-unit counts are reported rather than engineered. Ordering
     the result by id means the packet's item order discloses nothing about the
     draw.

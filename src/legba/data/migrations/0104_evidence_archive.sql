@@ -3,11 +3,11 @@
 --
 -- 0104_evidence_archive.sql
 --
--- P2-1 (program §A3, planning/PROGRAM_RECOMMENDATIONS_2026-07-24.md): NATIVE
+-- NATIVE
 -- cited-evidence archival — the bookkeeping sidecar for the `evidence_archiver`
 -- deterministic analyst. The archiver finds signals CITED by verified findings
 -- (derived_from of findings with a passing faithfulness critique), fetches the
--- ORIGINAL bytes behind `canonical_url` (SSRF egress guard + the P2-2 license
+-- ORIGINAL bytes behind `canonical_url` (SSRF egress guard + the license
 -- gate applied), stores them CONTENT-ADDRESSED on the archive volume at
 -- `{LEGBA_ARCHIVE_ROOT}/{sha256[:2]}/{sha256}`, and stamps the signal row —
 -- so the receipt chain terminates in OUR verifiable copy, not a rotting URL.
@@ -38,7 +38,7 @@
 --   failed           — fetch/store failed; retried until `attempts` reaches the
 --                      archiver's cap (egress-blocked URLs are capped at once —
 --                      a private-address target can never become fetchable).
---   skipped_license  — the P2-2 license gate refused retention for this
+--   skipped_license  — the license gate refused retention for this
 --                      source's license_class. Recorded (NEVER silent) with the
 --                      class that triggered it, so a future policy flip can
 --                      re-evaluate exactly these rows.
@@ -77,7 +77,7 @@ CREATE TABLE IF NOT EXISTS public.evidence_archive (
     media_object_ref text,
     media_sha256     text,
     media_size_bytes bigint,
-    -- The license_class the P2-2 gate evaluated for this signal at archive/skip
+    -- The license_class the license gate evaluated for this signal at archive/skip
     -- time (payload stamp → raw_provenance fallback; NULL = unknown/unset,
     -- which the default posture ARCHIVES — recorded so a policy flip can
     -- re-evaluate without guessing what the gate saw).

@@ -1,13 +1,13 @@
-# S3-T3 — Collection-Gap analyst descriptor.
+# Collection-Gap analyst descriptor.
 #
 # A `deterministic`-kind META analyst (sub_handler=collection_gap) over the
 # banded SCORECARD rows (kind='scorecard', produced by scorecard_producer). On a
-# MONTHLY cadence it reads the honest `insufficient-evidence` signal the P4
+# MONTHLY cadence it reads the honest `insufficient-evidence` signal the
 # banding already computes and turns it into a forward-looking COLLECTION
 # requirement: which desk×dimension cells are STARVED (insufficient in the
 # desk's current card), WHY (the aggregated banding `reason` over the window),
 # how PERSISTENTLY, and which SOURCE CLASSES (reporting / analysis / official /
-# state_media — the S1-T8 vocabulary) would plausibly feed them.
+# state_media — the vocabulary) would plausibly feed them.
 #
 # Target-agnostic + META: the aggregation is an observation-level property of the
 # shared scorecard pool, not a per-target interpretation. NO `targets` selector →
@@ -57,7 +57,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: active
-  owner: s3_collection_gap
+  owner: owner@local
 
 subscription:
   # No `targets` block → META analyst: one global sweep per cadence tick over the

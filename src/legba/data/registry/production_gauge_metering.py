@@ -20,8 +20,9 @@ typical-worst call has no headroom to absorb more load. Measured live
 which is exactly why this loop exists. The second leg is truncation:
 ``finish_reason='length'`` on a receipt means the server cut a finding off
 mid-sentence and the run carried on as a success — ONE such call is a defect
-at any sample size (the vllm handler does not send ``max_tokens`` by default,
-so 'length' means the server-side budget silently won).
+at any sample size (the vllm handler sends the alias's own declared maximum,
+or nothing where none is declared, so 'length' means the model's maximum, or
+the endpoint's default, was reached).
 
 **llm_daily_burn** — quota death is blind (#22). Every hosted PAYG call's
 receipt carried ``cost_estimate_usd: 0.0`` because the vllm handler's price

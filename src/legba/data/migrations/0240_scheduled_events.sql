@@ -3,7 +3,7 @@
 --
 -- 0240_scheduled_events.sql
 --
--- THE ALWAYS-ON CALENDAR (W11-F141).
+-- THE ALWAYS-ON CALENDAR.
 --
 -- WHY
 -- ---

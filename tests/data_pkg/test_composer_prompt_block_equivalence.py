@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""C-4 equivalence proof for the ONE composition prompt-block interface.
+"""Equivalence proof for the ONE composition prompt-block interface.
 
 The composition user turn was assembled by eight ad-hoc
 ``user_prompt = user_prompt + "\\n" + block`` statements whose order, separators

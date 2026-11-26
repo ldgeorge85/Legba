@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""legba.data.rag.lane4_loader — the manual-ingest Lane-4 vector loader (S5-T2).
+"""legba.data.rag.lane4_loader — the manual-ingest Lane-4 vector loader.
 
 Lane 4 of the manual-ingest format (see :mod:`legba.data.seed.manual_schema`):
 corpus documents destined for Qdrant. This loader takes a validated batch's
@@ -64,8 +64,7 @@ logger = logging.getLogger(__name__)
 _LANE4_NS = UUID("6f2b1e4a-7c3d-5a8e-9b0f-1d2c3e4f5a6b")
 
 #: corpus name → the QdrantStore ensure-method + config attr for its collection.
-#: The three provisioned RAG corpora (RAG plan §B + EXEMPLAR_SHELF_DRAFT
-#: §4 step 4). A batch whose ``docs`` declare any OTHER corpus is refused (the
+#: The three provisioned RAG corpora. A batch whose ``docs`` declare any OTHER corpus is refused (the
 #: loader never silently mints an arbitrary collection — the vector plane is
 #: exactly these curated corpora).
 CORPUS_COLLECTIONS: dict[str, tuple[str, str]] = {
@@ -250,9 +249,8 @@ def check_exemplar_id(shelf: ExemplarShelf, exemplar_id: str | None) -> Exemplar
     """Validate one id against the exemplar shelf for corpus ingest.
 
     Valid = a ``shelf.ready_ids()`` member OR a resolvable alias (a
-    merged-away id whose survivor is offered) — EXEMPLAR_SHELF_DRAFT §4 step
-    4's "template source class" material may only attach to a pattern the
-    shelf currently offers as ready, or to one of its merged aliases.
+    merged-away id whose survivor is offered) — "template source class" material may only attach to a
+    pattern the shelf currently offers as ready, or to one of its merged aliases.
 
     A RETIRED id is refused with the shelf's own reversal note (never
     silently dropped — the operator needs to know a re-admit is possible and

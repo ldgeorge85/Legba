@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""vLLM / gpt-oss-120b LLM provider handler (L-120).
+"""vLLM / the core model LLM provider handler (L-120).
 
-vLLM serves an OpenAI-compatible API; the self-hosted gpt-oss-120b
+vLLM serves an OpenAI-compatible API; the self-hosted core model
 endpoint at `https://llm.example.internal/v1` is one such deployment
 behind the OpenAI Chat Completions wire. This handler reuses 90% of the
 OpenAI handler's translation layer and overrides the bits that differ:
@@ -11,7 +11,7 @@ OpenAI handler's translation layer and overrides the bits that differ:
     rolls up to $0.00 in the budget UI. Operators can override per
     deployment if they want to apportion compute cost.
   * Token field shape matches OpenAI (prompt_tokens / completion_tokens).
-  * GPT-OSS models served by vLLM emit Harmony control tokens in some
+  * Models of the core model's family served by vLLM emit Harmony control tokens in some
     output paths; the existing legba parser handles that in the agent
     layer. The handler here does NOT strip Harmony markers — that's a
     decision the caller (analyst handler) makes based on whether it's
@@ -21,10 +21,10 @@ OpenAI handler's translation layer and overrides the bits that differ:
   * Some vLLM builds return multi-message choice lists (reasoning + final);
     we coalesce by joining text in choice order, mirroring the existing
     `legba.agent.llm.provider.VLLMProvider` behavior.
-  * Temperature defaults to 1.0 for GPT-OSS workloads per ernie's proven
+  * Temperature defaults to 1.0 for core-model workloads per ernie's proven
     pattern (`legba.agent.llm.provider`). Callers can override.
 
-Streaming (W11-F133): EVERY generation goes over the wire with
+Streaming: EVERY generation goes over the wire with
 `stream: true` + `stream_options.include_usage`, and the SSE
 `chat.completion.chunk` events are folded back into the same JSON shape the
 non-streaming endpoint returns (`_accumulate_sse`), so `_parse_response` and
@@ -79,7 +79,7 @@ _ENVELOPE_KEYS: tuple[str, ...] = (
 )
 
 #: ``/v1/models`` keys that name a model's context window, in probe order: the
-#: innoai gateway's ``context_tokens``, vLLM's ``max_model_len``, OpenRouter's
+#: model gateway's ``context_tokens``, vLLM's ``max_model_len``, OpenRouter's
 #: ``context_length``.
 _WINDOW_KEYS: tuple[str, ...] = (
     "context_tokens", "max_model_len", "context_length", "context_window",
@@ -87,6 +87,20 @@ _WINDOW_KEYS: tuple[str, ...] = (
 
 #: Delta keys a reasoning model streams its thinking under (never the answer).
 _REASONING_KEYS: tuple[str, ...] = ("reasoning_content", "reasoning")
+
+
+#: The house token estimate's divisor (``analysts/_llm_budget.CHARS_PER_TOKEN``).
+_CHARS_PER_TOKEN = 4
+
+#: ``LEGBA_LLM_SEND_MAX_TOKENS`` values that stop this handler sending any
+#: ``max_tokens``. Unset (or any other value) sends the declared maximum.
+SEND_MAX_TOKENS_ENV = "LEGBA_LLM_SEND_MAX_TOKENS"
+_SEND_OFF_VALUES = frozenset({"0", "false", "no", "off"})
+
+
+def _send_switched_off() -> bool:
+    """Is the deployment-wide off switch set?"""
+    return os.getenv(SEND_MAX_TOKENS_ENV, "").strip().lower() in _SEND_OFF_VALUES
 
 
 def _window_of(item: Mapping[str, Any]) -> int | None:
@@ -142,7 +156,7 @@ async def _iter_chat_sse(response: httpx.Response) -> AsyncIterator[Any]:
 
 
 class VLLMProviderHandler(LLMProviderHandler):
-    """Concrete handler for vLLM / gpt-oss-120b / any OpenAI-compatible endpoint."""
+    """Concrete handler for vLLM / the core model / any OpenAI-compatible endpoint."""
 
     subprovider: ClassVar[str] = "vllm"
     schema_version: ClassVar[str] = "legba/stack.llm_provider/1-0-0"
@@ -158,10 +172,10 @@ class VLLMProviderHandler(LLMProviderHandler):
     # set costs $0.00 exactly as before (#22, 2026-08-15).
     PRICE_TABLE: ClassVar[Mapping[str, ModelPrice]] = {}
 
-    # Default temperature for GPT-OSS-class workloads; callers override.
+    # Default temperature for core-model-class workloads; callers override.
     _DEFAULT_TEMPERATURE: ClassVar[float] = HOUSE_TEMPERATURE
 
-    #: W11-F133 — the base ``_call_chat`` hands an SSE body to
+    #: The base ``_call_chat`` hands an SSE body to
     #: ``_accumulate_sse`` (every pre-stream branch is the base's own).
     ACCUMULATES_SSE: ClassVar[bool] = True
 
@@ -297,7 +311,7 @@ class VLLMProviderHandler(LLMProviderHandler):
         reasoning_effort: str | None,  # vLLM doesn't honor this directly
         **kwargs: Any,
     ) -> dict[str, Any]:
-        # W11-F133: stream unless the caller explicitly asks not to
+        # Stream unless the caller explicitly asks not to
         # (``stream=False``) — the explicit flag is the ONLY way back to the
         # historical non-streaming wire call.
         stream = kwargs.pop("stream", True) is not False
@@ -317,23 +331,16 @@ class VLLMProviderHandler(LLMProviderHandler):
             )
         else:
             kwargs.pop("stream_options", None)
-        # `max_tokens` not sent by default — a self-hosted vLLM serves its
-        # server-side budget, and an absent cap lets long findings complete.
-        # BUT a hosted OpenAI-compatible API with a LOW server default will
-        # silently TRUNCATE findings when the field is absent. Opt-in, two
-        # ways: per-call (`send_max_tokens=True` kwarg, unchanged) or
-        # deployment-wide via LEGBA_LLM_SEND_MAX_TOKENS=1 (for instances
-        # pointing this handler at a hosted endpoint). Unset env + no kwarg
-        # is byte-identical to the historical behavior. Roll-86 follow-up (no
-        # output caps): what is sent is the model's maximum output
-        # (``model_max_output_tokens``: the component's declared value), never
-        # the caller's ``max_tokens``.
-        if kwargs.pop("send_max_tokens", False) or os.getenv(
-            "LEGBA_LLM_SEND_MAX_TOKENS", "",
-        ).strip().lower() in ("1", "true", "yes"):
-            limit = self.model_max_output_tokens(model)
-            if limit:
-                payload["max_tokens"] = limit
+        # `max_tokens` is the alias's own declared maximum output, so an
+        # endpoint whose default is lower (a hosted gateway's per-alias
+        # default) cannot cut a long answer or a long reasoning trace short.
+        # Never the caller's `max_tokens`. An alias with no declared maximum
+        # gets no field and the endpoint's own default applies, as before.
+        # Less than the maximum only when the counted input leaves less room in
+        # the window (an API validity constraint; the receipt records it).
+        # LEGBA_LLM_SEND_MAX_TOKENS=0 (or false/no/off) is the deployment-wide
+        # off switch; `send_max_tokens=False` is the per-call one.
+        send_limit = kwargs.pop("send_max_tokens", None) is not False and not _send_switched_off()
         if tools:
             payload["tools"] = list(tools)
         stop = kwargs.pop("stop", None)
@@ -343,7 +350,7 @@ class VLLMProviderHandler(LLMProviderHandler):
         if top_p is not None:
             payload["top_p"] = top_p
         # vLLM-specific extras (reasoning effort isn't a wire arg; some
-        # GPT-OSS templates expect a "reasoning: high" instruction in the
+        # the core model's templates expect a "reasoning: high" instruction in the
         # message content. The caller injects that, not the handler.)
         for k, v in kwargs.items():
             payload.setdefault(k, v)
@@ -360,7 +367,45 @@ class VLLMProviderHandler(LLMProviderHandler):
             merged.extend(slug for slug in ignore if slug not in merged)
             provider["ignore"] = merged
             payload["provider"] = provider
+        if send_limit:
+            # Last, so the counted input includes the tool schemas.
+            limit = self._max_tokens_for_window(model, payload)
+            if limit:
+                payload["max_tokens"] = limit
         return payload
+
+    # ---- Output limit: the alias's maximum, inside the window ------------
+
+    def _counted_input_tokens(self, payload: Mapping[str, Any]) -> int:
+        """The request's input tokens, counted before sending (the house
+        chars/4 estimate over messages and tool schemas, as the Anthropic
+        handler counts)."""
+        body = json.dumps([payload.get("messages"), payload.get("tools")], default=str)
+        return (len(body) + _CHARS_PER_TOKEN - 1) // _CHARS_PER_TOKEN
+
+    def _max_tokens_for_window(self, model: str, payload: Mapping[str, Any]) -> int | None:
+        """The alias's declared maximum, or the window's room when the counted
+        input leaves less; ``None`` when no maximum is declared.
+
+        room <= 0 (the input alone fills the window): the maximum goes and the
+        endpoint's own refusal says why, rather than a guess."""
+        ceiling = self.model_max_output_tokens(model)
+        if not ceiling:
+            return None
+        window = self.context_window_tokens()
+        if not window:
+            return ceiling
+        room = window - self._counted_input_tokens(payload)
+        return room if 0 < room < ceiling else ceiling
+
+    def _wire_receipt_fields(self, payload: Mapping[str, Any]) -> Mapping[str, Any] | None:
+        """Sparse receipt fields: present only when the window limited max_tokens."""
+        sent = payload.get("max_tokens")
+        ceiling = self.model_max_output_tokens(str(payload.get("model") or "")) if sent else None
+        if isinstance(sent, int) and isinstance(ceiling, int) and sent < ceiling:
+            return {"max_tokens_sent": sent, "max_tokens_model_max": ceiling,
+                    "max_tokens_limited_by": "context_window"}
+        return None
 
     def _provider_ignore(self) -> list[str]:
         """The component's ``provider_ignore`` slugs, comma/whitespace-split,
@@ -377,7 +422,7 @@ class VLLMProviderHandler(LLMProviderHandler):
                 out.append(slug)
         return out
 
-    # ---- Streaming (W11-F133) --------------------------------------------
+    # ---- Streaming --------------------------------------------
 
     async def _accumulate_sse(self, response: httpx.Response) -> dict[str, Any]:
         """Fold ``chat.completion.chunk`` events into one ``chat.completion`` body.
@@ -730,7 +775,7 @@ class VLLMProviderHandler(LLMProviderHandler):
 
         The configured api_endpoint may or may not include ``/v1`` — both
         shapes are tried, first non-empty listing wins (the historical order).
-        W11-F133: the same listing's context window per model (the gateway's
+        The same listing's context window per model (the gateway's
         ``context_tokens``, vLLM's ``max_model_len``, OpenRouter's
         ``context_length``) is kept for :meth:`context_window_tokens`.
         """
@@ -763,10 +808,14 @@ class VLLMProviderHandler(LLMProviderHandler):
         return []
 
     def context_window_tokens(self) -> int | None:
-        """The configured model's window from the ``/v1/models`` listing, or ``None``."""
+        """The declared ``context_window_tokens``; else the configured model's
+        window from the ``/v1/models`` listing; else ``None``."""
         cfg = self._cfg
         if cfg is None:
             return None
+        declared = super().context_window_tokens()
+        if declared is not None:
+            return declared
         return self._context_windows.get(str(cfg.model_name.raw))
 
 

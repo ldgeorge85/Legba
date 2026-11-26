@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""P2-T7 — the bringup unit drift guard fails loud on missing eval coverage.
+"""the bringup unit drift guard fails loud on missing eval coverage.
 
 A bounded reasoning UNIT (the T1/T2 unit-factory pattern) is JUST an
 inline_target DESCRIPTOR carrying its OWN inline ``method.system_prompt`` +

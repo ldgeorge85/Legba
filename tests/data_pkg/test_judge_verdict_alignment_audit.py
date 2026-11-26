@@ -72,7 +72,7 @@ def test_a_reply_naming_every_claim_is_aligned_by_id_even_with_no_gap():
 
 
 def test_a_reply_with_a_miscount_aligns_by_id_and_leaves_the_rest_unmatched():
-    """THE SHAPE the lane exists to persist: 3 claims sent, 2 verdicts back,
+    """THE SHAPE the audit exists to persist: 3 claims sent, 2 verdicts back,
     each naming its claim. The gap is inside the id arm — aligned_by is
     ``claim_index`` for the whole call, and the unnamed claim is unmatched."""
     raw = [

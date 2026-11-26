@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """P-FS tests for the ``finding_supersession`` deterministic sub-handler.
 
-Two layers (mirrors the P-09 cross_source_dedup test shape):
+Two layers (mirrors the cross_source_dedup test shape):
 
   * **Synthetic** (``deps=None``) — situation-signature clustering + deterministic
     latest selection over pre-shaped finding rows. No substrate needed; runs in
@@ -217,7 +217,7 @@ async def test_synthetic_supersedes_near_dup_for_same_situation():
 
 
 def test_composition_analyst_findings_are_not_clustered():
-    """DQ P6 — a COMPOSITION / META producer's report is a receipt, not an
+    """A COMPOSITION / META producer's report is a receipt, not an
     evolving-situation finding: it must be EXCLUDED from clustering (and thus
     never gets a situation_signature stamped / never mints a situation), while a
     real unit finding for the same topic IS clustered."""

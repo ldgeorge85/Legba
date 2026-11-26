@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Who writes (data-model lane 9) against the migrated test database.
+"""Who writes, against the migrated test database.
 
 * ``legba_principal(handle)`` creates a principal once, on first use, links a
   person to their ``users`` row and splits a seat into descriptor + version;
@@ -299,3 +299,55 @@ async def test_a_rule_requirement_names_the_rule(pg_pool):
             assert handle == "rule:collection_gap"
         finally:
             await conn.execute("DELETE FROM collection_requirements WHERE natural_key = $1", key)
+
+
+async def test_item_owners_sync_idempotently_and_read_at_the_finest_voice(pg_pool):
+    """A bundle's items resolve per channel and an aggregator's per article
+    publisher; a second sync writes nothing; the owner map moves a derived row
+    but never an admin-corrected one."""
+    from legba.data.owner_map import parse_owner_map
+
+    tg_body = {"config": {"channels": {"raw": ["@ow_chan_a", "@ow_chan_b"]}}}
+    heads = [("source.ow.tg", "telegram_channel", tg_body), ("source.ow.agg", "gdelt_files", {"config": {}})]
+    chan_a = O.derive_item_origin("source.ow.tg", "telegram_channel", tg_body,
+                                  payload={"channel": {"username": "ow_chan_a"}})
+    chan_b = O.derive_item_origin("source.ow.tg", "telegram_channel", tg_body,
+                                  payload={"channel": {"username": "ow_chan_b"}})
+    art = O.derive_item_origin("source.ow.agg", "gdelt_files", {}, canonical_url="https://www.ow-courier.example/a")
+    derived = [chan_a, chan_b, art]
+    keys = [d.origin_key for d in derived]
+    async with pg_pool.acquire() as conn:
+        await _wipe_origins(conn, keys)
+        await conn.execute("DELETE FROM source_descriptors WHERE descriptor_id LIKE 'source.ow.%'")
+        try:
+            for did, kind, body in heads:
+                await conn.execute(
+                    "INSERT INTO source_descriptors (descriptor_id, version, schema_uri, kind, owner, name, body) "
+                    "VALUES ($1, '1', 'legba/source/1.0.0', $2, 'test', $1, $3::jsonb)", did, kind, json.dumps(body))
+            assert (await O.sync_derived(conn, derived))["inserted"] == 3
+            assert await O.sync_derived(conn, derived) == {"inserted": 0, "moved": 0, "unchanged": 3, "corrected_kept": 0}
+
+            reads = await O.origin_groups_for_items(conn, [
+                {"source_id": "source.ow.tg", "canonical_url": "https://t.me/ow_chan_a/1", "payload": {"channel": {"username": "ow_chan_a"}}},
+                {"source_id": "source.ow.tg", "canonical_url": "https://t.me/ow_chan_b/2", "payload": {"channel": {"username": "ow_chan_b"}}},
+                {"source_id": "source.ow.agg", "canonical_url": "https://ow-courier.example/b", "payload": {}},
+                {"source_id": "source.ow.agg", "canonical_url": "https://new-voice.example/b", "payload": {}},
+                {"source_id": "source.ow.unknown", "canonical_url": None, "payload": {}},
+            ])
+            assert [r.group_key for r in reads] == [
+                "telegram:ow_chan_a", "telegram:ow_chan_b", "host:ow-courier.example",
+                "host:new-voice.example", "source:source.ow.unknown"]
+            assert [r.stored for r in reads] == [True, True, True, False, False]
+
+            # The map moves a derived channel; a corrected one stays put.
+            oid = await conn.fetchval("SELECT id FROM origins WHERE key = $1", chan_b.origin_key)
+            await O.correct_origin(conn, oid, group_key="org:ow_other", group_label=None, reason="x",
+                                   written_by="user:0b6c2f0e-1111-4c2a-9d3e-000000000001")
+            m = parse_owner_map({"channels": {"ow_chan_a": "org:ow_outlet", "ow_chan_b": "org:ow_outlet"}})
+            remapped = [O.derive_item_origin("source.ow.tg", "telegram_channel", tg_body, owner_map=m,
+                                             payload={"channel": {"username": c}}) for c in ("ow_chan_a", "ow_chan_b")]
+            res = await O.sync_derived(conn, remapped)
+            assert (res["moved"], res["corrected_kept"]) == (1, 1)
+        finally:
+            await _wipe_origins(conn, keys)
+            await conn.execute("DELETE FROM source_descriptors WHERE descriptor_id LIKE 'source.ow.%'")

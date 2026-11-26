@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """X2-B2 — the registry route-role gate (``route_roles.ROUTE_ROLES``).
 
-The DONE test of lane B2:
+The done test:
 
   * every POST/PUT/PATCH/DELETE route the REAL app (``server.create_app``)
     mounts has an explicit role in the table, and every table entry is
@@ -295,7 +295,7 @@ def test_request_state_seams_resolve() -> None:
     r.state.principal_kind = "service"
     assert rr.resolve_principal(r).role == rr.ROLE_OPERATOR
     # X4 GATE: an unstamped caller is UNRESOLVED and the lowest class — never
-    # the operator default it was before (W11-F75).
+    # the operator role.
     p = rr.resolve_principal(_req())
     assert (p.role, p.source, p.resolved) == (rr.ROLE_READ, rr.SOURCE_UNRESOLVED, False)
 

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""L-1 — the single alert path, the parts that need no database.
+"""The single alert path, the parts that need no database.
 
 * the closed list of kinds: every kind has a topic and a subject kind; every
   kind a producer names (trigger classes, watchdog channels, the escalation
@@ -116,7 +116,7 @@ def test_the_shipped_rule_loads_and_names_only_real_kinds() -> None:
     rule = PR.load_rule()
     assert rule.version and rule.entries
     assert {e.kind for e in rule.entries} <= set(K.KINDS)
-    # 2026-11-14 (the owner, "surge then"): a surge pages at medium; a baseline
+    # A surge pages at medium; a baseline
     # deviation is logged only, at any severity.
     assert rule.match("volume_surge", "medium", "US") is not None
     assert rule.match("volume_surge", "low", "US") is None

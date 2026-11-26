@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Synthetic page texts for the source-drift lane (D-1): one earlier article
+"""Synthetic page texts for the source-drift lane: one earlier article
 and a later version per class. Shaped after the live sample (2026-11-13): a
 developing story whose toll is revised, a headline rewritten, a live page
 whose entries scroll off, a related-links block and a "Published N hours ago"

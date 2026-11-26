@@ -308,7 +308,7 @@ async def test_unknown_target_is_empty_with_no_reference(client):
 
 @pytest.mark.asyncio
 async def test_one_desk_row_shape_and_badge(client, pg):
-    """The Israel desk aggregate, as Program 1 step 2 measured it."""
+    """The Israel desk aggregate, as measured earlier."""
     target_id = _target("desk")
     now = datetime.now(timezone.utc)
     ref = await _insert_reference(

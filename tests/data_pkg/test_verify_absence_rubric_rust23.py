@@ -131,57 +131,63 @@ def _fact_rich_with_absence(sid: str) -> tuple[str, list[dict]]:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "block",
-    [
-        "WHO YOU ARE.",  # doctrine dim 1 — identity
-        "WHAT EACH ERROR COSTS.",  # dim 2 — both directions
-        "WHAT A NEGATIVE IS, IN THIS HOUSE.",  # the route's own subject matter
-        "WHAT YOU ARE READING.",  # dim 5 — the inputs
-        "THE VERDICTS, AS THIS HOUSE DEFINES THEM.",
-        "WHAT GOES WRONG IN THIS SEAT.",  # the failure-history block
-        "THE FENCES.",  # the over-correction guard
-    ],
-)
-def test_absence_rubric_carries_every_doctrine_block(block: str) -> None:
-    """``absence.v4`` is a doctrine prompt, not a verdict list.
-
-    The old rubric had exactly one of these blocks (the verdicts). A future edit
-    that deletes a block — most plausibly the fences, because they read like
-    boilerplate until you know each one guards a measured error — turns this red.
-    """
-    assert block in _ABSENCE_JUDGE_SYSTEM
+def test_absence_rubric_defines_verdicts_by_scope_not_by_lean() -> None:
+    """The rubric does not lean either way. A correctly scoped negative over a
+    set that lacks the thing is supported with no citation; a negative that
+    reaches past what was searched, or rests on evidence too thin to tell, is
+    unsupported; a refutation must be source reporting at the denied scale."""
+    low = _ABSENCE_JUDGE_SYSTEM.lower()
+    assert (
+        "a correctly scoped negative over a set that lacks the thing is "
+        "supported even with no citation" in low
+    )
+    assert "too thin to tell" in low
+    assert "at the scale and of the kind denied" in low
+    # Analyst prose is recognised by its shape, not by a label.
+    assert "recognise it by its shape" in low
+    # A consequence drawn from an absence is graded as an inference.
+    assert "graded as an inference" in low
 
 
-def test_absence_rubric_defines_the_institution_and_never_names_it() -> None:
-    """The prompt DEFINES what this platform is in text and never assumes a
-    model knows the project by name (the D6 shared-preamble rule applied to a
-    judge seat). A model asked about "Legba" knows nothing at all; a judge that
-    does not know it is the last reader before publication cannot weigh what its
-    errors cost.
-    """
+def test_absence_rubric_carries_no_error_record_or_lean() -> None:
+    """The earlier rubric quoted an error record ("six in seven ... every
+    recurring error is a FALSE FAIL", "No adjudicator has ever caught this seat
+    passing a fabricated absence"), which told the judge which way to lean.
+    Statistics and history are not model-visible text; the cases live in the
+    judge regression set."""
+    low = _ABSENCE_JUDGE_SYSTEM.lower()
+    for gone in (
+        "six in seven", "false fail", "no adjudicator", "this house",
+        "when in doubt", "nobody re-reads",
+    ):
+        assert gone not in low, gone
+
+
+def test_absence_rubric_never_names_the_platform_or_the_example_domain() -> None:
+    """Platform text speaks in no profile's nouns and never names the project."""
     low = _ABSENCE_JUDGE_SYSTEM.lower()
     assert "legba" not in low
-    assert "automated open-source intelligence platform" in low
-    assert "last reader" in low
+    for word in ("per-country", "public wire", "strikes", "mobilisation", "blockade"):
+        assert word not in low, word
 
 
-def test_absence_rubric_failure_history_names_this_routes_own_classes() -> None:
-    """The failure-history block is cut to the ABSENCE route's adjudicated
-    classes, not inherited from the generic seat's. Each string below is the
-    prompt half of one measured item in the 6-of-7 set."""
-    low = _ABSENCE_JUDGE_SYSTEM.lower()
-    # R5-H17 / R4-S9 — the desk's own prose used as the refutation, unlabelled
-    # on this route in 8 of 13 preserved payloads.
-    assert "judge by shape, never by label" in low
-    # R5-H19 / R5-H16 — the claim's own carve-out used to refute it.
-    assert "'no other'" in low and "'limited to'" in low
-    # R5-H10 — a smaller-scale instance offered against a scale denial.
-    assert "'large-scale'" in low
-    # R4-S4 — the entailment from a supported absence charged as fabrication.
-    assert "entailment charged as fabrication" in low
-    # The pass-side line, which is the fence against over-correcting all of it.
-    assert "passing a fabricated absence" in low
+def test_absence_rubric_imports_the_shared_blocks() -> None:
+    """The scale, plan, party-statement and baseline rules and the pasted-text
+    rule are the shared text every grader carries, imported, not restated."""
+    from legba.data.grading_text import (
+        ABSENCE_VERDICTS,
+        CLAIM_EVIDENCE_RULES,
+        PASTED_TEXT_IS_DATA,
+    )
+
+    assert ABSENCE_VERDICTS in _ABSENCE_JUDGE_SYSTEM
+    assert CLAIM_EVIDENCE_RULES in _ABSENCE_JUDGE_SYSTEM
+    assert PASTED_TEXT_IS_DATA in _ABSENCE_JUDGE_SYSTEM
+
+
+def test_absence_reply_shape_puts_basis_and_span_before_the_verdict() -> None:
+    shape = _ABSENCE_JUDGE_SYSTEM[_ABSENCE_JUDGE_SYSTEM.index('{"verdicts"'):]
+    assert shape.index('"basis"') < shape.index('"quote"') < shape.index('"verdict"')
 
 
 def test_absence_rewrite_did_not_leak_onto_the_other_routes() -> None:
@@ -190,20 +196,20 @@ def test_absence_rewrite_did_not_leak_onto_the_other_routes() -> None:
     matrix as a control so this rewrite could be attributed on its own. If the
     doctrine text reaches the generic or survey rubric, that attribution is
     gone."""
-    assert "WHO YOU ARE." not in _GENERIC_JUDGE_SYSTEM
-    assert "WHO YOU ARE." not in _NULL_RESULT_JUDGE_SYSTEM
+    assert "graded as an inference" not in _GENERIC_JUDGE_SYSTEM
+    assert "graded as an inference" not in _NULL_RESULT_JUDGE_SYSTEM
     # And only the absence rubric ADVERTISES the fourth verdict (RUST-3).
     assert VERDICT_NOT_A_PROPOSITION in _ABSENCE_JUDGE_SYSTEM
     assert VERDICT_NOT_A_PROPOSITION not in _GENERIC_JUDGE_SYSTEM
     assert VERDICT_NOT_A_PROPOSITION not in _NULL_RESULT_JUDGE_SYSTEM
 
 
-async def test_absence_partition_sends_the_v5_rubric_through_the_real_entry(
+async def test_absence_partition_sends_the_v6_rubric_through_the_real_entry(
     monkeypatch,
 ) -> None:
     """REAL BINDING PATH: the pipeline entry routes an absence span to the
-    absence rubric (v4 doctrine + the H3 claim_index contract, v5) and every
-    other span to the untouched generic prompt, in one run."""
+    absence rubric (v6) and every other span to the generic prompt, in one
+    run."""
     monkeypatch.setenv("LEGBA_VERIFY_LLM_JUDGE", "1")
     body, citations = _fact_rich_with_absence(str(uuid4()))
     judge = _RouteJudge(
@@ -219,7 +225,7 @@ async def test_absence_partition_sends_the_v5_rubric_through_the_real_entry(
     assert _ABSENCE_JUDGE_SYSTEM in judge.systems
     assert _GENERIC_JUDGE_SYSTEM in judge.systems
     payload = build_faithfulness_critique_payload(rep, analyzed_output_id=uuid4())
-    assert payload["data"]["verification"]["branch_versions"]["absence"] == "absence.v5"
+    assert payload["data"]["verification"]["branch_versions"]["absence"] == "absence.v6"
 
 
 # ---------------------------------------------------------------------------
@@ -227,11 +233,14 @@ async def test_absence_partition_sends_the_v5_rubric_through_the_real_entry(
 # ---------------------------------------------------------------------------
 
 
-def test_the_contract_is_four_tokens() -> None:
+def test_the_contract_is_six_tokens() -> None:
+    """The faithfulness words plus the absence route's not_a_proposition."""
     assert JUDGE_VERDICT_TOKENS == {
         "supported",
+        "supported_as_inference",
         "unsupported",
         "contradicted",
+        "unverifiable_excerpt",
         "not_a_proposition",
     }
 
@@ -397,12 +406,13 @@ async def test_fourth_verdict_is_accepted_on_the_generic_route_too(
     assert rep.checkable_claims == 1
 
 
-async def test_unknown_verdict_tokens_still_coerce_to_unsupported(
-    monkeypatch,
+async def test_unknown_verdict_tokens_fail_the_call_loudly(
+    monkeypatch, caplog
 ) -> None:
-    """The pre-RUST-3 fallback is UNCHANGED. Widening the accepted vocabulary by
-    exactly one token must not turn the parser permissive: an invented verdict
-    is still a failure, never a silent pass and never an ungraded span."""
+    """An invented verdict word is never read as some verdict the judge did not
+    give. It used to coerce to ``unsupported`` (a silent soft fail); it now
+    fails the judge call, the finding falls to the deterministic floor under
+    ``judge_error``, and the word is named in the log line."""
     monkeypatch.setenv("LEGBA_VERIFY_LLM_JUDGE", "1")
     sid = str(uuid4())
     body = "The lira fell three percent today [1].\nThe peg held overnight [1].\n"
@@ -410,12 +420,14 @@ async def test_unknown_verdict_tokens_still_coerce_to_unsupported(
         {"marker": "[1]", "signal_id": sid, "title": "Lira drops 3% on the day"}
     ]
     judge = _RouteJudge(shared_json='{"verdicts": ["supported", "probably_fine"]}')
-    rep = await verify_finding_faithfulness(
-        body=body, citations=citations, judge_llm=judge
-    )
-    assert rep.checkable_claims == 2
-    assert "claims_ungraded_nonpropositional" not in rep.counters
-    assert [s.reason for s in rep.unsupported_spans] == ["judge_unsupported"]
+    with caplog.at_level("WARNING"):
+        rep = await verify_finding_faithfulness(
+            body=body, citations=citations, judge_llm=judge
+        )
+    assert rep.judge_status == "deterministic"
+    assert rep.judge_unavailable_reason == "judge_error"
+    assert "probably_fine" in caplog.text
+    assert not any(s.reason == "judge_unsupported" for s in rep.unsupported_spans)
 
 
 async def test_fullwidth_markers_still_normalize_on_the_absence_route(

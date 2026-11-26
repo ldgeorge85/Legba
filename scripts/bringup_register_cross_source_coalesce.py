@@ -1,14 +1,13 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Register the Cross-Source Coalesce analyst descriptor (review P2).
+"""Register the Cross-Source Coalesce analyst descriptor.
 
 Reads ``descriptors/analyst_cross_source_coalesce.yaml`` and POSTs it to the
 registry. Idempotent: if a head row is already present we report it and exit 0
 without re-posting.
 
 This is the OPT-IN bringup for the substrate-wide cross-source semantic/temporal
-coalescing analyst — the review P2 (data-integrity) "cross-source semantic/
-temporal coalescing not built" item. It is DELIBERATELY NOT in the default
+coalescing analyst (a data-integrity gap). It is DELIBERATELY NOT in the default
 ``bringup_register_analysts.py`` set: the analyst is off-by-default (its handler's
 ``enabled`` option defaults False — mirroring ``signals_retention``), so an
 operator must (1) run THIS script to register it, then (2) fire it with run

@@ -1,89 +1,89 @@
 <?xml version="1.0" encoding="utf-8"?>
-<rss xmlns:dc="http://purl.org/dc/elements/1.1/" version="2.0" xml:base="https://www.crisisgroup.org/">
+<rss xmlns:dc="http://purl.org/dc/elements/1.1/" version="2.0" xml:base="https://analysis.example.org/">
   <channel>
     <title>RSS</title>
-    <link>https://www.crisisgroup.org/</link>
+    <link>https://analysis.example.org/</link>
     <description/>
     <language>en</language>
     
     <item>
-  <title>The UAE in Sudan</title>
-  <link>https://www.crisisgroup.org/pod/africa/sudan/uae-sudan</link>
-  <description>This week on Hold Your Fire!, Richard is joined by Crisis Group experts Shewit Woldemichael and Alan Boswell to discuss how the UAE and other foreign powers...</description>
+  <title>Eastmere port extends night berthing (c1)</title>
+  <link>https://analysis.example.org/item/001</link>
+  <description>Synthetic summary text for a fixture item.</description>
   <pubDate>Friday, October 30, 2026 - 17:15</pubDate>
-    <dc:creator>hschaub</dc:creator>
+    <dc:creator>author</dc:creator>
     <guid isPermaLink="false">28615</guid>
     </item>
 <item>
-  <title>The View from Eritrea</title>
-  <link>https://www.crisisgroup.org/pod/africa/eritrea/view-eritrea</link>
-  <description>This week on The Horn , Alan speaks with Reuters journalist Giulia Paravicini about her recent reporting trip to Eritrea’s capital, Asmara, what she learned...</description>
+  <title>Halden Quay extends night berthing (c2)</title>
+  <link>https://analysis.example.org/item/002</link>
+  <description>Synthetic summary text for a fixture item.</description>
   <pubDate>Friday, October 30, 2026 - 16:29</pubDate>
-    <dc:creator>hschaub</dc:creator>
+    <dc:creator>author</dc:creator>
     <guid isPermaLink="false">28614</guid>
     </item>
 <item>
-  <title>October Trends and November Alerts 2026</title>
-  <link>https://www.crisisgroup.org/crisiswatch/october-trends-and-november-alerts-2026</link>
+  <title>Northvale Freight extends night berthing (c3)</title>
+  <link>https://analysis.example.org/item/003</link>
   <description/>
   <pubDate>Friday, October 30, 2026 - 15:08</pubDate>
-    <dc:creator>oolofsson</dc:creator>
+    <dc:creator>author</dc:creator>
     <guid isPermaLink="false">28608</guid>
     </item>
 <item>
-  <title>On Our Radar</title>
-  <link>https://www.crisisgroup.org/sco/global/our-radar</link>
-  <description>On Our Radar scans conflicts and crises around the globe every week and features some of the hotspots Crisis Group’s analysts are closely watching. Whether...</description>
+  <title>The Harbour Authority extends night berthing (c4)</title>
+  <link>https://analysis.example.org/item/004</link>
+  <description>Synthetic summary text for a fixture item.</description>
   <pubDate>Friday, October 30, 2026 - 00:00</pubDate>
-    <dc:creator>eschelhaas</dc:creator>
+    <dc:creator>author</dc:creator>
     <guid isPermaLink="false">27157</guid>
     </item>
 <item>
-  <title>After Serbia’s Election, Foreign Policy Takes a Back Seat, and That’s OK</title>
-  <link>https://www.crisisgroup.org/anb/europe/serbia/after-serbias-election-foreign-policy-takes-back-seat-and-thats-ok</link>
-  <description>Crisis Group expert Marko Prelec reflects on the foreign policy implications of Serbia’s recent elections</description>
+  <title>Veldmark customs extends night berthing (c5)</title>
+  <link>https://analysis.example.org/item/005</link>
+  <description>Synthetic summary text for a fixture item.</description>
   <pubDate>Thursday, October 29, 2026 - 17:58</pubDate>
-    <dc:creator>cmoore</dc:creator>
+    <dc:creator>author</dc:creator>
     <guid isPermaLink="false">28612</guid>
     </item>
 <item>
-  <title>Don’t Go Backward on China Policy</title>
-  <link>https://www.crisisgroup.org/opd/united-states/united-states-china/dont-go-backward-china-policy</link>
-  <description>The Folly of a Hawkish Restoration</description>
+  <title>Kestrel Bay pilots extends night berthing (c6)</title>
+  <link>https://analysis.example.org/item/006</link>
+  <description>Synthetic summary text for a fixture item.</description>
   <pubDate>Thursday, October 29, 2026 - 15:33</pubDate>
-    <dc:creator>mloukili</dc:creator>
+    <dc:creator>author</dc:creator>
     <guid isPermaLink="false">28613</guid>
     </item>
 <item>
-  <title>A Political Shake-up in Serbia, Business as Usual in Bosnia?</title>
-  <link>https://www.crisisgroup.org/pod/europe/serbia/political-shake-serbia-business-usual-bosnia</link>
-  <description>This week on War &amp; Peace , guest host Fabienne Hara speaks with Crisis Group’s Balkans expert Marko Prelec about contrasting election results in Serbia and...</description>
+  <title>Marrow Point terminal extends night berthing (c7)</title>
+  <link>https://analysis.example.org/item/007</link>
+  <description>Synthetic summary text for a fixture item.</description>
   <pubDate>Thursday, October 29, 2026 - 13:58</pubDate>
-    <dc:creator>hschaub</dc:creator>
+    <dc:creator>author</dc:creator>
     <guid isPermaLink="false">28610</guid>
     </item>
 <item>
-  <title>Central African Republic: Containing the Fallout from Sudan’s War</title>
-  <link>https://www.crisisgroup.org/rpt/africa/central-african-republic-sudan/323-centrafrique-contenir-les-effets-de-la-guerre-au-soudan</link>
-  <description>The war in Sudan is fuelling crime committed by armed groups in the north-eastern Central African Republic, which borders Darfur. Meanwhile, the...</description>
+  <title>Brindle Cargo Rail extends night berthing (c8)</title>
+  <link>https://analysis.example.org/item/008</link>
+  <description>Synthetic summary text for a fixture item.</description>
   <pubDate>Thursday, October 29, 2026 - 11:34</pubDate>
-    <dc:creator>mloukili</dc:creator>
+    <dc:creator>author</dc:creator>
     <guid isPermaLink="false">28609</guid>
     </item>
 <item>
-  <title>Centrafrique : contenir les effets de la guerre au Soudan</title>
-  <link>https://www.crisisgroup.org/fr/rpt/africa/central-african-republic-sudan/323-centrafrique-contenir-les-effets-de-la-guerre-au-soudan</link>
-  <description>La guerre au Soudan alimente l’activité criminelle des groupes armés dans le nord-est de la Centrafrique, frontalier du Darfour, alors que les partenariats...</description>
+  <title>Exampleland : contenir les effets d'une crise voisine</title>
+  <link>https://analysis.example.org/item/009</link>
+  <description>Synthetic summary text for a fixture item.</description>
   <pubDate>Jeudi, octobre 29, 2026 - 11:01</pubDate>
-    <dc:creator>mloukili</dc:creator>
+    <dc:creator>author</dc:creator>
     <guid isPermaLink="false">28609</guid>
     </item>
 <item>
-  <title>How the War in Iran Could Escalate</title>
-  <link>https://www.crisisgroup.org/opd/middle-east-north-africa/iran/how-war-iran-could-escalate</link>
+  <title>The Dunmere dockers' union extends night berthing (c9)</title>
+  <link>https://analysis.example.org/item/010</link>
   <description/>
   <pubDate>Tuesday, October 27, 2026 - 16:52</pubDate>
-    <dc:creator>mloukili</dc:creator>
+    <dc:creator>author</dc:creator>
     <guid isPermaLink="false">28611</guid>
     </item>
 

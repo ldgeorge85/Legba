@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""VOICES faculty-lens tier (planning/VOICES_BUILD_DESIGN.md §5.2) — the fourth
+"""VOICES faculty-lens tier — the fourth
 and fifth ids on the journal_assessor kind.
 
 Mirrors tests/data_pkg/test_chronicle_tier.py's approach. Locks the tier
@@ -20,8 +20,7 @@ plumbing:
     staggered crons + journal_read-only grants;
   * ``get_lens_reads`` is registered in the pack (the four-surface guard).
 
-2026-09-21 — the VOICES LEANS (planning/VOICES_LEAN_PRIORS_2026-09-21.md; operator
-decision D-4 accepted the six priors as drafts) add SIX stance-typed ids on the
+The VOICES LEANS (six priors, shipped as drafts) add SIX stance-typed ids on the
 same kind: lens_left / lens_right / lens_centre / lens_pragmatist /
 lens_militarist / lens_isolationist. They ride the same plumbing (entry_kind
 'lens', V1 verify, journal_read-only, one declared prior per persona module) on a

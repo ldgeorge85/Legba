@@ -5,10 +5,10 @@
 #   1. SELECTS the bounded un-scored recent-text pool (signals.salience IS NULL,
 #      modality='text', within a recent window), newest-first,
 #   2. SCORES each signal via the LLM provider plane (the $0 core plane,
-#      gpt-oss-120b — {event_class, actor_rank, magnitude}; NEVER Anthropic),
+#      the core model — {event_class, actor_rank, magnitude}; NEVER Anthropic),
 #      with an ECHO-BOUND parse (the model echoes the signal id) + degrade-to-
 #      unscored, and stamps `authority` DETERMINISTICALLY from the source's
-#      S1-T8 source_class (never model-chosen — the anti-tabloid-authority guard),
+#      source_class (never model-chosen — the anti-tabloid-authority guard),
 #   3. WRITES signals.salience for EVERY examined row (a real score, or a
 #      degraded marker), draining the pool idempotently (the signal_summarizer
 #      marker precedent).
@@ -19,7 +19,7 @@
 # proof before flipping to 'apply' via a descriptor PUT). The per-run summary is
 # a cadence receipt (TRACE_ONLY, in analyst_traces.output_payload); the
 # signals.salience writes are the real product, consumed by Phase-S consumption
-# (S-2 slice ordering) + the advisory judge (S-3).
+# (S-2 slice ordering) + the advisory judge.
 
 identity:
   id: signal_salience
@@ -32,7 +32,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: active
-  owner: phase_s_salience_layer
+  owner: owner@local
 
 subscription:
   # No `targets` block => META analyst (single global sweep; _cadence_targets
@@ -68,11 +68,10 @@ method:
       factory_kind: stack_ref
       raw: llm.primary.openai_compat
       expected_family: llm_provider
-    max_tokens: 1400           # one batched score array per ~12 signals
     temperature: 1.0           # deterministic scoring
     # --- kind-specific options (read by _build_signal_salience) --------------
     score_mode: apply             # LIVE (flipped 2026-07-13 after the dry-run proof:
-                                  # 300 examined / 300 scored / 0 degraded on gpt-oss,
+                                  # 300 examined / 300 scored / 0 degraded on the core model,
                                   # sane ranking — strike 0.9 > meme 0.05; ids echoed
                                   # reliably so the no-positional-fallback bind is safe).
                                   # 'dry_run' = scores + reports, writes nothing (revert).

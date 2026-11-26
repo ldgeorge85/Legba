@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """FETCH_REVIEW (a) — ``fetch_client`` dispatch + the re-expressed SSRF guard.
 
-Two properties, and they are the two that decide whether this lane was safe:
+Two properties, and they are the two that decide whether this client was safe:
 
   1. **Flag OFF is the old code.** ``LEGBA_FETCH_IMPERSONATE`` unset ⇒
      ``fetch_client`` returns the caller's own ``guarded_async_client(**kwargs)``
@@ -114,7 +114,7 @@ async def test_flag_unset_yields_the_same_guarded_client(monkeypatch):
         assert client.timeout == reference.timeout
         assert client.headers["user-agent"] == reference.headers["user-agent"]
         # …and the UA is OURS, not a browser's. The whole licence posture of
-        # this lane rests on that one string staying put.
+        # this client rests on that one string staying put.
         assert client.headers["user-agent"] == "legba-research/1.0"
     finally:
         await client.aclose()
@@ -413,7 +413,7 @@ async def test_page_fetch_through_the_adapter_returns_the_httpx_shaped_tuple():
 
 
 # ---------------------------------------------------------------------------
-# Wave O / o1 — the PAGE fetch inherits the pinned handshake.
+# The PAGE fetch inherits the pinned handshake.
 #
 # ``fetch_client``'s flag-off path is still the one statement
 # ``guarded(**kwargs)``, so whatever the transport factory pins, the page

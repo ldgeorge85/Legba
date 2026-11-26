@@ -242,10 +242,10 @@ describe('#case= opens a replay', () => {
   })
 })
 
-describe('X4/D4 — the shell command strings and the rail\'s subject click', () => {
+describe('the shell command strings and the rail\'s subject click', () => {
   const label = (id: string) => COMMANDS.find((c) => c.id === id)?.label
 
-  it('the shell commands name the view and the surface — never layout, mission or workspace (U-2)', () => {
+  it('the shell commands name the view and the surface — never layout, mission or workspace', () => {
     expect(label('view.reset')).toBe('Reset this surface to its default')
     expect(label('view.link')).toBe('Copy a link to this view')
     for (const c of commandsOf('shell')) {
@@ -254,14 +254,11 @@ describe('X4/D4 — the shell command strings and the rail\'s subject click', ()
     }
   })
 
-  it('railActions.subject is the subject READ: set_scope, focus, open_panel subject.page on the brief', () => {
+  it('railActions.subject is the subject READ: set_scope (the point), focus, then its home tab', () => {
     expect(railActions.subject('country_g20_br', 'Brazil')).toEqual([
       { action: 'set_scope', args: { kind: 'target', id: 'country_g20_br', label: 'Brazil' } },
       { action: 'focus', args: { ref: { kind: 'target', id: 'country_g20_br' }, label: 'Brazil' } },
-      {
-        action: 'open_panel',
-        args: { kind: 'subject.page', params: { subject: { kind: 'target', id: 'country_g20_br' }, tab: 'brief' } },
-      },
+      { action: 'arrange', args: { layout: 'subject', layout_type: 'stance' } },
     ])
   })
 

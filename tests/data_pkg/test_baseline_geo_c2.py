@@ -15,16 +15,16 @@ These tests pin the fix:
     ``geo`` at tier-1 enrichment;
   * when the body resolves a DIFFERENT country, that in-body country is what
     ``geo`` carries — the origin never appears;
-  * (S-2) the origin is applied to ``geo`` as a post-enrichment fallback ONLY
+  * the origin is applied to ``geo`` as a post-enrichment fallback ONLY
     when the story CONTENT corroborates it (the country is named in the body or
     carried as a country-class NER entity). A world story from a state wire
     whose body names no country stays geo-unattributed — never stamped with the
     outlet's home country. This is the fix for the Singapore-outlet (CNA)
     LeBron/OpenAI/F1 stories that were all landing geo=SG and flooding SG's desk.
-  * (lane N-B, 2026-11-11) AMENDED: a story whose content names NO country at
+  * AMENDED: a story whose content names NO country at
     all (no name, code, country entity or foreign demonym) now takes the origin
     as a MARKED low-confidence fallback (``payload.geo_fallback``), because an
-    untagged row reaches no desk (Times of Israel's Knesset protest, 850253c4).
+    untagged row reaches no desk (Times of Israel's Knesset protest).
     Any country named in the content still withholds the origin exactly as
     before. ``LEGBA_GEO_ORIGIN_FALLBACK=0`` restores the S-2 behaviour.
 """
@@ -105,7 +105,7 @@ async def test_run_baseline_inbody_country_beats_publisher_origin():
     assert out.payload["publisher_origin"] == ["TR"]      # origin still parked
 
 
-# --- fallback: origin applies ONLY when the body corroborates it (S-2) ------
+# --- fallback: origin applies ONLY when the body corroborates it ------
 
 
 @pytest.mark.asyncio
@@ -135,8 +135,8 @@ async def test_run_baseline_fallback_corroborated_by_country_entity():
 
 @pytest.mark.asyncio
 async def test_run_baseline_withholds_origin_when_body_does_not_corroborate(monkeypatch):
-    # S-2: a Singapore wire's world story (LeBron) — the body names no country,
-    # so the SG origin is never stamped as a CORROBORATED tag. Lane N-B: it is
+    # A Singapore wire's world story (LeBron) — the body names no country,
+    # so the SG origin is never stamped as a CORROBORATED tag. It is
     # stamped as the MARKED fallback instead (distinguishable by
     # payload.geo_fallback); with the kill switch it stays untagged as before.
     def _lebron():
@@ -153,13 +153,13 @@ async def test_run_baseline_withholds_origin_when_body_does_not_corroborate(monk
     assert out.payload["publisher_origin"] == ["SG"]      # origin still parked
     monkeypatch.setenv("LEGBA_GEO_ORIGIN_FALLBACK", "0")
     out = await run_baseline(_lebron(), _ctx(["SG"]), enrichment_stage=_resolve_nothing)
-    assert out.geo == []                                  # S-2 exactly
+    assert out.geo == []                                  # Exactly
     assert "geo_fallback" not in out.payload
 
 
 @pytest.mark.asyncio
 async def test_run_baseline_fallback_withheld_when_content_names_a_foreign_demonym():
-    # Lane N-B keeps S-2 for any row that names a place: "German" names
+    # A row that names a place is not given the fallback: "German" names
     # Germany, so the Singapore origin is NOT a fallback for it.
     sig = _sig(title="E.ON reviews former German nuclear sites for data centres")
     out = await run_baseline(sig, _ctx(["SG"]), enrichment_stage=_resolve_nothing)
@@ -195,7 +195,7 @@ async def test_run_baseline_no_enrichment_stage_corroborated_still_falls_back():
 @pytest.mark.asyncio
 async def test_run_baseline_no_enrichment_stage_withholds_uncorroborated():
     # Bare source, world story, no country in the body → no CORROBORATED origin
-    # tag; lane N-B's marked fallback instead.
+    # tag; the marked fallback instead.
     sig = _sig(title="LeBron James re-signs with the Los Angeles Lakers")
     out = await run_baseline(sig, _ctx(["SG"]))
     assert out is not None

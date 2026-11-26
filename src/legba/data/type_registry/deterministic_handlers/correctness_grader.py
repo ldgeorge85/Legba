@@ -23,7 +23,7 @@ did not call `silent` and only while LEGBA_GRADER_DAILY_CEILING_USD allows
 row + its per-claim ledger. Flag LEGBA_CORRECTNESS_GRADER_ENABLED, default
 OFF: off, it writes nothing at all.
 
-Verify exemption: G1 (LEDGER_RESET_2026-09-16 §3, Program 2): the
+Verify exemption: the
 correctness grader is an INSTRUMENT. Its receipt reports what the instrument
 did — which units it graded, against which reference, under which
 calibration, at what cost — and asserts nothing about the world that a

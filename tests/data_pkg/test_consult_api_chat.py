@@ -45,7 +45,7 @@ class _Row(dict):
 class _NoReadBackPg:
     """A pg pool that refuses the deep read-back (``fetchrow``) — proves the
     chat path never reads its answer back from analyst_outputs. The one read
-    it does make is the cited-ref kind lookup (``fetch``, W11 walk fix:
+    it does make is the cited-ref kind lookup (``fetch``:
     ``cited_ref_kinds``), answered from ``tables``: ``{table: [ids]}``."""
 
     def __init__(self, tables: dict[str, list[str]] | None = None) -> None:
@@ -247,7 +247,7 @@ _GONE = "33333333-3333-3333-3333-333333333333"
 
 
 def test_chat_cited_refs_carry_their_true_kind(monkeypatch):
-    """Roll 84's live walk: a cited SITUATION came back labelled ``signal``, so
+    """A cited SITUATION came back labelled ``signal``, so
     the Record sheet asked ``/lineage/signal/<situation id>`` and got a 404.
     Each ref is now typed by the table its id is in; an id in none is
     ``unresolved`` (the console shows it without a link)."""
@@ -382,8 +382,8 @@ def test_resolve_consult_model_override_mapping():
     )
     assert consult_api.CONSULT_MODEL_ALLOWLIST["opus"] == "llm.anthropic.opus_4_7"
     assert consult_api.CONSULT_MODEL_ALLOWLIST["fable"] == "llm.anthropic.fable_5_1"
-    assert consult_api.DEFAULT_CONSULT_MODEL == "core"  # DEC-17a (2026-10-03): the free plane is the default
-    # roll 84: a request that names no model answers on core; opus and fable
+    assert consult_api.DEFAULT_CONSULT_MODEL == "core"  # the free plane is the default
+    # A request that names no model answers on core; opus and fable
     # stay in the request's closed choice.
     req = consult_api.ConsultRequest(question="q")
     assert consult_api.resolve_consult_model_override(req.model) == ("core", None)
@@ -640,11 +640,11 @@ async def test_persist_assistant_turn_threads_steps(monkeypatch):
         "model": None,
         "context_compaction": None,
         "watch_minted": None,
-        # C-1b — the case key; None = the turn presented no case.
+        # The case key; None = the turn presented no case.
         "case": None,
         # C-2b-1 — the writes key; None = the turn was not armed for changes.
         "writes": None,
-        # Q-1 — the turn contract; None = the run carried none.
+        # The turn contract; None = the run carried none.
         "contract": None,
     }
 
@@ -681,11 +681,11 @@ def test_projection_lifts_floor_stamp_and_watch_candidates():
         "model": "core",
         "context_compaction": None,
         "watch_minted": None,
-        # C-1b — the case key; None = the turn presented no case.
+        # The case key; None = the turn presented no case.
         "case": None,
         # C-2b-1 — the writes key; None = the turn was not armed for changes.
         "writes": None,
-        # Q-1 — the turn contract; None = the run carried none.
+        # The turn contract; None = the run carried none.
         "contract": None,
     }
 
@@ -718,7 +718,7 @@ async def test_persist_assistant_turn_no_session_is_noop(monkeypatch):
 
 
 def test_chat_threads_an_existing_session_into_the_invoke_body(monkeypatch):
-    """W3 / F-4 — the watch mint names the session a minted watch came from, so
+    """The watch mint names the session a minted watch came from, so
     the actor's first input carries ``session_id`` whenever one exists. (With no
     session — an audit outage — the body is unchanged; the pinned-context
     golden holds that case.)"""

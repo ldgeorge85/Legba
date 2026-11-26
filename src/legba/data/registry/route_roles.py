@@ -13,7 +13,7 @@ anything, or it was refused. A dozen same-access users need three classes:
                            invocations, the watchlist, read receipts, own
                            exports.
   * ``read``             — every GET the display policy allows (the display
-                           policy itself is lane B4's; this gate only decides
+                           policy is defined elsewhere; this gate only decides
                            WHICH ROUTES a class may call).
 
 WHAT LIVES HERE
@@ -176,7 +176,7 @@ ROUTE_ROLES: dict[tuple[str, str], str] = {
     # -- collection_requirements_api.py / retention_policies_api.py ---------
     ("PATCH", f"{_V3}/collection-requirements/{{requirement_id}}"): ROLE_OPERATOR,
     ("PATCH", f"{_V3}/retention-policies/{{policy_name}}"): ROLE_OPERATOR,
-    # -- origins_api.py (data-model lane 9): which group an origin counts in
+    # -- origins_api.py: which group an origin counts in
     ("PUT", f"{_REG}/origins/{{origin_id}}/group"): ROLE_OPERATOR,
     ("POST", f"{_REG}/origins/derive"): ROLE_OPERATOR,
     # -- source_credibility_api.py (operator-curated) -----------------------
@@ -190,8 +190,8 @@ ROUTE_ROLES: dict[tuple[str, str], str] = {
     ("POST", f"{_V1}/consult/writes/{{write_id}}/cancel"): ROLE_OPERATOR,
     ("POST", f"{_V1}/consult/writes/{{write_id}}/revert"): ROLE_OPERATOR,
     # -- own rows -----------------------------------------------------------
-    # consult_api.py (C1 owns the file — gated from here; the per-run owner
-    # check on stop/synthesize is C1's/B3's, see docs/API_ROLES.md)
+    # consult_api.py (gated from here; the per-run owner check on
+    # stop/synthesize lives in the handler, see docs/API_ROLES.md)
     ("POST", f"{_V1}/consult"): ROLE_READER_OWN_ROWS,
     ("POST", f"{_V1}/consult/runs/{{request_id}}/stop"): ROLE_READER_OWN_ROWS,
     ("POST", f"{_V1}/consult/runs/{{request_id}}/synthesize"): ROLE_READER_OWN_ROWS,
@@ -213,6 +213,15 @@ ROUTE_ROLES: dict[tuple[str, str], str] = {
     ("POST", f"{_V1}/auth/invite"): ROLE_OPERATOR,
     ("GET", f"{_V1}/auth/users"): ROLE_OPERATOR,
     ("PATCH", f"{_V1}/auth/users/{{user_id}}"): ROLE_OPERATOR,
+    # users_admin_api.py — the console's Users page (answers 409 while the
+    # sign-in switch is off).
+    ("GET", f"{_V1}/auth/admin/users"): ROLE_OPERATOR,
+    ("POST", f"{_V1}/auth/admin/invites"): ROLE_OPERATOR,
+    ("DELETE", f"{_V1}/auth/admin/invites/{{user_id}}"): ROLE_OPERATOR,
+    ("POST", f"{_V1}/auth/admin/users/{{user_id}}/role"): ROLE_OPERATOR,
+    ("POST", f"{_V1}/auth/admin/users/{{user_id}}/disable"): ROLE_OPERATOR,
+    ("POST", f"{_V1}/auth/admin/users/{{user_id}}/enable"): ROLE_OPERATOR,
+    ("POST", f"{_V1}/auth/admin/users/{{user_id}}/end-sessions"): ROLE_OPERATOR,
     # PUBLIC (see PUBLIC_ROUTES): they authenticate THEMSELVES — a password,
     # an invite token, the cookie — and never call the bearer gate. `read`,
     # the lowest class, so every signed-in class may call them too.

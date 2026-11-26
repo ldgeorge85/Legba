@@ -1,11 +1,9 @@
-# sources_wave_2 — draft SourceDescriptor. Ships DRAFT (operator activates).
+# Draft SourceDescriptor. Ships DRAFT (operator activates).
 #
-# South China Morning Post — China section. Closes the audit-flagged gap
-# (planning/COVERAGE_VS_SELECTION_AUDIT_2026-09-07.md item #7): China's
+# South China Morning Post — China section. Closes a coverage gap: China's
 # sanctions confrontation, the rare-earth shipment halts, and the Meta/Manus
 # block had only 1 corpus hit (via oilprice) with "no wire-class China
-# coverage beyond CGTN/state media" — the audit's own registry-status note
-# lists SCMP explicitly among the outlets not registered. Verified live
+# coverage beyond CGTN/state media", and SCMP was not registered. Verified live
 # 2026-09-07: valid RSS 2.0 at https://www.scmp.com/rss/4/feed/ (the bare
 # https://www.scmp.com/rss/4/feed 301-redirects to an http canonical URL;
 # the trailing-slash https form serves directly with no redirect), title
@@ -14,8 +12,8 @@
 # (PLA/Lop Nur, China-Central Asia rail bypassing Russia, US-China
 # relations), en, well inside 7d.
 #
-# Reuters (the other candidate named in the brief) was NOT researched
-# further here — per the brief's own framing it is unavailable (no public,
+# Reuters (the other candidate) was NOT researched
+# further here — it is unavailable (no public,
 # keyless RSS; Reuters retired open RSS years ago and gates syndication
 # behind commercial licensing). Say so, not shipped.
 #
@@ -27,7 +25,7 @@
 # applied to France 24 / RFE-RL / NHK / ABC Australia (state-funded or
 # state-adjacent ownership, editorially conventional -> reporting).
 # Credibility host scmp.com (seeded 0.68/wire — commercial English-language
-# China-desk wire, state_affiliation False; flag for operator review given
+# China-desk wire, state_affiliation False; worth a review given
 # the ownership structure).
 # state: draft — bulk registration creates NO live actor; activation
 # (draft -> configured -> active) is the operator's after verifying the route
@@ -41,7 +39,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: sources_wave_2
+  owner: owner@local
   created: "2026-09-07T00:00:00Z"
 
 scope:
@@ -50,7 +48,7 @@ scope:
   languages: [en]
   tags: [news, asia, china, sources_wave_2]
   source_class: reporting
-  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
+  access_class: public          # free no-auth feed, no separate reuse agreement
 
 acquisition: poll
 
@@ -75,7 +73,7 @@ pipeline:
   enrichment:
     # language_detect FIRST so ner_multilingual uses the detected language.
     # No fact_extractor on the draft: the operator adds it after confirming the
-    # route yields full article text (mirrors the RSSHub-lane conservative default).
+    # route yields full article text (mirrors the other RSSHub routes' conservative default).
     - kind: language_detect
       config: {}
     - kind: ner_multilingual

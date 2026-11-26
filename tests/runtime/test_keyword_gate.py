@@ -416,7 +416,7 @@ async def test_rss_sugar_routes_through_the_same_matcher(monkeypatch):
     cfg = RSSConfig(
         url="https://feed.example.invalid/rss",
         keyword_include=["sanctions", "iran"], keyword_exclude=["football"],
-        first_poll_max_entry_age_days=0,  # the fixture feed is old-dated (W11-F265)
+        first_poll_max_entry_age_days=0,  # the fixture feed is old-dated
     )
     handler = RSSSourceHandler(cfg, http_client=httpx.AsyncClient(transport=transport))
     sid = f"source.test.kw_{uuid4().hex[:8]}"

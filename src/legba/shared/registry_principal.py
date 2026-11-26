@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The registry's two principals — the fleet's SERVICE token, the operator's own.
 
-Until X2-B1 (W11-F16) one bearer did everything: caddy's basic-auth perimeter
+Until X2-B1 one bearer did everything: caddy's basic-auth perimeter
 injected ``LEGBA_REGISTRY_API_TOKEN`` upstream for every viewer, and the
 runtime, the workflow worker, the bring-up registrars and the scripts all
 presented that same token. Every audit row said "bearer:<hash>" and no row
@@ -92,7 +92,7 @@ _component_service: str | None = None
 
 
 def role_for_actor(actor: str | None) -> str:
-    """The audit ``actor_role`` for an audit actor label (W11-F62).
+    """The audit ``actor_role`` for an audit actor label.
 
     The registry's gates stamp ``<principal>:bearer:<sha12>``
     (``_deps.principal_actor``), so the label's leading segment IS the

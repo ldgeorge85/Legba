@@ -4,8 +4,7 @@
 """rust23_absence_replay.py — RUST-2's before/after on the adjudicated ABSENCE set.
 
 WHAT THIS MEASURES. The 2026-08-16 panel
-(``planning/PANEL_2026-08-16/lens4_groundtruth_attribution.md`` §"By prompt
-branch") measured the adjudicated judge errors per prompt BRANCH and found the
+measured the adjudicated judge errors per prompt BRANCH and found the
 negative route was the worst surface in the system: **ABSENCE 6 wrong of 7
 (86%)**, GENERIC 8 of 30 (27%), NULL-RESULT 1 of 5 (20%). RUST-2 rewrote that
 route's rubric (``absence.v3 -> absence.v4``). This script replays those seven
@@ -107,7 +106,7 @@ URL = "https://openrouter.ai/api/v1/chat/completions"
 KEY_NAME = "OPENROUTER_API_KEY"
 
 #: ``absence.v3`` — the rubric text as it stood at 07c79f25, verbatim. The two
-#: shared rules are appended from the LIVE module (not copied) so that RUST-1's
+#: shared rules are appended from the LIVE module (not copied) so that the
 #: evidence-bytes fix and every later quote-rule edit are held constant across
 #: both arms; the contrast is then the rubric and nothing else.
 _ABSENCE_V3 = (
@@ -257,7 +256,7 @@ def build_truefail_set(bakeoff: str) -> list[dict]:
     payloads, the desk's OWN body and OWN citations, the evidence the judge
     actually saw. That makes the refuting evidence IN-FRAME by construction — it
     sits inside the slice the claim is scoped to — which is exactly what the
-    PROOF C-D lane cannot guarantee (its adjudications are at the product's
+    proof round cannot guarantee (its adjudications are at the product's
     14-day world frame, while the judge grades fidelity to the searched slice).
 
     Admission is mechanical: ``gt_fail`` is true, the claim routes to

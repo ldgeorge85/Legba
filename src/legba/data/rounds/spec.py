@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The round spec: typed models and the loader (plan P4 §2, lane G-1).
+"""The round spec: typed models and the loader.
 
 A spec is configuration, not a program. It has seats (who does a job, what
 each one ``reads`` — default deny), one flow tree of bounded control shapes,
@@ -129,7 +129,7 @@ class Seat(_Model):
     deadline_s: int | None = None
     retries: int = 0
     on_failure: Literal["absent", "stop_round", "escalate"] = "absent"
-    #: What a RETRY is handed (lane G-6). ``none``: a clean retry. ``reasons``:
+    #: What a RETRY is handed. ``none``: a clean retry. ``reasons``:
     #: the retry also gets the refused attempt's typed failure — the gates'
     #: named reasons per sentence, or the parse error — and that attempt's own
     #: output, so the SAME seat repairs its own reply. Never another seat's.

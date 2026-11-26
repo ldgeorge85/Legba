@@ -22,6 +22,7 @@
  */
 import { Suspense, lazy, useEffect, useState } from 'react'
 import { X } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
 import type { currentMode } from '@/auth/jwt'
 import { SingletonView } from '@/components/SingletonView'
 import { pinForSelection, usePinScope } from '@/lib/consultContext'
@@ -57,7 +58,16 @@ const RECORD_KINDS: readonly SelectionKind[] = [
  */
 function SheetPin() {
   const selection = useSelection((s) => s.selection)
-  usePinScope(pinForSelection(selection, RECORD_KINDS), 'record')
+  // A record the chain could not read is not something Consult can be asked
+  // about: its lookup is held in the shared query cache (the chain's own key),
+  // and a failed one withholds the pin instead of pointing Consult at a
+  // record that does not exist. A lookup still running keeps the pin.
+  const lookup = useQuery({
+    queryKey: ['record-lineage', selection?.kind ?? '', selection?.id ?? ''],
+    enabled: false,
+  })
+  const unresolved = lookup.status === 'error'
+  usePinScope(unresolved ? null : pinForSelection(selection, RECORD_KINDS), 'record')
   return null
 }
 

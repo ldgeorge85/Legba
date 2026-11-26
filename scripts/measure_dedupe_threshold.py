@@ -422,7 +422,7 @@ async def run(args: argparse.Namespace) -> None:
         # --- 5/6. the curves --------------------------------------------------
         _print_curve("PRECISION CURVE — all pairs (the corpus as it stands today)",
                      pairs)
-        _print_curve("PRECISION CURVE — cross-source pairs only (the P-02 case "
+        _print_curve("PRECISION CURVE — cross-source pairs only (the known case "
                      "the tier exists for)",
                      [p for p in pairs if p["cross_source"]])
         clean = [p for p in pairs if not p["degenerate"]]

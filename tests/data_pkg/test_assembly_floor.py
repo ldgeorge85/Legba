@@ -1,8 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W4 F-3 — the per-subject-group floor on the world read
-(``legba.data.analysts.assembly_floor``; design note
-``planning/v2/design/F-3_WORLD_FLOOR.md``).
+"""The per-subject-group floor on the world read
+(``legba.data.analysts.assembly_floor``).
 
 What this file proves:
 
@@ -106,7 +105,7 @@ COVERAGE = [
      "mode": "thematic_gap", "input_count": 0},
 ]
 
-# W4-F2 (2026-10-08): the rows' clock is read when ``_rows()`` is CALLED, not
+# The rows' clock is read when ``_rows()`` is CALLED, not
 # when this module is imported. A module-level ``NOW`` froze at collection
 # time while ``head_age_hours`` reads the wall clock at run time, so under a
 # shuffled 30-minute session the "6.0h old" a world run renders drifted to

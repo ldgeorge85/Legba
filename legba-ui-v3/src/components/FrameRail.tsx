@@ -3,8 +3,9 @@
  * rail (subjects, history, saved views)"). Collapsible to a strip of three
  * icons; open, it is 15 rem (`lib/frameGrid.ts`).
  *
- *   SUBJECTS        the roster, grouped (a click reads the subject: it lands on
- *                   the stage and becomes the point)
+ *   SUBJECTS        the roster, ranked by what changed since the reader last
+ *                   looked, with the count (a click reads the subject: it
+ *                   lands on the stage and becomes the point)
  *   CONVERSATIONS   Consult's prior chats; a click continues one in the chat
  *   SAVED VIEWS     links — a page, its point and its window (never an
  *                   arrangement); "Save this view" keeps the current link
@@ -25,6 +26,7 @@ import { CONSULT_PANEL_ID } from '@/lib/caseReplay'
 import { drive } from '@/lib/applyAction'
 import { parseAddress } from '@/lib/address'
 import { cn } from '@/lib/cn'
+import { useChangeCounts } from '@/v4/read/boardData'
 
 export const SAVED_VIEWS_KEY = 'legba_saved_views'
 
@@ -187,6 +189,12 @@ function SavedViews({ pageLabel }: { pageLabel: string }) {
   )
 }
 
+/** The rail's subjects, ranked by what changed since the reader last looked. */
+function RankedSubjects() {
+  const changes = useChangeCounts()
+  return <SubjectRoster changes={changes} />
+}
+
 export function FrameRail({
   mode,
   side,
@@ -264,7 +272,7 @@ export function FrameRail({
         <div className="min-h-0 flex-1 overflow-y-auto pb-3">
           <div data-testid="rail-section-subjects">
             <SectionHead testId="rail-head-subjects">{PROFILE_UI.subject.plural}</SectionHead>
-            <SubjectRoster />
+            <RankedSubjects />
           </div>
           <div data-testid="rail-section-conversations">
             <SectionHead testId="rail-head-conversations">Conversations</SectionHead>

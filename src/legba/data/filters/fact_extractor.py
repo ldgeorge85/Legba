@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""``fact_extractor`` enrichment stage — altitude-0 extraction (anchor §5 PIECE 2).
+"""``fact_extractor`` enrichment stage — altitude-0 extraction.
 
 A descriptor-gated ``descriptor.pipeline.enrichment`` stage (the registry
 pipeline factory) that turns each in-flight :class:`Signal` into
@@ -37,10 +37,10 @@ STATUS:
     (mirrors ``ner_multilingual``'s ValueError in ``pipeline.py``). The model
     id is whatever stack component the operator points ``llm_component_id`` at.
 
-DISCIPLINE (anchor §7): this stage is thin orchestration —
+DISCIPLINE: this stage is thin orchestration —
   * triple-quality gate reuses ``ner._is_nonentity_candidate`` (no fork),
   * event-time precedence reuses ``source_actor._entry_logical_ts`` (no fork),
-  * the facts write is the §3 ``ON CONFLICT`` upsert (the same idempotency
+  * the facts write is the ``ON CONFLICT`` upsert (the same idempotency
     contract the filters honor).
 
 Enrichment-only: ``transform`` NEVER drops the signal and NEVER raises on an
@@ -103,7 +103,7 @@ from .slm_relationship_validate import (
 
 logger = logging.getLogger(__name__)
 
-#: P7/7g-1 — the origin-class leg on the ingest upsert's row PICK (SEAMS #57
+#: The origin-class leg on the ingest upsert's row PICK (SEAMS #57
 #: sweep). The corroboration path finds the open row for a triple and merges
 #: live evidence into it; without this leg an imported historical row with the
 #: same triple could be the row picked, and a 2016 holding would silently
@@ -1033,7 +1033,7 @@ class FactExtractorConfig(BaseModel):
             "the confidence floor cannot (reused triples often lack a usable "
             "score). "
             "Conservative — a single real-name token keeps the endpoint. ON by "
-            "default (graph-and-data Wave-1b item 4); set false to disable.",
+            "default ; set false to disable.",
         ),
     )
     reject_sports_topic: bool = Field(
@@ -1199,7 +1199,7 @@ _LLM_SYSTEM = (
 class FactExtractorHandler:
     """Ingest-time fact-extraction enrichment stage. See module docstring."""
 
-    # --- L-102 §1 class-vars ------------------------------------------------
+    # --- class-vars ------------------------------------------------
     kind: ClassVar[str] = "fact_extractor"
     family: ClassVar[str] = "filter"
     schema_version: ClassVar[str] = "legba/filter.fact_extractor/1-0-0"
@@ -1919,7 +1919,7 @@ async def _insert_ingestion_fact(
     derived_from: list[Any],
     source_id: str | None = None,
 ) -> None:
-    """Write one source-owned ('ingestion') fact via the §3 ON CONFLICT upsert.
+    """Write one source-owned ('ingestion') fact via the ON CONFLICT upsert.
 
     Re-ingest of the same triple+valid_from is idempotent: confidence combines
     via the bounded noisy-OR (Holes-A A2 — corroboration raises belief above any
@@ -1939,7 +1939,7 @@ async def _insert_ingestion_fact(
     write contract the analyst path uses (``provenance.writes``) so both
     producers agree.
 
-    Holes-B Wave 0: the row's ``source_credibility`` is stamped = MAX over the
+    The row's ``source_credibility`` is stamped = MAX over the
     backing signals' ``signals.source_credibility`` (the ``derived_from`` signal
     ids), falling back to the ingestion tier nominal (0.5) when unscored.
     """
@@ -1954,7 +1954,7 @@ async def _insert_ingestion_fact(
             f"(subject={subject!r} predicate={predicate!r}); "
             "_event_time must stamp an event-time"
         )
-    # Holes-B Wave 0 — resolve this ingestion fact's source_credibility: MAX
+    # Resolve this ingestion fact's source_credibility: MAX
     # over the backing signals' signals.source_credibility (already backfilled
     # at signal write), else the ingestion tier nominal (0.5).
     source_credibility = await resolve_fact_source_credibility(
@@ -2017,7 +2017,7 @@ async def _insert_ingestion_fact(
            -- relation backend emits no real per-triple score) must NOT manufacture
            -- near-certainty ("Thousands located in South Africa" reached 0.99). A
            -- genuine sub-1.0 extractor score (> 0.5) keeps the 0.99 ceiling.
-           -- DQ P5 r2: the ceiling caps NEW belief but must NEVER LOWER an
+           -- the ceiling caps NEW belief but must NEVER LOWER an
            -- already-higher genuine confidence — GREATEST(existing, capped) so a
            -- floor observation can't drag a real 0.9 fact down to 0.75.
            -- Corroboration only ever raises; floor+floor still tops out at 0.75.
@@ -2051,7 +2051,7 @@ async def _insert_ingestion_fact(
                derived_from = (SELECT array_agg(DISTINCT e)
                                FROM unnest(facts.derived_from || $5::uuid[]) e),
                valid_from   = LEAST(facts.valid_from, $6),
-               -- Holes-B Wave 0: keep the MOST credible backing source.
+               -- keep the MOST credible backing source.
                -- GREATEST skips NULLs (NULL only if both NULL).
                source_credibility = GREATEST(facts.source_credibility, $7),
                updated_at   = now()
@@ -2101,7 +2101,7 @@ async def _insert_ingestion_fact(
             -- 0.75 when the incoming observation is at/below the heuristic floor
             -- (0.5) so floor-only corroboration cannot manufacture near-certainty;
             -- a genuine extractor score (> 0.5) keeps the 0.99 ceiling.
-            -- DQ P5 r2: GREATEST(existing, capped) so the 0.75 ceiling can cap
+            -- GREATEST(existing, capped) so the 0.75 ceiling can cap
             -- new belief but never LOWER an already-higher genuine confidence (a
             -- floor observation can't drag a real 0.9 fact to 0.75); floor+floor
             -- corroboration still tops out at 0.75.
@@ -2135,7 +2135,7 @@ async def _insert_ingestion_fact(
                            END,
             derived_from = (SELECT array_agg(DISTINCT e)
                             FROM unnest(facts.derived_from || EXCLUDED.derived_from) e),
-            -- Holes-B Wave 0: keep the MOST credible backing source.
+            -- keep the MOST credible backing source.
             source_credibility = GREATEST(facts.source_credibility,
                                           EXCLUDED.source_credibility),
             updated_at   = now()

@@ -21,7 +21,7 @@ from swallowing a genuine catch. The replay is the reason the rule looks the way
 it does: over 24 quoted ``judge_contradicted`` hard fails it fired ONCE, on the
 adjudicated row, with no false demotion.
 
-Section 4 covers the SIBLING rule on the V-B route, V-H5 — a scoped negative is
+Section 4 covers the SIBLING rule on the other route, V-H5 — a scoped negative is
 not violated by a row whose own leading assertion is a negative about the same
 subject — and the two restatement shapes it does NOT close, recorded as strict
 xfails so neither can quietly become done, or quietly stay owed.
@@ -267,7 +267,7 @@ def test_a_positive_row_is_never_a_restatement() -> None:
 # THE RESTATEMENT RESIDUALS — the two shapes V-H5 does NOT close.
 #
 # V-G2 named three "restatement-as-violator / composition-restates-a-unit" rows
-# it deliberately left on the V-B route. V-H5 closes one of them mechanically.
+# it deliberately left on the other route. V-H5 closes one of them mechanically.
 # The other two are recorded here rather than quietly dropped, per the ledger's
 # own contract: a strict xfail turns RED the day someone fixes it.
 # ---------------------------------------------------------------------------
@@ -281,11 +281,11 @@ def test_a_positive_row_is_never_a_restatement() -> None:
         "escalation unit's read — 'moderate near-term escalation risk … proxy "
         "activity … while noting no confirmed new mobilizations' — and the "
         "violating row is that unit's own BLUF saying the same thing in the same "
-        "words. V-H5 cannot see it: the row's leading assertion is POSITIVE "
+        "words. the earlier check cannot see it: the row's leading assertion is POSITIVE "
         "('risk remains moderate'), so the negative-vs-negative test does not "
         "apply, and the claim's denied thing ('confirmed new mobilizations') "
         "appears in neither text. Deciding this needs a claim-vs-row AGREEMENT "
-        "test, which is the same semantic gap V-H4's replay ruled out a bolt-on "
+        "test, which is the same semantic gap the earlier replay ruled out a bolt-on "
         "model for — it belongs in the judge subsystem, the named next seam."
     ),
 )
@@ -312,8 +312,8 @@ def test_restatement_residual_composition_restates_a_unit_assessment() -> None:
         "countries … South Africa is not listed among them' — and the slice "
         "hands that same headline back as the violator. The row is the claim's "
         "OWN cited evidence, so the fix is provenance (a row the claim CITES "
-        "cannot violate it), not lexical: V-G1 established exactly that rule on "
-        "the judge path, and the V-B route has no equivalent because the slice "
+        "cannot violate it), not lexical: an earlier change established exactly that rule on "
+        "the judge path, and the other route has no equivalent because the slice "
         "carries row text without the citation identity to match against. That "
         "plumbing is a substrate change, out of this branch's scope."
     ),

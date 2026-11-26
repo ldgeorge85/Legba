@@ -4,7 +4,7 @@
 
 Architectural-drift correction (2026-05-22). The hosted Legba-models NLP
 service ships as a stack-component descriptor that the filter handlers
-(L-154 NER, L-155 classify) bind to via ``Property.StackRef``.
+(NER, classify) bind to via ``Property.StackRef``.
 
 Tested surface:
 
@@ -77,7 +77,7 @@ class TestNLPServiceSchema:
             name="Test NLP service",
             schema_uri="legba/stack/nlp_service/1.0.0",
             version="0" * 16,
-            owner="lewis@local",
+            owner="owner@local",
             config=NLPServiceConfig(
                 endpoint=Property.Text.of("https://models.test.invalid"),
                 api_user=Property.Secret.of("nlp.test.api_user"),

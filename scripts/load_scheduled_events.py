@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """load_scheduled_events.py — seed CLI for the scheduled-events calendar.
 
-W11-F141. Ingests a curated events YAML and inserts ``provenance='seed'``
+Ingests a curated events YAML and inserts ``provenance='seed'``
 rows into ``scheduled_events`` (migration 0240) — see
 ``src/legba/data/scheduled_events.py`` for the schema, the validation and
 the (title, starts_at) idempotence key.
@@ -119,7 +119,7 @@ async def _run(path: Path, *, dry_run: bool) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Load the scheduled-events calendar (W11-F141).",
+        description="Load the scheduled-events calendar.",
     )
     parser.add_argument(
         "--file",

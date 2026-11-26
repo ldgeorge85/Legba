@@ -25,7 +25,7 @@
 #
 # Volume + network names match the running substrate exactly — don't change them.
 
-# H2 (audit 2026-07-06): docker's default json-file driver has NO rotation, so
+# Docker's default json-file driver has NO rotation, so
 # a chatty container (a dead telethon session flooded the runtime at ~2 GB/day)
 # grows an unbounded *-json.log until the disk fills. This anchor caps every
 # container that references it at 100 MB × 5 files = 500 MB max. A global
@@ -305,7 +305,7 @@ services:
     # Infra tuning: etcd mmaps its DB and the page cache is charged to this
     # cgroup — the default 1M-revision retention pins the DB near 380MB, which
     # put the old 512m limit at 91% (one growth step from an OOM kill of the
-    # whole reminder plane, 2026-08-02 engine review P6). 2g clears the cliff;
+    # whole reminder plane). 2g clears the cliff;
     # the periodic 24h compaction window below caps revision history by TIME
     # instead (~100k revisions at the observed ~1.15 rev/s). Reclaiming file
     # size after a retention change still needs a one-off `etcdctl defrag`.
@@ -627,8 +627,8 @@ services:
   #
   # Deployment NOTE: the PREFERRED shape is embedding the worker IN the
   # legba-runtime-dapr process via
-  # `legba.runtime.dapr_workflow.worker.build_workflow_runtime()` (P-CUT
-  # wires this into the host lifespan) — that needs NO container at all.
+  # `legba.runtime.dapr_workflow.worker.build_workflow_runtime()` (wired
+  # into the host lifespan) — that needs NO container at all.
   # This standalone service exists for the scale-out option (run the
   # optimizer worker on its own so GEPA's LLM-bound work scales
   # independently of the actor-host's substrate-write QPS), exactly the
@@ -636,10 +636,9 @@ services:
   #
   # It needs its own daprd sidecar (app-id legba-dapr-workflow) to reach
   # the workflow engine's gRPC channel — added under the `dapr-workflow`
-  # profile so the canonical `up -d` doesn't pull it until P-CUT cuts over.
+  # profile so the canonical `up -d` doesn't pull it unless that profile is enabled.
   #
-  # RUST-4 MOTHBALL (2026-08-21): hosts deep_consult_workflow; optimizer
-  # plane mothballed 2026-08-21. This service STAYS — it is not dropped from
+  # Optimizer plane mothballed: hosts deep_consult_workflow. This service STAYS — it is not dropped from
   # the deploy path — because it also registers deep_consult_workflow (the
   # "deep" consult mode's durable leg; see legba_dapr_workflow_worker/README
   # and `build_workflow_runtime()`, which registers both workflows
@@ -649,12 +648,12 @@ services:
   # `state: paused` (tree-only as of this commit), and
   # `src/legba/data/analysts/optimizer.py::run_method` refuses loud
   # (`OptimizerMothballedError`) for both descriptor ids regardless. See
-  # `docs/SEAMS.md` #53 and `planning/RUST4_EVIDENCE_2026-08-21.md`.
+  # `docs/SEAMS.md` #53.
   legba-dapr-workflow-worker:
     logging: *default-logging
     # Dedicated image = runtime image + dspy 3.0 (docker/Dockerfile.worker).
     # dspy/litellm live ONLY here, never in the base runtime image / the
-    # analyst inference hot path (operator hard rule). Build with:
+    # analyst inference hot path. Build with:
     #   docker compose --profile dapr-workflow build legba-dapr-workflow-worker
     build:
       context: .
@@ -808,9 +807,8 @@ services:
       start_period: 30s
     restart: unless-stopped
 
-  # ntfy — the local push-notification server for the P1 alert loop (E-4,
-  # operator directive 2026-07-27: local-first; subdomain/Caddy exposure and
-  # the phone app come later). Profile-gated: `--profile alerts up -d ntfy`.
+  # ntfy — the local push-notification server for the alert loop
+  # (local-first; subdomain/Caddy exposure and the phone app come later). Profile-gated: `--profile alerts up -d ntfy`.
   # The runtime's alert sinks reach it over the compose network as
   # `http://ntfy/<topic>`; the loopback host port serves the operator's
   # browser/UI test. Message cache is in-container ephemeral (a restart drops

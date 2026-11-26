@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""A7 — register the RSSHub-lane draft SourceDescriptors (starved-desk feeds).
+"""Register the RSSHub-lane draft SourceDescriptors (starved-desk feeds).
 
 The "RSSHub lane" bridges credible regional / gov / major-media outlets that
 publish no native RSS into the existing ``rss`` source kind, via the self-hosted

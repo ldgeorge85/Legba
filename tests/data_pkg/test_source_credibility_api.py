@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Integration tests for the P-8 source-credibility CRUD endpoints.
+"""Integration tests for the source-credibility CRUD endpoints.
 
 Runs against the live substrate via the `migrated_pg` fixture from
 `tests/data_pkg/conftest.py`. Builds a real FastAPI app, wires it to a

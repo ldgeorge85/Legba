@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W10 SPLIT-3 — the instance constants are profile data, read through one leaf.
+"""The instance constants are profile data, read through one leaf.
 
 ``profiles/<id>/profile.yaml`` ``constants`` (closed) carries the drain's tier
 order, the external-truth strata, the subject frame, the anchor and auto-merge
@@ -16,7 +16,7 @@ the fcbafb2e literals as its by-name fallback when no profile is loadable.
     refuses by name at every reader;
   * ``/eval/subject_scorecard`` serves what ``/eval/country_scorecard`` serves,
     byte for byte, through the ASGI app;
-  * the W7-F3 frame-prefix leftovers: ``LEGBA_FRAME_FAMILY`` off issues the
+  * the frame-prefix leftovers: ``LEGBA_FRAME_FAMILY`` off issues the
     legacy statements only; on, the ``frame`` family decides, and on the live
     topology the two answers are equal;
   * the 32-desk equality: every live desk resolves to the same frame, tier and
@@ -76,7 +76,7 @@ finally:
 _NOW = datetime(2026, 10, 4, tzinfo=timezone.utc)
 
 #: sha256 (canonical JSON: sets sorted, tuples as lists, keys sorted) of each
-#: literal this lane moved into the profile, measured on the pin fcbafb2e.
+#: literal moved into the profile, measured on the pin fcbafb2e.
 _PIN_DIGESTS = {
     "_external_audit_queue._TIER_RANK": "f37bc2223fa84a7596d8453a20a01fbcd021a372a511759a6ad8ab3633161af9",
     "external_truth._DESK_TIER_BY_ANALYST": "abca62d1b597ff77f0865f58685f2809a948726ea80d6fc4f6c9908b12f5d799",
@@ -409,7 +409,7 @@ def test_the_subject_scorecard_alias_serves_the_old_route_byte_for_byte(monkeypa
 
 
 # ---------------------------------------------------------------------------
-# The W7-F3 frame-prefix leftovers, on the live topology
+# The frame-prefix leftovers, on the live topology
 # ---------------------------------------------------------------------------
 
 
@@ -503,7 +503,7 @@ def test_flag_on_the_region_switch_reads_the_frame_family(monkeypatch):
     assert set(conn.calls) == {frames._FRAME_ROWS_SQL}
     # the family is authoritative: an unregistered region_* id is no frame, a
     # registered frame of the region kind is one whatever its id, the kind
-    # itself and a thematic lane are not
+    # itself and a thematic desk are not
     extra = _seed_rows() + [{
         "family": "frame", "value": "sahel", "schema_uri": "legba/vocabulary/1.0.0",
         "introduced": _NOW, "deprecated": None, "notes": "Region — Sahel",
@@ -577,7 +577,7 @@ def test_every_desk_resolves_to_the_same_frame_tier_and_anchor_as_at_the_pin(mon
 
 
 def test_the_tag_tables_follow_the_profile(tmp_path):
-    """W9-F4: the tables are read off the profile — a profile that declares no
+    """The tables are read off the profile — a profile that declares no
     applicability tags assigns none; the group tags are the frame seed's."""
     no_flags = load_profile(_profile_copy(tmp_path, lambda d: d["constants"].update(applicability_tags=[])))
     region, watch = tag_targets.tag_tables(no_flags)

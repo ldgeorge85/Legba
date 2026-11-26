@@ -33,7 +33,7 @@
 #      `newest_entry_ts`, so the poll ledger records NULL and the serve-stale
 #      watchdog is blind to this source the same way it was blind to the frozen
 #      hubs. The honest gauge for this feed is signal PRODUCTION (created_at,
-#      never fetched_at) — the S-1 production-deficit class — not entry age. If
+#      never fetched_at) — the production-deficit class — not entry age. If
 #      AP's world section ever freezes the way the hubs did, the tell is
 #      "polls succeed, zero NEW signals written for N days", nothing else.
 #      Do not read a `healthy` poll ledger row as evidence of fresh content.
@@ -79,7 +79,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: source_batch_2026_08
+  owner: owner@local
   created: "2026-08-03T00:00:00Z"
 
 scope:
@@ -90,7 +90,7 @@ scope:
   languages: [en]
   tags: [news, world, geopolitical, global, rsshub_lane, source_batch_2026_08]
   source_class: reporting
-  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
+  access_class: public          # free no-auth feed, no separate reuse agreement
 
 acquisition: poll
 

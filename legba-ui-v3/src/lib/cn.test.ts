@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { cn } from './cn'
 
-describe('cn — the type scale survives a colour class (U-3)', () => {
+describe('cn — the type scale survives a colour class', () => {
   it('keeps a named size beside a text colour', () => {
     expect(cn('rounded text-label', 'text-ink-1')).toBe('rounded text-label text-ink-1')
     expect(cn('text-body text-ink-3', 'hover:text-ink-1')).toBe('text-body text-ink-3 hover:text-ink-1')

@@ -1,4 +1,4 @@
-# Due-and-absent analyst descriptor (lane E-1 — "what was expected and has no
+# Due-and-absent analyst descriptor ("what was expected and has no
 # record").
 #
 # A `deterministic`-kind META analyst, NO LLM, no paid route, no token budget.
@@ -61,7 +61,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: draft
-  owner: expectations_e1
+  owner: owner@local
 
 subscription:
   # No `targets` block -> META analyst: one run per cadence tick. The handler

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for the L-197 alert output kind.
+"""Unit tests for the alert output kind.
 
 Covers:
 
@@ -668,7 +668,7 @@ def test_kind_name_is_alert():
 
 
 # ---------------------------------------------------------------------------
-# L-197 — runtime output-binding path: FindingPayload → AlertPayload coercion
+# Runtime output-binding path: FindingPayload → AlertPayload coercion
 # + severity gate (the audit's alert_sink_deliveries=0 fix).
 # ---------------------------------------------------------------------------
 
@@ -767,7 +767,7 @@ async def test_emit_threads_output_id_into_alert_row_id_for_audit():
 
 
 async def test_emit_malformed_surface_mode_is_audited_not_swallowed():
-    """K-1 regression: a descriptor surface with mode=True (the YAML-1.1
+    """Regression: a descriptor surface with mode=True (the YAML-1.1
     `mode: on`→bool trap) fails OutputSurface validation in _parse_surfaces. The
     failure must re-raise AND write an AUDITED alert_sink_deliveries error row
     (sink_kind='_descriptor', status='error') — not vanish, leaving the table

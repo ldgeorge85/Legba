@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""P4-T7 — the acute-forecast scoreboard producer (deterministic META driver).
+"""The acute-forecast scoreboard producer (deterministic META driver).
 
 Forecasting returns as a MEASURED number, NEVER a free-text claim. These tests
 pin the honesty invariants:
@@ -265,7 +265,7 @@ async def test_geography_dominated_vector_abstains_no_rows_minted():
     assert result.finding.data["issued"] == 0
     assert result.finding.data["resolved"] == 0
     assert result.finding.data["resolved_total"] == 0
-    # DQ P6 — the receipt now ATTRIBUTES the issued=0 to a D9 degeneracy abstain
+    # The receipt now ATTRIBUTES the issued=0 to a D9 degeneracy abstain
     # (distinct from a window-already-issued no-op) via a real receipt roundtrip.
     assert any(
         "abstained_degenerate_p" in w for w in result.finding.data["warnings"]
@@ -273,7 +273,7 @@ async def test_geography_dominated_vector_abstains_no_rows_minted():
 
 
 # ---------------------------------------------------------------------------
-# DQ P6 — issued=0 is ATTRIBUTED: abstain vs already-issued vs no-targets each
+# issued=0 is ATTRIBUTED: abstain vs already-issued vs no-targets each
 # emit a DISTINCT warnings[] entry (they used to be indistinguishable).
 # ---------------------------------------------------------------------------
 

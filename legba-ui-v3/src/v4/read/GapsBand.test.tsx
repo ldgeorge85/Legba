@@ -210,7 +210,7 @@ describe('the three answers are never collapsed', () => {
     stubAbsence({ country_g20_br: answer('country_g20_br') })
     await renderBand([card('country_g20_br')])
     expect(screen.getByTestId('morning-read-gaps-all-clear').textContent).toContain(
-      'No typed absence is recorded on any desk read here',
+      'No gap is recorded on any desk read here',
     )
     // The desk is still on the page: "we looked here and found nothing" is an
     // answer, and a band that hid it would imply it never looked.
@@ -227,7 +227,7 @@ describe('the three answers are never collapsed', () => {
       }),
     ])
     expect(screen.getByTestId('morning-read-gaps-desk-empty').textContent).toContain(
-      'No typed absence is recorded for this desk',
+      'No gap is recorded for this desk',
     )
     // And the seven kinds it DID read are named as read.
     expect(screen.getByTestId('morning-read-gaps-clear-kinds').textContent).toContain(
@@ -240,7 +240,7 @@ describe('the three answers are never collapsed', () => {
     stubAbsence({}, ['country_g20_br'])
     await renderBand([card('country_g20_br')])
     expect(screen.getByTestId('morning-read-gaps-desk-error').textContent).toContain(
-      'did not answer',
+      'could not be read',
     )
     expect(screen.queryByTestId('morning-read-gaps-desk-empty')).toBeNull()
   })
@@ -312,7 +312,7 @@ describe('the glossary link', () => {
   })
 })
 
-describe('U-5 — the per-desk reads wait for the band', () => {
+describe('The per-desk reads wait for the band', () => {
   /** The band the way `JudgmentBands` gates it: reads start when the band comes near. */
   function GatedHarness({ cards }: { cards: CountryScorecard[] }) {
     const [near, setNear] = useState(false)

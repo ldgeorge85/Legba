@@ -29,6 +29,7 @@ import { useSelection } from '@/state/selection'
 import { useActiveSurface } from '@/state/activeSurface'
 import { useCasePlayer } from '@/state/casePlayer'
 import { chromeFolds, ConsultChip, HoverCard, LayerCard, Legend, ViewControls, type HoverInfo } from './chrome'
+import { mapCoverage, type MapCoverage } from './coverage'
 import { GLOBE_CAPS, type GlobeLayerId } from './catalog'
 import { ensureMapFonts, globeStyle, labelLayers, markImages, projectionSpec, T } from './style'
 import {
@@ -45,7 +46,7 @@ import {
   useGlobeModel,
   type GlobePreset,
 } from './useGlobeModel'
-import type { SeriesGlyph } from './prep'
+import { seriesPctSentence, seriesPctText, type SeriesGlyph } from './prep'
 import { useGlobeCamera } from './actions'
 import { placeId, placeOfId } from './chokepoints'
 import { usePinScope } from '@/lib/consultContext'
@@ -160,8 +161,8 @@ function glyphElement(g: SeriesGlyph, onPick: (g: SeriesGlyph) => void, onHover:
   el.className = 'legba-series-glyph'
   el.dataset.testid = 'globe-series-glyph'
   el.dataset.key = g.key
-  const pct = g.pct == null ? '–' : `${Math.round(g.pct)} %`
-  el.setAttribute('aria-label', `${g.name}: ${g.latest} on ${g.day}, ${pct} of the 30-day baseline${g.revised ? ', revised' : ''}`)
+  const pct = seriesPctText(g.pct)
+  el.setAttribute('aria-label', `${g.name}: ${g.latest} on ${g.day}, ${seriesPctSentence(g.pct).toLowerCase()}${g.revised ? ', revised' : ''}`)
   el.innerHTML =
     `<span class="legba-series-dot" style="background:${STATUS_COLOR[g.status]}"></span>` +
     `<span class="legba-series-val">${esc(pct)}</span>` +
@@ -175,10 +176,32 @@ function glyphElement(g: SeriesGlyph, onPick: (g: SeriesGlyph) => void, onHover:
   return el
 }
 
-export default function GlobeMap({ preset, active, onFallback }: { preset: GlobePreset; active: boolean; onFallback: (why: string) => void }) {
+export default function GlobeMap({
+  preset,
+  active,
+  onFallback,
+  onCoverage,
+}: {
+  preset: GlobePreset
+  active: boolean
+  onFallback: (why: string) => void
+  /** Told what the map can vouch for (the coverage strip under the Board's map). */
+  onCoverage?: (c: MapCoverage) => void
+}) {
   const surface = useActiveSurface((s) => s.surface)
   const model = useGlobeModel(preset, active, null)
   const { on, setOn, out, figures, selection, selectedAt, reads } = model
+  const [layersOpen, setLayersOpen] = useState(false)
+  // Told on a change of what it says only (the reads object is new on every render).
+  const blanksUnreadable = !!reads.unreadable.blanks
+  const coverage = useMemo(
+    () => mapCoverage(out, { reads: reads.reads, subjects: reads.subjects }, { blanks: on.blanks }, blanksUnreadable ? { blanks: true } : {}),
+    [out, reads.reads, reads.subjects, on.blanks, blanksUnreadable],
+  )
+  const coverageKey = JSON.stringify(coverage)
+  const coverageCb = useRef(onCoverage)
+  coverageCb.current = onCoverage
+  useEffect(() => coverageCb.current?.(JSON.parse(coverageKey) as MapCoverage), [coverageKey])
 
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -459,7 +482,7 @@ export default function GlobeMap({ preset, active, onFallback }: { preset: Globe
         title: g.name,
         lines: [
           `${g.latest.toLocaleString('en-US')} ${reads.seriesUnit ?? 'per day'} on ${g.day}${g.revised ? ' (revised)' : ''}`,
-          g.pct == null ? 'No 30-day baseline yet' : `${Math.round(g.pct)} % of its 30-day baseline`,
+          seriesPctSentence(g.pct),
           reads.seriesAsOf ? `As recorded ${reads.seriesAsOf.slice(0, 10)}` : '',
         ].filter(Boolean),
       })
@@ -685,7 +708,7 @@ export default function GlobeMap({ preset, active, onFallback }: { preset: Globe
         }
         case 'series-dots':
           setHoverSubject(null)
-          return setHover({ x, y, title: String(p.name), lines: [Number(p.pct) >= 0 ? `${Math.round(Number(p.pct))} % of its 30-day baseline` : 'No 30-day baseline yet'] })
+          return setHover({ x, y, title: String(p.name), lines: [seriesPctSentence(Number(p.pct) >= 0 ? Number(p.pct) : null)] })
         default: {
           const iso = isoOf(p)
           const facts = iso ? o?.countries[iso] : undefined
@@ -814,14 +837,21 @@ export default function GlobeMap({ preset, active, onFallback }: { preset: Globe
       tabIndex={-1}
     >
       <div ref={containerRef} className="h-full w-full" />
-      {width > 0 && height > 0 && <LayerCard on={on} figures={figures} onToggle={setOn} collapsedByDefault={folds.layers} only={only} />}
+      {width > 0 && height > 0 && <LayerCard on={on} figures={figures} onToggle={setOn} collapsedByDefault={folds.layers} only={only} onOpenChange={setLayersOpen} />}
       <ViewControls projection={projection} onProjection={chooseProjection} onZoom={(d) => (d > 0 ? mapRef.current?.zoomIn({ duration: camMs() / 3 }) : mapRef.current?.zoomOut({ duration: camMs() / 3 }))} onReset={goHome} showProjection={preset === 'board'} />
       {preset === 'board' && <ConsultChip />}
-      {width > 0 && height > 0 && <Legend on={on} figures={figures} out={out} seriesUnit={reads.seriesUnit} clusterNote={clusterNote} only={only} collapsedByDefault={folds.legend} />}
-      {software && projection === 'flat' && preset === 'board' && !folds.layers && (
-        <div className="pointer-events-none absolute bottom-10 right-3 z-10 max-w-[15rem] text-right text-label text-ink-3" data-testid="globe-software-note">
-          Opened flat: this browser draws without a GPU. The Globe switch turns the globe on.
-        </div>
+      {width > 0 && height > 0 && (
+        <Legend
+          on={on}
+          figures={figures}
+          out={out}
+          seriesUnit={reads.seriesUnit}
+          clusterNote={clusterNote}
+          only={only}
+          collapsedByDefault={folds.legend}
+          room={layersOpen ? 'shared' : 'alone'}
+          note={software && projection === 'flat' && preset === 'board' ? 'Opened flat: this browser draws without a GPU. The Globe switch turns the globe on.' : null}
+        />
       )}
       <HoverCard hover={hover} width={width} />
     </div>

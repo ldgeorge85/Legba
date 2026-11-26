@@ -9,7 +9,7 @@
 # host_nightly_suite.sh, and both that script and the `--lint` mode it calls in
 # run_tests_in_container.sh land with this same branch. Installing the cron
 # file first gives a nightly that silently does nothing.
-#   cp /usr/local/deployments/active/legba/deploy/cron.d/legba-nightly-suite \
+#   cp /path/to/legba/deploy/cron.d/legba-nightly-suite \
 #      /etc/cron.d/legba-nightly-suite
 #   chmod 0644 /etc/cron.d/legba-nightly-suite
 #
@@ -21,7 +21,7 @@
 #   ls -l /var/log/legba/nightly/latest
 #   grep VERDICT /var/log/legba/nightly/latest/summary.txt
 # Run it by hand exactly as cron does:
-#   /usr/local/deployments/active/legba/scripts/host_nightly_suite.sh
+#   /path/to/legba/scripts/host_nightly_suite.sh
 #
 # The path below is ABSOLUTE and so is every path inside the script. A relative
 # path here is how scripts/loop_healthcheck.sh failed 7,834 out of 7,834 runs
@@ -34,14 +34,14 @@
 # must NOT be expressed here -- see the standing note that host cron and bare
 # `date -d` are PDT.
 #
-# Measured 2026-08-04: ~16 min per pass over 10,337 tests, so all three phases
+# Measured: ~16 min per pass over 10,337 tests, so all three phases
 # land inside 40 minutes. The script still takes /var/lock/legba-nightly-suite.lock
 # and exits quietly if a previous night is somehow still running -- the passes
 # share the legba_pivot_test database and would corrupt each other's fixtures.
 
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-# L-1: raise through the single alert path (scripts/lib/legba_alert.sh); the
+# Raise through the single alert path (scripts/lib/legba_alert.sh); the
 # direct push stays the fallback when the runtime or its database is down.
 LEGBA_ALERT_RAISE=1
 

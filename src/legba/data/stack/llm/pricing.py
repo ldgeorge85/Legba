@@ -39,7 +39,7 @@ class ModelPrice:
 
 
 # ---------------------------------------------------------------------------
-# Token totals — reasoning counted once (lane T-1)
+# Token totals — reasoning counted once
 # ---------------------------------------------------------------------------
 
 #: Subproviders whose parsed usage carries reasoning OUTSIDE

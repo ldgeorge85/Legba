@@ -7,8 +7,8 @@ The load-bearing surface is verify.py: the deterministic floor must stop crushin
 composition critiques on bold headings, split-off citation markers, judgment/
 assumption synthesis lines, and forward-looking watch bullets — WITHOUT over-
 crediting a genuinely uncited factual claim (the balance the fix must hold). The
-remaining tests pin the P7-F4 alert-gate semantics, the P7-F5 delivery-audit
-honesty, and the P7-F6 forecast-void guard.
+remaining tests pin the alert-gate semantics, the delivery-audit
+honesty, and the forecast-void guard.
 """
 
 from __future__ import annotations
@@ -57,7 +57,7 @@ def _comp_citation(ordinal: int, *, eff=None, derived=None, source="leadership_t
 
 
 # ---------------------------------------------------------------------------
-# P7-F1(1) — bold heading lines are structure, not facts
+# Bold heading lines are structure, not facts
 # ---------------------------------------------------------------------------
 
 
@@ -86,7 +86,7 @@ def test_bold_heading_body_floors_only_the_real_uncited_claim():
 
 
 # ---------------------------------------------------------------------------
-# P7-F1(2) — a citation marker trailing a sentence period is not orphaned
+# A citation marker trailing a sentence period is not orphaned
 # ---------------------------------------------------------------------------
 
 
@@ -120,7 +120,7 @@ def test_segment_pulls_trailing_marker_inside_sentence():
 
 
 # ---------------------------------------------------------------------------
-# P7-F1(3) — judgment/assumption synthesis lines are floor-exempt, judge-graded
+# Judgment/assumption synthesis lines are floor-exempt, judge-graded
 # ---------------------------------------------------------------------------
 
 
@@ -131,7 +131,7 @@ def test_judgment_assumption_floor_exempt_but_judge_grades():
 
 
 # ---------------------------------------------------------------------------
-# P7-F1(5) — forward-looking watch bullets exempt for BOTH floor and judge
+# Forward-looking watch bullets exempt for BOTH floor and judge
 # ---------------------------------------------------------------------------
 
 
@@ -169,7 +169,7 @@ def test_uncited_factual_claim_still_caught_unit():
 
 
 # ---------------------------------------------------------------------------
-# P7-F1(6) — shared-lineage double-count keyed on SAME source
+# Shared-lineage double-count keyed on SAME source
 # ---------------------------------------------------------------------------
 
 
@@ -215,7 +215,7 @@ def test_ordinal_source_map_reads_source():
 
 
 # ---------------------------------------------------------------------------
-# P7-F4 — alert gate semantics
+# Alert gate semantics
 # ---------------------------------------------------------------------------
 
 
@@ -255,7 +255,7 @@ def test_alert_gate_suppresses_absence_titles():
 
 
 # ---------------------------------------------------------------------------
-# P7-F5(a) — delivery audit honesty
+# Delivery audit honesty
 # ---------------------------------------------------------------------------
 
 
@@ -275,7 +275,7 @@ async def test_emit_logged_only_when_no_publisher_wired():
 
 
 # ---------------------------------------------------------------------------
-# P7-F6 — forecast void is DURABLE (resolver + pull exclude voided rows)
+# Forecast void is DURABLE (resolver + pull exclude voided rows)
 # ---------------------------------------------------------------------------
 
 
@@ -324,7 +324,7 @@ def test_migration_0074_is_world_scoped_and_non_destructive():
 
 
 # ===========================================================================
-# P7 r2 — BLOCKING: forward-looking / bold exemption is FLOOR-anchored, the
+# Forward-looking / bold exemption is FLOOR-anchored, the
 # JUDGE still grades every PRESENT-FACT clause (H1 invariant restored)
 # ===========================================================================
 
@@ -401,7 +401,7 @@ def test_plain_uncited_fact_still_caught_after_anchor():
 
 
 # ===========================================================================
-# P7 r2 — MAJOR: alert absence-title suppression no longer silences real
+# Alert absence-title suppression no longer silences real
 # escalations, and a moderate+/high finding is never gagged by a heuristic
 # ===========================================================================
 
@@ -463,7 +463,7 @@ def test_alert_gate_bare_negative_lead_gated_on_severity():
 
 
 # ===========================================================================
-# P7 r2 — MAJOR: cadence cooldown is stamped on EVERY organic trigger (incl.
+# Cadence cooldown is stamped on EVERY organic trigger (incl.
 # the reactive 'coalesced_fire'), NOT the manual/forced 'method' run
 # ===========================================================================
 

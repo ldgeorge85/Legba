@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """docs/DATA_SOURCES.md states how many source kinds are registered; the
-number is the registry's, counted (roll 83: the page said eighteen while
+number is the registry's, counted (the page once said eighteen while
 twenty-two were registered)."""
 from __future__ import annotations
 

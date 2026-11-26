@@ -30,9 +30,9 @@ be listed.
 | retired | analyst | geo_convergence_scan | descriptors/analyst_geo_convergence_scan.yaml | Retired. |
 | retired | analyst | hypothesis_lifecycle | descriptors/analyst_hypothesis_lifecycle.yaml | Superseded by competing_hypotheses. |
 | retired | analyst | meta_synthesizer | descriptors/analyst_meta_synthesizer.yaml | Superseded by the compositions. |
-| retired | source | source.gdelt.doc_api | descriptors/source_gdelt_doc_api.yaml | Retired (migration 0121); source.gdelt.files replaced it. |
+| retired | source | source.gdelt.doc_api | descriptors/source_gdelt_doc_api.yaml | Replaced by source.gdelt.files. |
 | retired | source | source.ucdp.ged | descriptors/source_ucdp_ged.yaml | Retired. |
-| retired | source | source.bundeswehr.procurement | descriptors/source_bundeswehr_procurement.yaml | It reads the general bundeswehr.de news feed keyword-filtered for procurement and produced no signals; no procurement-specific feed exists. |
+| retired | source | source.bundeswehr.procurement | descriptors/source_bundeswehr_procurement.yaml | It reads a general news feed keyword-filtered for procurement and produced no signals; no procurement-specific feed exists. |
 | retired | source | source.csis.analysis | catalog | Retired. |
 | retired | source | source.voa.africa | catalog | Retired. |
 | retired | source | source.xinhua.world | catalog | Retired; source_cgtn_world.yaml fills the same framing slot. |
@@ -45,21 +45,21 @@ be listed.
 |---|---|---|---|---|
 | parked | analyst | adversarial_signals | descriptors/analyst_adversarial_signals.yaml | Ships draft; registration and activation are an admin's step (file header). |
 | parked | analyst | anomaly_detection | descriptors/analyst_anomaly_detection.yaml | Ships draft; registration and activation are an admin's step (file header). |
-| parked | analyst | archive_retention | descriptors/analyst_archive_retention.yaml | Ships draft (migration 0224 sweep). |
+| parked | analyst | archive_retention | descriptors/analyst_archive_retention.yaml | Ships draft. |
 | parked | analyst | cross_target_raw_g20 | descriptors/analyst_cross_target_raw_g20.yaml | Ships draft (a correlation pilot). |
 | parked | analyst | signals_retention | descriptors/analyst_signals_retention.yaml | Ships draft. |
-| parked | source | source.acled.conflict | descriptors/source_acled_conflict.yaml | Draft; ACLED needs a portal grant (403). |
+| parked | source | source.acled.conflict | descriptors/source_acled_conflict.yaml | Draft; needs a portal grant (the feed answers 403 without one). |
 | parked | source | source.common_crawl.news | descriptors/source_common_crawl_news.yaml | Generic adapter template (draft). |
 | parked | source | source.discord.default | descriptors/source_discord_webhook.yaml | Generic adapter template (draft). |
 | parked | source | source.firecrawl.default | descriptors/source_firecrawl.yaml | Generic adapter template (draft). |
-| parked | source | source.gdelt.bigquery | descriptors/source_gdelt_bigquery.yaml | Draft; needs BigQuery credentials. |
+| parked | source | source.gdelt.bigquery | descriptors/source_gdelt_bigquery.yaml | Draft; needs cloud query credentials. |
 | parked | source | source.generic_webhook.default | descriptors/source_generic_webhook.yaml | Generic adapter template (draft). |
 | parked | source | source.intelmq.cisa_kev | descriptors/source_intelmq_cisa_kev.yaml | Draft. |
-| parked | source | source.mediacloud.world | descriptors/source_mediacloud.yaml | Draft; needs a Media Cloud key. |
+| parked | source | source.mediacloud.world | descriptors/source_mediacloud.yaml | Draft; needs an API key. |
 | parked | source | source.opensanctions.api | descriptors/source_opensanctions_api.yaml | Draft; needs an API key. |
-| parked | source | source.opensanctions.bulk | descriptors/source_opensanctions_bulk.yaml | Declares active but is not registered (licensed_noncommercial bulk set). |
+| parked | source | source.opensanctions.bulk | descriptors/source_opensanctions_bulk.yaml | Declares active but is not registered. |
 | parked | source | source.query_source_discovery.template | descriptors/source_query_source_discovery_template.yaml | Template (draft). |
-| parked | source | source.reliefweb.reports | descriptors/source_reliefweb_api.yaml | Declares active but is not registered (ReliefWeb needs an appname grant). |
+| parked | source | source.reliefweb.reports | descriptors/source_reliefweb_api.yaml | Declares active but is not registered (the API needs an application-name grant). |
 | parked | source | source.usgs.earthquakes | descriptors/source_usgs_earthquakes.yaml | Declares active but is not registered; the catalog's source.usgs.earthquakes_m45 is the quake feed. |
 | parked | target | discovery_geopolitical_countries | descriptors/discovery_geopolitical_countries.yaml | Discovery descriptor for an older materialiser path. |
 | parked | target | discovery_geopolitical_g20 | descriptors/discovery_geopolitical_g20.yaml | Discovery descriptor for an older materialiser path. |

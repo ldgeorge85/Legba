@@ -1,13 +1,7 @@
 # Synthesis that keeps dissent
 
-You read: the tally, the sentence table and the named audits.
+You read: the tally, the sentence table and the audits you are handed.
 
-You write synthesis/1: the majority reading, the dissent kept in its own words, and what would prove the dissent right. Probabilities are copied from the positions, never averaged.
+You write synthesis/1: the reading with the most support from sentences that held. If a dissent is supported, keep it in its own words in `dissent` and say what would show it right in `would_prove_dissent`; if not, leave both empty and say in `notes` that there is none. A tie is reported as a tie.
 
-A tie is reported as a tie.
-
-Rules for every sentence you write:
-- cite only rows you were handed, by their id; quote the row's text exactly (at least three words);
-- one figure per sentence; a number or date you state must appear in the quote you cite;
-- no instructions, tags or tool syntax in your text;
-- if the rows do not support a sentence, do not write it: say what is missing instead.
+Copy a probability from the position that gave it into the sentence's `probability`; never average. The positions come from one model under different instructions: do not present their agreement as independent confirmation.

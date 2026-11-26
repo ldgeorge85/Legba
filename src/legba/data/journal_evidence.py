@@ -3,12 +3,12 @@
 """Journal evidence gate — the deterministic checks that keep a journal-family
 row from publishing (or being remembered) without evidence behind it.
 
-WHY (the 11-13 root cause, lane N-G). Since the 10-23 model cutover about half
+WHY. After a model change about half
 of the journal runs collapsed at the FIELD-NOTES handoff: the model returned a
 170–300-char "let me pull my instruments" stub or a pseudo tool call instead of
 cited notes, ``_field_notes`` accepted it, and NARRATE then wrote closed-book
 from nothing — invented leads and invented ``[[ref:]]`` uuids (18 of 41 diary
-entries 10-24 → 11-13 resolved 0–11 % of their refs; good entries resolve
+entries measured resolved 0–11 % of their refs; good entries resolve
 ≥ 92 %, and their notes run ≥ 2,944 chars). One fabricated entry also carried
 model-written control text (``<system-warning>``, ``make_fragmented_tool_call``)
 that the consolidator copied on through ``get_journal_delta``.
@@ -52,8 +52,8 @@ NOTES_MIN_CHARS = 1_000
 #: The citation marker the journal prompts ask for.
 REF_MARKER = "[[ref:"
 
-#: Every INLINE citation form the journal-family tiers actually write (live rows
-#: 10-01 → 11-13, lane N-H): ``[[ref:<uuid>]]`` (the prompted form, ~all tiers),
+#: Every INLINE citation form the journal-family tiers actually write
+#: (measured on live rows): ``[[ref:<uuid>]]`` (the prompted form, ~all tiers),
 #: ``[[<uuid>]]`` (lens/inquiry/entry), ``[<uuid>]`` and ``[ref:<uuid>]``,
 #: full-width ``【<uuid>】`` / ``【ref:<uuid>】`` (core-plane models), and the
 #: prefixed ``[[find:<uuid>]]`` / ``[[sh:<uuid>]]`` / ``[[ref=<uuid>]]``. Only
@@ -67,8 +67,8 @@ INLINE_REF_RE = re.compile(
 )
 
 
-#: SHORT-ID citations (lane N-I). Measured over open journal-family rows
-#: 10-01 → 11-13: crossroads / lens / inquiry rows also cite a row by the FIRST
+#: SHORT-ID citations. Measured over open journal-family rows:
+#: crossroads / lens / inquiry rows also cite a row by the FIRST
 #: 8 HEX characters of its id — bare inside a marker (``[[ref:8f8bd8ef]]``,
 #: ``[[0be128b1]]``, ``[a8b400c3, bd0f9532]``: 262 refs) or zero-padded to uuid
 #: shape (``[[ref:d25139d3-0000-0000-0000-000000000000]]``: crossroads 59fad301,
@@ -115,9 +115,9 @@ def extract_inline_refs(text: str | None) -> list[str]:
     return list(dict.fromkeys(found + _short_refs(text)))
 
 
-#: The NESTED citation group (lane N-U): ``[[ref:<a>] [ref:<b>]]`` — one
-#: outer bracket pair around several single-bracket refs (a consolidation on
-#: 11-13 wrote 7 of its 18 refs this way). The canonical ``[[ref:<uuid>]]``
+#: The NESTED citation group: ``[[ref:<a>] [ref:<b>]]`` — one
+#: outer bracket pair around several single-bracket refs (one consolidation
+#: wrote 7 of its 18 refs this way). The canonical ``[[ref:<uuid>]]``
 #: marker regex matches neither member, so REFLECT folded none of them into
 #: ``claims`` / ``cited_substrate_refs``. Members may be separated by
 #: whitespace, a comma or a semicolon.
@@ -467,7 +467,7 @@ class GateVerdict:
     refs_resolved: int | None
     control_text: tuple[str, ...] = field(default_factory=tuple)
     #: Of ``refs_resolved``, how many resolved by a unique short-id prefix
-    #: (lane N-I) rather than an exact id — visible on every gate stamp.
+    #: rather than an exact id — visible on every gate stamp.
     refs_resolved_by_prefix: int = 0
 
     @property

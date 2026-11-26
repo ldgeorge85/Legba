@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""load_forecasts.py — seed CLI for the exogenous forecast ledger (ST0-B).
+"""load_forecasts.py — seed CLI for the exogenous forecast ledger.
 
 Reads a curated forecasts YAML and writes, through the ONE store
 (``src/legba/data/forecast_ledger.py``, migration 0242):
@@ -62,7 +62,7 @@ from legba.data.forecast_ledger import (  # noqa: E402
 )
 
 _SELECT_ID = "SELECT id::text AS id FROM forecast_questions WHERE slug = $1"
-#: Who writes the rows this loader inserts (data-model lane 9): the loader
+#: Who writes the rows this loader inserts: the loader
 #: itself; the YAML's own ``created_by`` / issuer columns say whose question
 #: and whose number it is.
 WRITTEN_BY = "rule:forecast_loader"
@@ -196,7 +196,7 @@ async def _connect() -> Any:  # pragma: no cover — the live path
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="Load the exogenous forecast ledger (ST0-B).")
+    ap = argparse.ArgumentParser(description="Load the exogenous forecast ledger.")
     ap.add_argument("--file", type=Path, default=DEFAULT_YAML,
                     help=f"curated forecasts YAML (default: {DEFAULT_YAML})")
     ap.add_argument("--dry-run", action="store_true",

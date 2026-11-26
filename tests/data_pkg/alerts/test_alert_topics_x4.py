@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""X4 ALERTS (W11-F17) — two topics, level-only escalations never push.
+"""X4 ALERTS — two topics, level-only escalations never push.
 
 Pure + fake-pool tests (no database). The real-driver half — the 9-move tick,
 the ledger rows read back, the volume route, the ``alert_volume_high`` page —
@@ -113,7 +113,7 @@ def test_every_trigger_class_and_watchdog_channel_names_its_topic() -> None:
     }
     missing = sorted(k for k in kinds if k not in T.TOPIC_BY_KIND)
     assert not missing, f"alert kinds with no declared topic: {missing}"
-    # L-1: the nightly suite keeps its own topic now that it raises through
+    # The nightly suite keeps its own topic now that it raises through
     # the single alert path; only its kind may use it.
     assert set(T.TOPIC_BY_KIND.values()) == {T.TOPIC_WORLD, T.TOPIC_ENGINE, T.TOPIC_NIGHTLY}
     assert [k for k, t in T.TOPIC_BY_KIND.items() if t == T.TOPIC_NIGHTLY] == ["nightly_suite"]

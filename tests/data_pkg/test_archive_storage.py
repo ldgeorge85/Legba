@@ -495,7 +495,7 @@ class TierConn:
         raise AssertionError(sql)
 
     async def fetch(self, sql, *args):
-        if sql is tier.PENDING_HOT_REMOVAL_SQL:   # C-1: the resume sweep
+        if sql is tier.PENDING_HOT_REMOVAL_SQL:   # The resume sweep
             return [{"sha256": s} for s in self.cold if s not in self.hot_removed][: args[0]]
         assert sql is tier.CANDIDATES_SQL
         return [r for r in self.rows if r["sha"] not in self.cold][: args[1]]

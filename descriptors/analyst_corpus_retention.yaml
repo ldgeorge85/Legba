@@ -1,4 +1,4 @@
-# corpus_retention — the OpenSearch corpus DELETE path (W2-C).
+# corpus_retention — the OpenSearch corpus DELETE path.
 #
 # corpus_indexer's mirror. That sweep projects signals INTO
 # `legba_signals_corpus`; this one takes them OUT when their substrate row is
@@ -73,7 +73,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: active
-  owner: corpus_retention
+  owner: owner@local
 
 subscription:
   # No `targets` block → META analyst: one global sweep per cadence tick over the

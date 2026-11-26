@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""FRAME-1 — COMPOSE OVER THE WINDOW (``planning/FRAME_PROGRAM_2026-08-20.md``).
+"""FRAME-1 — COMPOSE OVER THE WINDOW.
 
-The round's largest architecture finding: *a 72-hour pipeline forgets its own
+The main architecture finding: *a 72-hour pipeline forgets its own
 window*. Three mechanisms, all covered here.
 
 **§3 — the composition slice.** The trailing-24h wall-clock gate is retired in
@@ -49,7 +49,7 @@ NOW = datetime(2026, 8, 20, 12, 0, tzinfo=timezone.utc)
 
 @pytest.fixture(autouse=True)
 def _frozen_clock(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Pin ``composition_window``'s clock. Ages ARE the subject of this train —
+    """Pin ``composition_window``'s clock. Ages ARE the subject of this change —
     a test that cannot pin "now" can only assert an age exists, never that the
     right one was rendered."""
     monkeypatch.setattr(cw, "_now", lambda: NOW)
@@ -321,7 +321,7 @@ async def test_legacy_global_meta_stamps_no_head_ages():
 # 2b. H4 — THE EVIDENCE WINDOW: the composition's self-description, computed
 # ---------------------------------------------------------------------------
 #
-# ``planning/PROOF_ROUND_2026-08-25/VERDICT_DRAFT.md``: no composition declared
+# No composition declared
 # its evidence WINDOW (only a single as-of instant), and IR's stamp was
 # self-inconsistent — it claimed "latest 01:40 UTC" against heads the render
 # actually showed produced at 16-17 UTC, because the as-of line's date/time
@@ -437,7 +437,7 @@ async def test_run_renders_the_evidence_window_directive_with_the_true_dates():
 async def test_run_without_a_datable_row_stamps_no_evidence_window():
     """An unparseable-produced_at slice renders no directive and stamps no
     envelope field — absent, never a fabricated "as of now" (mirrors the
-    ``head_ages`` absent-not-zero discipline this train extends)."""
+    ``head_ages`` absent-not-zero discipline this change extends)."""
     llm = _CannedLLM()
     rows = [
         _row(analyst_id="escalation", age_hours=4.0, extra={"produced_at": None}),
@@ -1034,7 +1034,7 @@ def test_composition_window_does_not_import_the_synthesizer():
 
 @pytest.mark.asyncio
 async def test_run_marks_stale_unit_reads_on_the_real_binding_path():
-    """W11 SWEEP-2 — rows carrying their unit's cadence (stamped at read time by
+    """Rows carrying their unit's cadence (stamped at read time by
     ``composition_stale_reads.stamp_unit_cadence``) come out of the compose with
     each head marked and the record's ``stale_unit_reads`` count."""
     from legba.data.analysts.composition_stale_reads import UNIT_CADENCE_ROW_KEY

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W8 TAX-1 — the slice side of the tag spine.
+"""The slice side of the tag spine.
 
 * The legacy equivalence rule (`tags.signal_tag_match_forms`): a bare ``x`` and
   ``src:x`` are one tag; ``demo.axis:x`` is another — proven as the exact
@@ -502,5 +502,5 @@ def test_signal_slice_scope_is_a_leaf_the_slim_registry_can_import():
                                                  (0, "typing"), (1, "tags"),
                                                  (1, "subject_homonyms")}, node.module
         elif isinstance(node, ast.Import):
-            # K-1: `re` for the text arm's term grammar — stdlib, still a leaf.
+            # `re` for the text arm's term grammar — stdlib, still a leaf.
             assert [a.name for a in node.names] in (["logging"], ["re"])

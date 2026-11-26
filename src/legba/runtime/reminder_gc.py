@@ -194,14 +194,14 @@ class ReminderGCResult:
     already_absent: int = 0  # GET-miss: genuinely nothing to delete, not an action
     failed: int = 0
     removed_names: list[tuple[str, str]] = field(default_factory=list)  # (actor_id, name)
-    recently_confirmed_absent: int = 0  # W11-F268: skipped, absent on a check < recheck_after ago
+    recently_confirmed_absent: int = 0  # Skipped, absent on a check < recheck_after ago
 
     @property
     def took_action(self) -> bool:
         return self.removed > 0
 
 
-#: W11-F268 — how long a reminder CONFIRMED absent for an unchanged retired row
+#: How long a reminder CONFIRMED absent for an unchanged retired row
 #: is not asked about again. The sweep runs on every reconcile resync (5 min)
 #: over every retired source/analyst row; those rows are never pruned (each
 #: descriptor edit leaves one behind), so on 2026-11-14 the sweep asked daprd

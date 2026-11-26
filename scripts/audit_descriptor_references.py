@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""K-3 — resolve every string reference in the LIVE registry against the code.
+"""Resolve every string reference in the LIVE registry against the code.
 
 The descriptor drift guard in
 ``tests/data_pkg/test_descriptor_reference_resolution_k3.py`` checks
@@ -17,11 +17,9 @@ opens the substrate pool, reads ``is_head`` rows, and resolves. Exits non-zero
 when any reference on a binding-state descriptor fails to resolve, so it can
 gate a deploy.
 
-This is the check ``planning/CODE_CLEANUP_ANALYSIS_2026-08-02.md`` §5 Phase 3
-specifies as the verification for any rename wave: *"a descriptor-integrity
-check that every impl / prompt_module / *_type string in the database (not just
-the yaml files) resolves to a real module — run against the live registry,
-failing loud."*
+It is the verification for any rename: a descriptor-integrity check that
+every impl / prompt_module / *_type string in the database (not just the yaml
+files) resolves to a real module, run against the live registry, failing loud.
 
 Run INSIDE the runtime container so the resolver imports the DEPLOYED package
 rather than a checkout — resolving against a different tree than production

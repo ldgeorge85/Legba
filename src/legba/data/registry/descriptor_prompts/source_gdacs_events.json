@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.gdacs.events": {
+      "source": "source_gdacs_events.yaml",
+      "state": "draft"
+    }
+  }
+}

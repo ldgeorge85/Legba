@@ -355,7 +355,7 @@ async def test_resolver_applies_current_facts_gate_in_sql():
     await resolver.resolve(["United States"], max_facts=30)
     facts_sql = next(sql for sql, _ in pool.log if "FROM facts" in sql)
     # The temporal-honesty gate (matches substrate_query_port). The fact query
-    # is aliased ``f`` since Wave 5 LEFT JOINs the contention sidecar (``fc``),
+    # is aliased ``f`` because it LEFT JOINs the contention sidecar (``fc``),
     # so the gate columns now carry the ``f.`` qualifier.
     assert "f.superseded_by IS NULL" in facts_sql
     assert "f.valid_until IS NULL OR f.valid_until > now()" in facts_sql
@@ -935,7 +935,7 @@ async def test_resolver_maps_rows_to_grounding_facts():
 
 
 # ---------------------------------------------------------------------------
-# CONTESTED annotation (Wave 5, #101) — the grounding preamble TELLS the LLM a
+# CONTESTED annotation — the grounding preamble TELLS the LLM a
 # value is disputed instead of asserting it as plain ground truth. The sidecar
 # is joined read-only; the provenance gate is untouched (only seed/curated
 # facts are SELECTed — the join merely annotates one of them).

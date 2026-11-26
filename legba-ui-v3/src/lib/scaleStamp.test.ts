@@ -120,7 +120,7 @@ describe('scaleStampTooltip', () => {
 // W11-F9 (X1/D1) — the /findings row shape, off the live registry
 // ---------------------------------------------------------------------------
 
-describe('readScaleStamp on a /findings row (W11-F9)', () => {
+describe('readScaleStamp on a /findings row', () => {
   it('reads the stamp where /findings carries it: row.data.data (the finding envelope)', () => {
     // The live indicator_tracker row: `row.data` is the analyst_outputs.data
     // column, i.e. the whole envelope; the instrument's stamp rides the

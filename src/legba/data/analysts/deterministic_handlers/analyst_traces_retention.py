@@ -53,73 +53,29 @@ RETIREMENT NOTE: this module stays importable/registered in
 sub_handler name (``analyst_traces_retention``) so no descriptor/dispatch
 change is required — it just no longer carries its own purge SQL.
 
-TRACE BULK TO COMPRESSED OBJECTS - DESIGN, NOT BUILT (SEAMS #trace-bulk-cold)
------------------------------------------------------------------------------
-Owner decision 2026-11-15: keep every trace's fingerprint forever and its bulk
-as a compressed file. Deletion is off (above); this is the other half. It was
-measured on live and judged too large to land half-built, so it is designed
-here and declared in docs/SEAMS.md.
-
-Measured on live (read-only, 2026-11-15): 112,403 rows, 1,988 MB with indexes,
-about 1.5 GB of it the six bulk columns (``output_payload`` 687 MB,
-``prompt_rendered`` 493 MB, ``llm_calls`` 190 MB, ``intermediate_steps`` 69 MB,
-``input_payload`` 54 MB, ``tool_calls`` 4 MB; sizes as Postgres already
-compresses them in TOAST). About 2,550 runs a day, so about 45 MB a day, 1.35 GB
-a month, 16 GB a year while nothing is deleted. A sample of 3,000 runs older than
-14 days: 26 KB of JSON per run, 3.6 KB after zstd level 3, 2.3 KB at level 19
-(the archive codec's default is level 3; see ``archive_codec``). That is 9 MB a
-day, about 3.3 GB a year (2.1 GB at level 19) against 16 GB in the table, and
-about 400 MB for the existing 112k rows against about 1.5 GB now.
-
-The shape:
-
-* One object per run: the canonical JSON of the six bulk columns, zstd-compressed,
-  content-addressed by the sha256 of the canonical JSON, in a DEDICATED root
-  (``LEGBA_TRACE_ARCHIVE_ROOT``), never the evidence archive: that archive's
-  retention sweep, tier mover and orphan checks are about fetched bytes and
-  must never see a trace. ``archive_store.EvidenceStore(root).put(body)`` is the
-  writer and ``.get(sha)`` the verified reader (it re-hashes on read).
-* The row keeps its fingerprint and a pointer and nothing bulky:
-  ``receipt_hash``/``prev_receipt_hash`` (the chain; ``prompt_rendered`` feeds
-  ``compute_receipt_hash``, so the object is what lets a chain be re-verified),
-  ``prompt_sha256`` (the full prompt), new nullable ``bulk_sha256``,
-  ``bulk_codec``, ``bulk_bytes``, ``bulk_moved_at``; the six bulk columns become
-  NULL or their empty defaults in the same transaction that records the pointer.
-* A mover (this handler's sibling, daily, behind ``LEGBA_TRACE_COLD``, default
-  off) takes runs older than N days in bounded batches: write the object, read it
-  back and re-hash, then UPDATE the row; a failed read-back leaves the row
-  untouched. A dry-run script reports the rows, bytes and compression ratio for
-  the existing 112k rows before the switch is ever turned on.
-
-Why it is not a contained change (the estimate, one lane, about four days):
-
-* Six readers take the bulk of ANY age and must hydrate from the object:
-  ``registry/lineage_api`` (show-the-work, the reason for the whole decision),
-  ``registry/layers_api``, ``registry/flow_api``, ``data/_frame_content``,
-  ``analysts/optimizer`` and ``deterministic_handlers/_reference_diff``. The
-  ``llm_calls`` readers (``consult_turn_cost``, production gauge metering,
-  runtime telemetry) read short recent windows, so they stay on the row if the
-  mover's age floor is above their window (30 days or more); ``llm_calls`` can
-  stay hot for good (190 MB) to make that unconditional.
-* The REGISTRY image cannot read an object today: it has no ``zstandard`` and no
-  mount of an archive volume (only the runtime image has both). The read path
-  needs the dependency in ``docker/Dockerfile.registry`` and a read-only mount of
-  the trace root, which is a deploy-topology change, not a code change.
-* The trace root is the only copy of that text once the row is emptied, so it
-  needs its own backup line in ``scripts/backup.sh`` and a restore proof.
-* Tests: a byte-identical read-back of a sample, the chain re-verified from
-  objects, every reader on a moved row, and the mover under a crash between the
-  write and the UPDATE.
-
-Until it lands, with deletion off, the table grows about 45 MB a day (see the
-disk ceiling in the data-layers review, section 7 note C).
+COMPACTING OLD TRACE BULK
+-------------------------
+After the retention pass, and only when ``LEGBA_TRACE_COMPRESS`` is on, the
+same run compacts old traces (:mod:`legba.data.trace_bulk_compact`): the
+``prompt_rendered``, ``input_payload`` and ``output_payload`` of up to
+``LEGBA_TRACE_COMPRESS_BUNDLE_SIZE`` runs of one analyst older than
+``LEGBA_TRACE_COMPRESS_AFTER_DAYS`` go into one xz bundle in
+``analyst_trace_bundles``, verified byte for byte before the row's copy is set
+to NULL. Every row keeps its fingerprint (receipt hashes, ``prompt_sha256``,
+refs, ``llm_calls``, steps, status). Readers put the bulk back through
+:func:`legba.data.trace_bulk.hydrate_traces`. The run stops at
+``LEGBA_TRACE_COMPRESS_MAX_SECONDS`` and the next run resumes. With the switch
+off, the finding is exactly the retention pass's; with it on, the
+``compress_*`` counts are added to its data and body.
 """
 
 from __future__ import annotations
 
+import dataclasses
 from typing import Any, Mapping
 
 from ....runtime.analyst_method import AnalystMethodResult
+from ... import trace_bulk_compact
 from . import _retention_sweep
 
 SUB_HANDLER_NAME = "analyst_traces_retention"
@@ -138,8 +94,39 @@ async def handle(
     or ``ttl_days <= 0`` (default) yields a zeroed, no-purge run — identical
     to the pre-consolidation behavior.
     """
-    return await _retention_sweep.handle_policy(
+    result = await _retention_sweep.handle_policy(
         SUB_HANDLER_NAME, inputs, options, deps
+    )
+    settings = trace_bulk_compact.settings_from_env()
+    pool = getattr(deps, "pg_pool", None) if deps is not None else None
+    if not settings.enabled or pool is None:
+        return result
+    stats = await trace_bulk_compact.compact(pool, settings)
+    return _with_compaction(result, stats, settings)
+
+
+def _with_compaction(
+    result: AnalystMethodResult,
+    stats: trace_bulk_compact.CompactStats,
+    settings: trace_bulk_compact.CompactSettings,
+) -> AnalystMethodResult:
+    """The retention finding with the compaction counts added."""
+    finding = result.finding
+    data = dict(finding.data or {})
+    data.update(stats.as_data())
+    data["compress_after_days"] = settings.age_days
+    lines = [f"{k}={v}" for k, v in stats.as_data().items()]
+    lines += [f"compress_failure={f}" for f in stats.failures[:10]]
+    tags = list(finding.tags)
+    if stats.traces:
+        tags.append("traces_compressed")
+    return dataclasses.replace(
+        result,
+        finding=finding.model_copy(update={
+            "data": data,
+            "body": ((finding.body or "") + "\n" + "\n".join(lines))[:65536],
+            "tags": tags,
+        }),
     )
 
 

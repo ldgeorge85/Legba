@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""L-172 meta_findings_synthesizer analyst-kind tests.
+"""meta_findings_synthesizer analyst-kind tests.
 
 Covers:
 
@@ -23,7 +23,7 @@ Covers:
     rows already marked ``data.meta = true`` (so the synthesizer doesn't
     recurse on its own output).
 
-Test doubles are scoped to the LLM boundary only, per the L-172 brief
+Test doubles are scoped to the LLM boundary only, per the brief
 (no mocks for substrate boundaries — that part runs against the same
 migrated_pg fixture used by the rest of the legba.data suite).
 """
@@ -204,7 +204,7 @@ def test_kind_name_matches_taxonomy():
 
 
 def test_build_prompt_module_returns_dspy_module():
-    """Wave B prereq #4 (2026-05-21): build_prompt_module now returns a
+    """build_prompt_module now returns a
     real dspy.Module instance instead of the placeholder dict descriptor.
 
     PROMPT_MODULE_PATH was also migrated from the dotted analysts path
@@ -440,7 +440,7 @@ def test_coerce_finding_evidence_keeps_only_resolvable_identifiers():
 # THE JSON-ENVELOPE LEAK (2026-08-29), on the REAL binding path.
 #
 # The world composition of 2026-08-29 12:00Z
-# (analyst_outputs 823ff9dd-89b9-47f9-9c7e-8c9cc631e31d) published a body that
+# (analyst_outputs the leaked run-89b9-47f9-9c7e-8c9cc631e31d) published a body that
 # WAS its JSON wrapper — `{ "title": "Russia mobilization heightens European
 # escalation risk…", "body": "*As of 29 August 2026;…` — because the model
 # invented an unrequested `body_additional_sections` key and emitted it
@@ -459,23 +459,23 @@ _ENVELOPE_LEAK_FIXTURES = (
     Path(__file__).parent / "fixtures" / "json_envelope_leak"
 )
 
-#: The exact raw completion behind 823ff9dd, byte-for-byte from the live row.
+#: The exact raw completion behind the leaked run, byte-for-byte from the live row.
 _LEAKED_RAW = (
-    _ENVELOPE_LEAK_FIXTURES / "world_assessor_823ff9dd__leaked.txt"
+    _ENVELOPE_LEAK_FIXTURES / "world_assessor_envelope__leaked.txt"
 ).read_text(encoding="utf-8")
 
 #: The 00:00Z run's contract, rebuilt from the healthy row it produced.
 _HEALTHY_RAW = (
-    _ENVELOPE_LEAK_FIXTURES / "world_assessor_6c217274__healthy.json"
+    _ENVELOPE_LEAK_FIXTURES / "world_assessor_envelope__healthy.json"
 ).read_text(encoding="utf-8")
 
 
 def test_live_envelope_leak_coerces_to_markdown_not_the_wrapper():
-    """The exact 823ff9dd completion, replayed through the render path: the body
+    """The exact the leaked run completion, replayed through the render path: the body
     is the model's MARKDOWN and the title is its real headline — never the
     `{ "title": …` wrapper that actually shipped."""
     expected_body = (
-        _ENVELOPE_LEAK_FIXTURES / "world_assessor_823ff9dd__unwrapped.md"
+        _ENVELOPE_LEAK_FIXTURES / "world_assessor_envelope__unwrapped.md"
     ).read_text(encoding="utf-8")
 
     f = _coerce_finding(
@@ -486,7 +486,7 @@ def test_live_envelope_leak_coerces_to_markdown_not_the_wrapper():
 
     assert f.body == expected_body
     assert f.title == (
-        "Russia mobilization heightens European escalation risk amid global hotspots"
+        "Veldmark berth closure heightens regional escalation risk amid port disputes"
     )
     # The exact shipped symptom, now impossible.
     assert not f.body.lstrip().startswith("{")
@@ -602,7 +602,7 @@ async def test_run_method_cites_all_contributing_analysts_in_derived_from():
     """Three first-order findings from three distinct analysts → the
     meta-synth's ``derived_from`` carries all three finding-UUIDs and
     its payload's ``contributing_analysts`` carries all three analyst_ids.
-    This is the L-172 brief's core acceptance criterion."""
+    This is the brief's core acceptance criterion."""
     rows = [
         _finding_row(analyst_id="analyst.alpha", title="alpha first-order finding"),
         _finding_row(analyst_id="analyst.beta", title="beta first-order finding"),

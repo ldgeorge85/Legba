@@ -653,7 +653,7 @@ def test_the_write_survives_even_when_the_handler_IS_cancelled(
     handler cancels its ``asyncio.wait``; it does not reach into the run, which
     finishes and persists regardless. So the write survives a cancellation the
     production stack does not even inflict — which is the property that
-    matters, because the thing that actually lost run 3ae77c64 was not a
+    matters, because the thing that actually lost a live run was not a
     disconnect at all (see the module docstring).
 
     The negative control moved rather than disappeared: the assertion below,

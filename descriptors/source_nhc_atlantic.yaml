@@ -1,0 +1,88 @@
+# Draft SourceDescriptor. Ships DRAFT; the reference host walks it to
+# CONFIGURED (descriptors/LIFECYCLE.md), never active — activation is an
+# admin's call.
+#
+# NOAA National Hurricane Center (NHC) — tropical cyclones in the Atlantic, the Caribbean and the Gulf of America:
+# the tropical weather outlook (issued four times a day) and one item per active tropical cyclone
+# advisory. OFFICIAL (a US national forecast centre).
+#
+# Checked 2026-11-25 (one GET, generic client identity): https://www.nhc.noaa.gov/index-at.xml
+# -> HTTP 200, text/xml, ~2 KB, RSS 2.0 with GeoRSS and an nhc: namespace.
+# With no active storm the channel holds the outlook item (a new guid per
+# issue, the issue time in it) and ONE placeholder item, "There are no tropical
+# cyclones at this time.", whose guid is the bare site address and whose
+# pubDate is set in the future. The placeholder is not a report: the keyword
+# gate drops it, so a quiet basin writes only the outlook. The outlook text is
+# in the item description (CDATA). During a storm the channel adds advisory
+# items; their shape was not seen on the check day.
+#
+# Licence: the NHC page was not read; the terms are NOT STATED, so the
+# conservative class for unreviewed terms (`permissive_feed_unreviewed`) is set
+# until they are read. The channel's own `copyright` element says "none".
+# robots.txt was not read.
+#
+# Cadence: the outlook is issued four times a day and advisories every three
+# during a storm; every three hours.
+
+identity:
+  id: source.nhc.atlantic
+  name: NOAA National Hurricane Center — Atlantic tropical weather
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: owner@local
+  created: "2026-11-25T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: [en]
+  tags: [hazard, weather, cyclone, hurricane, gov, atlantic]
+  source_class: official
+  license_class: permissive_feed_unreviewed   # terms not stated on the page read
+  access_class: public          # free no-auth feed, no separate reuse agreement
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "17 */3 * * *"
+  cooldown_seconds: 300
+  jitter_seconds: 60
+  expect_quiet: true             # off-season the feed carries only the outlook
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://www.nhc.noaa.gov/index-at.xml"
+  keyword_exclude:
+    factory_kind: list
+    item_kind: text
+    raw: ["There are no tropical cyclones at this time"]
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 604800
+  delivery: lossy
+
+subscription_policy: open

@@ -320,7 +320,7 @@ def main() -> int:
     ap.add_argument("--min-anchor-days", type=int, default=None,
                     help="override the days clause (the replay runs 5 and 0)")
     ap.add_argument("--skip-naive", action="store_true",
-                    help="skip the P-6 nested-loop control (it is slow)")
+                    help="skip the nested-loop control (it is slow)")
     args = ap.parse_args()
 
     base = FrameAnchorConfig()

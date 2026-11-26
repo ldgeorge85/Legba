@@ -3,8 +3,7 @@
 --
 -- 0112_retrieval_origin.sql
 --
--- R-3b (search provider layer, planning/SEARCH_PROVIDER_REVIEW_2026-07-28.md
--- §6.1 + §6.5): the RETRIEVAL-ORIGIN axis — where a piece of evidence came
+-- Search provider layer: the RETRIEVAL-ORIGIN axis — where a piece of evidence came
 -- from, as distinct from who published it and what its licence permits.
 --
 -- WHY A NEW CONCEPT AND NOT A NEW `source_class` VALUE
@@ -27,14 +26,14 @@
 -- gameable input (SEO poisoning aimed at exactly the queries an OSINT platform
 -- asks). Two downstream gates need to read it, and both fail badly without it:
 --
---   * CALIBRATION (§6.1). Web-retrieved evidence is cheap and abundant; it will
+--   * CALIBRATION. Web-retrieved evidence is cheap and abundant; it will
 --     dominate volume within weeks of search going live. Untagged, the headline
 --     EXOGENOUS Brier silently degrades into "how well do we predict things
 --     that are easy to search", and no existing test fails. The code-side half
 --     of the fix is the `web_evidence` resolution label placed in the WEAK tier
 --     (calibration_tracking) — `hypotheses.resolved_by` is already `text`
 --     (migration 0038), so that half needs NO DDL and none is written here.
---   * ARCHIVE RETENTION (§6.5). `evidence_archiver`'s licence gate fails OPEN —
+--   * ARCHIVE RETENTION. `evidence_archiver`'s licence gate fails OPEN —
 --     unknown/unset `license_class` ARCHIVES — justified by a one-time LIC-1
 --     audit of ~48 curated sources. That rationale does not survive an
 --     unbounded, unreviewed open-web domain set. The gate now inverts for

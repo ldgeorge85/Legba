@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for the grown flavor-b seed adapters: wikidata_leaders + acled_conflict.
 
-Covers (planning/SEEDING_SKETCH.md "grow (b)"):
+Covers growth seeding:
 
   * both adapters are registered in ``ADAPTERS`` with the right source_type;
   * the Wikidata SPARQL adapter maps SPARQL JSON bindings → LeaderOf facts +
@@ -199,7 +199,7 @@ async def test_wikidata_maps_facts_and_signed_nexuses():
 
 
 # ---------------------------------------------------------------------------
-# S-3: current-holder selection (stale ex-leaders must NOT seed)
+# Current-holder selection (stale ex-leaders must NOT seed)
 # ---------------------------------------------------------------------------
 
 
@@ -220,7 +220,7 @@ def _drc_gov_row(leader: str, start: str, end: str | None = None) -> dict:
 
 @pytest.mark.asyncio
 async def test_wikidata_current_holder_wins_over_former_with_end_date():
-    # DR Congo head of government (S-3): a FORMER PM carrying an end-date +
+    # DR Congo head of government: a FORMER PM carrying an end-date +
     # the incumbent (no end-date). The adapter must emit ONLY the incumbent —
     # for BOTH the country-subject office fact AND the subject=leader LeaderOf
     # fact, so the ex-PM never enters `facts` at all.
@@ -399,7 +399,7 @@ async def test_wikidata_driver_end_to_end_and_idempotent(pg_pool):
     async with pg_pool.acquire() as conn:
         macron = await conn.fetchrow(
             "SELECT source_type, seed_batch_id, valid_from FROM facts "
-            # Phase B item 5: predicate stored canonical (was 'LeaderOf').
+            # Predicate stored canonical (was 'LeaderOf').
             "WHERE lower(subject)='emmanuel macron' AND predicate='leader of' "
             "AND lower(value)='france' AND valid_until IS NULL AND superseded_by IS NULL"
         )
@@ -413,7 +413,7 @@ async def test_wikidata_driver_end_to_end_and_idempotent(pg_pool):
 
         nato = await conn.fetchrow(
             "SELECT polarity, source_type FROM nexuses "
-            # Phase B item 5: rel_type stored canonical (was 'MemberOf').
+            # rel_type stored canonical (was 'MemberOf').
             "WHERE lower(subject)='france' AND rel_type='member of' "
             "AND lower(object)='nato' AND valid_until IS NULL AND superseded_by IS NULL"
         )

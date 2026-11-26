@@ -102,6 +102,20 @@ export function windowForRequest(
   return { hours, end: new Date(nowMs).toISOString(), label: `console ${hours}h` }
 }
 
+/**
+ * The time band's window in short words ("24h", "7d", "70h") — what Consult
+ * shows, read-only, for the window its next turn is sent with. Measured from
+ * the window's own ends, so a brushed window reads as what it is.
+ */
+export function bandWindowWords(startMs: number, endMs: number): string {
+  const ms = endMs - startMs
+  if (!Number.isFinite(ms) || ms <= 0) return `${DEFAULT_WINDOW_HOURS / 24}d`
+  const h = Math.round(ms / 3_600_000)
+  if (h < 48) return `${Math.max(1, h)}h`
+  const d = ms / 86_400_000
+  return Number.isInteger(Math.round(d * 10) / 10) ? `${Math.round(d)}d` : `${h}h`
+}
+
 /** The short words the point line prints for the window a turn will be sent with. */
 export function windowChoiceWords(choice: WindowChoiceId, bandSpanText: string): string {
   if (choice === 'band') return `${bandSpanText} (time band)`
@@ -402,25 +416,7 @@ export function groundingFamily(g: ContractGrounding, family: 'cut' | 'labelled'
 // The choice, remembered per viewer (a convenience: storage may be absent).
 // ---------------------------------------------------------------------------
 
-const WINDOW_KEY = 'legba_consult_window'
 const GROUNDING_KEY = 'legba_consult_grounding'
-
-export function loadWindowChoice(): WindowChoiceId {
-  try {
-    const v = localStorage.getItem(WINDOW_KEY)
-    return isWindowChoiceId(v) ? v : DEFAULT_WINDOW_CHOICE
-  } catch {
-    return DEFAULT_WINDOW_CHOICE
-  }
-}
-
-export function saveWindowChoice(v: WindowChoiceId): void {
-  try {
-    localStorage.setItem(WINDOW_KEY, v)
-  } catch {
-    // the choice still applies for this page; it just is not remembered
-  }
-}
 
 export function loadGroundingMode(): GroundingMode {
   try {

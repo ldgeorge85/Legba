@@ -95,7 +95,7 @@ class RSSConfig(BaseModel):
     def _keyword_terms(cls, v: list[str]) -> list[str]:
         _clean_terms(v)  # raises ValueError on an empty or mis-starred term
         return v
-    # W11-F151 — the pull cursor (runtime/source_cursor.py). The source actor
+    # The pull cursor (runtime/source_cursor.py). The source actor
     # hands this handler ``since - lookback`` so an item that surfaces in the
     # feed after the cursor passed its date is still considered; entries
     # already judged are skipped by the actor's ledger. None = the default
@@ -107,7 +107,7 @@ class RSSConfig(BaseModel):
     # and whose items are posted afterwards (en.kremlin.ru). The persisted
     # ``published_at`` is the feed's published date either way.
     cursor_timestamp: Literal["published", "latest"] = "published"
-    # W11-F265 — the FIRST poll's maximum entry age, in days. A poll with no
+    # The FIRST poll's maximum entry age, in days. A poll with no
     # cursor (a new source, or a new descriptor head) skips entries whose own
     # feed date is older than this; the source actor counts them on the poll
     # row (``age_skipped``) instead of ingesting a feed's whole archive. None
@@ -176,12 +176,12 @@ def strip_inline_data_images(text: str) -> str:
     return _INLINE_DATA_IMAGE_RE.sub(_INLINE_IMAGE_PLACEHOLDER, text)
 
 
-#: W11-F151 — default cursor look-back (hours) for dated feeds; mirrors
+#: Default cursor look-back (hours) for dated feeds; mirrors
 #: ``runtime.source_cursor.DEFAULT_LOOKBACK`` (this module never imports the
 #: runtime). Shared with the json_api handler.
 DEFAULT_LOOKBACK_HOURS = 72.0
 
-#: W11-F265 — default first-poll maximum entry age (days); mirrors
+#: Default first-poll maximum entry age (days); mirrors
 #: ``runtime.source_first_poll_age.DEFAULT_FIRST_POLL_MAX_AGE`` (a test pins
 #: the two together; this module never imports the runtime).
 DEFAULT_FIRST_POLL_MAX_AGE_DAYS = 30.0
@@ -249,13 +249,13 @@ class RSSSourceHandler:
 
     @property
     def cursor_lookback_seconds(self) -> float:
-        """W11-F151 — the look-back this feed's cursor gets (actor reads it)."""
+        """the look-back this feed's cursor gets (actor reads it)."""
         hours = self._config.cursor_lookback_hours
         return (DEFAULT_LOOKBACK_HOURS if hours is None else hours) * 3600.0
 
     @property
     def first_poll_max_entry_age_seconds(self) -> float:
-        """W11-F265 — the first poll's entry-age cap (actor reads it; 0 = none)."""
+        """the first poll's entry-age cap (actor reads it; 0 = none)."""
         days = self._config.first_poll_max_entry_age_days
         if days is None:
             return DEFAULT_FIRST_POLL_MAX_AGE_DAYS * 86400.0
@@ -887,7 +887,7 @@ _HHMM_RE = re.compile(r"\b([01]?\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?\b")
 # (below): English first, then the languages Drupal sites we poll render in.
 # A month word in no table yields None — no date — rather than a guess.
 #
-# W11-F151: English-only cost ICG every dated item that surfaced after a
+# English-only cost ICG every dated item that surfaced after a
 # French or Arabic one — "Jeudi, octobre 29, 2026 - 11:01" read as undated,
 # and an undated entry used to advance the cursor to the poll time, so the
 # English items dated before it were dropped. Both halves are fixed: the
@@ -908,7 +908,7 @@ _MONTHS_EN = {
     "december": 12, "dec": 12,
 }
 
-# W11-F151 — the other languages, as Drupal's core translations render the
+# The other languages, as Drupal's core translations render the
 # long month name ``F`` (Russian in both the nominative and the genitive form;
 # Arabic in the Egyptian/Gulf and the Levantine series). Accent-free and
 # dotless-i spellings are looked up through :func:`_month_number`.

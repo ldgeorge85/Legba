@@ -229,7 +229,7 @@ async def _plan_body(
             "wf_input": asdict(wf_input),
         }
 
-    user = f"Operator question:\n{question}"
+    user = f"Question from the person asking:\n{question}"
     if wf_input.scope_predicate:
         user += f"\n\nScope predicate (apply to queries): {wf_input.scope_predicate}"
     # The operator's pinned records lead the turn: the plan stage decides WHICH
@@ -579,7 +579,7 @@ async def _analyze_body(
                 # Same rows the plan stage saw — the synthesis turn must not
                 # be the one place in the deep run where the pins go missing.
                 "pinned_context": wf_input.pinned_context,
-                # W11-F68b: the synthesis loop renders its own tool results
+                # The synthesis loop renders its own tool results
                 # through the same class-keyed renderer.
                 "display_class": wf_input.display_class,
             }],
@@ -746,7 +746,7 @@ def _evidence_brief(
 ) -> str:
     """Compact the acquired tool results into a prompt-sized brief.
 
-    W11-F68b: each result renders through ``tool_context_renderer`` — the one
+    Each result renders through ``tool_context_renderer`` — the one
     class-keyed renderer every consult context uses — so a reader class never
     puts archived publisher text into the deep-consult context.
     """

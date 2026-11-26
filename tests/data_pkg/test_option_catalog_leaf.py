@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W3-F17 — the registry must be able to VALIDATE ``method.options`` on PUT.
+"""The registry must be able to VALIDATE ``method.options`` on PUT.
 
 **The defect.** Every source PUT response carried a warning, and the registry
 log said ``handler-options catalog unimportable here: dependency 'feedparser'
@@ -126,7 +126,7 @@ def build(kind, options):
             version="a" * 32, kind=kind,
             type_signature=TypeSignature(
                 input_type="legba.x.In", output_type="legba.x.Out"),
-            owner="lewis@local",
+            owner="owner@local",
         ),
         subscription=SubscriptionBlock(),
         method=MethodBlock(
@@ -225,7 +225,7 @@ def test_the_leaf_package_imports_nothing_outside_the_stdlib_and_itself():
                     if top not in stdlib:
                         offenders.append(f"{path.name}: from {node.module}")
                 elif node.level != 1 and not (
-                    # R-1: the type registry is itself a stdlib-only leaf
+                    # The type registry is itself a stdlib-only leaf
                     # (statically guarded in test_type_registry.py); the
                     # declared-options splice is the one module that reads it.
                     path.name == "handler_options_declared.py"

@@ -1,4 +1,4 @@
-# R-C — KEYED stack component: search.brave.paid (kind: search_provider).
+# KEYED stack component: search.brave.paid (kind: search_provider).
 #
 # The PAID rung of the search provider ladder. `search.searxng.local` stays
 # rung 0 (free, self-hosted, $0/query, live); this component is the rung the
@@ -91,7 +91,7 @@ schema_uri: legba/stack/search_provider/1.0.0
 # Placeholder — the registry stamps the content hash at register time.
 version: "0000000000000000"
 state: draft
-owner: lewis@local
+owner: owner@local
 
 config:
   subprovider:

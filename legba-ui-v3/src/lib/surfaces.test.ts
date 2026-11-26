@@ -7,7 +7,7 @@
  *     user missions and the Save/Restore slot → 8 pages, nothing else;
  *   - SEEDED panel regions per page ≤ 2 (was ≤ 3 regions + a fixed Consult
  *     column); the reader may add up to 3; the stage and the chat are frame;
- *   - panel kinds reachable from the reader side ≤ 9 (was: the whole catalog,
+ *   - panel kinds reachable from the reader side ≤ 8 (was: the whole catalog,
  *     33 kinds, one click away from the landing);
  *   - reader navigation rows on the top bar = 4.
  *
@@ -21,6 +21,8 @@ import type { SerializedDockview } from 'dockview-react'
 import { PANEL_REGISTRY } from '@/panel-registry/registry'
 import { catalogKinds } from '@/panel-registry/kindPlan'
 import {
+  BOARD_LIST_VIEW,
+  DAILY_READ_VIEW,
   LANDING_SURFACE,
   MAX_REGIONS,
   OPERATOR_SURFACES,
@@ -49,7 +51,7 @@ import { addressFor, parseAddress } from './address'
 
 /** The ceilings. Lower them in the commit that cuts; never raise them. */
 const NAMED_ARRANGEMENTS_CEILING = 8 // was 17 (+ user missions + the Save/Restore slot)
-const READER_KINDS_CEILING = 9 // was every catalog kind: 33
+const READER_KINDS_CEILING = 8 // was every catalog kind: 33; then 9, until the Wall left the Board
 const READER_NAV_ROWS = 4
 
 describe('RATCHET — named arrangements: 17 → 8', () => {
@@ -114,11 +116,18 @@ describe('RATCHET — at most two seeded panel regions per page; the stage and C
     for (const s of OPERATOR_SURFACES) expect(s.chat, s.id).toBe('collapsed')
   })
 
-  it("the Board's stage is today's read and its panel side leads with the map", () => {
+  it("the Board's stage is the ranked list and its panel side is the map alone", () => {
     const board = findSurface('board')!
-    expect(board.stage).toBe('v4.morning_read')
-    expect(board.regions[0].views[0]).toBe('v4.map')
-    expect(board.regions[0].weight).toBeGreaterThan(board.regions[1].weight)
+    expect(board.stage).toBe(BOARD_LIST_VIEW)
+    expect(board.regions).toEqual([{ id: 'a', views: ['v4.map'], weight: 1 }])
+    // the Wall (counts, the code grid, movers, health) is no longer on the landing
+    expect(pageViews(board)).not.toContain('system.wall')
+    expect(pageViews(board)).not.toContain('slot:coverage')
+  })
+
+  it('the full daily read is still a reader view, one link from the list', () => {
+    expect(readerKinds()).toContain(DAILY_READ_VIEW)
+    expect(homeOf(DAILY_READ_VIEW, 'board')).toEqual({ surface: 'board', place: 'stage', seeded: false })
   })
 })
 
@@ -145,8 +154,10 @@ describe(`RATCHET — panel kinds reachable from the reader side ≤ ${READER_KI
 
 describe('an open goes to the STAGE or its HOME region', () => {
   it("a page's own views stay where the page puts them", () => {
-    expect(homeOf('v4.morning_read', 'board')).toEqual({ surface: 'board', place: 'stage', seeded: true })
-    expect(homeOf('system.wall', 'board')).toEqual({ surface: 'board', place: 'b', seeded: true })
+    expect(homeOf(BOARD_LIST_VIEW, 'board')).toEqual({ surface: 'board', place: 'stage', seeded: true })
+    expect(homeOf('v4.map', 'board')).toEqual({ surface: 'board', place: 'a', seeded: true })
+    // the Wall is an operator's panel now: it opens on the operator side
+    expect(findSurface(homeOf('system.wall', 'board').surface)!.side).toBe('operator')
     expect(homeOf('v4.map', 'subject')).toEqual({ surface: 'subject', place: 'a', seeded: true })
   })
 
@@ -156,7 +167,16 @@ describe('an open goes to the STAGE or its HOME region', () => {
   })
 
   it("a panel-sized reader view swaps into this page's open region (a swap, not a trip)", () => {
-    expect(homeOf('system.source_health', 'board')).toEqual({ surface: 'board', place: 'b', seeded: false })
+    expect(homeOf('view:watch_silences', 'board')).toEqual({ surface: 'board', place: 'a', seeded: false })
+  })
+
+  it('the instrument views (accuracy, source health, the watches) are the operator side\'s', () => {
+    expect(homeOf('system.eval_scorecard', 'ledger')).toEqual({ surface: 'evaluation', place: 'b', seeded: true })
+    expect(homeOf('system.source_health', 'watch')).toEqual({ surface: 'engine', place: 'a', seeded: true })
+    expect(homeOf('system.alerts_watches', 'watch')).toEqual({ surface: 'engine', place: 'b', seeded: true })
+    for (const k of ['system.eval_scorecard', 'system.source_health', 'system.alerts_watches']) {
+      expect(readerKinds(), k).not.toContain(k)
+    }
   })
 
   it('an operator view crosses to the operator section that shows it', () => {
@@ -168,6 +188,19 @@ describe('an open goes to the STAGE or its HOME region', () => {
   it('on the operator side, anything opens on the section you are on', () => {
     expect(homeOf('analyst.runs', 'gate')).toEqual({ surface: 'gate', place: 'a', seeded: false })
     expect(homeOf('subject.page', 'engine')).toEqual({ surface: 'engine', place: 'stage', seeded: false })
+  })
+
+  it('an operator view whose contract names its page opens there, from either side (the Users page: Engine)', async () => {
+    const { USERS_VIEW } = await import('@/auth/adminViews')
+    await import('@/panels/users/register')
+    expect(homeOf(USERS_VIEW, 'board')).toEqual({ surface: 'engine', place: 'stage', seeded: false })
+    expect(homeOf(USERS_VIEW, 'investigate')).toEqual({ surface: 'engine', place: 'stage', seeded: false })
+  })
+
+  it('the subject page has no placeholder region: the map beside the page', () => {
+    const subject = findSurface('subject')!
+    expect(subject.stage).toBe('subject.page')
+    expect(surfaceViews(subject)).not.toContain('slot:subject_forecasts')
   })
 
   it('a kind no section shows opens in Investigate', () => {
@@ -241,18 +274,18 @@ describe('the stored arrangement: versioned, complete, within budget — or disc
 
   it('a layout missing a seeded view is discarded — nothing the default shows stays hidden', () => {
     const l = boardLayout() as unknown as { panels: Record<string, unknown> }
-    delete l.panels['system.wall']
+    delete l.panels['v4.map']
     saveSurfaceLayout('board', 'personal', l as unknown as SerializedDockview)
     expect(readSurfaceLayout('board', 'personal')).toMatchObject({ ok: false, reason: 'missing_view' })
   })
 
   it('a seeded view the READER closed stays closed; the layout is kept', () => {
     const l = boardLayout() as unknown as { panels: Record<string, unknown> }
-    delete l.panels['system.wall']
-    saveSurfaceLayout('board', 'personal', l as unknown as SerializedDockview, ['system.wall'])
+    delete l.panels['v4.map']
+    saveSurfaceLayout('board', 'personal', l as unknown as SerializedDockview, ['v4.map'])
     const r = readSurfaceLayout('board', 'personal')
     expect(r.ok).toBe(true)
-    if (r.ok) expect(r.closed).toEqual(['system.wall'])
+    if (r.ok) expect(r.closed).toEqual(['v4.map'])
   })
 
   it('the previous shell\'s slots (s1-, three regions and a fixed Consult column) are stale by construction', () => {
@@ -282,8 +315,19 @@ describe('the stored arrangement: versioned, complete, within budget — or disc
     const board = findSurface('board')!
     const v = surfaceLayoutVersion(board)
     expect(v).toMatch(/^s2-[0-9a-f]{8}$/)
-    const changed = { ...board, regions: [board.regions[0]] }
+    const changed = { ...board, regions: [{ ...board.regions[0], weight: board.regions[0].weight + 1 }] }
     expect(surfaceLayoutVersion(changed)).not.toBe(v)
+    // the Board before the Wall left it: a different stamp, so its stored
+    // arrangement is discarded once for the new default
+    const previous = {
+      ...board,
+      stage: DAILY_READ_VIEW,
+      regions: [
+        { id: 'a' as const, views: ['v4.map' as const], weight: 3 },
+        { id: 'b' as const, views: ['system.wall' as const, 'slot:coverage' as const], weight: 2 },
+      ],
+    }
+    expect(surfaceLayoutVersion(previous)).not.toBe(v)
   })
 })
 
@@ -295,7 +339,7 @@ describe('a profile with no geography', () => {
       for (const r of s.regions) expect(r.views.length).toBeGreaterThan(0)
     }
     expect(none.find((s) => s.id === 'board')!.regions[0].views).toEqual(['slot:subject_field'])
-    expect(none.find((s) => s.id === 'board')!.stage).toBe('v4.morning_read')
+    expect(none.find((s) => s.id === 'board')!.stage).toBe(BOARD_LIST_VIEW)
   })
 
   it('every slot says what it is and what it waits on', () => {

@@ -5,14 +5,8 @@
  * what changed since I last looked" in one screen. Everything that is not
  * rendering lives here so it is unit-testable without a DOM:
  *
- *   * the SINCE-CURSOR lifecycle — the client owns the cursor (the server is
- *     stateless, P1-6): `localStorage.legba_wall_cursor` holds the
- *     `server_now` of the last successful look; on open the panel fetches
- *     `/v3/since?cursor=<stored>`; the response's `server_now` is stored back
- *     only when the movers were actually shown (`markWallRead`, X1/D1) — the
- *     anchor is fixed once per page load (`wallVisitForPage`).
- *     First-ever open = a 24h default lookback. A cursor older than the
- *     server's 90d hard bound is clamped (the route 400s beyond it).
+ *   * the since read's path — the cursor itself is the page load's one
+ *     "since" (`lib/morningReadBands::pageVisit`), shared with every region;
  *   * movers grouping/sorting — band changes first (worst direction first),
  *     then the superseded-reversal count, then situation lifecycle edges.
  *   * the health-corner rollup over the System Status routes' rows.
@@ -123,156 +117,14 @@ export interface SinceResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Cursor lifecycle
+// The since read
 // ---------------------------------------------------------------------------
-
-/** The one localStorage key the Wall's since-cursor lives under. */
-export const WALL_CURSOR_KEY = 'legba_wall_cursor'
-
-/** First-ever open: how far back the default cursor looks. */
-export const DEFAULT_LOOKBACK_HOURS = 24
-
-/** Mirror of `since_api.MAX_LOOKBACK_DAYS` — the route 400s beyond it, so a
- *  very stale stored cursor is clamped just inside the bound. */
-export const MAX_LOOKBACK_DAYS = 90
-
-/** Safety margin inside the 90d bound so clock skew can't tip a clamped
- *  cursor over the server's rejection line. */
-const CLAMP_MARGIN_MS = 5 * 60_000
-
-export interface WallCursor {
-  /** The ISO cursor to send as `?cursor=`. */
-  cursor: string
-  /** True when no stored cursor existed (first-ever open → 24h default). */
-  firstVisit: boolean
-  /** True when the stored cursor was older than the server's 90d bound and
-   *  was clamped forward (the lookback shown is honest-but-capped). */
-  clamped: boolean
-}
-
-/**
- * Resolve the cursor for this visit from the stored value (or its absence).
- * Pure: `nowMs` is injectable for deterministic tests.
- *
- *  * no/invalid stored value → `now - 24h`, `firstVisit: true`.
- *  * stored in the future (clock skew) → clamped back to `now`.
- *  * stored beyond the 90d server bound → clamped to `now - 90d + margin`.
- */
-export function resolveWallCursor(
-  stored: string | null | undefined,
-  nowMs: number = Date.now(),
-): WallCursor {
-  const parsed = stored ? Date.parse(stored) : NaN
-  if (!Number.isFinite(parsed)) {
-    return {
-      cursor: new Date(nowMs - DEFAULT_LOOKBACK_HOURS * 3_600_000).toISOString(),
-      firstVisit: true,
-      clamped: false,
-    }
-  }
-  const oldest = nowMs - MAX_LOOKBACK_DAYS * 86_400_000 + CLAMP_MARGIN_MS
-  if (parsed < oldest) {
-    return { cursor: new Date(oldest).toISOString(), firstVisit: false, clamped: true }
-  }
-  if (parsed > nowMs) {
-    return { cursor: new Date(nowMs).toISOString(), firstVisit: false, clamped: true }
-  }
-  return { cursor: new Date(parsed).toISOString(), firstVisit: false, clamped: false }
-}
-
-/** Read the stored cursor (null when absent / storage unavailable). */
-export function loadWallCursor(storage: Pick<Storage, 'getItem'> | null = defaultStorage()): string | null {
-  try {
-    return storage?.getItem(WALL_CURSOR_KEY) ?? null
-  } catch {
-    return null
-  }
-}
-
-/**
- * Advance the stored cursor to `serverNow` (the response's capture time —
- * storing it after a successful display is what makes the NEXT visit a
- * "since last visit" diff). Never moves the cursor backwards: a stale poll
- * response cannot rewind a fresher stored value. Best-effort on storage
- * failure (private mode / quota).
- */
-export function storeWallCursor(
-  serverNow: string,
-  storage: Pick<Storage, 'getItem' | 'setItem'> | null = defaultStorage(),
-): void {
-  const next = Date.parse(serverNow)
-  if (!Number.isFinite(next)) return
-  try {
-    const prevRaw = storage?.getItem(WALL_CURSOR_KEY) ?? null
-    const prev = prevRaw ? Date.parse(prevRaw) : NaN
-    if (Number.isFinite(prev) && prev >= next) return
-    storage?.setItem(WALL_CURSOR_KEY, serverNow)
-  } catch {
-    // storage unavailable — the cursor just won't persist this visit.
-  }
-}
-
-function defaultStorage(): Storage | null {
-  try {
-    return typeof localStorage === 'undefined' ? null : localStorage
-  } catch {
-    return null
-  }
-}
-
-// ---------------------------------------------------------------------------
-// X1/D1 — one anchor per page load; the cursor moves only on a real read
-// ---------------------------------------------------------------------------
-
-/**
- * Review D (2026-10-08): the Wall's Overview said "MOVERS SINCE LAST VISIT ·
- * band changes 31", and four seconds later its Movers tab said "nothing
- * changed since <the moment the page loaded>". Two faults stacked:
- *
- *   1. every `/v3/since` RESPONSE advanced the stored cursor — including the
- *      one fetched by a tile mounted in a background tab nobody had looked
- *      at (Dockview keeps inactive tab content mounted) — so the page's own
- *      load stamped "read";
- *   2. each mount re-resolved the anchor from storage, so the Movers tab,
- *      mounting after the Overview had stamped, diffed from that stamp.
- *
- * The anchor is now resolved ONCE per page load and shared by every Wall
- * surface (the Overview quadrant, the Movers tab, the standalone tile) — one
- * `?cursor=`, one query key, one answer. The stored cursor advances only
- * through {@link markWallRead}, which the movers list calls when it has
- * actually been shown to the reader (its tile visible, the document visible).
- */
-let pageVisit: WallCursor | null = null
-
-/** This page load's anchor — resolved on first use, then fixed. */
-export function wallVisitForPage(
-  storage: Pick<Storage, 'getItem'> | null = defaultStorage(),
-  nowMs: number = Date.now(),
-): WallCursor {
-  if (!pageVisit) pageVisit = resolveWallCursor(loadWallCursor(storage), nowMs)
-  return pageVisit
-}
-
-/** Tests only: forget this page load's anchor. */
-export function __resetWallVisit(): void {
-  pageVisit = null
-}
-
-/**
- * Record that the reader has SEEN the movers as of `serverNow` — the next
- * page load diffs from here. Refused (returns false) when the surface was
- * not on screen: a background tile's fetch is not a read. Never moves the
- * stored cursor backwards ({@link storeWallCursor}).
- */
-export function markWallRead(
-  serverNow: string | null | undefined,
-  seen: { tileVisible: boolean; documentVisible: boolean },
-  storage: Pick<Storage, 'getItem' | 'setItem'> | null = defaultStorage(),
-): boolean {
-  if (!serverNow || !seen.tileVisible || !seen.documentVisible) return false
-  storeWallCursor(serverNow, storage)
-  return true
-}
+//
+// The Wall keeps no cursor of its own. Its movers read the one "since" of the
+// page load (`lib/morningReadBands::pageVisit`) — the same cursor the Board
+// list, the rail and the map send — so no two regions can state two different
+// since-times. (It used to keep `legba_wall_cursor` in the browser and say
+// "first visit — last 24h" beside a Board that said "since 06:00Z".)
 
 /** The `/v3/since` request path for a cursor (relative to the api client's
  *  `/api/v1` base). */

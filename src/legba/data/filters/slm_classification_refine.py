@@ -24,7 +24,7 @@ LLM-bearing
 -----------
 
 Backed by the L-120 ``legba.data.stack.llm`` provider stack. The default
-configuration targets gpt-oss-120b / vLLM (per the L-202 brief). The
+configuration targets the core model / vLLM (per the L-202 brief). The
 provider is injected via the :class:`SLMPort` structural-typing port so
 this module never imports a concrete provider class — the runtime wires
 the live ``VLLMProviderHandler`` in at activation. Tests inject a

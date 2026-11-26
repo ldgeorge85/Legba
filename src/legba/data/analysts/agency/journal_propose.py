@@ -1,17 +1,16 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The ``journal_propose`` pack — the journal's PROPOSE-AND-GATE write surface
-(planning/JOURNAL_ASSESSOR_PLAN.md §7 / §12 Wave 4).
+"""The ``journal_propose`` pack — the journal's PROPOSE-AND-GATE write surface.
 
-THE GOVERNING PRINCIPLE (§7.1). The journal writes EXACTLY TWO things directly:
+THE GOVERNING PRINCIPLE. The journal writes EXACTLY TWO things directly:
 entries + consolidations (the ``journal`` kind, the off-chain table). EVERYTHING
 else it wants to affect, it PROPOSES — into ONE human-gated queue
 (``journal_proposals``), NEVER to a live table. There is no third direct-write
 tool. A human always sits between the journal's voice and any change to the
-system: the journal can SUGGEST, never CAUSE (§7.5). This structurally kills the
+system: the journal can SUGGEST, never CAUSE. This structurally kills the
 self-confirmation loop (the adversarial review's self-confirmed-forecast class).
 
-WHY A SEPARATE PACK (not widening ``journal_read``): the §7.6 grant invariant.
+WHY A SEPARATE PACK (not widening ``journal_read``): the grant invariant.
 The journal must be granted ONLY read packs + this proposals pack — a pack whose
 tools write EXCLUSIVELY to ``journal_proposals`` and call NO ``write_fact`` /
 ``write_nexus`` / ``write_hypothesis``. That keeps the analyst structurally NOT
@@ -20,7 +19,7 @@ to carry a write tool would couple the read grant to a write surface and break
 the invariant.
 
 WHY NOT REUSE ``propose_facts``: that pack does the OPPOSITE of what is needed
-here (§7.2). ``propose_fact_tool`` calls ``write_fact(source_type='proposed')``
+here. ``propose_fact_tool`` calls ``write_fact(source_type='proposed')``
 and INSERTs a LIVE ``facts`` row with NO human in the loop; ``request_source`` /
 ``open_question`` write LIVE ``hypotheses`` rows the same way. There is NO
 review-queue indirection anywhere in that tree to reuse. So this pack is
@@ -37,9 +36,9 @@ THE BOUNDED TOOLSET (each writes ONLY a ``journal_proposals`` row):
                                 looks halved"). On accept → ``PUT /stack/{id}`` /
                                 ``PUT /descriptors/{family}/{id}``.
   * ``propose_self_revision`` — a diff to the journal's OWN instruction prompt.
-                                THE HIGHEST-SCRUTINY CLASS (§7.5): a self-
+                                THE HIGHEST-SCRUTINY CLASS: a self-
                                 modification loop on the most PERSUASIVE surface
-                                in the system. Ships LAST within Wave 4, after the
+                                in the system. Listed LAST, after the
                                 other two prove the queue. On accept → the
                                 optimizer's champion-promotion path
                                 (``resolve_promoted_system_prompt``).
@@ -84,9 +83,9 @@ logger = logging.getLogger(__name__)
 
 JOURNAL_PROPOSE_PACK_ID = "journal_propose"
 
-# Wave 4: the bounded propose toolset. Keep this tuple == the descriptor's
+# The bounded propose toolset. Keep this tuple == the descriptor's
 # `tools` names == the handlers registered below (the per-pack drift guard
-# asserts it). ORDER mirrors the §7.5 build order: correction + change prove the
+# asserts it). ORDER: correction + change prove the
 # queue + accept/reject path FIRST; self_revision (the highest-scrutiny class)
 # ships LAST and is listed last.
 JOURNAL_PROPOSE_TOOLS = (
@@ -297,7 +296,7 @@ async def _propose(
     except ProposalApplyError:
         archive_reason = "unapplyable_shape"
 
-    # The no-new-fact rule (§ H10.3) — a correction's own no-op for anything
+    # The no-new-fact rule — a correction's own no-op for anything
     # other than supersede_fact, so this only ever fires for a shape-valid
     # supersede_fact diff.
     if archive_reason is None and proposal_kind == "correction":
@@ -360,7 +359,7 @@ async def _propose(
 # ---------------------------------------------------------------------------
 # The three propose tools. Each is a thin wrapper over the shared path — the
 # proposal_kind is selected by the tool name, NOT a free arg, so the agent cannot
-# mislabel a self_revision as a correction to dodge the §7.5 protected-section
+# mislabel a self_revision as a correction to dodge the protected-section
 # gate (the gate runs on the stored kind at accept time).
 # ---------------------------------------------------------------------------
 
@@ -413,19 +412,19 @@ async def propose_self_revision_tool(
     call: ToolCall, pack: ActionPack, ctx: ToolContext
 ) -> ToolResult:
     """Propose a diff to the journal's OWN instruction/system prompt — THE
-    HIGHEST-SCRUTINY CLASS (§7.5). A self-modification loop on the most PERSUASIVE
+    HIGHEST-SCRUTINY CLASS. A self-modification loop on the most PERSUASIVE
     surface in the system, so a human ALWAYS gates it (never a direct self-edit).
 
     ``args``:
       * ``rationale`` (required) — the in-voice "why I want to change my own
         instructions" (the operator reviews this ALONGSIDE objective evidence —
         the recent critic/calibration of the journal's own entries — not in
-        isolation; see the accept API §7.5(a)).
+        isolation; see the accept API).
       * ``diff`` (required) — the prompt diff, e.g.
         ``{"op": "revise_prompt", "target_analyst_id": "journal_assessor",
         "new_prompt_text": "...", "summary": "..."}``. A diff that touches the
         prompt's grounding / honesty / anti-self-confirmation clauses is a
-        PROTECTED SECTION and is AUTO-REJECTED at accept time (§7.5(b)) — the
+        PROTECTED SECTION and is AUTO-REJECTED at accept time — the
         gate runs server-side on the stored diff, not here.
       * ``cited_substrate_refs`` (optional) — the warrant.
 

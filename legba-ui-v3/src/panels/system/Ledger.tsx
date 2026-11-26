@@ -1,11 +1,11 @@
 /**
- * Ledger — the forecast ledger (ST0-C), the Story's trust object.
+ * Ledger — the forecast ledger, the trust object.
  *
  * Every exogenous forecast question sorted by what resolves next, with each
- * arm's probability (operator · tower · consult · frontier · Clef), the
+ * arm's probability (operator · tower · consult · frontier · decision model), the
  * sealed/open state, the due date and the resolution. An arm with no number
  * reads `absent` with its reason on hover — never a blank; `—` is "not
- * stated". The Brier column is a placeholder until ST1 scores resolutions:
+ * stated". The Brier column is a placeholder until resolutions are scored:
  * the page is never more confident than the ledger.
  *
  * Reads `GET /api/v1/v3/ledger/forecasts`; mounted as the Forecasts view of

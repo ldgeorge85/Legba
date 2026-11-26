@@ -317,7 +317,7 @@ class GDELTFilesConfig(BaseModel):
         gt=0.0,
         le=240.0,
         description=(
-            "W11-F169 — OPTIONAL override of the SOURCE ACTOR's wall-clock "
+            "OPTIONAL override of the SOURCE ACTOR's wall-clock "
             "budget for one pull of this source (source_actor."
             "resolve_poll_bounds: descriptor config > handler > the generic "
             "30 s). Declared here because the schema is extra='forbid' and "
@@ -563,9 +563,8 @@ def _parse_sqldate(sqldate: str | None) -> datetime | None:
         return None
 
 
-# 2026-08-29 DQ sweep §3 (finding: GDELT staleness is a deterministic
-# year-off-by-one) — GDELT's own upstream events export sometimes carries
-# SQLDATE with the YEAR wrong by exactly one, month-day intact. Measured live:
+# GDELT staleness is a deterministic year-off-by-one: GDELT's own upstream
+# events export sometimes carries SQLDATE with the YEAR wrong by exactly one, month-day intact. Measured live:
 # 372/372 of the affected 30-day sample had `payload->>'published_at'`'s year
 # one less than the ingest year with month-day IDENTICAL to the fetch date.
 # Confirmed upstream (not our parse) by inspecting the untouched
@@ -592,8 +591,7 @@ def _parse_sqldate(sqldate: str | None) -> datetime | None:
 #      ``_NEWEST_ENTRY_MAX_FUTURE_SKEW``.
 #
 # Ingest-forward only: this does not rewrite rows already in the substrate
-# (372 of them, at last measurement) — that is a separate operator decision
-# (see planning/CAMPAIGN_2026-08-29/INGESTION_SMALLS_REPORT.md).
+# (372 of them, at last measurement) — that is a separate cleanup.
 _SQLDATE_YEAR_OFFSET_MAX_FUTURE_SKEW = timedelta(hours=26)
 
 
@@ -692,7 +690,7 @@ def row_to_signal(row: dict[str, str], *, ctx: SourceContext, export_url: str) -
     export carries that the BigQuery handler's narrower ``EVENT_COLUMNS``
     selection doesn't (e.g. Actor1Geo_* / Actor2Geo_* alongside ActionGeo_*).
     """
-    # 2026-08-29 DQ sweep §3 — correct GDELT's deterministic upstream
+    # Correct GDELT's deterministic upstream
     # SQLDATE year-off-by-one BEFORE it reaches the payload (see
     # ``_correct_sqldate_year_offset``'s docstring for the diagnosis and the
     # guard signature). ``raw_body`` below stays the fully untouched original
@@ -776,7 +774,7 @@ def row_to_signal(row: dict[str, str], *, ctx: SourceContext, export_url: str) -
             "sql_date": row.get("SQLDATE"),  # untouched upstream original, always
             "export_file_url": export_url,
             "published_at": published_at.isoformat() if published_at else None,
-            # 2026-08-29 DQ sweep §3 provenance marker — True only when the
+            # Provenance marker — True only when the
             # guarded year-off-by-one correction above actually fired for
             # this row (the raw, uncorrected value is always still available
             # above as `sql_date`).

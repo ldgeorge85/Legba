@@ -137,8 +137,8 @@ class OptimizerWorkflowInput:
     training_set: list[dict[str, Any]] = field(default_factory=list)
     training_set_ref: TrainingSetRef | None = None
 
-    # GEPA hyperparameters per L-105 §4.  Defaults are the per-2026-05-16
-    # ratified values; descriptors override via ``eval.optimizer`` dict.
+    # GEPA hyperparameters. Defaults below;
+    # descriptors override via ``eval.optimizer`` dict.
     max_generations: int = 5
     reflection_minibatch_size: int = 3
     auto: str = "light"  # retained for back-compat; superseded by max_metric_calls
@@ -161,7 +161,7 @@ class OptimizerWorkflowInput:
     min_traces_required: int = 50
     min_critiques_required: int = 0
 
-    # ── P4-T6 — the SCOPED, MEASURED GEPA return (faithfulness fitness) ──────────
+    # ── The SCOPED, MEASURED GEPA return (faithfulness fitness) ──────────
     # ALL new fields carry defaults so the dataclass round-trips unchanged: an
     # in-flight ``country_optimizer`` input (or any pre-P4-T6 serialized dict fed
     # to ``OptimizerWorkflowInput(**wf_input)`` by workflow.py) deserializes with
@@ -171,7 +171,7 @@ class OptimizerWorkflowInput:
     #
     #   * ``fitness_metric``          — ``critique_proxy`` (default; the cheap
     #     deterministic SEARCH heuristic that is the REPORTED fitness today) or
-    #     ``faithfulness`` (P4-T6: the paired before/after faithfulness MEASURE
+    # ``faithfulness`` (the paired before/after faithfulness MEASURE
     #     stage). Only ``unit_optimizer`` opts into ``faithfulness``.
     #   * ``min_paired`` / ``min_promote_delta`` / ``faithfulness_valset_max`` —
     #     the paired-eval + promotion gates (mirrored onto data.eval so the LIVE
@@ -437,7 +437,7 @@ async def validate_training_set_activity(
     expensive GEPA loop so an under-trained analyst short-circuits
     cleanly rather than wasting LLM budget.
 
-    P4-T6: resolve the OPTIMIZER descriptor's eval.optimizer thresholds FIRST
+    Resolve the OPTIMIZER descriptor's eval.optimizer thresholds FIRST
     (each Dapr activity gets its own serialized input copy, so this must run here
     too, not only in the compile) — else a scoped unit optimizer is gated on the
     monolith's default min_traces_required and short-circuits before the MEASURE
@@ -470,7 +470,7 @@ async def validate_training_set_activity(
 
 
 # ---------------------------------------------------------------------------
-# P4-T6 — the MEASURED fitness (paired before/after FAITHFULNESS) + gates
+# The MEASURED fitness (paired before/after FAITHFULNESS) + gates
 # ---------------------------------------------------------------------------
 #
 # The "honest top": GEPA's SEARCH stage keeps its cheap
@@ -1232,7 +1232,7 @@ async def _candidate_faithfulness_for_finding(
             data = None
     citations = data.get("citations") if isinstance(data, Mapping) else None
 
-    # PREFERRED: the structured [N]->signal bridge (P0-T1) in cited order.
+    # PREFERRED: the structured [N]->signal bridge in cited order.
     ordered: list[tuple[int, str]] = []
     if citations:
         for c in citations:
@@ -1274,7 +1274,6 @@ async def _candidate_faithfulness_for_finding(
     resp = await synth.chat_complete(
         [{"role": "user", "content": user_prompt}],
         system=candidate_text,
-        max_tokens=1536,
         temperature=HOUSE_TEMPERATURE,
     )
     raw = getattr(resp, "content", "") or ""
@@ -1375,7 +1374,7 @@ async def _run_gepa_loop(
          it exists so unit tests can exercise the algorithm wiring
          without a real LLM provider.
 
-    P4-T6 — when the OPTIMIZER descriptor's ``eval.optimizer.fitness_metric`` is
+    When the OPTIMIZER descriptor's ``eval.optimizer.fitness_metric`` is
     ``faithfulness`` (resolved into ``workflow_input`` here), a SEPARATE MEASURE
     stage overrides the REPORTED ``eval_score`` / ``eval_score_delta`` with a
     REAL paired before/after faithfulness delta (:func:`_paired_faithfulness_eval`);

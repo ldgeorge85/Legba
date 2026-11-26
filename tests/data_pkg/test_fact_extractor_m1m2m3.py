@@ -3,7 +3,7 @@
 """Pure (no-DB) unit tests for the DQ M1/M2/M3 fact-write gates (2026-07-06 audit).
 
 The live audit found the ingestion relation-extractor still laundering three
-classes the earlier D6/P5 gates were not scoped for:
+classes the earlier gates were not scoped for:
 
   * M1 — semantically absurd / relation-direction-inverted membership
     ("NATO member of Turkiye" inverted; "Russia member of <person>" bad object);

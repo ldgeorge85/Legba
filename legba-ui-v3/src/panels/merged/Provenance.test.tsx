@@ -65,7 +65,7 @@ describe('ProvenanceMerged', () => {
     expect(screen.queryByTestId('why-findings-search')).not.toBeInTheDocument()
   })
 
-  it('switching to Fan-out mounts the original Fan-out Explorer (UI-B1/merges)', async () => {
+  it('switching to Fan-out mounts the original Fan-out Explorer', async () => {
     render(wrap(<ProvenanceMerged registration={reg()} scope={{}} mode="personal" />))
     await screen.findByTestId('why-findings-search')
     fireEvent.click(screen.getByTestId('provenance-tab-fanout'))

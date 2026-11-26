@@ -176,18 +176,45 @@ async def _frames(conn: Any, target: str) -> list[dict[str, Any]]:
 async def desk(pool):
     """A target id no other row in the shared substrate can carry.
 
-    Nothing is deleted on teardown: ``hypotheses`` and the append-only
-    ``situation_events`` both reference ``situations``, and the tracker test file
-    next door records what an unscoped wipe of this table did to the 08-06
-    nightly. The frames are CLOSED instead, which is what every open-frame reader
-    in the tower filters on.
+    Teardown runs even when the test fails and removes everything the test made:
+    its supersession links, its findings (other tests derive rosters from the
+    desk findings in this table, so a leftover one changes their results), its
+    hypotheses, and every frame that has no trajectory ledger rows. A frame WITH
+    ledger rows cannot be deleted - ``situation_events`` is append-only and
+    refuses DELETE - so that one is CLOSED instead, which is what every
+    open-frame reader filters on, and it carries no findings.
     """
     target = f"country_split_{uuid4().hex[:10]}"
-    yield pool, target
-    async with pool.acquire() as conn:
-        await conn.execute(
-            "UPDATE situations SET status = 'closed' WHERE target_id = $1", target,
-        )
+    try:
+        yield pool, target
+    finally:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "DELETE FROM finding_supersessions WHERE superseded_finding_id IN "
+                    "(SELECT id FROM analyst_outputs WHERE target_id = $1) "
+                    "OR superseding_finding_id IN "
+                    "(SELECT id FROM analyst_outputs WHERE target_id = $1)",
+                    target,
+                )
+                await conn.execute(
+                    "DELETE FROM analyst_outputs WHERE target_id = $1", target,
+                )
+                await conn.execute(
+                    "DELETE FROM hypotheses WHERE target_id = $1 OR situation_id IN "
+                    "(SELECT id FROM situations WHERE target_id = $1 AND NOT EXISTS "
+                    "(SELECT 1 FROM situation_events e WHERE e.situation_id = situations.id))",
+                    target,
+                )
+                await conn.execute(
+                    "DELETE FROM situations WHERE target_id = $1 AND NOT EXISTS "
+                    "(SELECT 1 FROM situation_events e WHERE e.situation_id = situations.id)",
+                    target,
+                )
+                await conn.execute(
+                    "UPDATE situations SET status = 'closed' WHERE target_id = $1",
+                    target,
+                )
 
 
 # ---------------------------------------------------------------------------

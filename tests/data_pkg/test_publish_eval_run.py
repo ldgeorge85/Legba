@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""E-3 — ``scripts/publish_eval_run.py``, the owner's loader for one evaluation run.
+"""``scripts/publish_eval_run.py``, the owner's loader for one evaluation run.
 
 Small INVENTED fixtures, written here by hand, in the three report shapes the
 loader reads (run 1's ``legba.bakeoff.report/1``, run 1b's

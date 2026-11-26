@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""What a SUBSCRIBED source's received events become (lane I-4).
+"""What a SUBSCRIBED source's received events become.
 
 :class:`StreamCore` is a :class:`~legba.runtime.source_actor.SourceCore`, so a
 streamed record goes through EXACTLY the code a polled one does: the keyword

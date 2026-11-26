@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""F-3 — the desk's BOUNDED QUESTION as an explicit descriptor field.
+"""The desk's BOUNDED QUESTION as an explicit descriptor field.
 
-``planning/DEMOTION_D1_SPEC_2026-09-04.md`` §7 F-3: the assembly's block
-header is ruled to be "the desk's bounded question"
-(``data.data.assembly.blocks[].question``, §1.2) — and no descriptor field
+The assembly's block
+header is "the desk's bounded question"
+(``data.data.assembly.blocks[].question``) — and no descriptor field
 held one. The question lived only, implicitly, inside each bounded unit's own
 ``method.system_prompt``, under its own "BOUNDED QUESTION —" heading. This
-train adds ``method.bounded_question``: one interrogative sentence,
+change adds ``method.bounded_question``: one interrogative sentence,
 quote-derived from that prose, authored on each of the nine bounded units so
 a future assembler can render the block header without re-parsing prose.
 
@@ -15,7 +15,7 @@ The three composition tiers named by the assembly's own tier enum
 (§1.2, ``data.data.assembly.tier: country | world | thematic`` —
 ``country_composition``, ``world_assessor``, ``escalation_composition``)
 deliberately declare NO value: each synthesizes across several bounded
-questions and does not answer one itself. That is not a gap this train left
+questions and does not answer one itself. That is not a gap this change left
 behind — the spec's own ruling for F-3 is that the (separate, later) D-2
 assembler falls back to the desk display name (``identity.name``) and stamps
 ``question_source: "fallback_desk_name"`` when the field is absent. D-2
@@ -56,7 +56,7 @@ UNITS: tuple[str, ...] = (
 
 #: The three composition tiers — the assembly's own tier enum, §1.2.
 #: NOT ``region_composition``: that analyst is not one of the three named
-#: tiers and is slated for retirement under D-5/F-8, outside this train.
+#: tiers and is slated for retirement, outside this change.
 COMPOSITION_TIERS: tuple[str, ...] = (
     "country_composition",
     "world_assessor",
@@ -208,7 +208,7 @@ def test_bounded_question_validates_as_none_on_composition_tiers(tier: str) -> N
 def test_the_honest_fallback_per_d2s_contract(tier: str) -> None:
     """D-2's ruled fallback (§7 F-3): when ``bounded_question`` is absent,
     render the desk display name instead. D-2 (the renderer) is a separate,
-    later train; this proves the descriptor-side half of the contract is
+    later change; this proves the descriptor-side half of the contract is
     satisfiable — the exact expression a renderer would use resolves to a
     real, non-empty string rather than blanking the block header."""
     descriptor = _descriptor(tier)

@@ -1,6 +1,6 @@
 """THE REGION ROLLUP — the region tier stops writing and starts adding up.
 
-D-5, the CASCADE (planning/DEMOTION_D1_SPEC_2026-09-04.md §4). Under the
+The CASCADE. Under the
 assembly regime ``region_composition`` retires its GENERATIVE path: no LLM, no
 prompt, no faithfulness judge. What it emits instead is an arithmetic statement
 about its member country assemblies — ``region_rollup.v1``.

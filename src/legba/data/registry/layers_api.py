@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Program 6 L2 — the DIVERGENCE MAP read surface (7b-v).
+"""The DIVERGENCE MAP read surface.
 
 ``GET /api/v1/v3/layers/divergence`` — the newest ``layer_divergence`` receipt,
 desk by desk, plus the newest FIRED finding each desk carries.
@@ -60,6 +60,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 
 from ..layers._vocab import LAYER_VOCAB
+from ..trace_bulk import hydrate_traces, pointer_columns_sql, present_sql
 from .api import RegistryAPIDeps, require_bearer
 
 logger = logging.getLogger(__name__)
@@ -120,12 +121,14 @@ _MAX_FIRED_DAYS: int = 365
 
 #: The newest receipt. ONE row carries every desk the run resolved, so this is
 #: the whole map. Rides ``analyst_traces_analyst_idx (analyst_id,
-#: run_started_at DESC)``.
-_NEWEST_RECEIPT_SQL = """
-SELECT run_id, run_started_at, output_payload
+#: run_started_at DESC)``. A receipt older than the trace compaction age has its
+#: output in a bundle; ``present_sql`` still finds it and ``hydrate_traces``
+#: puts the output back.
+_NEWEST_RECEIPT_SQL = f"""
+SELECT run_id, run_started_at, output_payload, {pointer_columns_sql()}
   FROM analyst_traces
  WHERE analyst_id = $1
-   AND output_payload IS NOT NULL
+   AND {present_sql("output_payload")}
  ORDER BY run_started_at DESC
  LIMIT 1
 """
@@ -574,7 +577,8 @@ def build_layers_router(deps: RegistryAPIDeps) -> APIRouter:
         stamp = datetime.now(timezone.utc)
         try:
             async with deps_.descriptor_registry.pg.acquire() as conn:
-                receipt = await conn.fetchrow(_NEWEST_RECEIPT_SQL, ANALYST_ID)
+                row = await conn.fetchrow(_NEWEST_RECEIPT_SQL, ANALYST_ID)
+                receipt = (await hydrate_traces(conn, [row]))[0] if row is not None else None
                 fired_rows = await conn.fetch(
                     _FIRED_PER_DESK_SQL,
                     ANALYST_ID, fired_days, _MAX_FINDING_ROWS,

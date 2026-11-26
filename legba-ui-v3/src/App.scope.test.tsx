@@ -146,7 +146,7 @@ describe('Alt+Shift+← / → walk the SCOPE trail', () => {
 })
 
 /**
- * The cross-framing drill, opened by a claim chip (wave P lane B; UI-B1/shell).
+ * The cross-framing drill, opened by a claim chip.
  *
  * The `legba:open-cross-framing` event and its `window` park are retired. A
  * claim chip drives an `open_panel` carrying the claim through the ONE

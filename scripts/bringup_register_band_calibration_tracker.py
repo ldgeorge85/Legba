@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Register the Band-Calibration Tracker analyst descriptor (P2-3 harness).
+"""Register the Band-Calibration Tracker analyst descriptor.
 
 Reads ``descriptors/analyst_band_calibration_tracker.yaml`` and POSTs it to
 the registry. Idempotent: if a head row is already present we report it and

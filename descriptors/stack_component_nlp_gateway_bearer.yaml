@@ -1,0 +1,107 @@
+# THE NLP PLANE ON THE GATEWAY — entities, relations, zero-shot classify and
+# translation behind the model gateway (kind: nlp_service).
+#
+# legba-models (GLiREL triples over spaCy NER, DeBERTa zero-shot, NLLB
+# translation; `nlp.local.legba_models`) is dead since 2026-10-22 and that
+# component is short-circuited to a closed port, so NER, the fact extractor
+# (~16k facts a week) and classify degrade to un-enriched. This component
+# points the SAME client contract at the gateway (`provider: bearer_gateway`
+# selects GatewayNlpClient in src/legba/data/stack/nlp_service/gateway.py):
+#   extract()  -> ONE POST /v1/relations (model "ner"), answered as the legacy
+#                 {"triples": [{subject, predicate, object}], "ms"} shape;
+#   classify() -> POST /v1/classify (model "classify");
+#   entities() -> POST /v1/entities (model "ner"; no caller needs it today);
+#   translate() -> POST /v1/chat/completions on `translate_model`:
+#                 one completion per chunk, a strict translate-only system
+#                 prompt, temperature 1.0, no max_tokens; answered as the
+#                 legacy {"translated", "source_lang", "target_lang", "ms"};
+#                 an empty or >3x answer is refused (unavailable, never
+#                 stamped). This re-wires the translation and NER backfill
+#                 sweeps and the NER filter's translate-then-extract route.
+#   summarize() -> NOT COVERED (no gateway route): the callers' degrade path.
+# Label sets: `relation_labels` absent = the labels DERIVED from the graph's
+# relationship types (DEFAULT_RELATION_LABELS in
+# src/legba/data/stack/nlp_service/gateway_relations.py); `entity_labels`
+# absent = the ENTITY_CLASSES taxonomy less `entity`. Override either here.
+# FACT QUALITY: `relation_confidence`, `relation_threshold` and the
+# derived `relation_labels` below — the first gateway facts (10-23) landed at
+# the 0.5 floor as junk ("Melania Trump | operates in | Oleshky").
+#
+# SELECTION: the runtime binds ONE NLP component, named by the env knob
+# LEGBA_NLP_COMPONENT_ID (docs/TUNABLES.md; unset = nlp.local.legba_models,
+# read in src/legba/runtime/nlp_client_factory.py:resolve_nlp_component_id at
+# host bring-up). The switch, after this row is registered and transitioned
+# active: `LEGBA_NLP_COMPONENT_ID=nlp.gateway.bearer` in .env + recreate the
+# runtime. Unset the line to go back.
+#
+# PRICE: our own box behind the gateway — $0 per call.
+id: nlp.gateway.bearer
+name: NLP via the model gateway (entities, relations, classify, translation)
+schema_uri: legba/stack/nlp_service/1.0.0
+version: "0000000000000000"
+state: draft
+owner: owner@local
+config:
+  endpoint:
+    factory_kind: text
+    raw: "${env:LEGBA_GATEWAY_API_ENDPOINT}"
+  # VAULT REF — the gateway token, the same secret the gateway LLM lanes use
+  # (registered by scripts/cutover_gateway.py); never the plaintext.
+  api_key:
+    factory_kind: secret
+    raw: llm.gateway.api_key
+  provider:
+    factory_kind: text
+    raw: bearer_gateway
+  timeout_seconds:
+    factory_kind: number
+    raw: 30
+  classify_path:
+    factory_kind: text
+    raw: /classify
+  entities_path:
+    factory_kind: text
+    raw: /entities
+  relations_path:
+    factory_kind: text
+    raw: /relations
+  # The gateway has no /health; its model list answering 200 is liveness.
+  health_path:
+    factory_kind: text
+    raw: /models
+  # The gateway chat alias translate() asks: `fast` = the core chat model, thinking
+  # off, multilingual (replaces NLLB-200 and its non-commercial licence).
+  # Absent = `fast`; an empty raw turns translation off (the sweeps skip).
+  # Accepted on provider bearer_gateway only. Named by a variable here, so an
+  # unset or empty variable fails loudly rather than turning translation off.
+  translate_model:
+    factory_kind: text
+    raw: "${env:LEGBA_GATEWAY_TRANSLATE_MODEL}"
+  # The triple's confidence from its two endpoint scores: `min`
+  # (a relation is only as sure as its weaker end — a confident head cannot
+  # vouch for a doubtful tail), `mean`, or `none` (no confidence: the fact
+  # path's 0.5 floor, the pre-F113 behaviour). Absent = `min`.
+  relation_confidence:
+    factory_kind: text
+    raw: min
+  # Sent to /v1/relations as `threshold` AND applied client-side to
+  # the score above (the min under `none`); a hit below it is dropped and
+  # counted (dropped_below_threshold in the client's debug line). 0.5 = the
+  # fact path's own floor: a scored gateway triple below it would land LESS
+  # sure than an unscored one. If the route answers 400 naming `threshold`, the
+  # client retries once without it and filters client-side only. 0 = off.
+  # Absent = 0.5.
+  relation_threshold:
+    factory_kind: number
+    raw: 0.5
+  # `relation_labels` is deliberately ABSENT so the default tracks
+  # the graph's vocabulary: every RELATIONSHIP_TYPE less CoOccursWith, in the
+  # write path's row-predicate form (normalize_predicate): hostile to, located
+  # in, allied with, party to, targets, operates in, member of, leader of,
+  # conducted via, supplies weapons to, part of, affiliated with, involved in.
+  # To pin a set instead (e.g. legba-models' 20 GLiREL labels, kept as
+  # LEGACY_GLIREL_RELATION_LABELS):
+  #   relation_labels:
+  #     factory_kind: list
+  #     item_kind: text
+  #     raw: [leader of, member of, located in]

@@ -1,4 +1,4 @@
-# Sahel coverage pass — Burkina Faso desk (country_watch_bf) — 2026-09-07.
+# Burkina Faso desk (country_watch_bf).
 # Ships DRAFT.
 #
 # WHY THIS BATCH EXISTS. `country_watch_bf` (target geo ["BF"]) has had NO desk
@@ -75,7 +75,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: source_batch_2026_09
+  owner: owner@local
   created: "2026-09-07T00:00:00Z"
 
 scope:
@@ -84,7 +84,7 @@ scope:
   languages: [fr]
   tags: [news, world, africa, sahel, burkina_faso, francophone, source_batch_2026_09]
   source_class: state_media
-  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
+  access_class: public          # free no-auth feed, no separate reuse agreement
 
 acquisition: poll
 

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Pack tools bound to a round run: the as-of cut, and the run's own rows
-excluded (plan P4 §3.3 rule 4, lane G-5).
+excluded.
 
 A seat that lists packs under ``tools`` gets the pack's read tools that have a
 classified record-time cut (``raw_reader_known_at``: ``cut`` or ``exempt``),
@@ -209,8 +209,8 @@ class RoundTools:
     classified: Mapping[str, str]
     exclusions: Callable[[], Exclusions]
     log: list[dict[str, Any]] = field(default_factory=list)
-    #: Seconds one tool read may take before the seat is told so (lane G-6:
-    #: the first runs saw reads under the as-of cut take tens of seconds).
+    #: Seconds one tool read may take before the seat is told so (reads under
+    #: the as-of cut have taken tens of seconds).
     timeout_s: float = DEFAULT_TOOL_TIMEOUT_S
 
     def tools_for(self, seat: Any) -> tuple[str, ...]:

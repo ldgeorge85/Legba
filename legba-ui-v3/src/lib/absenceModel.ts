@@ -121,7 +121,7 @@ export const ABSENCE_KIND_LABEL: Record<AbsenceKind, string> = {
  * selection — so it renders as text, exactly as `scorecard` and `map_version`
  * already do, rather than as a click that would 404.
  *
- * `carried_unsupported` (W11-F14) is the ninth: the unit HAS a current read,
+ * `carried_unsupported` is the ninth: the unit HAS a current read,
  * and the status it states is carried — none of its indicators triggered and
  * its last read whose indicators did is older than N of its cadence windows.
  * Its proof `ref` is that last evidencing finding.
@@ -148,10 +148,9 @@ export const ABSENCE_KIND_ORDER: readonly AbsenceKind[] = [
  * slightly different things about what it is.
  */
 export const TYPED_ABSENCE_GLOSSARY_NOTE =
-  'Typed absence (docs/GLOSSARY.md): an absence with a scope, a kind, a ' +
-  'proof and a shelf life, never a blank. Seven kinds, one closed ' +
-  'vocabulary; every item says what was looked at, when, and whether ' +
-  'anyone has looked since.'
+  'A gap is something that was looked for and not found, or could not be ' +
+  'looked at, never a blank: each says what was looked at, when, and ' +
+  'whether anyone has looked since.'
 
 const SEPARATOR = '|'
 
@@ -252,9 +251,15 @@ export function notMeasuredReason(
   return null
 }
 
+/** An instant as a short UTC stamp (`2026-11-24 18:22Z`), the console's one clock. */
+function utcStamp(iso: string): string {
+  const ms = Date.parse(iso)
+  return Number.isFinite(ms) ? `${new Date(ms).toISOString().slice(0, 16).replace('T', ' ')}Z` : iso
+}
+
 /** The extent line for an item: its `since`, else its `window`, else absent. */
 export function absenceExtent(item: AbsenceItem): string {
-  if (item.since) return `since ${new Date(item.since).toLocaleString()}`
+  if (item.since) return `since ${utcStamp(item.since)}`
   if (item.window) return item.window
   return 'extent not recorded'
 }
@@ -267,15 +272,13 @@ export function absenceExtent(item: AbsenceItem): string {
  */
 export function absenceHeadline(item: AbsenceItem): string {
   const measured = item.as_of
-    ? `measured ${new Date(item.as_of).toLocaleString()} (${item.as_of_basis})`
+    ? `measured ${utcStamp(item.as_of)} (${item.as_of_basis})`
     : `not measured — ${item.as_of_basis}`
   if (item.stale && item.expires_at) {
-    return `${measured} · last known absence, not re-checked (due ${new Date(
-      item.expires_at,
-    ).toLocaleString()})`
+    return `${measured} · last known absence, not re-checked (due ${utcStamp(item.expires_at)})`
   }
   if (item.expires_at) {
-    return `${measured} · current until ${new Date(item.expires_at).toLocaleString()}`
+    return `${measured} · current until ${utcStamp(item.expires_at)}`
   }
   return `${measured} · ${item.review ? `revised by ${item.review}` : 'no recheck scheduled'}`
 }

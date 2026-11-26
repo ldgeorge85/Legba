@@ -6,7 +6,7 @@
 Driven by the run directory (``<D>/run.json``) and its grading directory
 (``<D>/grading``, where ``grade_sheet.py`` wrote ``tell_test.json`` and
 ``sheet.json``). Every call goes to the PRIMARY GRADER only —
-``grade_sheet.GRADER_COMPONENT`` (``lightning-think`` on the gateway) — at
+``grade_sheet.GRADER_COMPONENT`` (the think judge on the gateway) — at
 temperature 1.0 with no max_tokens, at most :data:`CONCURRENCY` at once.
 
 Before any call, both model subcommands refuse a run with no ``grader_pin``,
@@ -455,7 +455,7 @@ def operator_sample(
     doc = {
         "schema": OPERATOR_SCHEMA, "rater": "operator", "rater_name": None,
         "instructions": ("Grade each answer on its own, axes 1-7, exactly as the grade shape asks "
-                         "(design §4.2-§4.3): fill every status / asserted / usefulness / stale_state / "
+                         "fill every status / asserted / usefulness / stale_state / "
                          "stated_confidence / coverage field. A row counts once every field validates."),
         "design_sha256": sheet.get("design_sha256"), "seed": seed, "share": share, "items": items,
     }
@@ -541,7 +541,7 @@ async def grade_main(a: argparse.Namespace, *, chat: common.Chat | None = None, 
         if run.get("blind_key_opened_at"):
             raise GradingRefused("the blind key has been opened (report.py): no grading after that")
     if not a.practice and not _tell_passed(run):
-        raise GradingRefused("the last tell test did not pass (or none was scored) — design §5.4: grading "
+        raise GradingRefused("the last tell test did not pass (or none was scored): grading "
                              "never starts on a failed tell test")
     run = await grade_sheet.recheck_pin(run_dir, probe=probe)
     _sealed(run, "sheet")

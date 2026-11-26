@@ -33,6 +33,20 @@ export interface PageFrame {
   centreRem: number | null
 }
 
+/**
+ * Where a view sat in the panel side before it was sent to the stage, so
+ * that going Back past it puts it back there: in the same region as `within`,
+ * or, when it was alone in its region, beside the region holding `beside.ref`.
+ */
+export interface StageReturn {
+  /** The dock id it had. */
+  id: string
+  /** It was one of the page's own (seeded) views, not an opened one. */
+  seeded: boolean
+  within?: string
+  beside?: { ref: string; direction: 'left' | 'right' | 'above' | 'below' }
+}
+
 /** One thing on the stage. */
 export interface StageEntry {
   /** The view id (`v4.morning_read`, `subject.page`, `view:forecasts`, a registered view). */
@@ -47,6 +61,8 @@ export interface StageEntry {
   title: string
   /** Who put it there: `page` (the default), `operator` (a click), `case` (Consult). */
   origin: string
+  /** Set when it came from the panel side: where Back puts it again. */
+  returnTo?: StageReturn
 }
 
 /** The stage instance id of an entry (also its key in the on-screen report). */

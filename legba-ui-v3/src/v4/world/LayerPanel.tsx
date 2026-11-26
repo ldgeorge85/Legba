@@ -34,6 +34,7 @@ import { useQuery } from '@tanstack/react-query'
 import { cn } from '@/lib/cn'
 import { COUNTRY_BY_ISO2 } from '@/lib/countryGeo'
 import { InfoTip } from '@/components/InfoTip'
+import { useBelowAdminPassive as useBelowAdmin } from '@/auth/roles'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/ui/tooltip'
 import { fetchLayerDivergence, type LayerDivergenceResponse } from '@/lib/api'
 import {
@@ -89,6 +90,8 @@ export function LayerApertureTip({
 }) {
   const id = useId()
   const testId = `layer-aperture-${layer.id}`
+  // The route a layer reads is the admin's detail; a reader is told what it shows.
+  const technical = !useBelowAdmin()
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -102,7 +105,7 @@ export function LayerApertureTip({
           <Info className="h-3 w-3" aria-hidden />
           <span className="sr-only">What the {layer.label} layer can see</span>
           <span id={id} className="sr-only" data-testid={`${testId}-description`}>
-            {apertureSentence(layer)}
+            {apertureSentence(layer, technical)}
           </span>
         </span>
       </TooltipTrigger>
@@ -114,7 +117,7 @@ export function LayerApertureTip({
       >
         <div className="mb-1 font-semibold text-ink-1">{layer.label} · what this layer can see</div>
         <dl className="space-y-0.5">
-          {apertureLines(layer).map((l) => (
+          {apertureLines(layer, technical).map((l) => (
             <div key={l.label}>
               <dt className="inline font-semibold text-ink-2">{l.label}: </dt>
               <dd className="inline text-ink-2">{l.text}</dd>

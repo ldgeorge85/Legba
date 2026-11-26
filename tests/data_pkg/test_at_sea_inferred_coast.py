@@ -1,21 +1,21 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane N-S part 2 — an incident at sea names the coasts it lies off.
+"""An incident at sea names the coasts it lies off.
 
-N-R files an authoritative point that lies in no country under NO country
-(``payload.geo.at_sea``, empty ``signals.geo``). This lane adds the honest
+An authoritative point that lies in no country under NO country
+(``payload.geo.at_sea``, empty ``signals.geo``). This adds the honest
 relation beside it: ``payload.geo.inferred`` = the coastal states whose
 bundled 110m outline is within 200 km, nearest first, at most three, each
 marked ``basis: nearest_coast`` with its distance. The relation is never a
 filing: ``signals.geo`` stays empty, ``countries`` / ``derivation`` are
 untouched, and the promote step does not lift it.
 
-Lane N-X (operator-approved 2026-11-13) then let the desks read it: the slice's
+The desks then read it: the slice's
 desk geo test (``signal_slice_scope.desk_geo_sql``) admits an unfiled at-sea
 row whose ``inferred`` coasts name a desk code, and the rendered row says
 "at sea, about N km off X ... not an event in X". The persisted-row tests
 below pin both: the Hormuz incident reaches the Oman, UAE and Iran desks and
-the Hormuz lane; the open-ocean incident reaches no desk.
+the Hormuz shipping-lane desk; the open-ocean incident reaches no desk.
 """
 
 from __future__ import annotations
@@ -185,7 +185,7 @@ OPEN_OCEAN = (30.0, -40.0)
 
 
 # ---------------------------------------------------------------------------
-# Lane N-X — the rendered row and the SQL shape (pure)
+# The rendered row and the SQL shape (pure)
 # ---------------------------------------------------------------------------
 
 _IN_COUNTRY_ROW = {
@@ -261,7 +261,7 @@ async def _slice(conn, body: dict[str, Any]) -> dict[Any, dict[str, Any]]:
 
 
 async def test_persisted_at_sea_rows_reach_the_desks_of_their_coasts(conn) -> None:
-    """Lane N-X: an at-sea incident reaches the country desks and lane desks of
+    """An at-sea incident reaches the country desks and shipping-lane desks of
     the coasts it lies off, marked as at sea in the rendered row; storage is
     unchanged; an open-ocean incident reaches no country desk; an ordinary
     in-country row renders with no location line."""

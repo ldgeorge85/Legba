@@ -1,4 +1,4 @@
-# options_contest/2 — options_contest/1 re-sized and re-judged (lane G-6): the
+# options_contest/2 — options_contest/1 re-sized and re-judged: the
 # fixture that gives `debate`, `select` and `branch` an executed example.
 # Same shape as /1. What changed: deadlines from measurement (thinking ON
 # p95 121 s -> 180 s; thinking OFF p95 14.5 s -> 60 s); every model seat
@@ -52,7 +52,7 @@ round:
     rank_a:
       kind: judge
       card: cards/judges/rank.md
-      plane: llm.verify.innoai_gemma.openai_compat
+      plane: llm.verify.gateway_judge.openai_compat
       family_rule: {differs_from: [pitch, advocate_for, advocate_against]}
       reads: [{from: table, view: sentence_table}]
       output: verdict/2
@@ -60,7 +60,7 @@ round:
       retries: 1
       repair: reasons
     rank_b: {seat_ref: rank_a}
-    rank_c: {seat_ref: rank_a, plane: llm.grader.innoai_lightning.openai_compat}
+    rank_c: {seat_ref: rank_a, plane: llm.grader.gateway_third_family.openai_compat}
     advocate_for:
       kind: model
       card: cards/advocate_for.md
@@ -74,7 +74,7 @@ round:
     moderator:
       kind: judge
       card: cards/moderator.md
-      plane: llm.verify.innoai_gemma.openai_compat
+      plane: llm.verify.gateway_judge.openai_compat
       family_rule: {differs_from: [advocate_for, advocate_against]}
       reads: [{from: floor.sealed, view: sentence_table}]
       output: verdict/1

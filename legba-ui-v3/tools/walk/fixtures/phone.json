@@ -774,7 +774,7 @@
     "history": [],
     "shared": true,
     "shared_note": "Shared: this instance has one alert log, so an acknowledgement or snooze takes the alert out of \"needs you\" for everyone, not only for you.",
-    "paging_note": "Paging is unchanged: the episode stays open, its raises are still recorded, and the page rule still pushes it. It comes back into \"needs you\" if it pages at a higher severity than when you acted.",
+    "paging_note": "Notifications are unchanged: the alert stays open, each time it rises is still recorded, and it still sends a notification. It comes back into \"needs you\" if it rises above the severity it had when you acted.",
     "snooze_options": [
      "1h",
      "4h",
@@ -812,7 +812,7 @@
     "history": [],
     "shared": true,
     "shared_note": "Shared: this instance has one alert log, so an acknowledgement or snooze takes the alert out of \"needs you\" for everyone, not only for you.",
-    "paging_note": "Paging is unchanged: the episode stays open, its raises are still recorded, and the page rule still pushes it. It comes back into \"needs you\" if it pages at a higher severity than when you acted.",
+    "paging_note": "Notifications are unchanged: the alert stays open, each time it rises is still recorded, and it still sends a notification. It comes back into \"needs you\" if it rises above the severity it had when you acted.",
     "snooze_options": [
      "1h",
      "4h",
@@ -864,7 +864,7 @@
     ],
     "shared": true,
     "shared_note": "Shared: this instance has one alert log, so an acknowledgement or snooze takes the alert out of \"needs you\" for everyone, not only for you.",
-    "paging_note": "Paging is unchanged: the episode stays open, its raises are still recorded, and the page rule still pushes it. It comes back into \"needs you\" if it pages at a higher severity than when you acted.",
+    "paging_note": "Notifications are unchanged: the alert stays open, each time it rises is still recorded, and it still sends a notification. It comes back into \"needs you\" if it rises above the severity it had when you acted.",
     "snooze_options": [
      "1h",
      "4h",
@@ -902,7 +902,7 @@
     "history": [],
     "shared": true,
     "shared_note": "Shared: this instance has one alert log, so an acknowledgement or snooze takes the alert out of \"needs you\" for everyone, not only for you.",
-    "paging_note": "Paging is unchanged: the episode stays open, its raises are still recorded, and the page rule still pushes it. It comes back into \"needs you\" if it pages at a higher severity than when you acted.",
+    "paging_note": "Notifications are unchanged: the alert stays open, each time it rises is still recorded, and it still sends a notification. It comes back into \"needs you\" if it rises above the severity it had when you acted.",
     "snooze_options": [
      "1h",
      "4h",
@@ -940,7 +940,7 @@
     "history": [],
     "shared": true,
     "shared_note": "Shared: this instance has one alert log, so an acknowledgement or snooze takes the alert out of \"needs you\" for everyone, not only for you.",
-    "paging_note": "Paging is unchanged: the episode stays open, its raises are still recorded, and the page rule still pushes it. It comes back into \"needs you\" if it pages at a higher severity than when you acted.",
+    "paging_note": "Notifications are unchanged: the alert stays open, each time it rises is still recorded, and it still sends a notification. It comes back into \"needs you\" if it rises above the severity it had when you acted.",
     "snooze_options": [
      "1h",
      "4h",
@@ -978,7 +978,7 @@
     "history": [],
     "shared": true,
     "shared_note": "Shared: this instance has one alert log, so an acknowledgement or snooze takes the alert out of \"needs you\" for everyone, not only for you.",
-    "paging_note": "Paging is unchanged: the episode stays open, its raises are still recorded, and the page rule still pushes it. It comes back into \"needs you\" if it pages at a higher severity than when you acted.",
+    "paging_note": "Notifications are unchanged: the alert stays open, each time it rises is still recorded, and it still sends a notification. It comes back into \"needs you\" if it rises above the severity it had when you acted.",
     "snooze_options": [
      "1h",
      "4h",
@@ -1206,7 +1206,7 @@
     "history": [],
     "shared": true,
     "shared_note": "Shared: this instance has one alert log, so an acknowledgement or snooze takes the alert out of \"needs you\" for everyone, not only for you.",
-    "paging_note": "Paging is unchanged: the episode stays open, its raises are still recorded, and the page rule still pushes it. It comes back into \"needs you\" if it pages at a higher severity than when you acted.",
+    "paging_note": "Notifications are unchanged: the alert stays open, each time it rises is still recorded, and it still sends a notification. It comes back into \"needs you\" if it rises above the severity it had when you acted.",
     "snooze_options": [
      "1h",
      "4h",

@@ -4,10 +4,9 @@
 
 **Purpose.** Preserves the heavily-used consult capability from the
 retiring legacy ``ConsultPanel`` UI (see ``src/legba/ui/consult.py``) as
-the 9th analyst kind in the topology v2 taxonomy (per
-``plans/design/legba_topology_redesign.md`` §5 + ``§5.9 Open taxonomy``).
+the 9th analyst kind in the topology v2 taxonomy.
 
-Per L-178 in ``plans/task_tracker.md`` §15.6:
+Its contract:
 
   * **No scheduled cadence.** Purely on-demand. Dispatched via A2A skill,
     MCP tool, or a future operator panel.
@@ -33,7 +32,7 @@ Dispatch shape (for the integration pass):
   * **A2A skill name:** ``intelligence.consult_on_demand``
   * **MCP tool name:** ``legba_consult`` (input schema: ``{"question": str,
     "scope_predicate": str | None}``)
-  * **Operator panel:** ``O-Consult`` per the §15.6 / L-178 note.
+  * **Operator panel:** ``O-Consult``.
 
 ReAct loop (max :data:`MAX_TOOL_ROUNDS`=6 rounds)::
 
@@ -100,7 +99,7 @@ from . import consult_thinking as _think  # T-1: which consult calls think
 from . import consult_context_ceiling as _cc
 from . import consult_round_protocol as _cp
 from . import consult_transcript as _tx
-# V3/P3 — the SubstrateQueryPort protocol moved to a leaf when the temporal
+# The SubstrateQueryPort protocol moved to a leaf when the temporal
 # params grew this module past its size ceiling; imported back and
 # re-exported so every call site is byte-identical.
 from .consult_provenance_census import compose_census
@@ -117,7 +116,7 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Kind identity (registry key — see kind_contracts §1)
+# Kind identity (registry key)
 # ---------------------------------------------------------------------------
 
 
@@ -183,10 +182,9 @@ LLM_OVERRIDE_ALLOWLIST = frozenset(
 )
 
 
-#: Fallback per-LLM-call output budget — reached ONLY when neither the env
-#: override nor a descriptor cap is present (hand-built test/embedder deps).
-#: The production deps builder always threads the descriptor's
-#: ``method.llm.max_tokens``, so this is not the operative production cap.
+#: Fallback output-token ESTIMATE — reached ONLY when neither the env
+#: override nor a descriptor value is present (hand-built test/embedder deps).
+#: Never sent and never a bound: see :func:`resolve_output_budget`.
 _FALLBACK_MAX_TOKENS = 2048
 
 
@@ -211,33 +209,22 @@ def resolve_output_budget(
     *,
     fallback: int = _FALLBACK_MAX_TOKENS,
 ) -> int:
-    """Per-LLM-call output budget: DESCRIPTOR-governed, env-OVERRIDABLE.
+    """The run's per-call output-token ESTIMATE (``deps.max_tokens``).
+
+    It bounds nothing. No handler sends a caller's ``max_tokens``: the wire
+    carries the alias's own maximum (``model_max_output_tokens``), and the
+    input ceiling derives from the route's window, not from this number. What
+    still reads it: the bake-off spend guard's worst-case projection of one
+    call's output (``consult_bakeoff``), and the "partial" label's count rule
+    on a handler that declares no maximum of its own (a test double).
 
     Precedence:
 
-      1. ``LEGBA_CONSULT_MAX_TOKENS`` — an EMERGENCY valve only. When it is
-         set AND a descriptor cap exists, the env value wins and the override
-         is logged LOUDLY (WARNING) every resolve, so a forgotten env pin can
-         never silently defeat the descriptor-governed budget.
-      2. the descriptor's ``method.llm.max_tokens`` — the governed production
-         value, threaded by the runtime deps builder
-         (``_build_consult_on_demand`` / ``_build_deep_consult``).
+      1. ``LEGBA_CONSULT_MAX_TOKENS`` — when set AND a descriptor value
+         exists, the env value wins and is logged (WARNING) every resolve;
+      2. the descriptor's ``method.llm.max_tokens``, threaded by the runtime
+         deps builder (``_build_consult_on_demand`` / ``_build_deep_consult``);
       3. ``fallback`` — hand-built deps with no descriptor (tests, embedders).
-
-    HISTORY (why the cap used to be 2048, and why it no longer is): under the
-    old NON-STREAMING Anthropic wire call the cap was welded to the provider's
-    HTTP window, not to answer quality — 1024 truncated real "world report"
-    answers mid-string, and 4096 made a broad forced-final's generation slow
-    enough to outrun the provider timeout → ``network error`` → actor retry
-    storm → 504, so 2048 was the survivable sweet spot. The Anthropic handler
-    now STREAMS every generation (the connection stays live for the whole
-    output; see ``stack/llm/anthropic.py:_call_chat_streaming``), which
-    removes the transport coupling entirely: the budget is sized for complete
-    answers (32768 on the consult descriptors) and is governed where the rest
-    of the method knobs live — the descriptor. An over-budget answer is still
-    not a parse hazard: under the plain-markdown FINAL contract
-    (:func:`_parse_sentinel_final`) a cap-cut answer degrades to readable
-    markdown, never an unclosed JSON envelope.
     """
     env_val = _env_max_tokens()
     cap = None
@@ -252,9 +239,9 @@ def resolve_output_budget(
         if cap is not None and env_val != cap:
             logger.warning(
                 "consult.max_tokens.ENV_OVERRIDE LEGBA_CONSULT_MAX_TOKENS=%d "
-                "OVERRIDES the descriptor-governed output budget "
-                "(method.llm.max_tokens=%d) — emergency valve engaged; unset "
-                "the env var to restore descriptor governance",
+                "overrides the descriptor's output-token estimate "
+                "(method.llm.max_tokens=%d; never sent, bounds nothing); unset "
+                "the env var to use the descriptor's value",
                 env_val, cap,
             )
         return env_val
@@ -269,7 +256,7 @@ def _default_max_tokens() -> int:
     Kept as the :class:`ConsultOnDemandDeps.max_tokens` default_factory so
     hand-built test/embedder deps behave as before (env override → 2048).
     Production deps come from the runtime builder, which passes the
-    descriptor's cap through :func:`resolve_output_budget` explicitly.
+    descriptor's estimate through :func:`resolve_output_budget` explicitly.
     """
     return resolve_output_budget(None)
 
@@ -362,10 +349,13 @@ class AnalystMethodResult:
 
 
 
-# The system prompt text lives in its own leaf (wave Q, 2026-09-28 — the size
+# The system prompt text lives in its own leaf (split out for the size
 # gate); imported one way and re-exported under the same name so readers of
 # ``consult_on_demand._SYSTEM_PROMPT`` are unaffected.
 from .consult_system_prompt import _SYSTEM_PROMPT  # noqa: E402
+
+#: The label in front of the question in the first user turn.
+QUESTION_LABEL = "Question from the person asking:"
 
 
 
@@ -382,7 +372,7 @@ def _render_user_prompt(
     request carried no pins — which is every pre-``pinned_context`` request,
     and which makes this function byte-identical to its previous form there.
     """
-    body = f"Operator question:\n{question.strip()}"
+    body = f"{QUESTION_LABEL}\n{question.strip()}"
     if scope_predicate:
         body += f"\n\nScope predicate (apply to substrate queries): {scope_predicate}"
     if pinned_block:
@@ -393,7 +383,7 @@ def _render_user_prompt(
 # ---------------------------------------------------------------------------
 # Reply parsing — EXTRACTED to ``consult_reply_parsing`` (D-7)
 #
-# The JSON-envelope reader and the whole §28.4 plain-markdown FINAL contract
+# The JSON-envelope reader and the whole plain-markdown FINAL contract
 # moved out one-way when this module crossed its size ceiling; they are a
 # self-contained string-parsing subsystem with no dependency on anything else
 # here. Re-exported so every importer (tests included) is unchanged, and so
@@ -455,7 +445,7 @@ def _coerce_uuid_list(raw: Any) -> list[UUID]:
 def _coerce_refs_audited(raw: Any) -> tuple[list[UUID], list[str]]:
     """``(refs, malformed)`` for the MODEL's own ``cited_refs`` header.
 
-    2026-09-28 §B.3, and the counterpart to the strict reader above. A bare
+    The counterpart to the strict reader above. A bare
     ``UUID(str(item))`` under ``except: continue`` threw away two different
     things in the same silence: a REAL id the model wrapped in a bracket (the
     core plane writes ``【a1b2…】`` by default) and a FABRICATED label
@@ -499,9 +489,9 @@ def _merge_refs(*lists: list[UUID]) -> list[UUID]:
 # tests) is unchanged and the loop below reads exactly as it did.
 # ---------------------------------------------------------------------------
 
-from . import consult_bakeoff as _bk  # noqa: E402 — X3/G0, the bake-off arms
-from . import consult_case as _case  # noqa: E402 — C-1b, the case gate
-from . import consult_tool_providers as _prov  # noqa: E402 — C-2a §7, the hook
+from . import consult_bakeoff as _bk  # noqa: E402 — the bake-off arms
+from . import consult_case as _case  # noqa: E402 — the case gate
+from . import consult_tool_providers as _prov  # noqa: E402 — the provider hook
 from . import consult_tool_routing as _route  # noqa: E402
 from .consult_tool_routing import (  # noqa: E402,F401
     _KNOWN_TOOLS,
@@ -560,7 +550,7 @@ def _build_consult_response(
     # already markdown and passes through untouched; this covers the normal
     # final, the forced-final, and replayed sessions — all funnel through here.
     answer = _unwrap_double_envelope(str(final_payload.get("answer") or ""))[:65000]
-    # 2026-09-28 §B.3 — NORMALIZE THE MARKERS ONCE, HERE, and persist the
+    # NORMALIZE THE MARKERS ONCE, HERE, and persist the
     # result. The core plane writes ``【3】`` / ``【ref:2】`` / ``【2†L1-L2】``
     # where ``[3]`` belongs; every other analyst path has normalized that at
     # write time since 2026-06-30, and consult was the one that did not,
@@ -587,7 +577,7 @@ def _build_consult_response(
     # Prefer the LLM-confirmed subset (the planner's narrowing); fall
     # back to the full collected set when the planner didn't narrow.
     cited = confirmed_llm_refs if confirmed_llm_refs else list(collected_refs)
-    # 2026-09-28 §B.3 — STAMP WHICH FALLBACK THIS WAS. "The planner declined to
+    # STAMP WHICH FALLBACK THIS WAS. "The planner declined to
     # narrow" and "every ref the planner named failed to parse or to intersect"
     # arrive here as the same empty ``confirmed_llm_refs`` and leave as the same
     # whole collected set, and the operator cannot tell a deliberate breadth
@@ -616,7 +606,7 @@ def _build_consult_response(
     if uncertainty >= 0.7 and not unanswered:
         unanswered = [question[:512]]
 
-    # WATCH CANDIDATES (CONSULT_REVIEW_2026-09-28 §B.4) — the answer's own
+    # WATCH CANDIDATES — the answer's own
     # "what would change my mind" items, off the header line, structured. The
     # key is ABSENT when the model wrote none: an empty list would read as
     # "nothing would change this call", which is a claim and not the same
@@ -763,7 +753,7 @@ async def _reason_with_response(
 
 
 def _raise_if_stream_cut(content: str, response: Any) -> None:
-    """Raise a RETURNED stream cut as the loop's one cut shape (W11-F133).
+    """Raise a RETURNED stream cut as the loop's one cut shape.
 
     Anthropic's handler returns a cut stream as the partial body with
     ``finish_reason="error"`` and a ``legba_stream_error`` marker; the core
@@ -840,11 +830,10 @@ class ConsultOnDemandDeps:
     resolve_llm_component: (
         Callable[[str], Awaitable[LLMHandlerLike]] | None
     ) = None
-    # Per-LLM-call output budget. DESCRIPTOR-governed in production: the
-    # runtime builder passes method.llm.max_tokens through
-    # resolve_output_budget() (LEGBA_CONSULT_MAX_TOKENS demoted to an
-    # emergency override, logged loudly when it wins). The default_factory
-    # only serves hand-built test/embedder deps.
+    # Per-call output-token ESTIMATE (resolve_output_budget): the bake-off
+    # spend projection reads it. Passed to the handler, which never sends it;
+    # it bounds no output and no input. The default_factory only serves
+    # hand-built test/embedder deps.
     max_tokens: int = field(default_factory=_default_max_tokens)
     # Wall-clock budget for the tool loop — env-tunable, see
     # _default_wall_budget_seconds(). Caps over-drilling so broad questions
@@ -908,7 +897,7 @@ class ConsultOnDemandDeps:
     # on a turn the operator armed (``present_case``), re-pointed per request;
     # an armed turn without it fails loud (``case_unavailable``), never plain.
     drive_binding: Any | None = None
-    # C-2a §7 — the per-analyst binding of every provider pack the consult
+    # The per-analyst binding of every provider pack the consult
     # descriptor grants, keyed by pack id (``runtime/consult_bindings``). A
     # family is offered only on a turn armed for it; ``drive_binding`` above is
     # C-1b's spelling of the drive pack's entry and is still honoured.
@@ -954,7 +943,7 @@ async def run_method(
     so the planner is forced to synthesize whatever it has.
 
     Errors at the LLM boundary propagate (the runtime classifies them
-    per ``kind_contracts §7``).  Tool errors are folded into the
+    per the kind contract).  Tool errors are folded into the
     conversation so the planner can recover.
     """
     if not inputs:
@@ -1012,11 +1001,11 @@ async def run_method(
     # parsing tool calls out of prose. The `unparseable` step kind — a burned
     # round and a burned Opus call — cannot occur on that route, because a
     # reply either carries tool_use blocks (a tool round) or does not (the
-    # answer). Everything else, including the §28.4 markdown FINAL, is
+    # answer). Everything else, including the markdown FINAL, is
     # unchanged. See ``consult_round_protocol``.
     native_tools_route = _cp.supports_native_tools(active_llm)
     native_wire = _cp.native_wire(active_llm)
-    # C-1b (decision D1), generalised by the C-2a §7 hook: a provider family
+    # A provider family
     # (the case's drive actions, the write plane) is OPT-IN per turn. Unarmed,
     # nothing below differs by a byte; armed, the family's tools and its
     # protocol block are offered, and an armed turn with no binding refuses
@@ -1039,7 +1028,7 @@ async def run_method(
         if native_tools_route
         else None
     )
-    # --- RUN CONTEXT (CONSULT_REVIEW_2026-09-28 §B.4) -------------------
+    # --- RUN CONTEXT -------------------
     # What is TRUE at this run's start, appended to the standing prompt rather
     # than baked into it: which curated series the platform actually holds
     # (the reason series_history/series_compare had been invoked zero times —
@@ -1054,9 +1043,11 @@ async def run_method(
     run_context = await _pctx.render_run_context(
         substrate=None if arm else deps.substrate,  # an arm holds no series tools
         agency_binding=deps.agency_binding,
+        frozen=arm is not None,
     ) + "".join(_p.fragment(_prov.binding_for(deps, _p.pack_id)) for _p in offered)
-    effective_system_prompt = (arm.system_prompt if arm else deps.system_prompt) + run_context + (
-        _cp.native_system_suffix(FINAL_SENTINEL) if native_tools_route else ""
+    effective_system_prompt = _cp.run_system_prompt(
+        arm.system_prompt if arm else deps.system_prompt, run_context,
+        native=native_tools_route, frozen=arm is not None,
     )
 
     # --- Step trace + live telemetry (Piece 1, D5) --------------------
@@ -1108,9 +1099,7 @@ async def run_method(
     if context_ceiling is None:
         # W11-F133 (consult 6cd91190): no descriptor ceiling is no longer "no
         # ceiling" — the route's own window bounds the loop's input.
-        context_ceiling, ceiling_source = _cc.derive_ceiling(
-            active_llm, max_tokens=deps.max_tokens,
-        )
+        context_ceiling, ceiling_source = _cc.derive_ceiling(active_llm)
     ceiling_stamp: dict[str, Any] | None = None
     recovery = first.get("synthesize_from")
     if recovery:
@@ -1151,7 +1140,7 @@ async def run_method(
             thinking=thinking.for_role(_think.ROLE_RECOVERY),
         )
         recovered = await _wm.mint_on_result(recovered, first=first, options=options, deps=deps, record=_record)
-        # W11-F93 — the recovered answer is judged once it has SETTLED, too.
+        # The recovered answer is judged once it has SETTLED, too.
         recovered = await _judging.judge_settled_result(recovered, deps=deps, record=_record)
         return await _ct.enforce_after_judge(recovered, r_contract, record=_record)
 
@@ -1207,7 +1196,7 @@ async def run_method(
     spend = await arm_turn_ceiling_observed(spend, active_llm, pool=deps.pg_pool or deps.contract_pool)
     batch_cap = _cp.native_batch_cap(deps.native_batch_cap)
 
-    # C-1b / C-2a §7 — each offered family's RUN-SCOPED GATE (the case gate:
+    # Each offered family's RUN-SCOPED GATE (the case gate:
     # read set, seq, cap, seal; the write gate: read set, caps, spend), over a
     # binding re-pointed at this request. Armed turns only.
     gates = {
@@ -1293,7 +1282,7 @@ async def run_method(
 
     collected_refs: list[UUID] = []
     aggregate_usage = {"prompt_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0}
-    # Roll 86: per-call receipts = the run account's entries from here on (unbound → none).
+    # Per-call receipts = the run account's entries from here on (unbound → none).
     from ..registry.consult_turn_stamps import call_receipts as _call_receipts
     from ..run_accounting import llm_call_watermark as _acct_wm, llm_calls_since as _acct_since
     _calls_from = _acct_wm()
@@ -1315,7 +1304,7 @@ async def run_method(
     #: kind — this is a fact the loop knows and nobody else should have to
     #: reconstruct.
     synthesis_status = "complete"
-    #: A terminal round answered with no body (W11-F160): settled as "none"
+    #: A terminal round answered with no body: settled as "none"
     #: with no forced final, which would burn the same output cap again.
     answered_empty = False
     #: The synthesis request as sent, recorded so a CUT run can be finished
@@ -1336,9 +1325,9 @@ async def run_method(
     # A sink installed around a generation holds every streamed token, so a
     # timeout cancels the call but leaves the paid-for prefix in the caller's
     # hands; deltas are relayed live so the panel shows the answer forming.
-    # Run 9b902fec (2026-10-29) is why this is no longer forced-final-only: on
+    # This is not forced-final-only: on
     # the native route a DRILLING round with no tool call IS the answer, and
-    # round 13 was cut at 480s with no sink installed — the answer was thrown
+    # a long run was cut at 480s with no sink installed — the answer was thrown
     # away and a second long generation bought to replace it.
     #
     # Relay is throttled by CHARACTERS, not per delta: Anthropic emits many
@@ -1409,9 +1398,9 @@ async def run_method(
             break
         # SPEND guard. Checked before the call, so the ceiling is never
         # breached by the round that discovers it — the point is not to spend
-        # the money. This is the guard that would have ended c8a0105c around
-        # round 5 instead of round 10, with the same answer and a fifth of the
-        # bill; every clock in the loop passed that run.
+        # the money. This guard ends such a run
+        # early, with the same answer and a fraction of the bill; every clock
+        # in the loop passes it otherwise.
         spent_reason = spend.exhausted_reason()
         if round_idx > 0 and spent_reason is not None:
             stop_reason = spent_reason
@@ -1647,22 +1636,14 @@ async def run_method(
                 {
                     "role": "user",
                     "content": (
-                        "Your reply matched neither reply shape. To CALL "
-                        "TOOLS, respond with ONLY a strict-JSON object "
-                        '({"tool": ..., "args": ...} or {"tools": [...]}). '
-                        "To ANSWER, do not use JSON at all — reply with the "
-                        f"line {FINAL_SENTINEL}, then the uncertainty / "
-                        "cited_refs / unanswered_aspects header lines, then "
-                        "your answer as plain markdown. If your last reply "
-                        "WAS the answer, re-send it in that form: the prose "
-                        "does not need to be shortened or escaped."
+                        _cp.unreadable_nudge(content, frozen=arm is not None)
                     ),
                 },
             ]
             continue
 
         if parsed.get("final") is True:
-            # W11-F160: an empty body settles "none", a cap-cut one "partial".
+            # An empty body settles "none", a cap-cut one "partial".
             final_payload, synthesis_status, settle_step = _cp.settle_final_reply(
                 parsed, llm_response, usage, max_tokens=out_limit,
                 rounds_used=rounds_used, rounds_available=effective_rounds,
@@ -1705,12 +1686,7 @@ async def run_method(
                 {
                     "role": "user",
                     "content": (
-                        "Your JSON had neither `tool` nor `tools`. To call "
-                        'tools emit {"tool": ..., "args": ...} or '
-                        '{"tools": [{"tool": ..., "args": ...}, ...]}. To '
-                        f"answer, emit the {FINAL_SENTINEL} line + header "
-                        "lines + markdown instead — the final answer is NOT "
-                        "JSON."
+                        _cp.no_tool_nudge(frozen=arm is not None)
                     ),
                 },
             ]
@@ -1801,7 +1777,7 @@ async def run_method(
         for _gate in gates.values():
             # This round's READ results join each gate's read set only now,
             # after its provider calls ran: a ref from the same batch never
-            # counts (C-1a §2, C-2a §5.2).
+            # counts.
             _gate.harvest(rounds_used, calls, results)
         if native_round is not None:
             # Native route: hand the results back through the SAME structured
@@ -1880,10 +1856,14 @@ async def run_method(
         # ONE definition of this prompt, shared with the recovery path in
         # ``consult_transcript``. A second copy of the wording here is exactly
         # what would make "the replay sends the same prompt" quietly false.
-        force_system = _tx.synthesis_system(effective_system_prompt, FINAL_SENTINEL)
+        force_system = _tx.synthesis_system(
+            effective_system_prompt, FINAL_SENTINEL, frozen=arm is not None,
+        )
         synthesis_messages, ceiling_stamp = _cc.apply_context_ceiling(
             messages + [
-                {"role": "user", "content": _tx.synthesis_instruction(FINAL_SENTINEL)},
+                {"role": "user", "content": _tx.synthesis_instruction(
+                    FINAL_SENTINEL, frozen=arm is not None,
+                )},
             ],
             system=force_system, ceiling=context_ceiling, source=ceiling_source,
         )
@@ -2057,7 +2037,7 @@ async def run_method(
             # X2 / C1 — the receipt: the meter plus model, elapsed, priced.
             "usage": {
                 **spend.receipt(active_llm, elapsed_s=_elapsed()),
-                # Roll 86: one receipt per model call (consult_turn_stamps.call_receipts).
+                # One receipt per model call (consult_turn_stamps.call_receipts).
                 "call_receipts": _call_receipts(_acct_since(_calls_from)),
             },
             **_cc.stamp_fields(ceiling_stamp),
@@ -2114,7 +2094,7 @@ async def run_method(
     # rows twice would let the two numbers printed beside each other disagree.
     _cited = [str(r) for r in consult.cited_substrate_refs]
     for _gate in gates.values():
-        # The census union (C-1a §5): the turn's cited set is the answer's refs
+        # The census union: the turn's cited set is the answer's refs
         # plus every record the case's actions cite (narration included). Each
         # gate's record lands on the bag under its own key.
         _cited += [r for r in _gate.cited_uuids() if r not in _cited]
@@ -2127,9 +2107,9 @@ async def run_method(
         )
     except Exception as exc:  # noqa: BLE001 — never fails an answer
         logger.warning("consult.ref_classification.failed err=%s", exc)
-    # THE EVIDENCE FLOOR (CONSULT_REVIEW_2026-09-28 §B.3/§B.4). Until now the
+    # THE EVIDENCE FLOOR. Without it the
     # turn's uncertainty was the model's own header number and nothing else:
-    # session 96d7bfc2 made two tool calls, one of them carrying a fabricated
+    # one recorded session made two tool calls, one of them carrying a fabricated
     # result in its ARGS, and published `uncertainty: 0.30`. The floor is keyed
     # to the count of cited refs that RESOLVE to a real row — the same
     # measurement the census below reports, read ONCE above and shared, so the
@@ -2142,7 +2122,7 @@ async def run_method(
     # beside. Best-effort by contract — a census that cannot be measured
     # reports None per class (never a fabricated zero) and never costs the
     # caller an answer.
-    # 2026-09-28 §B.3 — THE CENSUS + THE PROVENANCE HOLD, over the SAME classify
+    # THE CENSUS + THE PROVENANCE HOLD, over the SAME classify
     # read the floor just made (one read serves both; the two cannot disagree).
     # An answer that resolved not one citation to live or held reporting, and
     # still asserts, leads with a line saying so. The banner goes on the ANSWER
@@ -2162,7 +2142,7 @@ async def run_method(
         consult = consult.model_copy(
             update={"answer": (_hold_banner + consult.answer)[:65000]}
         )
-    # C-2a §5.4 — THE TRUTH LINE: an armed write turn ENDS with the server's
+    # THE TRUTH LINE: an armed write turn ENDS with the server's
     # count of what changed (``writes: executed n · staged n · refused n`` or
     # ``writes: none``), whatever the prose above it claims.
     for _gate in gates.values():
@@ -2178,7 +2158,7 @@ async def run_method(
     consult = consult.model_copy(
         update={"data": {**consult.data, **data_update}}
     )
-    # The JUDGE is not here: it runs at the settle point below (W11-F93).
+    # The JUDGE is not here: it runs at the settle point below.
     # Both B.4 facts ride the FRAME as well as the payload, deliberately: the
     # payload's ``data`` bag dies at the consult front door (``consult_turns``
     # has no column for it, and the chat path writes no analyst_outputs row),
@@ -2214,7 +2194,7 @@ async def run_method(
         cost_estimate_usd=spend.cost_usd,
     )
     result = await _wm.mint_on_result(result, first=first, options=options, deps=deps, record=_record)
-    # X2 / C1, W11-F93 — THE SETTLE POINT. The judge grades the answer and the
+    # X2 / C1, THE SETTLE POINT. The judge grades the answer and the
     # cited refs this run RETURNS, after every edit and the mint, and stamps a
     # digest of them the front door re-checks against what it persists. It is
     # exempt from the run's spend ceiling (``spend`` above never meters it): a
@@ -2271,7 +2251,7 @@ class ConsultOnDemandRunner:
 def build_prompt_module() -> Any:
     """Construct the DSPy module bound to this kind.
 
-    Wave B prereq #4: backfilled to return a real
+    Returns a real
     :class:`legba.prompts.consult_on_demand.v1.ConsultOnDemandRound`.
 
     The kind is a ReAct loop (``MAX_TOOL_ROUNDS = 6`` rounds + one

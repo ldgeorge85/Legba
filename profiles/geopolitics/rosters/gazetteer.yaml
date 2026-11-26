@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# THE GAZETTEER of the geopolitics exemplar (W10 CANON-1) — the tables of names
+# THE GAZETTEER of the geopolitics exemplar — the tables of names
 # and codes the platform's guards, matchers and canonicalisers used to carry as
 # code literals in five modules (absence_slice, world_knowledge_guards +
 # writes_supersession, _polity_match + _geo_routing, _entity_canon, grounding).
@@ -201,7 +201,7 @@ irregular_demonyms:
 screen_stopwords: ["country", "countries", "state", "states", "government", "governmental", "national", "international"]
 
 # classifier_patterns: declared title classifiers. machine_structured_title is
-# the GDELT/CAMEO event-coding SHAPE (was _CAMEO_TITLE_RE, W1(c)): an ALL-CAPS
+# the GDELT/CAMEO event-coding SHAPE (was _CAMEO_TITLE_RE): an ALL-CAPS
 # actor (optionally two, joined by <->), a colon, then a LOWERCASE action verb.
 # Compiled with no flags.
 classifier_patterns:
@@ -209,7 +209,7 @@ classifier_patterns:
     ^\s*[A-Z][A-Z0-9 .,'’()&/\-]{1,}(?:<->\s*[A-Z0-9 .,'’()&/\-]+)?:\s+[a-z]
 
 # ---------------------------------------------------------------------------
-# world_knowledge_guards — the E-1 facts-reconciled officeholder guard
+# world_knowledge_guards — the facts-reconciled officeholder guard
 # ---------------------------------------------------------------------------
 # officeholder_country_groups: one alias group per country, in ORDER (was
 # _OFFICEHOLDER_COUNTRY_GROUPS): every surface the extractor recognizes and
@@ -273,7 +273,7 @@ polity_offices:
   leader_of: "leader of"
 
 # ---------------------------------------------------------------------------
-# writes_supersession — office-keyed fact supersession (FU3 / P5)
+# writes_supersession — office-keyed fact supersession
 # ---------------------------------------------------------------------------
 # functional_role_country_side: which column names the COUNTRY for each
 # functional-role predicate (was _FUNCTIONAL_ROLE_COUNTRY_SIDE).
@@ -356,7 +356,7 @@ alias_org: ["European Union", "United Nations"]
 # Curated, never a suffix rule: surnames and multi-country adjectives are
 # deliberately absent.
 demonym_map:
-  # the original curated core (DQ-H4)
+  # the original curated core
   "american": "United States"
   "british": "United Kingdom"
   "french": "France"
@@ -524,7 +524,7 @@ demonym_map:
   "trinidadian": "Trinidad and Tobago"
 
 # region_adjective_map: continental adjectives -> the continent, a LOCATION
-# (was _REGION_ADJECTIVE_MAP, DQ P4).
+# (was _REGION_ADJECTIVE_MAP).
 region_adjective_map:
   "african": "Africa"
   "european": "Europe"
@@ -585,15 +585,15 @@ target_slug_names:
   "za": ["south africa"]
   "eu": ["european union"]
   # Watch tier (non-G20 high-consequence desks). kp/tw/ua were once MISSING and
-  # their desks self-suppressed to TRACE_ONLY (the P4 pre-push review C1).
+  # their desks self-suppressed to TRACE_ONLY.
   # North Korea findings say "North Korea" / "DPRK".
   "kp": ["north korea", "dprk"]
   "tw": ["taiwan"]
   "ua": ["ukraine"]
-  # Pakistan (S1-T2): without it the guard runs BLIND for the pk desk — it fails
+  # Pakistan: without it the guard runs BLIND for the pk desk — it fails
   # OPEN but cannot tell Pakistan from India.
   "pk": ["pakistan"]
-  # A3 / DEC-C (2026-07-16): the escalation-risk watch desks. Aliases cover the
+  # The escalation-risk watch desks. Aliases cover the
   # shapes wire copy uses ("Burma", "DRC", "Burkina"); a miss fails OPEN.
   "sd": ["sudan"]
   "ml": ["mali"]
@@ -616,7 +616,7 @@ known_country_tokens: [
 ]
 
 # ---------------------------------------------------------------------------
-# subject_homonyms — the homonym class (B6, W11-F13)
+# subject_homonyms — the homonym class
 # ---------------------------------------------------------------------------
 # Per subject code: the surface forms that LOOK like the subject but name
 # something else (`exclude`), what they actually name (`reads_as`), and forms

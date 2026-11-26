@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """``composition_lineage_sweep`` sub-handler — the system's lineage-integrity
-verification over the COMPOSITION roots (P3-T6).
+verification over the COMPOSITION roots.
 
 A NEW deterministic sub-handler (NOT an extension of ``integrity_sweep`` — that
 is a single global count-based audit marked ``TRACE_ONLY``; a per-root multi-hop

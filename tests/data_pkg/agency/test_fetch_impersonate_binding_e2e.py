@@ -1,34 +1,33 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""FETCH_REVIEW (a)/(a′) through the REAL binding path.
+"""Fetcher impersonation and block detection through the REAL binding path.
 
 Every test here drives ``Agency.run_pack_tool`` against a fresh migrated
 Postgres — the three-way resolve, the governor, the invocation ledger, the
 handler dispatch and the settle all really run, and ``action_pack_invocations``
 is asserted so this counts as coverage of the BINDING and not of a helper. A
-unit test of ``_egress_impersonate`` alone would not (review §5, and the
-memory rule "tests must traverse the real binding path").
+unit test of ``_egress_impersonate`` alone would not.
 
 What it proves:
 
   1. **reuters.com is never connected to, flag off OR on.** Its robots.txt
      says ``# Block all other bots`` / ``User-agent: *`` / ``Disallow: /`` —
-     as explicit as robots gets. The review is categorical: no fetcher option
-     may be applied to reuters.com, and it asked for this as a NAMED test so
-     nobody has to rediscover §2. Robots is checked BEFORE any page connect,
+     as explicit as robots gets. No fetcher option
+     may be applied to reuters.com; this is a NAMED test so the rule is not
+     rediscovered. Robots is checked BEFORE any page connect,
      so the page URL must never appear in the transport's log.
   2. **A block reads as a block, not as an empty web.** A 403 with a
      Cloudflare interstitial, and a 200 carrying a DataDome one, both surface
      ``blocked_by_challenge`` on the tool output, ``depth_reason=fetch_blocked``
      on the teaser the planner reads, and the tell on the landed row's payload.
-     Before (a′) both landed as ``fetch_failed`` / ``no_main_text_extracted``,
+     Without block detection both landed as ``fetch_failed`` / ``no_main_text_extracted``,
      i.e. indistinguishable from "nothing was published".
   3. **A genuine article is untouched by any of it** — still full_text, still
      archived, no false block.
   4. **The licence gate is NOT touched.** A blocked host with no affirmative
      licence class is a teaser either way; the block is reported, and the
      depth rule stays exactly where ``depth_for_license`` put it. That gate is
-     the operator's (review §1), and this lane does not move it.
+     the operator's, and these tests do not move it.
 """
 from __future__ import annotations
 
@@ -67,7 +66,7 @@ pytestmark = [pytest.mark.asyncio]
 
 
 # ---------------------------------------------------------------------------
-# Bodies — reconstructed from the tells FETCH_REVIEW §2 measured live.
+# Bodies — reconstructed from the tells measured on live probe bodies.
 # ---------------------------------------------------------------------------
 
 ARTICLE_HTML = (
@@ -100,7 +99,7 @@ DATADOME_HTML = (
 )
 
 ROBOTS_ALLOW_ALL = "User-agent: *\nDisallow:\n"
-#: reuters.com's own, verbatim in shape (review §2, line 127 of their file).
+#: reuters.com's own, verbatim in shape.
 ROBOTS_BLOCK_ALL = "# Block all other bots\nUser-agent: *\nAllow: /plus/\nDisallow: /\n"
 
 
@@ -135,8 +134,7 @@ async def _conn(dsn):
 #: Every host this file touches. The cleanup below is SCOPED to these, and
 #: deliberately not the unscoped ``DELETE FROM source_credibility`` the older
 #: R-A e2e uses: that delete commits on the shared session-scoped test DB and
-#: needs a restore fixture to undo, which is the 09-05 merge-wave ordering
-#: pollution. A file that only ever owns its own hosts needs neither.
+#: needs a restore fixture to undo, which pollutes test ordering. A file that only ever owns its own hosts needs neither.
 _OWNED_HOSTS: tuple[str, ...] = (
     "www.reuters.com", "apnews.com",
     "blocked.test", "cleared.test", "unreviewed.test",
@@ -303,8 +301,8 @@ def _response(url: str) -> SearchResponse:
 async def _clear_host(dsn, host: str, license_class: str = "cc_by") -> None:
     """Give a host an AFFIRMATIVE licence class so full_text depth is even
     attempted. Without it ``depth_for_license`` stops at teaser and no fetch
-    happens at all — which is the review's §1 point, and is why the licence
-    gate is not what this lane is testing."""
+    happens at all — which is why the licence
+    gate is not what these tests exercise."""
     async with _conn(dsn) as conn:
         await conn.execute(
             "INSERT INTO source_credibility (source_host, score, scored_by, "
@@ -351,7 +349,7 @@ async def test_reuters_com_is_refused_by_robots_and_never_connected_to(
 ):
     """``# Block all other bots`` is an ANSWER, not an obstacle.
 
-    No fetcher option in FETCH_REVIEW may be applied to reuters.com. Robots is
+    No fetcher option may be applied to reuters.com. Robots is
     evaluated before any page connect, so with the flag in ANY state the only
     URL the transport ever sees is ``/robots.txt``.
     """
@@ -447,7 +445,7 @@ async def test_a_genuine_article_is_not_blocked_and_still_reaches_full_text(dsn,
 async def test_the_licence_gate_is_untouched_by_the_block_report(dsn, web):
     """An UNREVIEWED host is a teaser whether or not it blocked us, and the
     tool never fetched it. ``depth_for_license`` is the operator's gate; this
-    lane reports blocks, it does not widen depth."""
+    path reports blocks, it does not widen depth."""
     url = "https://unreviewed.test/article/1"   # no source_credibility row
     seen = web(page_status=403, page_body=CLOUDFLARE_HTML)
     provider = _StubProvider(_response(url))

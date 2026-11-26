@@ -1,4 +1,4 @@
-# dialogues_mapped/2 — dialogues_mapped/1 re-sized and re-judged (lane G-6).
+# dialogues_mapped/2 — dialogues_mapped/1 re-sized and re-judged.
 # Same shape as /1 (blind openings, one rebuttal, a code sentence table, a gate
 # judge then three voting judges, quorum two of three, a synthesis that keeps
 # dissent). What changed:
@@ -58,7 +58,7 @@ round:
     j_support:
       kind: judge
       card: cards/judges/support.md
-      plane: llm.verify.innoai_gemma.openai_compat
+      plane: llm.verify.gateway_judge.openai_compat
       family_rule: {differs_from: [seat_one, seat_two, seat_three, control]}
       reads: [{from: table, view: sentence_table}]
       output: verdict/2

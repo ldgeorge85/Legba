@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane D-1 — the drift classifier, the cited-span check and the slice mark's
+"""The drift classifier, the cited-span check and the slice mark's
 render (pure: no database).
 
 Every class of the closed list from a fixture pair; numbers, names, dates and

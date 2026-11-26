@@ -327,7 +327,7 @@ class TestDescriptorsParseAndValidate:
         for missing_in_seed in EXTENDED_ENTITY_CLASSES:
             assert missing_in_seed in ec, (
                 f"template missing entity_class {missing_in_seed!r}; "
-                f"L-205 vocabulary registration list incomplete"
+                f"vocabulary registration list incomplete"
             )
 
     def test_template_relationship_types_cover_legacy_geopolitical(self):
@@ -337,7 +337,7 @@ class TestDescriptorsParseAndValidate:
         for missing_in_seed in EXTENDED_RELATIONSHIP_TYPES:
             assert missing_in_seed in rt, (
                 f"template missing relationship_type {missing_in_seed!r}; "
-                f"L-205 vocabulary registration list incomplete"
+                f"vocabulary registration list incomplete"
             )
 
     def test_discovery_relabel_rules_all_validate(self):

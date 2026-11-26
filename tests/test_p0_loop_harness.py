@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""P0-T8 — the end-to-end loop verification harness (the 60-second demo, as a test).
+"""the end-to-end loop verification harness (the 60-second demo, as a test).
 
 This is the glass tower's FLOOR-0 regression gate. It asserts a GREEN report
 across the four loop stages, end to end, for one finding:
@@ -29,7 +29,7 @@ TWO MODES
   ``LEGBA_P0_DEMO_TARGET=<g20-country>``. It runs the four-stage check against the
   RUNNING stack's read APIs (registry ``/api/v1`` on 127.0.0.1:8090 by default).
   When the env is absent OR the stack is unreachable it SKIPS cleanly (pytest
-  skip) — so this file is green NOW and the live demo is the operator's
+  skip) — so this file is green NOW and the live demo is a
   post-deploy step. It never fabricates a pass: an unreachable stack skips, a
   reachable-but-broken loop FAILS.
 
@@ -385,7 +385,7 @@ def _live_ctx():
     target = _live_target()
     if not target:
         pytest.skip(
-            f"live P0 loop check disabled; set {_LIVE_TARGET_ENV}=<g20-country> "
+            f"live loop check disabled; set {_LIVE_TARGET_ENV}=<g20-country> "
             "to run it post-deploy"
         )
     httpx = pytest.importorskip("httpx", reason="httpx needed for the live check")

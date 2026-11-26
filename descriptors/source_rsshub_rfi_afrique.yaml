@@ -45,7 +45,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: a7_rsshub_lane
+  owner: owner@local
   created: "2026-07-24T00:00:00Z"
 
 scope:
@@ -54,7 +54,7 @@ scope:
   languages: [fr]
   tags: [news, world, africa, sahel, francophone, niger]
   source_class: reporting
-  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
+  access_class: public          # free no-auth feed, no separate reuse agreement
 
 acquisition: poll
 

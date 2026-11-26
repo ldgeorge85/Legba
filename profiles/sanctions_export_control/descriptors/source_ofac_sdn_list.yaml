@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# Sanctions / export-control profile SKELETON (PROFILE-1; DEC-11) — X2/E2.
+# Sanctions / export-control profile SKELETON.
 # The OFAC Specially Designated Nationals and Blocked Persons List, as the
 # INSTRUMENT itself: the whole published list, fetched, hashed, archived and
 # diffed entry by entry against the last snapshot (kind instrument_snapshot,
@@ -10,8 +10,8 @@
 #
 # Ships DRAFT — registering it never schedules it; the operator activates.
 # The download was fetched ONCE from a worktree on 2026-10-08 (scratch archive,
-# not the live one) to prove the URL, the size and the hash — see the X2/E2
-# report. US Government work: public domain.
+# not the live one) to prove the URL, the size and the hash.
+# US Government work: public domain.
 #
 # One change signal per changed list: the two sha256 hashes, the added /
 # removed / changed entries keyed on the list's own <uid>, the entry count

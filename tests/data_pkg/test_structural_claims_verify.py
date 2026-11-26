@@ -230,7 +230,7 @@ def test_opt_in_registry_is_subset_of_exempt_set():
     """Drift guard — you cannot structurally-verify a NON-structural analyst, so
     every STRUCTURAL_CLAIMS_VERIFY analyst must also be verify-EXEMPT."""
     assert STRUCTURAL_CLAIMS_VERIFY_ANALYSTS <= STRUCTURAL_VERIFY_EXEMPT_ANALYSTS
-    # The claim-bearing structural analysts this wave opts in.
+    # The claim-bearing structural analysts that opt in.
     assert "geo_convergence_scan" in STRUCTURAL_CLAIMS_VERIFY_ANALYSTS
     assert "indicator_tracker" in STRUCTURAL_CLAIMS_VERIFY_ANALYSTS
     assert "thematic_proposal" in STRUCTURAL_CLAIMS_VERIFY_ANALYSTS

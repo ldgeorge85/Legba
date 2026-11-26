@@ -1,4 +1,4 @@
-# A-3a — substrate_read action pack (review G2 close).
+# Substrate_read action pack (review G2 close).
 #
 # The consult kind's four read tools used to dispatch straight at the
 # SubstrateQueryPort, bypassing the agency plane entirely. This pack puts
@@ -26,7 +26,7 @@ identity:
   version: "<content-hash stamped at register time>"
   abstraction_level: L1
   state: active
-  owner: a3_agency
+  owner: owner@local
   created: "2026-06-09T00:00:00Z"
 
 tools:
@@ -38,10 +38,10 @@ tools:
     config: {}
   - name: vector_search
     config: {}
-  # S5-T4 — RAG over the curated Lane-4 reference corpora (world_context =
+  # RAG over the curated reference corpora (world_context =
   # country/topic priors + doctrine summaries; tradecraft = analytic standards /
-  # SAT handbooks). Embeds the query through the port embedder (S5-T1) and
-  # cosine-searches the S5-T2 collections; returns cited chunks with payload
+  # SAT handbooks). Embeds the query through the port embedder and
+  # cosine-searches the collections; returns cited chunks with payload
   # metadata. Read-only; BACKGROUND/method knowledge, not live substrate.
   - name: search_context
     config: {}
@@ -65,7 +65,7 @@ tools:
     config: {}
   - name: compare_targets
     config: {}
-  # P5 / #99 — DB-side recursive-CTE graph traversal over the OPEN nexus graph
+  # DB-side recursive-CTE graph traversal over the OPEN nexus graph
   # (cyclic; visited-set guard, max_hops<=3, row caps): ranked signed paths
   # A->...->B, the INDIRECT proxy chains (cut-outs), and the brokers that sit on
   # paths between two camps — so an analyst can pull "the proxy path from A to B"
@@ -87,11 +87,10 @@ tools:
     config: {}
   - name: query_predictions
     config: {}
-  # V3/P3 — the decision-time register: "what did Legba believe on date D"
-  # (spec §3.4). Read-only; the findings it returns are citable by id.
+  # The decision-time register: "what did Legba believe on date D". Read-only; the findings it returns are citable by id.
   - name: belief_as_of
     config: {}
-  # V3/P6 — the event surface (spec §6.1): the filtered bounded-occurrence
+  # The event surface: the filtered bounded-occurrence
   # list (lifecycle / geo / entity / time-window / as_of filters) and the
   # one-event dossier (ranked signals, actors with roles, event edges,
   # tracking situations, the lifecycle ledger). Read-only; every id the
@@ -108,16 +107,16 @@ tools:
     config: {}
   - name: list_sources
     config: {}
-  # W11-F141 — the scheduled-events calendar (migration 0240): the
+  # The scheduled-events calendar (migration 0240): the
   # operator-entered register of FUTURE dated things (summits, votes,
   # deadlines, strikes). Read-only; reuses this pack's kind.
   - name: list_scheduled_events
     config: {}
-  # W11-F162 — the forecast ledger's due-date reader (migrations 0242/0244):
+  # The forecast ledger's due-date reader (migrations 0242/0244):
   # what resolves next, each issuer's number, the newest rule proposal.
   - name: list_due_resolvers
     config: {}
-  # W11-F152 — per-source health with a staleness verdict, so the consult can
+  # Per-source health with a staleness verdict, so the consult can
   # tell a quiet feed from a dead one (list_sources is the thin version).
   - name: get_source_health
     config: {}
@@ -141,29 +140,31 @@ prompt_fragments:
   - >-
     Query the substrate before answering: search_signals for full-text,
     query_facts for the fact store, inspect_entity for entity profiles,
-    vector_search for semantic similarity. Cite returned UUIDs.
+    vector_search for semantic similarity. Cite returned UUIDs. A finding is
+    the platform's reading of its sources, not a source; open the signals it
+    cites before resting a claim on it.
   - >-
     For real-world occurrences: query_events lists bounded events (filter
     by target, geo ISO2, category, lifecycle_state, actor, or time window —
     it is a thing that HAPPENED, where list_situations is a thing being
     watched); inspect_event returns one event's dossier — ranked evidence
     signals, actors with roles, event edges, tracking situations, and the
-    lifecycle ledger. belief_as_of(as_of) reads what Legba believed on a
-    date. Every id these tools return is citable.
+    lifecycle ledger. belief_as_of(as_of) reads what the platform had
+    published on a date. Every id these tools return is citable.
   - >-
-    For the PAST as numbers: series_history(series_id, subject, from, to)
+    For the PAST as numbers: series_history(series_id, subject, since, until)
     reads one curated historical series for one subject over a valid-time
-    window, and series_compare(series_id, subjects, from, to) reads the same
-    series across several subjects in one call. from/to are required and
+    window, and series_compare(series_id, subjects, since, until) reads the same
+    series across several subjects in one call. since/until are required and
     bound the period the numbers are ABOUT; the optional as_of bounds the
     provider's RECORD time (which revision had been published by then).
-    These rows are HISTORY, never current reporting: a figure valid for 2016
-    is never evidence about now, and citing one obliges you to state its
+    These rows are HISTORY, never current reporting: a figure valid for an
+    earlier period is never evidence about now, and citing one obliges you to state its
     valid period.
   - >-
     For the FUTURE as scheduled dates: list_scheduled_events reads the
-    platform's calendar of operator-entered events (summits, votes,
-    deadlines, strikes), defaulting to the next 14 days and matched by
+    platform's calendar of events people have entered (for example
+    deadlines, hearings, releases), defaulting to the next 14 days and matched by
     overlap. Its coverage block is part of the answer — n=0 says no events
     are held for that window, which is a statement about the register, not
     the world.

@@ -1,11 +1,11 @@
-# X-1 source expansion (2026-11-14) — draft SourceDescriptor. Ships DRAFT;
+# Draft SourceDescriptor. Ships DRAFT;
 # the reference host walks it to CONFIGURED (descriptors/LIFECYCLE.md), never
-# active — activation is the owner's call per source.
+# active — activation is the operator's call per source.
 #
 # US Federal Reserve Board — speeches by Board members (the press-release feed
 # is a separate catalog entry). The US central bank's own publication:
 # OFFICIAL; central-bank signalling between decisions.
-# Checked 2026-11-14 by the source-expansion review (one GET, generic client
+# Checked (one GET, generic client
 # identity): HTTP 200, text/xml, 15 items, newest 2026-11-14 00:00 UTC, oldest
 # 2026-09-28 — about two a week. Every six hours is ample.
 #
@@ -26,7 +26,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: x1_source_expansion
+  owner: owner@local
   created: "2026-11-14T00:00:00Z"
 
 scope:

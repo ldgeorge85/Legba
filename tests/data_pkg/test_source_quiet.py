@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""U-9 — ``source_quiet.quiet_class``: why a quiet source is quiet, on the
+"""``source_quiet.quiet_class``: why a quiet source is quiet, on the
 source-firing route (the console's Watch surface tells "looked, nothing
 there" from "could not look" by it).
 
@@ -125,7 +125,7 @@ def test_the_leaf_is_stdlib_only() -> None:
     [(0, -1, True), (0, 0, True), (0, 1, False), (1, -1, False), (None, -1, False)],
 )
 def test_a_zero_write_success_is_honest_quiet_to_the_watchdog(written, newest_delta_h, honest) -> None:
-    """Roll 86 (source.usgs.earthquakes_m45 paged every 6.5 h): the geojson
+    """source.usgs.earthquakes_m45 paged every 6.5 h: the geojson
     valve's forced refetch re-yields the unchanged feature, the sink collapses
     it, and the poll records 'success' with 0 written. Same upstream-stamp
     rule as an empty poll; a success that wrote, or an unrecorded count,

@@ -3,7 +3,7 @@
 --
 -- 0035_entity_profiles_composite_key.sql
 --
--- Entity-resolution false-merge fix (entity-resolution Wave 1).
+-- Entity-resolution false-merge fix.
 --
 -- WHY:
 --   Entity resolution deduped on lower(canonical_name) ALONE

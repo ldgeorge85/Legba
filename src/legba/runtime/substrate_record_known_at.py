@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The record readers' ``known_at`` cut — the MACHINERY (lane E2).
+"""The record readers' ``known_at`` cut — the MACHINERY.
 
 What each record reader does under ``known_at`` is classified in
 :mod:`legba.data.raw_reader_known_at` (:data:`RECORD_KNOWN_AT_CUTS`, with the

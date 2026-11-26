@@ -128,7 +128,7 @@ async function startTurn() {
   return FakeEventSource.instances[0]
 }
 
-describe('M-1 — the desktop Consult turn (held before the extraction)', () => {
+describe('The desktop Consult turn (held before the extraction)', () => {
   it('a 202 turn settles from the terminal frame, and its contract and cost stop render', async () => {
     vi.stubGlobal('fetch', routed({ post: () => ACCEPTED }))
     const es = await startTurn()
@@ -199,7 +199,7 @@ describe('M-1 — the desktop Consult turn (held before the extraction)', () => 
 
   it('STOP stops the run, then synthesises on the panel model, then settles', async () => {
     localStorage.setItem('legba_consult_model', 'opus')
-    localStorage.setItem('legba_consult_model_chosen', '1') // an explicit pick (roll 84)
+    localStorage.setItem('legba_consult_model_chosen', '1') // an explicit pick
     const fetchMock = routed({
       post: () => ACCEPTED,
       synth: () => ok(200, { answer: 'salvaged answer', synthesis_status: 'complete', contract: CONTRACT }),

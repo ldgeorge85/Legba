@@ -3,8 +3,8 @@
 --
 -- 0244_forecast_resolution_records.sql
 --
--- THE RESOLUTION RECORD (ST1-A; plan 10 §3.4, decisions D-10, D-15).
--- 0241 stays reserved for the C-3 consult turn record; 0243 is the evidence archive tiering.
+-- THE RESOLUTION RECORD.
+-- 0241 stays reserved for the consult turn record; 0243 is the evidence archive tiering.
 --
 -- WHY
 -- ---

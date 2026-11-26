@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """``GET /v3/graph/arcs`` with ``direction=both``: the anchor's two arms are ONE
-term of the WHERE clause (roll 84, found by lane P-7).
+term of the WHERE clause.
 
 Before the fix the anchor clause was ``(out-arm) OR (in-arm)`` joined to the
 plane and time filters with AND, so SQL read it as ``plane AND time AND

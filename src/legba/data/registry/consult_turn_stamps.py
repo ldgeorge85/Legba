@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The two stamps every persisted consult turn carries (X2 lane C1).
+"""The two stamps every persisted consult turn carries.
 
 * the USAGE RECEIPT (``consult_turns.usage``, migration 0195) — tokens in and
   out, calls, model, route, elapsed, and ``cost_usd`` ONLY when the route
@@ -60,7 +60,7 @@ USAGE_SCHEMA = "consult_usage/1"
 VERIFICATION_SCHEMA = "consult_verification/1"
 _STATES = frozenset({"judged", "unassessable", "not_judged"})
 
-#: W11-F93 — why a judge could not run. Closed: a stamp carries one of these or
+#: Why a judge could not run. Closed: a stamp carries one of these or
 #: no ``judge_unavailable_reason`` at all (a deliberate state — the flag off, a
 #: deep answer — is not unavailability).
 UNAVAILABLE_BUDGET_EXHAUSTED = "budget_exhausted"
@@ -160,7 +160,7 @@ def usage_from_steps(steps: Sequence[Any]) -> dict[str, Any]:
     return {}
 
 
-#: What one per-call receipt on a consult turn keeps (roll 86): the run
+#: What one per-call receipt on a consult turn keeps: the run
 #: account's ``llm_calls`` entry (``stack/llm/base._account_call``) cut to the
 #: fields a reader of the turn needs — which alias answered, what it cost in
 #: tokens, how long it queued at the core-plane gate and how long it took.
@@ -173,7 +173,7 @@ CALL_RECEIPT_STR_KEYS: tuple[str, ...] = (
     "model", "component_id", "subprovider", "status", "finish_reason",
     "thinking_fallback", "error",
 )
-#: Sparse: present only when the call carried them (roll 87: an Anthropic call
+#: Sparse: present only when the call carried them (an Anthropic call
 #: whose ``max_tokens`` the context window limited — an API validity constraint).
 CALL_RECEIPT_SPARSE_KEYS: tuple[str, ...] = (
     "max_tokens_sent", "max_tokens_model_max", "max_tokens_limited_by",
@@ -256,7 +256,7 @@ def usage_receipt(
         "schema": USAGE_SCHEMA,
         "plane": plane,
         "route": route,
-        # Roll 86: what RAN, from the per-call receipts (``model_from_calls``);
+        # What RAN, from the per-call receipts (``model_from_calls``);
         # the handler's configured name only when the run carried no receipts.
         "model": model,
         "models": models,
@@ -278,7 +278,7 @@ def usage_receipt(
         # snapshot; registry/consult_turn_ceiling.py documents it here). ``null``
         # when no ceiling was armed: the knob off, or an unpriced route.
         "turn_ceiling_usd": _float_or_none(src.get("turn_ceiling_usd")),
-        # Roll 87: the per-call output that ceiling PROJECTED with, an
+        # The per-call output that ceiling PROJECTED with, an
         # estimate with its basis (the route's largest observed output, else
         # the fallback). ``null`` when no ceiling was armed.
         "turn_projection": (
@@ -287,7 +287,7 @@ def usage_receipt(
             if src.get("projection_basis") else None
         ),
         "reason": None if measured else reason_if_absent,
-        # Roll 86: one receipt per model call (``call_receipts``); ``null``
+        # One receipt per model call (``call_receipts``); ``null``
         # when the run carried none.
         "call_receipts": receipts,
     }
@@ -298,7 +298,7 @@ def model_from_calls(
 ) -> tuple[str | None, dict[str, int] | None]:
     """The turn's ``model`` and ``models`` from its per-call receipts.
 
-    Roll 86's live chat turn: every call ran the thinking alias ``deep``, while
+    Example: every call ran the thinking alias ``deep``, while
     the turn said ``fast`` — the handler's CONFIGURED name, which the receipt
     took from the handler, not from the calls (the thinking switch picks the
     alias per call). With receipts the turn says what ran: the one model when
@@ -349,7 +349,7 @@ def verification_stamp(
     numeric score is not a verdict at all, a non-judged state that is a failure
     to judge says why (``judge_unavailable_reason``), and — when ``answer`` is
     given — a verdict whose ``settled_sha256`` does not match the answer about
-    to be persisted is withdrawn as ``not_settled`` (W11-F93).
+    to be persisted is withdrawn as ``not_settled``.
     """
     if isinstance(raw, Mapping) and raw.get("state") in _STATES:
         stamp = dict(raw)

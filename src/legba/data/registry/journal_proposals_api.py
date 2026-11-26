@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Operator review surface for the journal's PROPOSE-AND-GATE queue
-(planning/JOURNAL_ASSESSOR_PLAN.md §7.4 / §12 Wave 4).
+"""Operator review surface for the journal's PROPOSE-AND-GATE queue.
 
 The journal SUGGESTS into ``journal_proposals``; a human DISPOSES here. Three
 routes (all bearer-gated, mounted under ``/api/v1``):
@@ -31,7 +30,7 @@ a compliance field full of "ok" and break every existing caller (the panel posts
 read back. An omitted, empty, or whitespace-only reason stores NULL — the honest
 "none given", never an empty string masquerading as one.
 
-§7.5 SAFEGUARDS for self_revision:
+SAFEGUARDS for self_revision:
   (a) the list + the detail surfaced to the operator carries OBJECTIVE EVIDENCE —
       the recent critic/calibration of the journal's own entries — alongside the
       rationale, so a beautifully-argued self-revision is reviewed against the
@@ -41,7 +40,7 @@ read back. An omitted, empty, or whitespace-only reason stores NULL — the hone
       apply worker raises ProtectedSectionViolation → the row archives with the
       reason, NOTHING is applied).
 
-IDEMPOTENCY (§7.4). Accept flips ``status`` ``pending → accepted`` ATOMICALLY
+IDEMPOTENCY. Accept flips ``status`` ``pending → accepted`` ATOMICALLY
 (``UPDATE … WHERE status='pending' RETURNING``) BEFORE applying; only the run
 that won the transition applies. A replayed accept on an already-decided row
 returns the recorded decision WITHOUT re-applying.
@@ -110,7 +109,7 @@ class ProposalOut(BaseModel):
     decision_reason: str | None
     decided_at: datetime | None
     produced_at: datetime
-    # §7.5(a): present ONLY for self_revision (the highest-scrutiny class) — the
+    # Present ONLY for self_revision (the highest-scrutiny class) — the
     # objective evidence the operator must weigh against the rationale.
     self_revision_evidence: CalibrationEvidence | None = None
 
@@ -186,7 +185,7 @@ def _load_jsonb(value: Any) -> Any:
 
 
 async def _journal_calibration_evidence(conn: Any) -> CalibrationEvidence:
-    """Read the §7.5(a) objective evidence for a self_revision review: the live
+    """Read the objective evidence for a self_revision review: the live
     calibration verdict + the journal's own recent critic mean. Best-effort —
     absent data reads as 'unproven' (absence of proof is not proof of skill)."""
     # B0-3 (read-truth): the calibration writer produces ``kind='finding'`` +
@@ -218,7 +217,7 @@ async def _journal_calibration_evidence(conn: Any) -> CalibrationEvidence:
         exo_n = data.get("exogenous_sample_size")
         calibration_thin = not isinstance(exo_n, int) or exo_n < 5
 
-    # The journal's OWN recent critic scores (its track record, §7.5(a)).
+    # The journal's OWN recent critic scores (its track record).
     # ``analyst_critiques`` carries ``overall_score`` as a real column and no
     # analyst attribution of its own — the analyzed desk is one join away via
     # ``trace_id -> analyst_traces.run_id``. (The original query invented a
@@ -313,7 +312,7 @@ def build_journal_proposals_router(deps: RegistryAPIDeps) -> APIRouter:
         )
         async with _pg().acquire() as conn:
             rows = await conn.fetch(sql, *args)
-            # §7.5(a): the objective evidence is read once and bound to any
+            # The objective evidence is read once and bound to any
             # self_revision rows in the page (cheap: one row each from
             # calibration + the journal's critic mean).
             has_self_rev = any(r["proposal_kind"] == "self_revision" for r in rows)
@@ -383,7 +382,7 @@ def build_journal_proposals_router(deps: RegistryAPIDeps) -> APIRouter:
                     actor=actor,
                 )
             except ProtectedSectionViolation as exc:
-                # §7.5(b) — auto-reject: archive WITH the reason, apply NOTHING.
+                # Auto-reject: archive WITH the reason, apply NOTHING.
                 # The machine's reason leads (it is why the row archived), but the
                 # operator's own note is carried after it rather than overwritten —
                 # discarding what the human typed is the exact gap this closes.

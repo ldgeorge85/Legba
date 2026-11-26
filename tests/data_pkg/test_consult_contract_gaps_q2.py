@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Q-2 — the gaps Q-1 left in the consult turn contract, closed.
+"""The gaps Q-1 left in the consult turn contract, closed.
 
 1. WINDOWS the parser missed: numeric day/month ranges (one stated rule for
    the ambiguous reading, printed), "from the 3rd to the 10th", early / mid /
@@ -12,7 +12,7 @@
    a row past the bound is read to it and the accounting says how much was not.
 3. ``synthesize_from`` (recovery) settles its OWN contract over the original
    turn's window / grounding / coverage, by the same functions; the front door
-   answers with it, else with the original's stored contract (roll 81).
+   answers with it, else with the original's stored contract.
 4. DEEP consult: the contract reads the asker's question (not the evidence
    brief appended to it), the settle-point judge runs (a stub judge here — no
    model), and the contract and verdict travel to the finding and the turn.
@@ -335,7 +335,7 @@ async def test_an_unarmed_original_or_unarmed_deps_recover_with_no_contract_of_t
     assert "contract" not in consult.data or not consult.data["contract"].get("armed")
     original = _original_contract()
     consult, _ = await _recover(original, armed=False)
-    # Nothing produced: the front door falls back to the original's (roll 81).
+    # Nothing produced: the front door falls back to the original's.
     assert recovered_contract(consult.data.get("contract"), {"contract": original}) == original
 
 

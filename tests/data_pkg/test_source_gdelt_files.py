@@ -427,7 +427,7 @@ def test_row_to_signal_shape() -> None:
     assert sig.payload["goldstein_scale"] == -6.0
     assert sig.payload["num_mentions"] == 25
     assert sig.payload["export_file_url"] == _EXPORT_URL
-    # B-6: the payload keeps the RAW FIPS value under its ``_fips`` key; the
+    # The payload keeps the RAW FIPS value under its ``_fips`` key; the
     # indexed, desk-routing ``geo`` column carries the TRANSLATED ISO code. Iran
     # is a case where FIPS and ISO happen to agree ('IR' → 'IR'), which is
     # precisely why this assertion passed for months while the codes that do NOT
@@ -943,7 +943,7 @@ async def test_filter_state_store_none_and_number_values_roundtrip() -> None:
 
 async def test_gdelt_files_cursor_read_survives_codec_decoded_scalar() -> None:
     """End-to-end through the real handler: seed the cursor exactly as the
-    live 2026-07-24 incident left it after its one real success, then
+    a live 2026-07-24 failure left it after its one real success, then
     confirm the very next poll (lastupdate.txt still pointing at the same
     export file — the steady "nothing new yet" state every 15-min tick was
     landing in) reads it back without raising."""

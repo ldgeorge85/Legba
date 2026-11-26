@@ -62,7 +62,7 @@ DESCRIPTORS = Path(__file__).resolve().parents[2] / "descriptors"
 #: shape the answer takes (``test_voice_contract``). ``disruption_status`` is
 #: on both lists: it gathers, so every rule below applies to it, AND it is the
 #: ninth bounded unit, so the HOUSE READ CONTRACT applies too. Conflating them
-#: is precisely how it spent the voice wave with half a contract.
+#: is precisely how it spent a whole round of voice work with half a contract.
 #:
 #: ``country_assessor`` gathers but is deliberately absent: it is ``state:
 #: draft`` (retired live) and takes its prompt from ``method.prompt_module``,

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""A bound on what a multi-round GATHER run carries into its calls (W11-F91).
+"""A bound on what a multi-round GATHER run carries into its calls.
 
 What happened
 =============
@@ -46,8 +46,13 @@ Derived default — the arithmetic::
                          = 0.6 × B × 4 characters    (CHARS_PER_TOKEN)
     evidence_char_cap    = that − len(gather system prompt), floor 16,000
 
-    B = 65,536 (live):  0.6 × 65,536 × 4 = 157,286 − 28,082 ≈ 129,200 chars
+    B = 126,976 (a 262,144 window, 131,072 output reserved):
+                        0.6 × 126,976 × 4 = 304,742 − 28,082 ≈ 276,700 chars
+    B = 65,536:         0.6 × 65,536 × 4 = 157,286 − 28,082 ≈ 129,200 chars
     B = 32,000 (10-16): 0.6 × 32,000 × 4 =  76,800 − 28,082 ≈  48,700 chars
+
+B is ``_llm_budget.input_token_budget(llm)``: the explicit override when set,
+else derived from the route's context window, else the default.
 
 The 40% left over is headroom for the estimator's error (at three characters a
 token a chars/4 count of 60% is 80% real) and for the tool schemas the native
@@ -186,6 +191,7 @@ def resolve_gather_context_budget(
     gather_system: str,
     max_rounds: int,
     engaged: bool,
+    llm: Any = None,
 ) -> GatherContextBudget | None:
     """The run's bound, or ``None`` when it does not apply.
 
@@ -195,7 +201,8 @@ def resolve_gather_context_budget(
     """
     if not engaged:
         return None
-    budget = input_token_budget()
+    # ``llm`` is the run's handler: its context window sizes the budget.
+    budget = input_token_budget(llm)
     raw = (options or {}).get(EVIDENCE_CHAR_CAP_OPTION)
     explicit: int | None = None
     if raw is not None and not isinstance(raw, bool):

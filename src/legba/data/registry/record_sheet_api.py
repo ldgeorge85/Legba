@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""``GET /v3/record/*`` — the Record sheet's receipt, text and integrity reads (lane U-10).
+"""``GET /v3/record/*`` — the Record sheet's receipt, text and integrity reads.
 
 The console's Record sheet reads a statement as a chain: the statement → its
 row → the evidence → the RECEIPT → later versions → the integrity line. The

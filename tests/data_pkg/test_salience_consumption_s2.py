@@ -1,18 +1,18 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""S-2 / S-1d (MASTER_PLAN 2026-07-10, Phase S) — salience CONSUMPTION + PROPAGATION.
+"""Salience CONSUMPTION + PROPAGATION.
 
-S-1 made consequence DATA (``signals.salience``); this suite locks the consumers:
+Made consequence DATA (``signals.salience``); this suite locks the consumers:
 
-  * S-1d propagation helpers (signal_salience.magnitude_of / max_salience /
+  * Propagation helpers (signal_salience.magnitude_of / max_salience /
     build_signal_finding_salience) — the max-up-the-tower primitive + the unit
     finding stamp builder.
-  * S-2a the JOURNAL slice ordering (journal_assessor._salience_ordered /
+  * The JOURNAL slice ordering (journal_assessor._salience_ordered /
     _salience_tag / _render_user_prompt) — THE Graham test: a head-of-state
     funeral (higher magnitude, OLDER) must lead a senator's death (lower
     magnitude, NEWER); an unscored row sorts last; authority breaks a magnitude
     tie.
-  * S-2b the COMPOSITION input ordering (meta_findings_synthesizer._orient /
+  * The COMPOSITION input ordering (meta_findings_synthesizer._orient /
     _extract_input_salience / _input_salience_magnitude / _render_salience_lead_block)
     — salience-primary sort over the FindingPayload envelope (``data->data->
     salience``), the byte-for-byte fallback when NOTHING is scored yet, and the
@@ -28,7 +28,7 @@ from legba.data.analysts import meta_findings_synthesizer as mfs
 
 
 # ---------------------------------------------------------------------------
-# S-1d propagation primitives (signal_salience)
+# Propagation primitives (signal_salience)
 # ---------------------------------------------------------------------------
 
 
@@ -96,7 +96,7 @@ def test_build_signal_finding_salience_title_from_payload() -> None:
 
 
 # ---------------------------------------------------------------------------
-# S-2a — the JOURNAL slice ordering (THE Graham test)
+# The JOURNAL slice ordering (THE Graham test)
 # ---------------------------------------------------------------------------
 
 
@@ -207,7 +207,7 @@ def test_journal_render_leads_with_top_magnitude() -> None:
 
 
 # ---------------------------------------------------------------------------
-# T-1b / T-2b — title_en preference + the [untranslated:<lang>] tag in BOTH
+# / title_en preference + the [untranslated:<lang>] tag in BOTH
 # render loops (entry + chronicle).
 # ---------------------------------------------------------------------------
 
@@ -270,7 +270,7 @@ def test_english_row_never_untranslated_tagged() -> None:
 
 
 # ---------------------------------------------------------------------------
-# T-4(c) — _derive_title accepts a leading BOLD-only line, preferred over the
+# (c) — _derive_title accepts a leading BOLD-only line, preferred over the
 # first ATX section header (the chronicle emits a bold title but ### sections).
 # ---------------------------------------------------------------------------
 
@@ -304,7 +304,7 @@ def test_derive_title_falls_back_to_first_line() -> None:
 
 
 # ---------------------------------------------------------------------------
-# T-4(d) — an [[instrument]] perspective span is recorded distinctly in the
+# (d) — an [[instrument]] perspective span is recorded distinctly in the
 # reflect audit (instrument_perspective_span), not left indistinguishable from
 # ordinary perspective; the claim itself stays kind='perspective'.
 # ---------------------------------------------------------------------------
@@ -341,7 +341,7 @@ def test_reflect_instrument_on_world_span_still_downgrades() -> None:
 
 
 # ---------------------------------------------------------------------------
-# S-2b — the COMPOSITION input ordering (over the FindingPayload envelope)
+# The COMPOSITION input ordering (over the FindingPayload envelope)
 # ---------------------------------------------------------------------------
 
 
@@ -384,7 +384,7 @@ def test_orient_sorts_by_salience_then_recency() -> None:
 
 
 def test_orient_byte_for_byte_recency_when_nothing_scored() -> None:
-    # before S-1d stamps anything, ALL magnitudes are -1.0 → pure newest-first
+    # before stamps anything, ALL magnitudes are -1.0 → pure newest-first
     old = _finding("old", "2026-07-10T00:00:00+00:00", None)
     new = _finding("new", "2026-07-14T00:00:00+00:00", None)
     mid = _finding("mid", "2026-07-12T00:00:00+00:00", None)
@@ -413,7 +413,7 @@ def test_salience_lead_block_present_only_when_scored() -> None:
 
 
 # ---------------------------------------------------------------------------
-# S-3 — the advisory salience judge (lead vs top-consequence input)
+# The advisory salience judge (lead vs top-consequence input)
 # ---------------------------------------------------------------------------
 
 _W = "2026-07-13T00:00:00+00:00"

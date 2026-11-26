@@ -2,8 +2,7 @@
  * Tests for the Journal panel's pure helpers — `journalRefLabel` (T1.3),
  * plus `journalKindBadge` / `cycleBand` / `splitCycleBands` (h7).
  *
- * `journalRefLabel` — the T1.3 fix
- * (planning/JOURNAL_CONNECTIVE_AUDIT_PROPOSAL_2026-09-09.md §6): a resolved
+ * `journalRefLabel`: a resolved
  * journal ref must never render the bare word "unknown", and a resolved
  * SIGNAL ref must name which source it came from rather than showing a
  * kind-less title/id.
@@ -117,7 +116,7 @@ const ALL_KINDS = [
   'chronicle',
   'lens',
   'lens_diff',
-  // Program 5 — the stateful tier (the `inquiry` analyst kind).
+  // The stateful tier (the `inquiry` analyst kind).
   'inquiry',
   'crossroads',
 ]
@@ -172,7 +171,7 @@ describe('cycleBand / splitCycleBands', () => {
     expect(cycleBand('chronicle')).toBe('synthesis')
     expect(cycleBand('lens')).toBe('synthesis')
     expect(cycleBand('lens_diff')).toBe('synthesis')
-    // Program 5 reads ACROSS cycles by construction, so it bands with the
+    // The stateful tier reads ACROSS cycles by construction, so it bands with the
     // synthesis reading rather than under the diary's reveal cap.
     expect(cycleBand('inquiry')).toBe('synthesis')
     expect(cycleBand('crossroads')).toBe('synthesis')

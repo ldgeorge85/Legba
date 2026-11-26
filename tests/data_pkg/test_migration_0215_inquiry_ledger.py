@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Migration 0215 — the inquiry ledger, against real SQL.
 
-Program 5 lane 1 (planning/PROGRAM5_INQUIRY_DESIGN_2026-09-24.md §3). Every
+Every
 property asserted here is a property of the DATABASE, not of the pack code
 that sits on top of it — the table exists with its named constraints, the
 sealed-ledger discipline (a hypothesis with no resolution_test is refused)

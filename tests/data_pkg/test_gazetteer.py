@@ -14,9 +14,9 @@ is read through ``src/legba/data/gazetteer.py``. This file proves:
   * the two officeholder extractor regexes compile to the SAME pattern strings
     the pin's code builds from the pin's literals, and the CAMEO classifier is
     the pin's pattern string;
-  * VERDICT PARITY — 50 live signal titles (a read-only sample: GDELT/CAMEO
-    codings, officeholder-shaped headlines, colon headlines) get exactly the
-    verdicts the pin computed through the title classifier, the officeholder
+  * VERDICT PARITY — 50 invented signal titles (machine-coded event titles,
+    officeholder-shaped headlines, colon headlines) get exactly the recorded
+    verdicts through the title classifier, the officeholder
     extractor, the stale-leader guard, the cross-target guard and the V-B
     claim-scope resolver;
   * NOT APPLICABLE BY NAME — a profile that declares a guard's sections not
@@ -278,13 +278,13 @@ def test_the_cameo_classifier_is_the_pins_pattern_string():
 
 
 # ---------------------------------------------------------------------------
-# Verdict parity over 50 live titles
+# Verdict parity over 50 invented titles
 # ---------------------------------------------------------------------------
 
 _DOC = json.loads(VERDICTS.read_text(encoding="utf-8"))
 
 
-def test_the_fixture_is_fifty_titles_from_the_pin():
+def test_the_fixture_is_fifty_invented_titles():
     assert _DOC["pin"] == "fcbafb2e"
     rows = _DOC["rows"]
     assert len(rows) == 50
@@ -294,7 +294,7 @@ def test_the_fixture_is_fifty_titles_from_the_pin():
 
 
 @pytest.mark.parametrize("i", range(50))
-def test_fifty_live_titles_get_the_pins_verdicts(i):
+def test_fifty_titles_get_the_recorded_verdicts(i):
     from legba.data.provenance import absence_slice as AS
     from legba.data.provenance import world_knowledge_guards as W
 

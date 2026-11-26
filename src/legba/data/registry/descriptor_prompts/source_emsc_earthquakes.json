@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.emsc.earthquakes": {
+      "source": "source_emsc_earthquakes.yaml",
+      "state": "draft"
+    }
+  }
+}

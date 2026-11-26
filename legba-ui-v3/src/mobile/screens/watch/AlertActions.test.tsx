@@ -1,8 +1,7 @@
 /**
  * An alert's page on the phone: Acknowledge and Snooze for one who may act on
- * an OPEN episode; a closed one takes no act and says so (roll 87 live at
- * 360 px: the walk opened the newest row, a closed episode, and found a page
- * with no controls and no reason).
+ * an OPEN episode; a closed one takes no act and says so (at 360 px a
+ * closed episode's page once showed no controls and no reason).
  */
 import { describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'

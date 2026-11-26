@@ -1,4 +1,4 @@
-# Claim Watch analyst descriptor (KW-3 — flag-only new-evidence-vs-open-question
+# Claim Watch analyst descriptor (flag-only new-evidence-vs-open-question
 # matcher).
 #
 # A `deterministic`-kind META analyst that, on a ~30-minute cadence, matches
@@ -15,12 +15,12 @@
 #     LIVE (non-superseded) products via a FORWARD walk over
 #     output_consumption (migration 0106); one OPEN flag per (consumer,
 #     question) pair (the partial unique index is the writer idempotency).
-#     With method.options.question_flags: "on" (F5, ships OFF in code — the
-#     X-1 byte-identical contract; armed by the same descriptor PUT that arms
+#     With method.options.question_flags: "on" (ships OFF in code — a
+#     byte-identical contract; armed by the same descriptor PUT that arms
 #     the bearing gate), a matched question the walk finds NO consumer for
 #     writes ONE open SELF-flag instead (output_id = founded_on_id = the
-#     hypothesis id, reason new_evidence_bears_on_unconsumed_question). K-4 R4
-#     §9 F5 measured why: output_consumption held 0 rows for ALL 112 watched
+#     hypothesis id, reason new_evidence_bears_on_unconsumed_question). A
+#     measurement showed why: output_consumption held 0 rows for ALL 112 watched
 #     questions, so the consumer-only walk had left review_flags empty
 #     all-time and bearing_edges was the watcher's only artifact.
 #
@@ -34,7 +34,7 @@
 # The entity plane is GRADED, not boolean, and that is the conservatism of the
 # whole model: ONE shared entity is desk co-membership, not evidence. On a
 # country desk "this signal mentions Iran and is geo-Iran" against "an open
-# question about Iran" is close to trivially true — the KW-3 first-live run
+# question about Iran" is close to trivially true — the first live run
 # proved it, matching ~2.2 questions per incoming signal until the per-run
 # edge cap was the only thing containing it. So 1 entity + geo = 0.30 (NO
 # match), 2 entities + geo = 0.48 (match), 3 entities = 0.56 (match), and a
@@ -61,7 +61,7 @@
 #     rests on the entity plane — but NEVER silently: signal_vectors_found /
 #     signal_vectors_missing / vector_plane_errors are counted separately and
 #     vector_plane_starved goes true (with a WARNING) when a WIRED plane
-#     covers nothing. The first-live incident was exactly that shape.
+#     covers nothing. A first live run hit exactly that shape.
 #   * entity — canonical entity overlap between the signal's resolved links
 #     (merged-loser fold) / its NER surface names resolved through the
 #     existing election machinery, and the entities linked to the question's
@@ -144,7 +144,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: draft
-  owner: kw3_claim_watch
+  owner: owner@local
 
 subscription:
   # No `targets` block → META analyst: one global matcher pass per cadence
@@ -163,8 +163,8 @@ method:
   sub_handler: claim_watch
   # Deterministic kinds carry no per-day token budget — the question-text
   # embeds ride the self-hosted embed plane ($0), bounded per run.
-  # W6 SPLIT-1 fold, 2026-10-04: the live head carries this; the tree now does too:
-  # the core-plane model ref and the two F5/CW gates were set ON live by PUT.
+  # The core-plane model ref and the two gates below (question_flags,
+  # bearing_gate) are ON.
   llm:
     primary:
       factory_kind: stack_ref
@@ -173,18 +173,14 @@ method:
   options:
     bearing_gate: "on"
     question_flags: "on"
-    # Cutover 2026-10-23: the gate asked Gemma on the box (the 8B is retired)
-    # and the decision model shadowed every gate call (W11-F108).
-    # ROLE SWAP 2026-11-05 (operator decision, W11-F148): clef-flash DECIDES
-    # (the gate asks it the one /decide choice question) and the Gemma chat
-    # judge becomes the SHADOW for one week (its rows in decision_shadow_ledger
-    # carry NULL p_yes). Basis: the 197-row adjudication of gate/shadow
-    # disagreements (planning/reviews/CLEF_ADJUDICATION_2026-10-25_prelabelled
-    # .csv) — Clef right 109 / gate 88, and where the gate REFUSED a signal
-    # Clef was right 2:1 (the chat gate under-admits); agreement had drifted
-    # 93.5 -> 88.4 % over the prior week.
-    bearing_gate_ref: llm.decide.innoai_clef_flash
-    bearing_shadow_ref: llm.verify.innoai_gemma.openai_compat
+    # The decision model DECIDES (the gate asks it the one /decide choice
+    # question) and the chat judge is the SHADOW (its rows in
+    # decision_shadow_ledger carry NULL p_yes). Basis: an adjudication of
+    # gate/shadow disagreements — the decision model was right more often, and
+    # where the chat gate REFUSED a signal it was right 2:1 (the chat gate
+    # under-admits).
+    bearing_gate_ref: llm.decide.gateway_typed_choice
+    bearing_shadow_ref: llm.verify.gateway_judge.openai_compat
 
 cadence:
   fallback_schedule: "7-59/30 * * * *"

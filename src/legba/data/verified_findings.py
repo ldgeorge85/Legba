@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """VERIFIED-ONLY finding reads — the composition admission rule, as a reader filter.
 
-The bake-off's arm C (planning/reviews/BAKEOFF_DESIGN.md §2, lane X3/G0) reads
+The bake-off's arm C reads
 the platform's findings THROUGH the checking pipeline and nothing else: only a
 finding a composition would admit as basis evidence. The consult port's two
 finding readers (``list_findings`` / ``belief_as_of``) LEFT JOIN the critique,
@@ -87,7 +87,7 @@ def verified_findings_sql(
     is unchanged — ``critic_score`` here IS the faithfulness score the floor
     was applied to. ``critic_as_of`` (``"AND cr.produced_at <= $n"``) dates
     the verdict to a decision instant, as the plain reader does.
-    ``offset_param`` pages the read (W11-F150); without it the SQL is
+    ``offset_param`` pages the read; without it the SQL is
     unchanged.
     """
     fold = _cf.latest_critique_cte(

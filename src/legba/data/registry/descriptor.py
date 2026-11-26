@@ -105,7 +105,7 @@ class Family(str, Enum):
     ANALYST = "analyst"
     SOURCE = "source"
     ACTION_PACK = "action_pack"
-    # Program 7g — a bounded, versioned HOLDING of the past. Its own family
+    # A bounded, versioned HOLDING of the past. Its own family
     # rather than "a source with a date range": a collection has no cadence,
     # no cooldown and no health, and it carries a firewall block naming the
     # eight surfaces it is fenced from. File convention
@@ -323,7 +323,7 @@ class DescriptorRegistry:
         Public accessor for sibling services (the `api.py` HTTP surface, the
         Phase 5 runtime, audit/DLQ inspection endpoints) that need to issue
         raw SQL against the same connection pool the registry owns. Promoted
-        from the prior private `_pg` attribute per the 2026-05-20 review.
+        from the prior private `_pg` attribute.
 
         Use `async with registry.pg.acquire() as conn: …` for one-shot reads
         and `async with registry.pg.transaction() as conn: …` when atomicity
@@ -1464,7 +1464,7 @@ class DescriptorRegistry:
     ) -> None:
         """INSERT the new head row — the per-family SQL lives in
         :mod:`legba.data.registry.descriptor_families`. ``written_by`` is the
-        writing principal's handle (lane 9): the version's author; head and
+        writing principal's handle: the version's author; head and
         lifecycle moves are the audit log's (``descriptor_audit_log.actor_id``)."""
         await insert_descriptor_row(conn, family.value, descriptor, version, body,
                                     written_by=written_by)

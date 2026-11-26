@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane E0 — the raw readers' ``known_at`` record-time cut (pure; fakes only).
+"""The raw readers' ``known_at`` record-time cut (pure; fakes only).
 
 Pinned here:
 

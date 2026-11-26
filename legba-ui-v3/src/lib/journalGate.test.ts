@@ -31,7 +31,7 @@ const COMPLIANT_PROMPT = [
   'You never write a fact.',
 ].join('\n')
 
-describe('protectedSectionViolations (§7.5b client mirror)', () => {
+describe('protectedSectionViolations', () => {
   it('reports no drops for a prompt carrying every protected clause', () => {
     expect(protectedSectionViolations(COMPLIANT_PROMPT)).toEqual([])
   })
@@ -230,7 +230,7 @@ describe('decisionOutcomeText', () => {
   })
 })
 
-describe('selfRevisionEvidenceSummary (§7.5a counterweight)', () => {
+describe('selfRevisionEvidenceSummary', () => {
   it('says plainly that there is no record when the evidence is unavailable', () => {
     expect(selfRevisionEvidenceSummary(null)).toContain('has not earned a track record')
     expect(

@@ -2,8 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """G1 — THE PACKET: one byte-identical grading item set, and the leak scan.
 
-Ported from ``planning/PROGRAM1_2026-09-16/build_step2_packets.py``, shape for
-shape. What every family sees is the SAME object: the note, the rubric verbatim,
+What every family sees is the SAME object: the note, the rubric verbatim,
 the output contract READ OUT of the rubric, and one item per claim carrying an
 assertion and the reduced reference. The only variable left is the family, which
 is the entire point of building it once.
@@ -15,7 +14,7 @@ apparatus; ``source_url`` / ``source_tier`` / ``significance`` / ``hindsight`` /
 ``gaps`` / ``dimension`` are the reference builder's own metadata, and ANNEX C
 v4 rule 5 explicitly retires tier and hindsight from the grader's job. A
 whitelist rather than a blacklist so a field nobody anticipated cannot ride in
-on a reference written by another lane (R2 builds these; G1 only reads them).
+on a reference written by another builder (this module only reads them).
 
 THE LEAK SCAN is ``r4_common.leak_scan``, carried. It is NOT a substring search:
 three tiers, each with its own argument.
@@ -160,8 +159,8 @@ def reduce_reference(
     """``{ref_developments: [five fields …], ref_bands: …}`` and nothing else.
 
     ``item_id`` is the reference's own development id where it carries one;
-    where it does not, it is derived by R3's convention (``RD-<CC>-<lane>-<n>``)
-    — the same fallback the ratified v3/v4 packets used, so an id in a packet
+    where it does not, it is derived by the convention (``RD-<CC>-<lane>-<n>``)
+    — the same fallback earlier packet versions used, so an id in a packet
     here means what it meant there. ``country`` is the subject ladder's
     resolved code as an item code (``legba.data.subject.item_code``): the
     ISO2 on a country desk, the upper-cased id on a target with no single geo.
@@ -247,7 +246,7 @@ def scan_packet(packet: Mapping[str, Any]) -> list[dict[str, Any]]:
     The rubric is the one shared frozen document every family sees and it is not
     part of the leak surface. A ``.replace()`` would miss it — the embedded copy
     is JSON-escaped — so the field is DROPPED before scanning, exactly as the
-    ratified builder does it.
+    earlier builder did.
     """
     without_rubric = {k: v for k, v in packet.items() if k != "rubric"}
     return leak_scan(json.dumps(without_rubric, ensure_ascii=False))

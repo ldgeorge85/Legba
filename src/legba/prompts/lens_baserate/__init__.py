@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """legba.prompts.lens_baserate — the base-rate-skeptic faculty's persona + prior.
 
-VOICES v1 faculty (planning/VOICES_FACULTY_PRIORS.md § lens_baserate; DL-3). One
+A faculty lens. One
 of four function-typed lenses on the journal_assessor kind. This faculty anchors
 every read to the historical frequency of the event class and to reversion toward
 the mean; "this time is different" is the claim that must clear the higher bar.
@@ -11,7 +11,7 @@ The prior below is the reconciled, falsifiable prior VERBATIM (RECONCILIATION
 STAMP 2026-07-21 — blind-spot gate REPAIRED, trigger now read-time observable via
 the composition's own first-of-kind / tracked-shift framing). Single source of
 truth for the consistency judge; the descriptor's content hash IS the prior
-version (DL-2). Shared tower-only task + narrate contract in
+version. Shared tower-only task + narrate contract in
 ``legba.prompts.lens_common``.
 """
 

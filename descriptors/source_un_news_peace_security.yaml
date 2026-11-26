@@ -1,4 +1,4 @@
-# sources_wave_2 — draft SourceDescriptor. Ships DRAFT (operator activates).
+# Draft SourceDescriptor. Ships DRAFT (operator activates).
 #
 # UN News — Peace and Security topic feed (news.un.org). The escalation-desk
 # analogue of source_un_press.yaml (Security Council meetings coverage) but
@@ -24,7 +24,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: sources_wave_2
+  owner: owner@local
   created: "2026-09-07T00:00:00Z"
 
 scope:
@@ -33,7 +33,7 @@ scope:
   languages: [en]
   tags: [gov, diplomacy, escalation, global, sources_wave_2]
   source_class: official
-  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
+  access_class: public          # free no-auth feed, no separate reuse agreement
 
 acquisition: poll
 
@@ -58,7 +58,7 @@ pipeline:
   enrichment:
     # language_detect FIRST so ner_multilingual uses the detected language.
     # No fact_extractor on the draft: the operator adds it after confirming the
-    # route yields full article text (mirrors the RSSHub-lane conservative default).
+    # route yields full article text (mirrors the other RSSHub routes' conservative default).
     - kind: language_detect
       config: {}
     - kind: ner_multilingual

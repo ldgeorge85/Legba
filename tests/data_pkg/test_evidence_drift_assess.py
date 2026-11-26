@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane D-2 — the drift assessment's code rules, the model step's schema and
+"""The drift assessment's code rules, the model step's schema and
 prompt, the slice line, the switches and the guards (pure: no database)."""
 from __future__ import annotations
 

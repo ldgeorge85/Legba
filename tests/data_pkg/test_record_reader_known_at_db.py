@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane E2 — a record row that entered the record after K is invisible to a cut read.
+"""A record row that entered the record after K is invisible to a cut read.
 
 Database-backed (isolated test stack). For every record reader the record-only
 arm can call, and for ``live_series``, one row recorded before K and one after,

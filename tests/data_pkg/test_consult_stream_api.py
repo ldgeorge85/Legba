@@ -94,7 +94,7 @@ async def test_relay_yields_steps_then_stops_on_final(nats_store, monkeypatch):
                 json.dumps({"type": "step", "round": i}).encode("utf-8"),
             )
         # The ACTOR's bare final — it says the run ended but carries no answer,
-        # so the relay must NOT close on it (D-7). It opens the grace window.
+        # so the relay must NOT close on it. It opens the grace window.
         await nats_store.nc.publish(
             subject,
             json.dumps({"type": "final", "request_id": request_id}).encode("utf-8"),
@@ -153,7 +153,7 @@ async def test_relay_keepalive_on_idle(nats_store, monkeypatch):
     gen = resp.body_iterator
 
     # First yield is the NAMED keepalive event (no message published yet) — a
-    # comment line would never reach a browser script (W2 S-batch).
+    # comment line would never reach a browser script.
     first = await asyncio.wait_for(gen.__anext__(), timeout=5.0)
     assert first.startswith(b"event: keepalive\ndata: ")
     assert first.endswith(b"\n\n")

@@ -45,77 +45,36 @@
 #        POST {registry}/api/v1/registry/descriptors/source/source.telegram.org_channels/transition
 #             {"to_state": "configured"}   then   {"to_state": "active"}
 #
-# 2026-07-29 — supply-chain domain source research
-# (planning/SUPPLY_CHAIN_SOURCES_2026-07-29.md §3, §5 rank #7): added
+# One descriptor, one Telegram session: a second concurrent TelegramClient on
+# the same session is exactly Telegram's AUTH_KEY_DUPLICATED session-kill
+# trigger (see telegram.py below the imports), so every channel rides this
+# descriptor.
+#
+# Per-channel source_class: SourceScope.source_class is a whole-descriptor
+# field (`reporting` for this batch, see scope: below), but state media
+# (@Almasirah_En, @ansarollah1 — Ansar Allah / Houthi authority media, see the
+# STATE MEDIA (PER-CHANNEL OVERRIDE) category in config.channels below) need
+# an honest `state_media` (framing-not-fact doctrine, the IRNA/PressTV
+# precedent documented for Irna_en below). `config.classes` is an optional
+# per-channel source_class override map
+# (TelegramChannelSourceConfig.classes, src/legba/data/sources/telegram.py),
+# read at the signal_salience authority-stamping path
+# (legba.data.analysts.signal_salience._channel_class_override), which prefers
+# the per-channel override over scope.source_class, keyed by each signal's own
+# payload.channel.username.
+#
 # TankerTrackers.com (independent OSINT dark-fleet/sanctioned-tanker tracker)
-# to the INDEPENDENT category below, riding this SAME session/client — no new
-# vault secrets, no new Telegram account, no new rate-limit surface (the
-# G-1 gap slot's explicit constraint,
-# planning/SUPPLY_CHAIN_PACK_PLAN_2026-07-29.md §5.2: "must ride the existing
-# telethon flood-control posture ... no new client, no new rate-limit
-# surface"). Stays under this descriptor's blanket source_class: reporting —
-# the SAME treatment this file already gives Bellingcat (also independent
-# investigative/OSINT) under the "INDEPENDENT" comment category, not a schema
-# field.
+# is in the INDEPENDENT category below and rides this same session/client
+# (no new vault secrets, Telegram account or rate-limit surface). It stays
+# under the blanket source_class: reporting, the same treatment this file
+# gives Bellingcat.
 #
-# 2026-07-29 — OPERATOR DECISION (reverses the earlier plan): @Almasirah_En +
-# @ansarollah1 (Ansar Allah / Houthi authority media — see the STATE MEDIA
-# (PER-CHANNEL OVERRIDE) category in config.channels below) ride THIS
-# descriptor/account too, instead of the separate
-# source_telegram_ansarallah.yaml descriptor + new Telegram account originally
-# planned. A second concurrent TelegramClient on this SAME session is exactly
-# Telegram's AUTH_KEY_DUPLICATED session-kill trigger (see telegram.py:124-130
-# below the imports); a second account/session was also rejected. But
-# source_class is otherwise a WHOLE-DESCRIPTOR field
-# (SourceScope.source_class = `reporting` for this whole batch, see scope:
-# below) — Almasirah/Ansar Allah need an honest `state_media` (framing-not-
-# fact doctrine, the IRNA/PressTV precedent this file already documents for
-# Irna_en above), which the batch default can't carry alongside Bloomberg/
-# Guardian/Bellingcat. RESOLUTION: `config.classes` — a NEW optional
-# per-channel source_class override map (TelegramChannelSourceConfig.classes,
-# src/legba/data/sources/telegram.py) read at the S-1 signal_salience
-# authority-stamping path (legba.data.analysts.signal_salience.
-# _channel_class_override), which prefers the per-channel override over this
-# descriptor's scope.source_class default, keyed by each signal's own
-# payload.channel.username. source_telegram_ansarallah.yaml is DELETED (its
-# separate-descriptor approach is retired) — its live DRAFT source_descriptors
-# row (source.telegram.ansarallah_channels, never activated / no vault
-# secrets ever loaded) is retired via the registry FSM by the operating
-# session, NOT by this file edit (no PUTs from a worktree agent).
-#
-# KNOWN LIMITATION (not fixed by this change — flagged, not silently ignored):
-# `pipeline.enrichment` (below) is ALSO a whole-descriptor list — there is no
-# per-channel pipeline-stage override analogous to `config.classes`.
-# This descriptor's `fact_extractor` stage therefore still runs against
-# Almasirah_En / ansarollah1 messages, even though the doctrine ported from
-# source_telegram_ansarallah.yaml (below) says state media should be
+# KNOWN LIMITATION: `pipeline.enrichment` (below) is also a whole-descriptor
+# list; there is no per-channel pipeline-stage override analogous to
+# `config.classes`. The `fact_extractor` stage therefore still runs against
+# Almasirah_En / ansarollah1 messages, although state media should be
 # framing/signal evidence, NOT fact-mined into the substrate. Only
-# source_class (-> S-1 authority) is per-channel today; a per-channel
-# pipeline override is out of scope for this change and left for the
-# operator as a follow-up if the fact_extractor output on these two channels
-# proves to be a real problem in practice.
-#
-# REGISTRATION STEP (main session) — READ BEFORE APPLYING: a live read-only
-# SELECT against the production DB on 2026-07-29 shows this descriptor's HEAD
-# is ALREADY `state: active` (content hash
-# a5512da66700eda4a47ca48b9373296fde99b6f0ee37c3ac89b0f00c902b38fd at time of
-# check), even though identity.state below still reads `draft` — a pre-
-# existing drift between this repo file and the live instance (someone
-# activated it via the registry API without the repo catching up), NOT
-# something this edit caused or corrects. Practical consequence: applying
-# THIS channel-list change is a LIVE CONFIG UPDATE to an already-running
-# Telethon actor, not an inert draft bring-up like every other file in this
-# commit. It is safe from the AUTH_KEY_DUPLICATED angle (same actor/session
-# reconciling a new body, not a second client) but it is NOT draft-safe —
-# treat it with the same care as any other production descriptor update
-# (verify the new channel resolves to the real TankerTrackers account before
-# flipping this live; a plain content-hash update via the registry's normal
-# PUT/update path is the correct mechanism, NOT a Wave-A-style draft-batch
-# registrar, which would see the file's stale `draft` claim, diff it against
-# the live `active` state, and refuse with "no legal FSM path active ->
-# draft" — a safe but noisy failure. Recommend correcting identity.state to
-# `active` in this file as a follow-up so the repo stops drifting from the
-# live instance; out of scope for this supply-chain source-research change.)
+# source_class (-> authority) is per-channel.
 
 identity:
   id: source.telegram.org_channels
@@ -125,7 +84,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft                       # KEYED — operator flips after vault load
-  owner: s2_keyed_sources
+  owner: owner@local
   created: "2026-06-09T00:00:00Z"
 
 scope:
@@ -140,11 +99,11 @@ scope:
   # per-channel-classed via config.classes below — the tag widens
   # discoverability, it does NOT itself change any channel's source_class).
   tags: [social, messaging, official, humanitarian, health, global, maritime, osint, supply_chain, state_media, yemen, red_sea, houthi]
-  # S1-T8 — generic channel monitor; content depends on the operator-configured
+  # Generic channel monitor; content depends on the operator-configured
   # channel set, so classed reporting (the conservative default) even though the
   # shipped EXAMPLE channels are official org channels.
   source_class: reporting
-  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
+  access_class: public          # free no-auth feed, no separate reuse agreement
 
 acquisition: poll
 
@@ -224,7 +183,7 @@ config:
       - "TankerTrackers"           # TankerTrackers.com — independent OSINT dark-fleet/sanctioned-tanker tracking (satellite+AIS); added 2026-07-29, supply-chain domain sweep
       # --- STATE MEDIA (PER-CHANNEL OVERRIDE — see config.classes
       #     below): Ansar Allah (Houthi) authority voices, added 2026-07-29
-      #     (planning/SUPPLY_CHAIN_SOURCES_2026-07-29.md §3, §5 rank #1/#9).
+      #    .
       #     CRITICAL — these are Yemen's de facto Houthi authority's OWN
       #     media: the exact same primary-source / official-position framing
       #     role IRNA (Iran, Irna_en above) / Press TV (Iran) / Ukrinform
@@ -234,13 +193,12 @@ config:
       #     config.classes (NOT this descriptor's blanket
       #     scope.source_class: reporting above) — read exactly the way
       #     source_irna_english.yaml is read, never as neutral fact. Both
-      #     verified ACTIVE 2026-07-29 (same-day posts) via the public
+      #     verified active (same-day posts) via the public
       #     https://t.me/s/<handle> preview.
       - "Almasirah_En"             # Almasirah English — Houthi/Ansar Allah state media, English arm
       - "ansarollah1"              # official Ansar Allah site channel (Arabic)
-      # --- X-1 CHANNELS, moved here from source_telegram_x1_staged.yaml on
-      #     2026-11-14 (roll 83). Labels as reviewed; classes in
-      #     config.classes below.
+      # --- Channels moved here from source_telegram_x1_staged.yaml. Labels as
+      #     reviewed; classes in config.classes below.
       # OFFICIAL: a government's own channel, read as THAT government's
       # position (primary source, never independent confirmation):
       - "GeneralStaffZSU"          # General Staff of the Armed Forces of Ukraine (Ukrainian government; party to the war)
@@ -261,7 +219,7 @@ config:
   # channel except the ones listed here; an override channel MUST also be
   # listed in `channels` above (config validation fails loud otherwise — see
   # TelegramChannelSourceConfig._classes_keys_must_reference_a_configured_
-  # channel). Values are choice-locked to the S1-T8 source_class vocabulary
+  # channel). Values are choice-locked to the source_class vocabulary
   # (legba.data.schemas.source.SourceClass) — an off-vocabulary value fails
   # loud at registration/activation, never silently at signal-write time.
   classes:
@@ -271,7 +229,7 @@ config:
     raw:
       Almasirah_En: state_media
       ansarollah1: state_media
-      # X-1 (moved 2026-11-14, roll 83):
+      # Moved from source_telegram_x1_staged.yaml:
       GeneralStaffZSU: official
       kpszsu: official
       mod_russia: official
@@ -287,8 +245,8 @@ config:
     raw: 12
   # Bare boolean (no factory wrapper — the unwrap path passes scalars
   # through untouched): media described, never downloaded, stays off.
-  # 2026-09-20 operator: two channels (tassagency_en, ansarollah) timed out on every poll at 15 s; the 30 s / 100-entry
-  # generic poll bound clamped the walk (90 clamps / 48 h). Timeouts and bounds raised to the runtime ceilings.
+  # Two channels (tassagency_en, ansarollah) timed out on every poll at 15 s and the 30 s / 100-entry
+  # generic poll bound clamped the walk, so timeouts and bounds are set to the runtime ceilings.
   per_channel_timeout_seconds:
     factory_kind: number
     raw: 45

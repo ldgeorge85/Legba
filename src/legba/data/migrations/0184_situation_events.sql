@@ -3,7 +3,7 @@
 --
 -- 0184_situation_events.sql
 --
--- CONTINUITY PHASE 2 (planning/SITUATION_CONTINUITY_PLAN_2026-07-31.md, D1) —
+-- CONTINUITY PHASE 2 —
 -- the SITUATION TRAJECTORY LEDGER. Phase 1 gave the compositions a MEMORY (the
 -- prior read + the open-situation register, as citable refs). It did not make
 -- "what changed since the prior read" a QUERYABLE property: a composition could

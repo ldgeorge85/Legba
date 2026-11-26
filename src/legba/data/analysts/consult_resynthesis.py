@@ -348,7 +348,7 @@ async def run_synthesis_only(
     # ORIGINAL run's counts beside prose that no longer existed. Same composer
     # as the loop's, so the two cannot drift.
     consult = await _stamp_census(consult, deps=deps, classification=_classification)
-    # The judge runs at the caller's settle point (W11-F93), not here.
+    # The judge runs at the caller's settle point, not here.
     await record({
         "phase": "reflect",
         "kind": "resynthesis_uncertainty",

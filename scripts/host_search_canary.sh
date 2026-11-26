@@ -24,7 +24,7 @@
 # session): */15 * * * *  (ride the same /etc/cron.d/legba-watchdog file as
 # host_llm_heartbeat.sh; 15 min keeps the probe budget well under one query
 # per SearXNG-goodwill-conscious hour while still catching an outage fast).
-#   */15 * * * * root /usr/local/deployments/active/legba/scripts/host_search_canary.sh
+#   */15 * * * * root <repo>/scripts/host_search_canary.sh
 set -u
 RUNTIME_CONTAINER="${RUNTIME_CONTAINER:-legba-legba-runtime-dapr-1}"
 SEARCH_COMPONENT_ID="${SEARCH_COMPONENT_ID:-search.searxng.local}"

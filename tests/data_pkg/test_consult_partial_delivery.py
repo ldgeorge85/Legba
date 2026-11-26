@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W11-F132 — run 9b902fec: two paid generations, nothing delivered.
+"""Two paid generations, nothing delivered.
 
-2026-10-29 18:31Z, consult session 963b7b08, route ``llm.anthropic.fable_5_1``.
-Twelve drilling rounds took two minutes; in round 13 the model began ANSWERING
+A live consult on route ``llm.anthropic.fable_5_1``: twelve drilling rounds
+took two minutes; in round 13 the model began ANSWERING
 (native route, no tool call) and the round deadline cut it at 480s with no
 text sink installed — the answer was discarded. The loop then bought a second
 long generation in the forced final; that one streamed 26 KB of answer, and
@@ -178,7 +178,7 @@ ANSWER = "## Assessment\n\n" + ("The escalation ladder is intact. " * 120)
 
 @pytest.mark.asyncio
 async def test_a_round_cut_while_answering_delivers_the_partial_and_spends_nothing_more() -> None:
-    """The 9b902fec round 13, reproduced: the answer is DELIVERED, once.
+    """The live round-13 cut, reproduced: the answer is DELIVERED, once.
 
     ``round_deadline_seconds`` is floored at 1s by the loop, so this costs one
     real second. The forced final must not run: two requests on the wire.

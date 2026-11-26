@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""L-204 — `/api/v1/registry/ui_panels` route tests.
+"""`/api/v1/registry/ui_panels` route tests.
 
-The L-204 frontend calls this route at boot to populate its reactive
+The frontend calls this route at boot to populate its reactive
 panel registry. The contract:
 
   * `GET /api/v1/registry/ui_panels?mode=<mode>` → list of active rows.
@@ -359,7 +359,7 @@ async def test_get_ui_panels_by_slot(api_app, client):
 @pytest.mark.asyncio
 async def test_ui_panel_row_out_field_set_matches_ts_interface(api_app, client):
     """The TS `PanelRegistration` interface (legba-ui-v3/src/types.ts)
-    expects exactly these fields. Drift breaks the L-204 frontend
+    expects exactly these fields. Drift breaks the frontend
     silently, so we lock it down here."""
     _, _, pg_store = api_app
     target = f"r_{uuid4().hex[:8]}"

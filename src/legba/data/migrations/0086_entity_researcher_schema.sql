@@ -3,8 +3,8 @@
 --
 -- 0086_entity_researcher_schema.sql
 --
--- The SCHEMA FOUNDATION for the `entity_researcher` (E2b + E5 of
--- planning/MASTER_PLAN_2026-07-10.md). This migration only lands the DDL
+-- The SCHEMA FOUNDATION for the `entity_researcher` (E2b + E5).
+-- This migration only lands the DDL
 -- surfaces the researcher writes against; the analyst, the blocking/candidate
 -- generator (E3), and the write-time canonicalization code land separately.
 --

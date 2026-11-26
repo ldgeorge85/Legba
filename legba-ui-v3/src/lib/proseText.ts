@@ -58,8 +58,7 @@ export function stripMarkdown(md: string): string {
 
 /**
  * Strip a raw-signal JOURNAL citation marker (`[[ref:<uuid>]]`) from prose.
- * A journal claim cites a raw signal this way (T1.3,
- * planning/JOURNAL_CONNECTIVE_AUDIT_PROPOSAL_2026-09-09.md §6) — a DIFFERENT
+ * A journal claim cites a raw signal this way — a DIFFERENT
  * marker family from the ordinal `[[ref:N]]` `stripCitationMarkers` (below)
  * and `citationsModel`'s marker tokenizer strip/resolve, so it passes through
  * both untouched and would otherwise render as literal bracket noise. Matched

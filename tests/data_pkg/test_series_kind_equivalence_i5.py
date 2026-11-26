@@ -1,16 +1,16 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""I-5 — the EXISTING series and register bindings read byte-for-byte as before.
+"""The EXISTING series and register bindings read byte-for-byte as before.
 
-Lane I-5 widened ``series_api`` (root / indexed row paths, positional rows, a
+Widened ``series_api`` (root / indexed row paths, positional rows, a
 wider closed date vocabulary, a templated since parameter, a JSON-stat reader,
 a period-END window test) and the ``xml_records`` differ (an attribute key and
 attribute paths). None of that may move a source that already exists.
 
-The digests below were computed on the PRE-I-5 code (tip 1d5055f7) over the
+The digests below were computed on the PRE-code (tip 1d5055f7) over the
 same inputs and pinned here; the test recomputes them on the current code.
-Inputs: the two recorded-shape fixtures the S-1 tests use (EIA JSON, BIS CSV),
-two synthetic CSV bodies shaped like the ECB SDMX header X-1 checked, the two
+Inputs: the two recorded-shape fixtures the tests use (EIA JSON, BIS CSV),
+two synthetic CSV bodies shaped like the ECB SDMX header checked, the two
 SDN fixtures and a text body; per series descriptor the records (every field
 the observation sink writes), the request parameters a poll sends for a fixed
 window and page, and the window starts; per register binding the parsed
@@ -66,7 +66,7 @@ SERIES_CASES: dict[str, tuple[Path, bytes]] = {
     "ecb_fm": (DESC / "source_ecb_deposit_rate_daily.yaml", _ECB_FM_CSV),
 }
 
-#: sha256 of :func:`_series_view` on the PRE-I-5 code (1d5055f7).
+#: sha256 of :func:`_series_view` on the PRE-code (1d5055f7).
 SERIES_GOLDEN: dict[str, str] = {
     "eia": "dd094637a1ec143494e873bc4568e30a650de1d378502b34a6d34a865280fb37",
     "bis": "6159600a747d243a5165a4b07420978e529fd7d4b12a15df34bc99a52bc771ca",
@@ -84,7 +84,7 @@ REGISTER_CASES: dict[str, Path] = {
     "canada_text": DESC / "source_canada_sema_sanctions_list.yaml",
 }
 
-#: sha256 of :func:`_register_view` on the PRE-I-5 code (1d5055f7).
+#: sha256 of :func:`_register_view` on the PRE-code (1d5055f7).
 REGISTER_GOLDEN: dict[str, str] = {
     "ofac_sdn": "e1556e5f2e8f1edb1f5d115656a26c10cb9f93baacf6822614cd67f8acd6cf5e",
     "uk_text": "7b5b43b25e30c45a8215b22f0202ef23cd3236cbd977b06395f1c26b2aa80a5b",
@@ -142,8 +142,8 @@ def test_existing_series_sources_read_exactly_as_before(name: str) -> None:
     path, payload = SERIES_CASES[name]
     view = _series_view(path, payload)
     if name == "ecb_exr":
-        # The ONE intended change: X-1 wrote the ECB rate as `ratio` before the
-        # currency-pair unit existed; I-5 moves it to `fx_quote_per_base`.
+        # The ONE intended change: wrote the ECB rate as `ratio` before the
+        # currency-pair unit existed; moves it to `fx_quote_per_base`.
         # Everything else about the reading is pinned unchanged.
         units = {r["unit"] for k in ("all", "since", "since_oct") for r in view[k]["records"]}
         assert units == {"fx_quote_per_base"}

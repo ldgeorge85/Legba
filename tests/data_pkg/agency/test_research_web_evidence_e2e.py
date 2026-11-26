@@ -67,7 +67,7 @@ from legba.data.stack.search import SearchResponse, SearchResult
 
 # The ``restore_source_credibility_seed`` fixture (tests/data_pkg/conftest.py)
 # re-applies the baseline source_credibility rows onto an open connection —
-# see its docstring for why (09-05 merge-wave: this file's reset fixture runs
+# see its docstring for why (this file's reset fixture runs
 # an unscoped ``DELETE FROM source_credibility`` that commits on the shared
 # test DB).
 
@@ -140,8 +140,8 @@ async def _reset_db(dsn, restore_source_credibility_seed):
     """Scrub the tables this file owns BEFORE each test, and RESTORE the
     canonical ``source_credibility`` seed AFTER — the unscoped delete in
     ``_clean`` commits on the shared test DB, so leaving it wiped poisons every
-    later ``source_credibility`` test in the suite (the 09-05 merge-wave
-    ordering pollution)."""
+    later ``source_credibility`` test in the suite (test-ordering
+    pollution)."""
     await _clean(dsn)
     try:
         yield
@@ -159,8 +159,7 @@ async def _scrub_targets(conn) -> None:
     file. A draft ``country_watch_il`` head is OFF the reference roster (the
     roster admits an active head or none), so ``test_reference_builder`` read
     ``[country_g20_ar] != [country_watch_il]`` and a thin-dimension set widened by
-    the head's ``news`` tag whenever the shuffle ran it after this file
-    (nightly 10-05 .. 10-06 and the W11-F50 seed 290567073)."""
+    the head's ``news`` tag whenever the shuffle ran it after this file."""
     await conn.execute(
         "DELETE FROM target_descriptors WHERE descriptor_id = 'country_watch_il' AND owner = 'test'")
     await conn.execute(
@@ -467,9 +466,8 @@ async def test_landed_row_contributes_zero_cited_mass(dsn, web):
 
 # ---------------------------------------------------------------------------
 # THE EMPTY-TEASER GUARD — a teaser hit with no snippet text is SKIPPED, not
-# landed as a zero-text signals row (live incident 2026-09-06: run
-# 46b41612-d8e6-45a1-bb16-24380a0becd9 landed an en.m.wikipedia.org hit with
-# payload.text == '' — SearXNG returned the result with an empty snippet).
+# landed as a zero-text signals row (an en.m.wikipedia.org hit once landed with
+# payload.text == '' because SearXNG returned the result with an empty snippet).
 # ---------------------------------------------------------------------------
 
 
@@ -1437,32 +1435,32 @@ async def test_with_nothing_dispatched_the_same_run_self_selects_unchanged(
 
 
 # ---------------------------------------------------------------------------
-# THE PLANNER EXECUTES ITS ASSIGNMENT (2026-09-08)
+# THE PLANNER EXECUTES ITS ASSIGNMENT
 #
 # The section above proved the chain works when the model speaks the protocol.
-# Three dispatched runs then showed it does not. Live, from analyst_traces:
+# Three dispatched runs then showed it does not. Observed in analyst_traces:
 #
-#   09-07 15:37Z  success. Assignment present, ONE search_corpus call, round 2
-#                 unparseable, and the FINDING's body was the model's own
-#                 action text — "Attempt to fetch external evidence." plus
-#                 {"action": "web_evidence", "query": …, "hypothesis_id": …}.
-#                 Faithfulness 1.00 on a claim about nothing. The question was
-#                 claimed at GROUND and stayed in_progress.
-#   09-08 03:37Z  success. NO assignment block — the claim above had moved the
-#                 row out of ``status='open_question'``, which is the only
-#                 status the backlog SQL reads, so the ranker could not see it.
-#                 Round 2 ``unrecognized``; body "Attempt tool use."
-#   09-08 15:37Z  FAILED (OutputContractError, empty body). Also unassigned,
-#                 self-selected a unit_payload question, and DID land five
-#                 signals — with geo {} and dispatch.kind self_selected,
-#                 because nothing outside an assignment block prints an id.
+#   run 1  success. Assignment present, ONE search_corpus call, round 2
+#          unparseable, and the FINDING's body was the model's own
+#          action text — "Attempt to fetch external evidence." plus
+#          {"action": "web_evidence", "query": …, "hypothesis_id": …}.
+#          Faithfulness 1.00 on a claim about nothing. The question was
+#          claimed at GROUND and stayed in_progress.
+#   run 2  success. NO assignment block — the claim above had moved the
+#          row out of ``status='open_question'``, which is the only
+#          status the backlog SQL reads, so the ranker could not see it.
+#          Round 2 ``unrecognized``; body "Attempt tool use."
+#   run 3  FAILED (OutputContractError, empty body). Also unassigned,
+#          self-selected a unit_payload question, and DID land five
+#          signals — with geo {} and dispatch.kind self_selected,
+#          because nothing outside an assignment block prints an id.
 #
 # So these three tests are the three defects, driven through the same REAL
 # chain as the section above with the LIVE reply shapes as the stub's script.
 # ---------------------------------------------------------------------------
 
 
-#: The 09-07 15:37Z body, verbatim except for the id, which each test splices
+#: A live narration body, verbatim except for the id, which each test splices
 #: in from the prompt it was actually shown.
 _LIVE_NARRATION = (
     "Attempt to fetch external evidence.\n"
@@ -1475,7 +1473,7 @@ _LIVE_NARRATION = (
 
 
 class _LiveShapePlanner(_AssignmentFollowingPlanner):
-    """Round 2 replies with the 09-07 narration + flat ``{"action": …}`` object.
+    """Round 2 replies with the narration + flat ``{"action": …}`` object.
 
     Everything else is the assignment-following planner's own script, so the
     ONLY difference between this test and the passing one above is the envelope
@@ -1650,7 +1648,7 @@ async def test_the_live_narration_shape_is_executed_not_published(
     run_id = uuid4()
     result = await _run_researcher(dsn, planner, run_id=run_id, provider=provider)
 
-    # THE ACTION RAN. The live run's round 2 was ``unrecognized``; this is a
+    # THE ACTION RAN. The observed round 2 was ``unrecognized``; this is a
     # completed tool_call, with the query the model actually asked for.
     steps = [s for s in result.intermediate_steps if s.get("kind") == "tool_call"]
     assert [s["tool"] for s in steps] == ["search_corpus", "web_evidence"]
@@ -1700,7 +1698,7 @@ async def test_an_action_without_the_id_still_reaches_the_desk(
     """THE SCOPE CARRY, made structural. The same live shape with the
     ``hypothesis_id`` line dropped — the transcription failure the prompt
     cannot prevent. The run KNOWS its assignment, so the loop stamps the id and
-    the evidence still lands with the desk's geo. The 09-08 15:37Z run, which
+    the evidence still lands with the desk's geo. The live run that
     had no assignment to stamp from, landed five rows with geo {}."""
     await _sweep_backlog(dsn)
     qid = await _dispatch_the_il_gap(dsn, datetime.now(timezone.utc))
@@ -1731,7 +1729,7 @@ async def test_an_action_without_the_id_still_reaches_the_desk(
 
 
 class _NarratingProsePlanner(_AssignmentFollowingPlanner):
-    """The 09-08 03:37Z shape: prose in GATHER (no parseable action at all),
+    """A live shape: prose in GATHER (no parseable action at all),
     then a FINDING that is the announcement ``"Attempt tool use."``"""
 
     async def chat_complete(self, messages, **kwargs):
@@ -1746,7 +1744,7 @@ class _NarratingProsePlanner(_AssignmentFollowingPlanner):
 async def test_a_narrated_run_publishes_nothing_and_keeps_the_claim(
     dsn, web, archive_root,
 ):
-    """(b) THE 09-08 03:37Z DEFECT. The planner never emits a parseable action
+    """(b) THE NARRATED-FINDING DEFECT. The planner never emits a parseable action
     and its finding is the announcement. Nothing may be published: the run
     fails loud with the receipt, and the question stays CLAIMED so the next
     tick can re-render it."""
@@ -1778,7 +1776,7 @@ async def test_a_narrated_run_publishes_nothing_and_keeps_the_claim(
 async def test_the_next_tick_re_renders_a_claim_this_analyst_did_not_answer(
     dsn, web, archive_root,
 ):
-    """(c) THE 09-08 03:37Z SECOND DEFECT, under the 09-09 claim rule. After
+    """(c) THE SECOND DEFECT, under the claim rule. After
     the narrated run above the question was ``in_progress`` — invisible to the
     backlog SQL, which reads ``status='open_question'`` and nothing else — and
     live, the next two ticks were handed the ordinary unit_payload menu while
@@ -1834,7 +1832,7 @@ async def test_a_successful_run_that_did_not_answer_keeps_the_claim(dsn):
     """The half the release does NOT cover, and must not.
 
     A run that SUCCEEDED — published a finding, wrote a ``success`` trace — and
-    still never answered its assignment (the 09-07 15:37Z shape: a narration
+    still never answered its assignment (the narration shape: a narration
     published as a finding, no ``addressed_question``, no bearing edge) is not
     a dead run. Its claim stands, and ``resolve_standing_assignment``
     re-renders the same assignment WITHOUT re-claiming it, so the reclaim clock
@@ -1915,9 +1913,9 @@ async def test_a_claim_held_by_another_analyst_is_never_re_rendered(dsn):
 
 
 # ---------------------------------------------------------------------------
-# THE FINAL TURN IS THE FINDING (2026-09-09)
+# THE FINAL TURN IS THE FINDING
 #
-# Three consecutive live hard fails — 09-08 15:37Z, 09-09 03:37Z, 09-09 15:37Z —
+# Three consecutive live hard fails,
 # all reading, character for character:
 #
 #     OutputContractError: model returned a finding contract with no readable
@@ -1934,9 +1932,9 @@ async def test_a_claim_held_by_another_analyst_is_never_re_rendered(dsn):
 # a dict with no title and no body and raises that exact string. With
 # GATHERING_CLOSED_CLAUSE appended to the synthesis turn, 0 of 8.
 #
-# So: the trace must carry the evidence (§1), the receipt must name the shape
-# (§2), the synthesis turn must say gathering is closed (§3), and a hard-failed
-# assigned run must not hold its claim (§4).
+# So: the trace must carry the evidence, the receipt must name the shape, the
+# synthesis turn must say gathering is closed, and a hard-failed assigned run
+# must not hold its claim.
 # ---------------------------------------------------------------------------
 
 

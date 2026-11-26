@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """What the two statement seats share: the route they run on, how a seat calls
-its model, and how a seat reads the model's reply (plan P1 §4 lane S3).
+its model, and how a seat reads the model's reply.
 
 THE TWO SEATS.
 
@@ -12,7 +12,7 @@ THE TWO SEATS.
   decides.
 * The **verifier seat** (:mod:`legba.data.statement_verifier`) checks a
   draft's support in a clean context — code first, then a model that sees only
-  the statement and its quotes (plan §3 G4). Only ``supports`` may establish,
+  the statement and its quotes. Only ``supports`` may establish,
   and its planted-error catch rate (:mod:`legba.data.statement_planted`) is
   published beside every figure it feeds.
 
@@ -27,8 +27,8 @@ runs on a built handler before the first call; it refuses an Anthropic
 component, a priced component, a non-vLLM subprovider and the ``deep`` alias.
 
 NEITHER SEAT WRITES. A seat returns a typed draft or a report. Status is never
-a seat's to set (plan S3 "Must not ... let either seat write a status"); the
-store (lane S1) and the gate's lifecycle decide.
+a seat's to set; the store and the
+gate's lifecycle decide.
 
 A LEAF: stdlib + the shapes leaf + the shared sampling constant.
 """
@@ -55,7 +55,7 @@ FORBIDDEN_MODEL_ALIASES = frozenset({"deep"})
 TYPING_SEAT_ID = "statement_typing_seat"
 VERIFIER_SEAT_ID = "statement_verifier_seat"
 
-#: Principals the seats act as (plan §2.2). Recorded on what they return;
+#: Principals the seats act as. Recorded on what they return;
 #: stamping a row with them is the store's job.
 TYPING_PRINCIPAL = "agent:statement-typing"
 VERIFIER_PRINCIPAL = "agent:statement-verifier"
@@ -115,7 +115,7 @@ class SeatCall:
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     model: str | None = None
-    #: S-6 — the call asked for the core plane's thinking alias
+    #: The call asked for the core plane's thinking alias
     #: (``chat_complete(thinking=True)``); ``None`` = not asked either way.
     thinking: bool | None = None
 
@@ -142,6 +142,20 @@ class CallBudget:
         return max(0, self.limit - self.used)
 
 
+#: The token a seat prompt carries for the quote minimum; filled from the
+#: gate's own number at call time, so the prompt and the gate cannot disagree.
+MIN_QUOTE_TOKEN = "<<MIN_QUOTE_WORDS>>"
+
+
+def fill_seat_tokens(system_prompt: str) -> str:
+    """The seat prompt with the numbers code owns written in."""
+    if MIN_QUOTE_TOKEN not in system_prompt:
+        return system_prompt
+    from .statement_gate import MIN_QUOTE_WORDS
+
+    return system_prompt.replace(MIN_QUOTE_TOKEN, str(MIN_QUOTE_WORDS))
+
+
 async def call_seat(
     llm: SeatLLM,
     *,
@@ -166,7 +180,7 @@ async def call_seat(
     try:
         response = await llm.chat_complete(
             [{"role": "user", "content": user_content}],
-            system=system_prompt,
+            system=fill_seat_tokens(system_prompt),
             temperature=HOUSE_TEMPERATURE,
             **extra,
         )
@@ -246,6 +260,7 @@ def first_of(values: Sequence[str], allowed: frozenset[str]) -> str | None:
 __all__ = [
     "CORE_SUBPROVIDER",
     "FORBIDDEN_MODEL_ALIASES",
+    "MIN_QUOTE_TOKEN",
     "SEAT_COMPONENT",
     "TYPING_PRINCIPAL",
     "TYPING_SEAT_ID",
@@ -259,6 +274,7 @@ __all__ = [
     "as_text",
     "assert_core_route",
     "call_seat",
+    "fill_seat_tokens",
     "first_of",
     "fold_fullwidth_markers",
     "parse_reply_object",

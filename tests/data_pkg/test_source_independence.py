@@ -87,7 +87,7 @@ def _cit(
 
 
 #: The origin head's own body. Quotable: the assembler refuses to construct a
-#: block it cannot cut a span from, which is F-12 doing its job.
+#: block it cannot cut a span from, which is doing its job.
 DESK_BODY = (
     "**BLUF:** Two separate deployments were confirmed along the northern "
     "corridor this week, and the second has not been publicly acknowledged.\n"

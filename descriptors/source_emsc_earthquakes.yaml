@@ -1,0 +1,131 @@
+# Draft SourceDescriptor. Ships DRAFT; the reference host walks it to
+# CONFIGURED (descriptors/LIFECYCLE.md), never active — activation is an
+# admin's call.
+#
+# EMSC (Euro-Mediterranean Seismological Centre) — earthquakes of magnitude
+# 5.5 and above from its FDSN event service, as text signals with the
+# epicentre as the signal's own point. A second, independent seismological
+# authority beside USGS (source.usgs.earthquakes_m45) and the Japan
+# Meteorological Agency list. Kind: json_api over the service's GeoJSON
+# (the document is a FeatureCollection; the handler reads `features` as the
+# item list, so each event gets a readable title — "M5.6 mb — region" — that
+# the geojson kind would not build from these properties).
+#
+# Checked 2026-11-25 (one GET, generic client identity):
+# https://www.seismicportal.eu/fdsnws/event/1/query?limit=5&format=json&minmag=5&orderby=time
+# -> HTTP 200, application/json, FeatureCollection {type, metadata, features}.
+# Each feature: top-level `id` (the event id, e.g. "20261125_0000184"),
+# a Point geometry [lon, lat, depth-as-negative-metres], and properties
+# source_id, source_catalog, lastupdate, time (ISO 8601, UTC), flynn_region
+# (the Flynn-Engdahl region name), lat, lon, depth (km), evtype, auth, mag,
+# magtype, unid. Read here: `id`; `properties.time` (origin time);
+# `properties.flynn_region`, `properties.mag`, `properties.magtype`,
+# `properties.depth`, `properties.auth`; the coordinates from
+# `properties.lat` / `properties.lon`. An event revised upstream keeps its id
+# and changes its magnitude: the title carries the magnitude, so a revision is
+# a new content hash.
+#
+# Threshold: magnitude 5.5 and above, the 50 newest. Lower thresholds firehose
+# minor tremors; the platform keeps the major-events slice of the geophysical
+# feeds. Cadence hourly.
+#
+# Licence, in the publisher's words
+# (https://www.seismicportal.eu/fdsn-wsevent.html): "distributed under the
+# Creative Commons Attribution 4.0 International (CC BY 4.0) license".
+# robots.txt was not read.
+
+identity:
+  id: source.emsc.earthquakes
+  name: EMSC — earthquakes M5.5 and above (FDSN GeoJSON)
+  kind: json_api
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: owner@local
+  created: "2026-11-25T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: [en]
+  tags: [gis, geospatial, structured, hazard, seismic, earthquake, global]
+  source_class: official
+  license_class: cc_by            # EMSC FDSN page: CC BY 4.0
+  attribution: "Source: EMSC (Euro-Mediterranean Seismological Centre), CC BY 4.0"
+  access_class: public
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "19 * * * *"
+  cooldown_seconds: 300
+  jitter_seconds: 60
+  expect_quiet: true             # hours without a M5.5 quake are normal
+
+config:
+  url_template:
+    factory_kind: text
+    raw: "https://www.seismicportal.eu/fdsnws/event/1/query?format=json&minmag=5.5&limit=50&orderby=time"
+  items_path:
+    factory_kind: text
+    raw: "features"
+  id_path:
+    factory_kind: text
+    raw: "id"
+  title_path:
+    factory_kind: text
+    raw: "properties.flynn_region"
+  title_template:
+    factory_kind: text
+    raw: "M{properties.mag} {properties.magtype} earthquake: {properties.flynn_region}"
+  timestamp_path:
+    factory_kind: text
+    raw: "properties.time"
+  body_template:
+    factory_kind: text
+    raw: "Earthquake of magnitude {properties.mag} ({properties.magtype}) in {properties.flynn_region}. Origin time (UTC): {properties.time}. Depth: {properties.depth} km. Reporting authority: {properties.auth}. Event id: {id}"
+  geometry:
+    factory_kind: dict
+    value_kind: text
+    raw:
+      lat_path: properties.lat
+      lon_path: properties.lon
+      place_path: properties.flynn_region
+      off_land: no_country       # an ocean epicentre is filed under no country
+  language:
+    factory_kind: text
+    raw: "en"
+  static_tags:
+    factory_kind: list
+    raw: [earthquake, emsc]
+  lookback_minutes:
+    factory_kind: number
+    raw: 4320                    # first poll reaches back three days
+  max_items_per_pull:
+    factory_kind: number
+    raw: 50
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL/id-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    - kind: language_detect
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 604800
+  delivery: lossy
+
+subscription_policy: open

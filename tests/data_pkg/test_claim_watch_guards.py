@@ -3,10 +3,10 @@
 """CW-4 / CW-5 — the contention-question guards, and the K-4 R3 replay.
 
 The parametrised cases are VERBATIM (thesis, signal title) pairs from
-``planning/K4_R3_WORKSHEET_LABELED.csv`` with their measured labels, so the
+the internal labeled worksheet (``planning/K4_R3_WORKSHEET_LABELED.csv``) with their measured labels, so the
 anchor's regression net is the evidence that justified it.
 
-The replay test at the bottom is the CW train's PRE-REGISTERED acceptance
+The replay test at the bottom is the PRE-REGISTERED acceptance
 gate. It skips when the labeled worksheet is absent, because ``planning/`` is
 gitignored — the CSVs are internal evidence, not shipped code. That is a real
 limitation and it is why the guard cases above are inlined here: they keep the
@@ -64,7 +64,7 @@ def test_every_other_shape_is_out_of_scope(thesis):
 
 
 # ---------------------------------------------------------------------------
-# CW-5 — the subject anchor
+# The subject anchor
 # ---------------------------------------------------------------------------
 
 _TEXAS = (
@@ -198,7 +198,7 @@ def test_anchor_text_reads_more_than_the_prompt_digest():
 
 
 # ---------------------------------------------------------------------------
-# CW-4 — liveness, shipped OFF
+# Liveness, shipped OFF
 # ---------------------------------------------------------------------------
 
 
@@ -238,7 +238,7 @@ async def test_an_unreadable_substrate_degrades_OPEN():
 
 @pytest.mark.skipif(
     not WORKSHEET.exists(),
-    reason="planning/ is gitignored — the K-4 labels are internal evidence",
+    reason="the gold-set labels are internal evidence",
 )
 def test_the_replay_meets_the_pre_registered_bar():
     """population-weighted precision >= 0.60 AND >= 60% correct_match
@@ -247,7 +247,7 @@ def test_the_replay_meets_the_pre_registered_bar():
     Offline (no --db): the anchor sees only the worksheet's title + truncated
     summary, so it reads STRICTER than production and the number is a floor
     under a floor. CW-2 is scored as a no-op throughout — a prompt change is
-    not replayable, so the train takes no credit for it here.
+    not replayable, so the change takes no credit for it here.
     """
     # INHERIT the environment and extend it, rather than replacing it. A
     # hand-built `env={"PYTHONPATH": REPO/src, "PATH": ...}` looks tidy and is

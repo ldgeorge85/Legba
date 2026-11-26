@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Indicator-flip census (X3 debounce lane, W11-F55) — READ-ONLY.
+"""Indicator-flip census — READ-ONLY.
 
 Two columns over the same window, per unit stream ``(target, unit)``:
 

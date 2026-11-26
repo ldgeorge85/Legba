@@ -29,11 +29,11 @@ identity:
   # production_gauge.descriptor_state_drift) so a re-register from this file
   # cannot resurrect it.
   state: retired
-  owner: release_meta_activation
+  owner: owner@local
 
 subscription:
   # No `targets` block => META analyst (single global run; target_filter=None).
-  # M19 (2026-07-06) — REPOINTED to the LIVE composition + unit layer. The prior
+  # REPOINTED to the LIVE composition + unit layer. The prior
   # set (country_assessor / country_predictor / world_assessor) pointed at the
   # RETIRED per-country layer (country_assessor last fired 2026-07-01;
   # country_predictor is gone), so the correlator saw a near-monoculture and
@@ -93,7 +93,7 @@ method:
       factory_kind: stack_ref
       raw: llm.primary.openai_compat
       expected_family: llm_provider
-    # M16 (2026-07-06) — the MANDATORY faithfulness verify. Its PRESENCE is the
+    # The MANDATORY faithfulness verify. Its PRESENCE is the
     # opt-in the actor's verify dispatch keys on (same discriminator the world /
     # per-country compositions use). Without it the correlator was the ONE active
     # LLM analyst that ESCAPED verify, so its confidence (<=0.95) was never clamped
@@ -107,7 +107,6 @@ method:
       factory_kind: stack_ref
       raw: llm.primary.openai_compat
       expected_family: llm_provider
-    max_tokens: 1024
   budget_tokens_per_day: 0
   retry:
     budget:

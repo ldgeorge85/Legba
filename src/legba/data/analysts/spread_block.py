@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane narrative (Program 7 piece 7e) — the SPREAD BLOCK for
+"""The SPREAD BLOCK for
 ``narrative_coordination``.
 
 THE GAP THIS CLOSES. The unit's descriptor already treats organic coverage as
 the null hypothesis and already tells the model it has NO source-class field
-to reason from (S1-T8 / Phase-V D8a, held by
+to reason from (held by
 ``tests/data_pkg/test_source_class_taxonomy.py``). What it lacked was a
 DEFINITION of inauthentic spread the faithfulness judge could hold it to — a
 model asked to eyeball "coordination" from a numbered signal list will keep

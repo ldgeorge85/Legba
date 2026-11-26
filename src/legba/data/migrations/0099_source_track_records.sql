@@ -3,11 +3,11 @@
 --
 -- 0099_source_track_records.sql
 --
--- P3-3 (A6 layer 3 — the EARNED source track record; the MEASURED half of the
--- source assurance ledger; planning/PROGRAM_RECOMMENDATIONS_2026-07-24.md §A6):
+-- The EARNED source track record; the MEASURED half of the
+-- source assurance ledger:
 -- the per-source, recomputable-from-our-own-substrate record of "when this
 -- source's claims were contested, how often did accumulating evidence side
--- with it?" — the operator's key insight that grades should be MEASURED, not
+-- with it?" Grades should be MEASURED, not
 -- just asserted.
 --
 -- NUMBERING NOTE: 0096/0097/0098 are held by concurrent/prior branches; 0099
@@ -59,7 +59,7 @@
 --                              this record. Recorded so the readout is honest
 --                              about which slice it measured.
 --
--- HARD CONSUMPTION RULE (operator, A6): this record feeds WEIGHTING /
+-- HARD CONSUMPTION RULE: this record feeds WEIGHTING /
 -- TIE-BREAK / flags / display ONLY — NEVER the faithfulness score (trust !=
 -- groundedness). Nothing in the verify/judge path reads this table. The
 -- arbiter's consumption (the `_earned_track_record_weight` seam) is behind

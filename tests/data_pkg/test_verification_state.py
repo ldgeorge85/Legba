@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""X4 READPATH (W11-F53) — the pending|absent state of a block-less finding."""
+"""X4 READPATH — the pending|absent state of a block-less finding."""
 
 from __future__ import annotations
 
@@ -62,7 +62,7 @@ def test_never_carries_a_score_and_reads_a_naive_stamp_as_utc():
 
 
 def test_states_never_collide_with_a_real_verify_blocks_score_state():
-    # A REAL block also carries `score_state` (Q-1 / SW-9); the UI tells the two
+    # A REAL block also carries `score_state`; the UI tells the two
     # apart by the value, so the vocabularies must stay disjoint.
     from legba.data.provenance import judge_assessability as ja
 

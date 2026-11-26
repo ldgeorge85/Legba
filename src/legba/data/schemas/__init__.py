@@ -1,29 +1,25 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""legba.data.schemas — vendored pydantic descriptor schemas (L-101).
+"""legba.data.schemas — vendored pydantic descriptor schemas.
 
-Decision per L-001 brief item 5: vendor a working subset of the L-101 pydantic
-shapes into the package now, so L-110 (descriptor registry CRUD) and L-111
-(stack registry CRUD) can import them directly without a separate
-`legba-schemas` distribution.
+A working subset of the descriptor pydantic shapes, vendored into the package
+so the descriptor and stack registries can import them directly without a
+separate `legba-schemas` distribution.
 
-Coverage in this drop:
-  * Property-factory catalog (13 factories per L-101 §2)
-  * Target descriptor schema (L-101 §3)
-  * Analyst descriptor schema (L-101 §4)
-  * Stack-component descriptor schemas (L-101 §5)
-  * Lifecycle state machine (L-101 §6)
-  * Versioning + content-hashing (L-101 §7)
-  * Vocabulary registry (L-101 §8)
+Coverage:
+  * Property-factory catalog (13 factories)
+  * Target descriptor schema
+  * Analyst descriptor schema
+  * Stack-component descriptor schemas
+  * Lifecycle state machine
+  * Versioning + content-hashing
+  * Vocabulary registry
 
-Out of scope for this drop (will land with L-110 / L-111 / L-104):
+Out of scope:
   * The injected runtime validator that calls VocabularyRegistry.values()
-    at registration time — needs the registry connection wired (L-110).
-  * Starlark predicate compilation (L-104).
-  * The conversion-webhook walk + apply (L-112).
-
-The interface lock matches L-101 verbatim so consumers don't need to chase
-divergence between the doc and the code.
+    at registration time — needs the registry connection wired.
+  * Starlark predicate compilation.
+  * The conversion-webhook walk + apply.
 """
 
 from __future__ import annotations
@@ -158,7 +154,7 @@ from .vocabulary import (
 )
 
 # DiscoveryBlock + TargetDescriptor carry forward refs to RelabelRule +
-# ResyncPolicy (per Wave D L-200). Resolving them eagerly at target.py
+# ResyncPolicy. Resolving them eagerly at target.py
 # import time hits a cycle (schemas → sources → mediacloud → schemas),
 # so target.py only attempts the resolve and stays defensive on failure.
 # This re-attempt runs post-init when both packages have settled.
@@ -187,7 +183,7 @@ __all__ = [
     "SourceDescriptor", "SourceIdentity", "SourceScope", "SourceDeps",
     "SourceOutput", "SourceDiscoveryBlock", "ProvisionBlock",
     "SourceRef", "SourceSelector", "Subscription",
-    # Collection (Program 7g — bounded holdings of the past)
+    # Collection (bounded holdings of the past)
     "CollectionDescriptor", "CollectionIdentity", "CollectionState",
     "COLLECTION_SCHEMA_URI", "COLLECTION_TRANSITIONS",
     "FENCED_SURFACES", "OPT_IN_READERS",

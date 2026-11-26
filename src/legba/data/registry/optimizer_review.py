@@ -287,7 +287,7 @@ async def apply_optimizer_review(
                     namespace=Family.ANALYST.value,
                     descriptor_id=analyst_id,
                     action="optimizer_reject",
-                    actor_role=actor_role,  # W11-F62: the principal's
+                    actor_role=actor_role,  # The principal's
                     from_version=str(payload.get("analyst_version") or "") or None,
                     to_version=None,
                     change_summary={

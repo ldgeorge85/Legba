@@ -1,7 +1,7 @@
 # Supply-chain domain — top-10 first registrations (2026-07-29). Draft
 # SourceDescriptor. Ships DRAFT (operator activates).
 #
-# REGISTRATION STEP (main session): register via a Wave-A-style direct-DB
+# REGISTRATION STEP: register via a direct-DB
 # registrar — see scripts/bringup_register_supply_chain_sources.py in this
 # same commit — then, on the live instance:
 #   docker exec -e LEGBA_DATA_PG_DB=legba legba-legba-registry-1 \
@@ -11,8 +11,7 @@
 # offshore energy, regulation, security) — a second anchor voice alongside the
 # already-live gcaptain (do not duplicate its beat; this outlet's editorial
 # angle skews more regulatory/policy). Feeds the lane_* desks generically; no
-# single-country focus, geo stays empty. Verified live 2026-07-29 per
-# planning/SUPPLY_CHAIN_SOURCES_2026-07-29.md §2.B (§5 rank #5): HTTP 200,
+# single-country focus, geo stays empty. Verified live 2026-07-29: HTTP 200,
 # same-day items, robots.txt clean, free/no-auth.
 #
 # NOTE — feed format: the URL path is `/articles.rss` but the shortlist marks
@@ -33,7 +32,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: supply_chain_top10
+  owner: owner@local
   created: "2026-07-29T00:00:00Z"
 
 scope:
@@ -44,7 +43,7 @@ scope:
   languages: [en]
   tags: [supply_chain, maritime, shipping, news]
   source_class: reporting
-  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
+  access_class: public          # free no-auth feed, no separate reuse agreement
 
 acquisition: poll
 
@@ -70,7 +69,7 @@ pipeline:
   enrichment:
     # language_detect FIRST so ner_multilingual uses the detected language.
     # No fact_extractor on the draft: the operator adds it after confirming the
-    # route yields full article text (mirrors the Wave-A conservative default).
+    # route yields full article text (mirrors the other RSS sources' conservative default).
     - kind: language_detect
       config: {}
     - kind: ner_multilingual

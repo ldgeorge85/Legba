@@ -163,7 +163,7 @@ WORKSHEET_FIELDS = [
 
 _HEADER_COMMENT = (
     "# {schema}\n"
-    "# K-4 MATCH-GOLD WORKSHEET - claim_watch precision measurement\n"
+    "# MATCH-GOLD WORKSHEET - claim_watch precision measurement\n"
     "# (docs/SEAMS.md #49; DEC-K1 bar recommendation: pairwise precision >= 0.85)\n"
     "#\n"
     "# LABELING IS OUT-OF-PLANE (never performed by this sampler). Columns\n"

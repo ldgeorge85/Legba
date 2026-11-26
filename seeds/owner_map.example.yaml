@@ -1,0 +1,41 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# owner_map.example.yaml -- FORMAT DOC for the owner map. Copy to
+# `seeds/owner_map.yaml` (gitignored: curated DATA never ships), or point
+# LEGBA_OWNER_MAP at your file, and replace these INVENTED names with yours.
+#
+# The code already puts two feeds of one registrable domain in one owner, gives
+# each Telegram channel its own owner, and owns an aggregator's item by the
+# publisher domain of its article. This file only adds what a domain cannot say.
+# Apply it with:  python3 scripts/derive_owner_groups.py [--apply]
+#
+# Every value is an owner group key, '<kind>:<name>' (lower case): 'host:' for
+# a publisher's domain, 'org:' for an organisation you name yourself.
+# ALL NAMES BELOW ARE FAKE.
+
+version: 1
+
+# A derived group key -> the owner it joins. Keys are what the dry-run prints:
+# 'host:<domain>', 'host:<domain>/<department>', 'publisher:<proxy route>'.
+groups:
+  host:northaven-courier.net: host:northaven-courier.example     # one publisher, two domains
+  publisher:northavenwire: host:northavenwire.example            # proxied feed = direct feed
+  host:gov.example/ministry-of-ports: org:northaven_government   # collapse departments, if wanted
+
+# A Telegram channel (no '@', any case) -> the owner it joins.
+channels:
+  northavenport: host:northaven-courier.example                  # a channel run by an outlet
+
+# One source descriptor -> the owner it joins, when its address does not say.
+sources:
+  source.northaven.travel_advice: org:northaven_government
+
+# Source descriptors, beyond the built-in aggregator kinds, whose items are
+# owned by the publisher of the underlying article.
+aggregators:
+  - source.northaven.news_roundup
+
+# Display names for owner groups (optional).
+labels:
+  org:northaven_government: Northaven Government

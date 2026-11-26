@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for the Prometheus ``/metrics`` exposition (resilience P2).
+"""Tests for the Prometheus ``/metrics`` exposition.
 
 Two layers:
 

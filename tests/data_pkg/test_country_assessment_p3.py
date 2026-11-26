@@ -1,4 +1,4 @@
-"""P3 LANE A — THE PER-COUNTRY ASSESSMENT CHANNEL.
+"""THE PER-COUNTRY ASSESSMENT CHANNEL.
 
 What this file proves, in the order the channel runs:
 
@@ -18,8 +18,8 @@ What this file proves, in the order the channel runs:
   * THE GRADER — a ``country_assessment`` head is a COMPOSITION-grain (``CR-``)
     atom set, and the composition correctness GATE does not widen to it.
 
-The fixtures build a REAL country assembly with D-2's own builder, for the
-reason the D-6 file gives: a hand-written payload drifts from the producer the
+The fixtures build a REAL country assembly with the desk-rows builder, for the
+reason the sibling test file gives: a hand-written payload drifts from the producer the
 first time either moves.
 """
 
@@ -540,7 +540,7 @@ def test_the_absence_test_still_reads_the_lead_and_not_the_whole_read() -> None:
 def test_the_d3_arms_skip_the_context_span_by_role_rather_than_passing_it() -> None:
     """It would PASS — ``[0:len(body)]`` of a body always equals that body — and
     that is exactly why it is skipped: a guaranteed pass per block dilutes the
-    denominator of the one number D-1 §3.6 says must read 1.0 or page."""
+    denominator of the one number that must read 1.0 or page."""
     assert arms.SPAN_ROLE_CONTEXT_BODY == asp.SPAN_ROLE_CONTEXT_BODY, (
         "data.provenance may not import data.analysts, so the constant is "
         "restated there and held equal HERE rather than by an import"
@@ -623,7 +623,7 @@ def test_the_world_prompt_and_version_are_byte_identical_to_today() -> None:
     import hashlib
 
     payload = _world_payload()
-    assert apr.PROMPT_VERSION == "assessment_prompt.v3"
+    assert apr.PROMPT_VERSION == "assessment_prompt.v3.1"
     assert apr.prompt_version_for(payload) == apr.PROMPT_VERSION
     assert apr.system_prompt_for(payload) is apr.ASSESSMENT_SYSTEM
     # The world USER prompt carries no context section.
@@ -644,7 +644,7 @@ def test_the_country_tier_gets_its_own_voice_and_its_own_version() -> None:
     _, payload = _country_payload()
     assert apr.system_prompt_for(payload) is apr.COUNTRY_ASSESSMENT_SYSTEM
     assert apr.COUNTRY_ASSESSMENT_SYSTEM is not apr.ASSESSMENT_SYSTEM
-    assert apr.prompt_version_for(payload) == "country_assessment_prompt.v1"
+    assert apr.prompt_version_for(payload) == "country_assessment_prompt.v1.1"
     assert apr.COUNTRY_PROMPT_VERSION != apr.PROMPT_VERSION, (
         "pooling two voices under one version string makes every before/after "
         "comparison on either of them uninterpretable"

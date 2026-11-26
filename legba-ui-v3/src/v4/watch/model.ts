@@ -2,7 +2,7 @@
  * The Watch surface's model (U-9) — pure: wire rows in, reader rows out. No
  * React, no fetch. Every word a reader sees on Watch is chosen here, so the
  * vocabulary is tested in one place (`model.test.ts`) and engine words stay
- * off the page (brief §5: kinds, ids and `*_stall` never reach a title).
+ * off the page (kinds, ids and `*_stall` never reach a title).
  *
  * Three regions read it:
  *
@@ -144,7 +144,7 @@ export const ALERT_GROUP_LABEL: Record<AlertGroup, string> = {
   fired: 'Watch fired',
   quiet: 'Source quiet',
   changed: 'Changed after read',
-  // roll 84: the reader's noun (the profile's subject noun, as the other
+  // The reader's noun (the profile's subject noun, as the other
   // reader pages say it), never the engine's "unit".
   desk: `${SUBJECT_NOUN} stalled`,
   forecast: 'Forecast resolved',
@@ -228,7 +228,7 @@ export interface PageDecision {
   paged: boolean
   /** "Paged at high" / "Logged only". */
   words: string
-  /** Which rule, in words: "the page rule pages this kind at high or above". */
+  /** Which rule, in words: "this kind sends a notification at high or above". */
   rule: string
   /** For a paged alert: whether a push was delivered (null: not known). */
   delivered: boolean | null
@@ -237,7 +237,7 @@ export interface PageDecision {
 function ruleLine(entry: string | null | undefined): string | null {
   const p = parseRuleEntry(entry)
   if (!p) return null
-  return `the page rule pages this kind at ${p.min} or above${p.subject ? ` for ${p.subject}` : ''}`
+  return `this kind sends a notification at ${p.min} or above${p.subject ? ` for ${p.subject}` : ''}`
 }
 
 export function pageDecision(ep: AlertEpisode, kinds: ReadonlyMap<string, AlertKindInfo>, paged: readonly PagedAlert[]): PageDecision {
@@ -248,19 +248,19 @@ export function pageDecision(ep: AlertEpisode, kinds: ReadonlyMap<string, AlertK
     return {
       paged: true,
       words: `Paged${ep.paged_severity ? ` at ${ep.paged_severity}` : ''}`,
-      rule: rule ?? 'the page rule matched it',
+      rule: rule ?? 'it matched the notification settings',
       delivered: page ? page.delivered ?? (page.outcomes ?? []).includes('delivered') : null,
     }
   }
-  if (entries == null) return { paged: false, words: 'Logged only', rule: 'the page rule was not read', delivered: null }
+  if (entries == null) return { paged: false, words: 'Logged only', rule: 'the notification settings could not be read', delivered: null }
   if (entries.length === 0) {
-    return { paged: false, words: 'Logged only', rule: 'the page rule has no entry for this kind', delivered: null }
+    return { paged: false, words: 'Logged only', rule: 'no notification is set for this kind', delivered: null }
   }
   const floor = ruleLine(entries[0])
   return {
     paged: false,
     words: 'Logged only',
-    rule: floor ? `${floor}; this reached ${ep.max_severity ?? ep.severity}` : 'below the page rule',
+    rule: floor ? `${floor}; this reached ${ep.max_severity ?? ep.severity}` : 'below the level that sends a notification',
     delivered: null,
   }
 }

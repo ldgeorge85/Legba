@@ -3,7 +3,7 @@
 --
 -- 0212_sealed_forecast_ledger.sql
 --
--- H13 — the sealed forecast ledger (Program 7, pulled forward 2026-09-23).
+-- The sealed forecast ledger.
 --
 -- (1) `acute_forecasts.resolution_test TEXT NOT NULL` — the resolution test
 --     frozen as TEXT at mint by forecast_acute.py (its `RESOLUTION_TEST`

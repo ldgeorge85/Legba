@@ -62,7 +62,7 @@ def _reset_deps_registry():
     dapr_actors.clear_deps_registry()
 
 
-# The live signal_salience incident, to the second.
+# The live signal_salience timing, to the second.
 _COOLDOWN_S = 3000                                     # descriptor cooldown_seconds
 _RUN_START = datetime(2026, 7, 29, 20, 7, 1, tzinfo=timezone.utc)
 _RUN_END = datetime(2026, 7, 29, 20, 21, 16, tzinfo=timezone.utc)   # +14m15s
@@ -75,7 +75,7 @@ def _end_anchored(run_end: datetime, cooldown_seconds: int) -> datetime:
 
 
 # ---------------------------------------------------------------------------
-# 1) The live incident: the next scheduled tick must RUN.
+# 1) The live timing: the next scheduled tick must RUN.
 # ---------------------------------------------------------------------------
 
 

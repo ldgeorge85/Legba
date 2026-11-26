@@ -9,7 +9,7 @@ shell's bound-panel synthesis reads an id, a name and a state; the subject
 index, the map's geometry index and the supply-chain desks read
 ``body.identity.name`` and ``body.scope.{domain, geo, tags, geometry}``.
 
-Roll 84's live walk: the target list was 279 KB (the phone landing's largest
+Measured live: the target list was 279 KB (the phone landing's largest
 response, over its 0.25 MB budget — the bodies grew with ``_auto_wired_sources``
 and ``sources``) and the analyst list 546 KB on every desktop landing.
 ``fields=summary`` keeps every column and cuts ``body`` to
@@ -17,7 +17,7 @@ and ``sources``) and the analyst list 546 KB on every desktop landing.
 and 71 KB), plus :data:`DECLARED_SOURCES_KEY`: how many sources the body
 declares.
 
-Roll 86's live walk: the cut dropped ``body.sources`` whole, and the map reads
+The first cut dropped ``body.sources`` whole, and the map reads
 "does this subject declare a source" from it (``v4/globe/data.ts``
 ``subjectsFromRoster``). Every subject read as declaring none, every place was
 hatched "not covered", and the hatch sat over every changed area. The count is

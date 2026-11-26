@@ -15,14 +15,16 @@
  * path checks against the root the anchors route lists. The outside timestamp
  * on that root is never verified in the console.
  *
- * No score appears here: scoring is the track record's, behind its gate.
+ * A resolved forecast shows its score only when the scorecard says enough
+ * questions have resolved (`scoresWithheld`); until then the cell is a dash.
  */
 import { useEffect, useMemo, useState } from 'react'
 import { ApiError } from '@/lib/api'
 import { cn } from '@/lib/cn'
 import type { LedgerForecast } from '@/lib/ledgerModel'
-import type { ScorecardQuestion } from '@/lib/scorecardModel'
+import { fmtBrier, scoresMin, scoresWithheld, type ScorecardQuestion, type ScorecardResponse } from '@/lib/scorecardModel'
 import { usePanelActionHandler } from '@/lib/panelActions'
+import { useAsOf } from '@/lib/asOf'
 import {
   SEAL_COVERS,
   day,
@@ -38,8 +40,9 @@ import {
   type SealCheck,
   type SealProof,
 } from '@/lib/ledgerProof'
-import { useLedgerForecasts, useLedgerScorecard, useReceiptAnchors, useSealProof } from './ledgerQueries'
-import { FORECAST_FILTERS, useLedgerView, type ForecastFilter } from './ledgerView'
+import { useLedgerForecasts, useLedgerScorecard, useReceiptAnchors, useResolutionRecords, useSealProof } from './ledgerQueries'
+import { FORECAST_FILTERS, sortForecasts, useLedgerView, type ForecastFilter, type ForecastSort } from './ledgerView'
+import { PointFilterLine, pointLabel, usePointFilter } from '@/components/PointFilter'
 
 const VIEW_ID = 'view:forecasts'
 const DAY_MS = 86_400_000
@@ -159,9 +162,92 @@ function SealDetail({ f, check, anchors }: { f: LedgerForecast; check: SealCheck
   )
 }
 
+const STATUS_WORD: Record<ForecastState['kind'], string> = {
+  open: 'Open',
+  overdue: 'Past due',
+  awaiting_confirmation: 'Proposed',
+  needs_judgement: 'Needs a judgement',
+  resolved_yes: 'Resolved yes',
+  resolved_no: 'Resolved no',
+  void: 'Void',
+}
+
+/** The forecast's score once resolved: the first issuer's Brier figure, "—" until scores are shown. */
+function scoreCell(q: ScorecardQuestion | undefined, sc: ScorecardResponse | null | undefined, state: ForecastState) {
+  if (state.kind !== 'resolved_yes' && state.kind !== 'resolved_no') return { text: '', title: undefined }
+  if (scoresWithheld(sc)) return { text: '—', title: `Scores appear once ${scoresMin(sc)} questions have resolved` }
+  const scored = (q?.numbers ?? []).find((n) => n.brier != null)
+  if (!scored) return { text: '—', title: 'No score was recorded for this question' }
+  return { text: fmtBrier(scored.brier), title: `${scored.issuer_kind.replace(/[_-]+/g, ' ')}: lower is better` }
+}
+
+/** The history of one forecast, from its resolution records (read only once it is opened). */
+function History({ id }: { id: string }) {
+  const rq = useResolutionRecords(id)
+  const records = rq.data?.records ?? []
+  if (records.length === 0) return null
+  return (
+    <p data-testid="ledger-forecast-history">
+      <span className="text-ink-3">History: </span>
+      {records.map((r) => `${r.record_kind} ${r.outcome} ${day(r.recorded_at)}`).join(' · ')}
+    </p>
+  )
+}
+
+/** The detail sheet under a row: full rule, void rule, state, seal and history. */
+function ForecastDetail({ f, state, anchors }: { f: LedgerForecast; state: ForecastState; anchors: AnchorRow[] | null | undefined }) {
+  const rule = resolutionRule(f)
+  const check = sealCheck(f.sealed_at, anchors)
+  const nums = statedNumbers(f)
+  return (
+    <div className="space-y-2 border-l-2 border-l-point px-3 py-3 text-label text-ink-2" data-testid="ledger-forecast-sheet">
+      <p className="max-w-[80ch] font-serif text-heading text-ink-1">{f.question}</p>
+      <p className="font-medium text-ink-1" data-testid="ledger-forecast-state">
+        {state.label}
+      </p>
+      {state.detail && <p>{state.detail}</p>}
+      <ul className="flex flex-wrap gap-x-4 gap-y-1 text-body" data-testid="ledger-forecast-numbers">
+        {nums.map((n, i) => (
+          <li key={`${n.kind}-${i}`} title={n.reason ?? undefined}>
+            <span className="text-ink-3">{n.who}</span>{' '}
+            {n.p == null ? <span className="text-ink-3">· no number stated</span> : <span className="font-mono text-ink-1">{n.text}</span>}
+          </li>
+        ))}
+      </ul>
+      <p className="font-mono">
+        sealed {day(f.sealed_at)} · due {day(f.due_at)}
+      </p>
+      <p className="max-w-[80ch] text-body text-ink-2" data-testid="ledger-forecast-rule">
+        {rule.rule}
+        {rule.confirmation && <span> Confirmed by {rule.confirmation}.</span>} <span className="text-ink-3">{rule.timing}</span>
+      </p>
+      {rule.condition && (
+        <p>
+          <span className="text-ink-3">Only counts if: </span>
+          {rule.condition}
+        </p>
+      )}
+      {rule.voidRule && (
+        <p>
+          <span className="text-ink-3">Void if: </span>
+          {rule.voidRule}
+        </p>
+      )}
+      <History id={f.id} />
+      <p className={cn('font-mono', sealClass(check.state))} data-testid="ledger-forecast-seal">
+        seal: {SEAL_WORD[check.state]}
+      </p>
+      <SealDetail f={f} check={check} anchors={anchors} />
+    </div>
+  )
+}
+
+const COLS = 'px-2 py-1.5 text-left align-baseline'
+
 function ForecastRow({
   f,
   q,
+  sc,
   voidReason,
   anchors,
   now,
@@ -170,99 +256,98 @@ function ForecastRow({
 }: {
   f: LedgerForecast
   q: ScorecardQuestion | undefined
+  sc: ScorecardResponse | null | undefined
   voidReason: string | null
   anchors: AnchorRow[] | null | undefined
   now: number
   selected: boolean
   onSelect: () => void
 }) {
-  const [open, setOpen] = useState(false)
   const state = forecastState(f, q, voidReason, new Date(now))
-  const rule = resolutionRule(f)
-  const check = sealCheck(f.sealed_at, anchors)
-  const nums = statedNumbers(f)
+  const nums = statedNumbers(f).filter((n) => n.p != null)
+  const lead = nums[0]
   const closed = state.kind === 'resolved_yes' || state.kind === 'resolved_no' || state.kind === 'void'
+  const score = scoreCell(q, sc, state)
+  const subject = (f.subject_keys ?? []).join(', ')
   return (
-    <li
-      className={cn('border-b border-line py-4 pl-3', selected ? 'border-l-2 border-l-point' : 'border-l-2 border-l-transparent')}
-      data-testid="ledger-forecast-row"
-      data-slug={f.slug}
-      data-state={state.kind}
-      aria-current={selected ? 'true' : undefined}
-    >
-      <button type="button" className="block w-full text-left" onClick={onSelect} data-testid="ledger-forecast-select">
-        <p className="max-w-[72ch] font-serif text-heading text-ink-1">{f.question}</p>
-      </button>
-      <div className="mt-2 flex flex-wrap items-baseline gap-x-4 gap-y-1 text-label">
-        <span className={cn('font-medium', toneClass(state))} data-testid="ledger-forecast-state">
-          {state.label}
-        </span>
-        <span className="font-mono text-ink-2">
-          sealed {day(f.sealed_at)} · due {day(f.due_at)}
-          {!closed && <span className="text-ink-3"> ({dueIn(f.due_at, now)})</span>}
-        </span>
-        <span className={cn('font-mono', sealClass(check.state))} data-testid="ledger-forecast-seal">
-          seal: {SEAL_WORD[check.state]}
-        </span>
-      </div>
-      <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-body" data-testid="ledger-forecast-numbers">
-        {nums.map((n, i) => (
-          <li key={`${n.kind}-${i}`} title={n.reason ?? undefined}>
-            <span className="text-ink-3">{n.who}</span>{' '}
-            {n.p == null ? (
-              <span className="text-ink-3">· no number stated</span>
-            ) : (
-              <span className="font-mono text-ink-1">{n.text}</span>
-            )}
-          </li>
-        ))}
-      </ul>
-      {state.detail && <p className="mt-1 text-label text-ink-2">{state.detail}</p>}
-      <p className="mt-2 max-w-[80ch] text-body text-ink-2" data-testid="ledger-forecast-rule">
-        {rule.rule}
-        {rule.confirmation && <span> Confirmed by {rule.confirmation}.</span>} <span className="text-ink-3">{rule.timing}</span>
-      </p>
-      <button
-        type="button"
-        className="mt-2 text-label text-ink-3 underline decoration-line underline-offset-2 hover:text-ink-1"
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-        data-testid="ledger-forecast-more"
+    <>
+      <tr
+        className={cn(
+          'cursor-pointer border-b border-line-subtle hover:bg-surf-2',
+          selected && 'bg-surf-2',
+        )}
+        data-testid="ledger-forecast-row"
+        data-slug={f.slug}
+        data-state={state.kind}
+        aria-current={selected ? 'true' : undefined}
+        onClick={onSelect}
       >
-        {open ? 'Hide the rule in full and the seal' : 'The rule in full, and how to check the seal'}
-      </button>
-      {open && (
-        <div className="mt-2 space-y-1 text-label text-ink-2">
-          {rule.condition && (
-            <p>
-              <span className="text-ink-3">Only counts if: </span>
-              {rule.condition}
-            </p>
-          )}
-          {rule.voidRule && (
-            <p>
-              <span className="text-ink-3">Void if: </span>
-              {rule.voidRule}
-            </p>
-          )}
-          <SealDetail f={f} check={check} anchors={anchors} />
-        </div>
+        <td className={cn(COLS, 'max-w-0 w-[44%]', selected ? 'border-l-2 border-l-point' : 'border-l-2 border-l-transparent')}>
+          <button type="button" className="block w-full truncate text-left text-body text-ink-1" title={f.question} data-testid="ledger-forecast-select">
+            {f.question}
+          </button>
+        </td>
+        <td className={cn(COLS, 'whitespace-nowrap font-mono text-ink-1')} data-testid="ledger-forecast-p" title={nums.map((n) => `${n.who} ${n.text}`).join(' · ') || 'no number stated'}>
+          {lead ? lead.text : '—'}
+          {nums.length > 1 ? <span className="font-sans text-ink-3"> {lead!.who} +{nums.length - 1}</span> : null}
+        </td>
+        <td className={cn(COLS, 'whitespace-nowrap font-mono text-label text-ink-2')} title={closed ? undefined : dueIn(f.due_at, now)}>
+          {day(f.due_at)}
+        </td>
+        <td className={cn(COLS, 'max-w-0 w-[16%] truncate text-label text-ink-2')} title={subject}>
+          {subject || '—'}
+        </td>
+        <td className={cn(COLS, 'whitespace-nowrap text-label', toneClass(state))} title={state.label} data-testid="ledger-forecast-status">
+          {STATUS_WORD[state.kind]}
+        </td>
+        <td className={cn(COLS, 'whitespace-nowrap font-mono text-label text-ink-2')} title={score.title} data-testid="ledger-forecast-score">
+          {score.text}
+        </td>
+      </tr>
+      {selected && (
+        <tr data-testid="ledger-forecast-detail" data-slug={f.slug}>
+          <td colSpan={6} className="border-b border-line bg-surf-1">
+            <ForecastDetail f={f} state={state} anchors={anchors} />
+          </td>
+        </tr>
       )}
-    </li>
+    </>
+  )
+}
+
+function SortHead({ label, by, sort, onSort }: { label: string; by: ForecastSort['by']; sort: ForecastSort; onSort: (by: ForecastSort['by']) => void }) {
+  const on = sort.by === by
+  return (
+    <th className={cn(COLS, 'font-normal text-ink-3')} aria-sort={on ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+      <button type="button" className={cn('hover:text-ink-1', on && 'text-ink-1')} onClick={() => onSort(by)} data-testid={`ledger-sort-${by}`}>
+        {label}
+        {on ? (sort.dir === 'asc' ? ' ↑' : ' ↓') : ''}
+      </button>
+    </th>
   )
 }
 
 export default function LedgerForecasts() {
-  const fq = useLedgerForecasts()
-  const sq = useLedgerScorecard()
+  // AS RECORDED: with an instant set the table is the ledger as it stood
+  // then; the scorecard (today's resolutions and scores) is left out, so a
+  // past row's state is the one it had at that instant.
+  const asOfMs = useAsOf()
+  const fq = useLedgerForecasts(asOfMs)
+  const sqNow = useLedgerScorecard()
+  const scorecard = asOfMs === null ? sqNow.data : undefined
   const aq = useReceiptAnchors()
-  const { forecast, filter, set } = useLedgerView()
+  const { forecast, filter, sort, set } = useLedgerView()
   const now = Date.now()
+  // THE POINT: with a subject in focus the table narrows to the forecasts
+  // about it (their subject keys are subject ids); "Show all" undoes that here.
+  const pointFilter = usePointFilter()
 
   usePanelActionHandler(VIEW_ID, 'show_forecast', (args) => {
     const slug = String(args.forecast ?? '')
-    const known = fq.data?.forecasts?.some((f) => f.slug === slug)
-    if (!known) return false
+    const found = fq.data?.forecasts?.find((f) => f.slug === slug)
+    if (!found) return false
+    // a forecast about another subject than the point is shown in the full table
+    if (pointFilter.filtered && !(found.subject_keys ?? []).includes(pointFilter.point!.id)) pointFilter.showAll()
     set({ forecast: slug, filter: 'all' })
     requestAnimationFrame(() => document.querySelector(`[data-slug="${CSS.escape(slug)}"]`)?.scrollIntoView({ block: 'center' }))
     return true
@@ -274,16 +359,20 @@ export default function LedgerForecasts() {
     return true
   })
 
-  const byId = useMemo(() => new Map((sq.data?.questions ?? []).map((q) => [q.id, q])), [sq.data])
-  const voids = useMemo(() => new Map((sq.data?.void_questions ?? []).map((v) => [v.slug, v.reason])), [sq.data])
+  const byId = useMemo(() => new Map((scorecard?.questions ?? []).map((q) => [q.id, q])), [scorecard])
+  const voids = useMemo(() => new Map((scorecard?.void_questions ?? []).map((v) => [v.slug, v.reason])), [scorecard])
   const anchors: AnchorRow[] | null | undefined = aq.isPending ? undefined : aq.isError ? null : (aq.data?.anchors ?? null)
 
-  const all = fq.data?.forecasts ?? []
+  const every = fq.data?.forecasts ?? []
+  const pointId = pointFilter.filtered ? pointFilter.point!.id : null
+  const all = pointId ? every.filter((f) => (f.subject_keys ?? []).includes(pointId)) : every
   const isClosed = (f: LedgerForecast) => f.status !== 'open'
-  // Open first by due date (what resolves next), then the closed ones, newest due first.
-  const shown = all
-    .filter((f) => (filter === 'all' ? true : filter === 'open' ? !isClosed(f) : isClosed(f)))
-    .sort((a, b) => Number(isClosed(a)) - Number(isClosed(b)) || (isClosed(a) ? b.due_at.localeCompare(a.due_at) : a.due_at.localeCompare(b.due_at)))
+  // Default: open first by due date (what resolves next), then the closed ones, newest due first.
+  const shown = sortForecasts(
+    all.filter((f) => (filter === 'all' ? true : filter === 'open' ? !isClosed(f) : isClosed(f))),
+    sort,
+  )
+  const onSort = (by: ForecastSort['by']) => set({ sort: sort.by === by ? { by, dir: sort.dir === 'asc' ? 'desc' : 'asc' } : { by, dir: 'asc' } })
   const nOpen = all.filter((f) => !isClosed(f)).length
   const nClosed = all.length - nOpen
   const nextDue = all
@@ -306,31 +395,52 @@ export default function LedgerForecasts() {
         The forecast ledger could not be read. That is not the same as having no forecasts.
       </p>
     )
+  } else if (all.length === 0 && pointId) {
+    body = (
+      <p className="text-body text-ink-2" data-testid="ledger-forecasts-none-on-point">
+        No sealed forecast is about {pointLabel(pointFilter.point!)}.
+      </p>
+    )
   } else if (all.length === 0) {
     body = <p className="text-body text-ink-2">No forecast has been sealed yet.</p>
   } else if (shown.length === 0) {
     body = <p className="text-body text-ink-2">{filter === 'resolved' ? 'No forecast has resolved yet.' : 'No forecast is open.'}</p>
   } else {
     body = (
-      <ol className="border-t border-line" data-testid="ledger-forecast-list">
-        {shown.map((f) => (
-          <ForecastRow
-            key={f.id}
-            f={f}
-            q={byId.get(f.id)}
-            voidReason={voids.get(f.slug) ?? null}
-            anchors={anchors}
-            now={now}
-            selected={forecast === f.slug}
-            onSelect={() => set({ forecast: forecast === f.slug ? null : f.slug })}
-          />
-        ))}
-      </ol>
+      <table className="w-full table-fixed border-t border-line text-body" data-testid="ledger-forecast-list">
+        <thead>
+          <tr className="border-b border-line text-label">
+            <th className={cn(COLS, 'w-[44%] font-normal text-ink-3')}>Question</th>
+            <th className={cn(COLS, 'w-[11%] font-normal text-ink-3')}>Probability</th>
+            <SortHead label="Due" by="due" sort={sort} onSort={onSort} />
+            <th className={cn(COLS, 'w-[16%] font-normal text-ink-3')}>Subject</th>
+            <SortHead label="Status" by="status" sort={sort} onSort={onSort} />
+            <th className={cn(COLS, 'font-normal text-ink-3')} title="Lower is better; shown once enough questions have resolved">
+              Score
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {shown.map((f) => (
+            <ForecastRow
+              key={f.id}
+              f={f}
+              q={byId.get(f.id)}
+              sc={scorecard}
+              voidReason={voids.get(f.slug) ?? null}
+              anchors={anchors}
+              now={now}
+              selected={forecast === f.slug}
+              onSelect={() => set({ forecast: forecast === f.slug ? null : f.slug })}
+            />
+          ))}
+        </tbody>
+      </table>
     )
   }
 
   return (
-    <section className="mx-auto max-w-[96ch] space-y-3" data-testid="ledger-forecasts">
+    <section className="space-y-3" data-testid="ledger-forecasts">
       <header className="space-y-1">
         <h2 className="text-heading-lg font-semibold text-ink-1">Forecasts</h2>
         <p className="text-body text-ink-2" data-testid="ledger-forecasts-counts">
@@ -354,6 +464,7 @@ export default function LedgerForecasts() {
           cannot change after the seal. A resolver proposes outcomes; nothing closes until a person confirms it.
         </p>
       </header>
+      <PointFilterLine state={pointFilter} testId="ledger-forecasts-point" />
       <div className="flex gap-1" role="tablist" aria-label="Which forecasts">
         {FORECAST_FILTERS.map((k) => (
           <button

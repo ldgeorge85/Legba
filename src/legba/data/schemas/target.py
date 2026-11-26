@@ -119,7 +119,7 @@ class _ScopeBase(BaseModel):
         ),
     )
 
-    # Lane K-1 — the TEXT ARM of the slice include (signal_slice_scope): a
+    # The TEXT ARM of the slice include (signal_slice_scope): a
     # signal is also in this target's slice when its title + summary names one
     # of these terms (word-start, case-insensitive), OR-ed with signal_tags.
     # For a desk with no place (cyber). Empty is left out of the dump, so every
@@ -128,7 +128,7 @@ class _ScopeBase(BaseModel):
         default_factory=list,
         max_length=64,
         description=(
-            "Slice include, TEXT ARM (lane K-1): a signal whose title + summary "
+            "Slice include, TEXT ARM: a signal whose title + summary "
             "names one of these terms is in this target's slice, OR-ed with "
             "signal_tags (`tags && $n OR text ~* $m`). Lowercase words joined "
             "by one space or hyphen; word-start match, so a stem matches its "

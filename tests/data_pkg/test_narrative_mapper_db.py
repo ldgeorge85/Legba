@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""P4-1 + P4-2 — the ``narrative_mapper`` analyst, real-Postgres integration.
+"""The ``narrative_mapper`` analyst, real-Postgres integration.
 
 Drives the mapper against a MIGRATED ephemeral DB (the ``migrated_pg`` fixture
 applies migration 0102) to prove end to end:

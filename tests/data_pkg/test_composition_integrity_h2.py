@@ -581,16 +581,21 @@ def test_the_judge_rubric_carries_what_the_checks_decline() -> None:
     handed over."""
     rubric = ci.RUBRIC
     assert "SHAPE A. SCOPE DELETED" in rubric
-    assert "THIS DESK'S COLLECTION" in rubric and "INFORMATION ENVIRONMENT" in rubric
+    assert "this desk's collection" in rubric
     assert "SHAPE B. THE DESK CITED FOR ITS OWN NEGATION" in rubric
-    assert "remains UNCHANGED" in rubric
+    assert "remain unchanged" in rubric
     assert "SHAPE C. A CLAIM THE NAMED DESK DOES NOT MAKE" in rubric
-    assert "smart-defence" in rubric
     assert "SHAPE D. DIRECTION INVERTED ACROSS THE LAYER" in rubric
-    assert "TIGHTENING maritime control" in rubric
-    assert "MINE-CLEARANCE" in rubric
+    assert "not the word its summary line chose" in rubric
+    # The two shapes that change certainty rather than content.
+    assert "SHAPE E. CERTAINTY RAISED" in rubric
+    assert "SHAPE F. DISAGREEMENT FLATTENED" in rubric
     # It must also say what is NOT a violation, or it is a licence to over-fail.
     assert "SUPPORTED" in rubric and "ordinary summarisation" in rubric
+    # The examples are invented; the real cases that taught the shapes live in
+    # the judge regression set, and no audit history is model-visible.
+    for gone in ("Japan", "Ukraine", "Iran-Oman", "Ten country reads"):
+        assert gone not in rubric
 
 
 def test_the_rubric_reaches_the_composition_judge_prompt() -> None:

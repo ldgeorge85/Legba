@@ -1,5 +1,5 @@
-# narrative_mapper — P4-1 reified narratives + P4-2 source-echo graph
-# (deterministic META; planning/PROGRAM_RECOMMENDATIONS_2026-07-24.md §A11).
+# narrative_mapper — reified narratives + source-echo graph
+# (deterministic META).
 #
 # A `deterministic`-kind META analyst (sub_handler=narrative_mapper) that reifies
 # the substrate-native NARRATIVE layer the operator amended in — NOT
@@ -59,7 +59,7 @@
 
 identity:
   id: narrative_mapper
-  name: Narrative Mapper (P4-1 narratives + P4-2 source-echo graph)
+  name: Narrative Mapper (narratives + source-echo graph)
   schema_uri: legba/analyst/1.0.0
   version: "<content-hash stamped at register time>"
   kind: deterministic
@@ -68,7 +68,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: draft
-  owner: p4_narratives
+  owner: owner@local
 
 subscription:
   # META analyst: one global sweep per tick over the fact_contention sidecar +

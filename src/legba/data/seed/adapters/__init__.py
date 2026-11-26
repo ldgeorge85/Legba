@@ -10,7 +10,7 @@
   * ``sipri_arms_transfers`` — curated-YAML SIPRI arms transfers → signed
     ``ArmsTransferTo`` nexuses (supplier→recipient, polarity +1 / supportive).
 
-The UCDP / World Bank tiers (planning/SEEDING_SKETCH.md) grow in here as new
+The UCDP / World Bank tiers grow in here as new
 modules, each registered in :data:`legba.data.seed.ADAPTERS`.
 """
 

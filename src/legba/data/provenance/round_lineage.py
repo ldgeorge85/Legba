@@ -1,16 +1,16 @@
-"""THE ROUND LINEAGE — where the badge's external number comes from (D-1 §2.3 / F-6).
+"""THE ROUND LINEAGE — where the badge's external number comes from.
 
 THE HOLE THIS FILLS. The Assessment publishes with an accuracy badge, and the
 badge is *"the one place a wrong number is worse than no number"*. There is no DB
 home for an R-round result: ``correctness_labels`` holds 8 rows all-time and is a
 different instrument, and the C-A grades live only in
-``planning/PROOF_ROUND_*/scoring/*.jsonl``. Grepping ``src/`` for the round
-numbers returns nothing but prose comments.
+the round's own scoring files, which are not in the repo. Grepping ``src/`` for
+the round numbers returns nothing but prose comments.
 
 So the numbers live HERE, frozen and append-only, pinned by a test the way the
 judge stamp's own lineage is. This is machinery plus five numbers per round — not
 a corpus — which is why it belongs in the repo rather than behind the
-no-seed-data rule (F-6, ratified).
+no-seed-data rule.
 
 TWO RULES THIS MODULE EXISTS TO ENFORCE, both stated as code rather than as
 convention:

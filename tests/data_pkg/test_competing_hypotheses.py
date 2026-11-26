@@ -289,7 +289,7 @@ async def test_llm_matrix_scorer_falls_back_on_unparsable_output():
 
 
 # ---------------------------------------------------------------------------
-# W11-F139 — diagnosticity_mode: shared support is divided, refutation kept
+# diagnosticity_mode: shared support is divided, refutation kept
 # ---------------------------------------------------------------------------
 
 
@@ -353,7 +353,7 @@ def test_shared_mode_done_fixture_scores_as_the_note_says():
 
 
 def test_off_mode_reproduces_pre_f139_scoring_exactly():
-    """`diagnosticity_mode: off` = the pre-W11-F139 numbers, goldened before
+    """`diagnosticity_mode: off` = the earlier numbers, goldened before
     the change (spread-weighted sign counts over diagnostic items only)."""
     ach = build_ach_matrix(
         _SHARED3_HYPS, _SHARED3_EVIDENCE,
@@ -445,7 +445,7 @@ def test_diagnosticity_mode_declared_in_option_catalog():
 async def pg_pool(migrated_pg: PostgresConfig, clean_tables):
     """The live pool, over a situations/hypotheses pair this file OWNS.
 
-    WHY THE TRUNCATE (2026-08-30 release-gate train). ``run_method`` picks its
+    WHY THE TRUNCATE (2026-08-30 release-gate change). ``run_method`` picks its
     focal topics with ``_read_focal_topics``:
 
         SELECT ... FROM situations
@@ -466,7 +466,7 @@ async def pg_pool(migrated_pg: PostgresConfig, clean_tables):
     exactly this — proven by running the two files in that order.
 
     This is the ``test_corpus_research_backlog`` shape from the 2026-08-29
-    shuffle train, not the "assert emptiness" shape: no assertion rewrite can
+    shuffle change, not the "assert emptiness" shape: no assertion rewrite can
     recover a row the ranking dropped, so the candidate pool itself has to
     start clean. ``situations`` is scratch space this file fully owns for the
     duration of its own assertions (the ``clean_tables`` contract);
@@ -988,7 +988,7 @@ async def test_calibration_reads_exogenous_resolved_outcome_only(pg_pool):
 
 
 # ---------------------------------------------------------------------------
-# Contested-fact-value ACH evidence (Holes-B Wave 5, #101) — a stub-conn unit
+# Contested-fact-value ACH evidence — a stub-conn unit
 # test (no live DB): an OPEN fact_contention group whose subject is a resolved
 # topic entity becomes a ``contested_fact_value`` diagnostic-evidence item.
 # ---------------------------------------------------------------------------

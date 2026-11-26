@@ -11,7 +11,7 @@ NEWEST-FIRST. Recency was the ONLY ranking, which is what let a tabloid frame
 (Graham) and a World-Cup meme outrank a head-of-state event (Khamenei's funeral).
 
 This sweep scores each raw text signal — ``{event_class, actor_rank, magnitude,
-authority}`` — on the $0 core plane (gpt-oss-120b, NEVER Anthropic), stamping
+authority}`` — on the $0 core plane (the core model, NEVER Anthropic), stamping
 ``signals.salience`` (migration 0089). Phase-S consumption (S-2) then orders the
 slice by (magnitude, authority, recency) and the advisory judge (S-3) checks the
 lead against the top-magnitude input.
@@ -41,14 +41,13 @@ from ...runtime.analyst_method import AnalystMethodResult, LLMHandlerLike
 from ..provenance.kinds import TRACE_ONLY as _TRACE_ONLY
 from ..provenance.models import FindingPayload
 from ..provenance.origin import origin_class_clause
-from ._tradecraft import with_preamble
 from ..taxon_families import SALIENCE_CLASS, bind_taxon, taxon_set
 from ..taxon_families import SALIENCE_CLASSES as _SALIENCE_CLASSES
 from . import salience_institutional as _inst
 
 logger = logging.getLogger(__name__)
 
-#: P7/7g-1 — the origin-class leg on the salience batch (SEAMS #57 sweep;
+#: The origin-class leg on the salience batch (SEAMS #57 sweep;
 #: `salience` is one of the eight surfaces a collection is fenced from). A
 #: loaded historical document has no salience in the present, and scoring one
 #: would put imported history into every ranked window downstream.
@@ -196,7 +195,7 @@ def max_salience(saliences: Iterable[Mapping[str, Any] | None]) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
-# THE SALIENCE REPAIR — `cited_mass.v1`  (D-1 §1.5.2)
+# THE SALIENCE REPAIR — `cited_mass.v1`
 # ---------------------------------------------------------------------------
 #
 # `max_salience` above is a MAX-POOL, and at the composition tier the pool has
@@ -327,7 +326,7 @@ def pool_salience(
     """The composition-tier pool: `max_salience` widened with the repaired key.
 
     ``magnitude`` is byte-identical to what :func:`max_salience` returns today —
-    that is the compat contract D-1 §1.5.2 fixes, and it is why every existing
+    that is the compat contract, and it is why every existing
     consumer is untouched. The four new keys ride ALONGSIDE it.
 
     ``cited_mass`` is summed over DISTINCT signal ids across the children, not
@@ -459,7 +458,22 @@ class SalienceVerdict:
     lift_rule: str | None = None
 
 
-_SALIENCE_SYSTEM = with_preamble(
+#: Sent instead of the house analyst preamble: this seat returns a bare JSON
+#: array, and the preamble's object-only reply rule and BLUF rule contradict
+#: that.
+_SALIENCE_HEADER = (
+    "You score news signals for how much they would matter if they are true. "
+    "For each signal return one object in a JSON array and nothing else. Echo "
+    "the id exactly. Score from the signal text only. Use the class names as "
+    "labels; the number is your judgment of consequence. 'confidence' is how "
+    "clearly the text itself states the event, not how likely it is to be true."
+)
+
+#: The standing sentence for prompts that embed text written by third
+#: parties, from the shared grading text.
+from ..grading_text import PASTED_TEXT_IS_DATA as _PASTED_TEXT_IS_DATA  # noqa: E402
+
+_SALIENCE_SYSTEM = _SALIENCE_HEADER + "\n\n" + (
     """TASK — score each NEWS SIGNAL for CONSEQUENCE (how much the world would move if this is true), for an intelligence salience index. You are given a numbered list of signals, each with an `id`. For EACH return one score object. Output ONE JSON array, nothing else — one object per signal. ECHO the `id` VERBATIM so the score binds to the right signal:
 [{"id": "<id verbatim>", "event_class": "<one class>", "actor_rank": "<one rank>", "magnitude": 0.0-1.0, "confidence": 0.0-1.0}]
 
@@ -486,17 +500,17 @@ magnitude 0.0-1.0 — THE consequence score. Anchors:
   - 0.4-0.65: sanctions_economic, market_move.
   - 0.1-0.35: procurement_routine, an ordinary individual's news.
   - 0.0-0.2: meme_sports_culture.
-Ranking matters more than the absolute number: a Supreme-Leader funeral MUST outrank a viral meme; a missile strike MUST outrank a routine arms deal; a head-of-state event MUST outrank an ordinary senator's death.
+Ranking matters more than the absolute number: a head-of-state funeral MUST outrank a viral meme; a missile strike MUST outrank a routine arms deal; a head-of-state event MUST outrank an ordinary legislator's death.
 
 Worked examples:
-  - "Iran's Supreme Leader Khamenei buried; state funeral in Tehran" -> {"event_class":"leader_death","actor_rank":"head_of_state","magnitude":0.95,"confidence":0.9}
-  - "US missile strike hits IRGC position near Damascus" -> {"event_class":"kinetic_strike","actor_rank":"state_organ","magnitude":0.9,"confidence":0.85}
-  - "Senator Lindsey Graham dies at 70" -> {"event_class":"other","actor_rank":"individual","magnitude":0.3,"confidence":0.7}
-  - "Australia signs long-planned submarine procurement contract" -> {"event_class":"procurement_routine","actor_rank":"state_organ","magnitude":0.2,"confidence":0.8}
-  - "World Cup final ends in penalty shootout; meme goes viral" -> {"event_class":"meme_sports_culture","actor_rank":"none","magnitude":0.05,"confidence":0.9}
+  - "A country's head of state is buried after a state funeral in the capital" -> {"event_class":"leader_death","actor_rank":"head_of_state","magnitude":0.93,"confidence":0.88}
+  - "A government's missile strike hits a militia position across the border" -> {"event_class":"kinetic_strike","actor_rank":"state_organ","magnitude":0.87,"confidence":0.83}
+  - "A regional legislator dies at 70" -> {"event_class":"other","actor_rank":"individual","magnitude":0.28,"confidence":0.72}
+  - "A navy signs a long-planned submarine procurement contract" -> {"event_class":"procurement_routine","actor_rank":"state_organ","magnitude":0.17,"confidence":0.81}
+  - "A cup final ends in a penalty shootout; a meme goes viral" -> {"event_class":"meme_sports_culture","actor_rank":"none","magnitude":0.04,"confidence":0.92}
 
 Do NOT invent facts beyond the signal text. If a signal is too thin to judge, use event_class "other" with a LOW magnitude + LOW confidence. Output nothing but the JSON array."""
-)
+) + "\n\n" + _PASTED_TEXT_IS_DATA
 
 
 def _signal_text(payload: Any, *, snippet_chars: int = DEFAULT_SNIPPET_CHARS) -> str:
@@ -989,7 +1003,7 @@ __all__ = [
     "EVENT_CLASSES", "ACTOR_RANKS", "AUTHORITY_BY_SOURCE_CLASS", "AUTHORITY_RANK",
     "SignalRow", "SalienceVerdict", "SignalSalienceDeps",
     "salience_sort_key", "magnitude_of", "max_salience",
-    # D-2 — the repaired CITED-grain key (`cited_mass.v1`, D-1 §1.5.2).
+    # The repaired CITED-grain key (`cited_mass.v1`).
     "MASS_FLOOR", "ABOVE_BAR", "CITED_SALIENCE_VERSION",
     "cited_salience", "pool_salience",
     "build_signal_finding_salience",

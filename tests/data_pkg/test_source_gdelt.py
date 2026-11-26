@@ -1,12 +1,12 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for :class:`legba.data.sources.gdelt.GDELTBigQuerySourceHandler` (L-131).
+"""Tests for :class:`legba.data.sources.gdelt.GDELTBigQuerySourceHandler`.
 
 Coverage:
 
   * Config schema validation (FIPS country shape, regex compile, root-code
     padding, tone range ordering, cost caps).
-  * Conformance with the L-102 source-kind class-var contract.
+  * Conformance with the source-kind class-var contract.
   * SQL composition: every filter mode produces the expected WHERE clauses
     and parameter bindings.
   * Cursor advance: pulls record ``gdelt_last_dateadded`` from the highest
@@ -271,7 +271,7 @@ class TestGDELTConfigValidation:
 
 
 # ---------------------------------------------------------------------------
-# Class-var conformance to L-102 §2
+# Class-var conformance to §2
 # ---------------------------------------------------------------------------
 
 
@@ -399,7 +399,7 @@ async def test_pull_yields_signals_and_advances_cursor() -> None:
         out.append(sig)
 
     assert len(out) == 3
-    # Signal envelope shape (L-102 §2).
+    # Signal envelope shape (§2).
     for sig in out:
         assert sig.source_id == "gdelt_brazil"
         # Source-first pivot: Signal is target-agnostic — target_id left the

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for the curated/authoritative seeding ROOTS (flavor b).
 
-Covers (planning/SEEDING_SKETCH.md "roots deliverable"):
+Covers the roots deliverable:
 
   * migration 0034 applies — seed_batches table + seed_batch_id on facts AND
     nexuses + source_type on nexuses; facts/nexuses accept 'seed'/'backfill'.
@@ -478,7 +478,7 @@ async def test_world_baseline_end_to_end_and_idempotent(pg_pool):
         modi = await conn.fetchrow(
             "SELECT source_type, seed_batch_id, valid_from, confidence "
             "FROM facts WHERE lower(subject)='narendra modi' "
-            # Phase B item 5: predicate stored canonical (was 'LeaderOf').
+            # Predicate stored canonical (was 'LeaderOf').
             "AND predicate='leader of' AND lower(value)='india' "
             "AND valid_until IS NULL AND superseded_by IS NULL"
         )
@@ -509,7 +509,7 @@ async def test_world_baseline_end_to_end_and_idempotent(pg_pool):
         nato = await conn.fetchrow(
             "SELECT source_type, seed_batch_id, polarity, valid_from "
             "FROM nexuses WHERE lower(subject)='france' "
-            # Phase B item 5: rel_type stored canonical (was 'MemberOf').
+            # rel_type stored canonical (was 'MemberOf').
             "AND rel_type='member of' AND lower(object)='nato' "
             "AND valid_until IS NULL AND superseded_by IS NULL"
         )
@@ -658,7 +658,7 @@ async def test_seed_batch_ledger_is_idempotent(pg_pool):
 @pytest.mark.asyncio
 async def test_seed_resolve_entity_composite_key_and_geo_gate(pg_conn):
     """``_resolve_entity`` keys on (lower(name), entity_class) so a name shared
-    across classes stays two rows; and the Wave-1b entity-geo reconciliation
+    across classes stays two rows; and the entity-geo reconciliation
     overrides a coordinate set whose country contradicts a country-NAMED
     entity (the source coords belong to a different place)."""
     from legba.data.seed._driver import _resolve_entity

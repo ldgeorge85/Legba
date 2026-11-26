@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Presigned-URL redaction — ONE helper for every persisted redirected URL.
 
-W11-F59. The OFAC download redirects to a PRESIGNED object-store URL whose
+The OFAC download redirects to a PRESIGNED object-store URL whose
 query carries a temporary credential (``X-Amz-Security-Token`` /
 ``X-Amz-Signature``). ``instrument_snapshot`` stripped that query from its
 ``final_url`` — but nothing stopped a different handler persisting a redirected

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""L-1 — the single alert path on the REAL driver, every claim read back from
+"""The single alert path on the REAL driver, every claim read back from
 the rows of a migrated database.
 
 * migration 0250 is idempotent and additive;
@@ -255,7 +255,7 @@ async def test_watchdog_transitions_raise_and_recover(pool, http) -> None:  # no
 
 @pytest.mark.asyncio
 async def test_cursor_lag_leg_raises_through_the_path_and_recovers(pool, http) -> None:  # noqa: ANN001
-    """N-Z x L-1: the cursor-lag leg's entry (``analyst_cursor_lag``) and
+    """N-Z x the cursor-lag leg's entry (``analyst_cursor_lag``) and
     recovery (payload kind ``analyst_cursor_lag_recovered``) both reach
     ``raise_alert`` under the channel kind in the closed list: entry opens and
     pages at high, recovery closes; nothing is refused."""

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane G-2: the interpreter and the harness host, with synthetic seats.
+"""The interpreter and the harness host, with synthetic seats.
 
 Every shape runs; a run killed at any step resumes from its file receipts to
 the same record; a planted leak is refused by the store; a late seat in a

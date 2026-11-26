@@ -180,11 +180,21 @@ def test_substrate_reads_findings_route_folds_both_critiques_set_based():
 
     src = inspect.getsource(substrate_reads_api.build_substrate_reads_router)
     assert "LEFT JOIN LATERAL" not in src
-    assert src.count("_FAITHFULNESS_VERIFICATION_CTE") == 2
+    # Both light projections fold through the pair `verification_ctes` hands
+    # back: the constants above for a read of now, the same folds limited to
+    # the critiques written by `?at=` for a read of the record as it stood.
+    assert src.count("_verification_ctes(at_param)") == 1
+    assert src.count("{faith_cte}") == 2 and src.count("{struct_cte}") == 2
+    assert substrate_reads_folds.verification_ctes(None) == (faith, struct)
+    assert substrate_reads_folds.verification_ctes(None, full=True) == (score, badge)
+    for sql in substrate_reads_folds.verification_ctes(7) + substrate_reads_folds.verification_ctes(7, full=True):
+        assert "AS MATERIALIZED (" in sql and "DISTINCT ON (" in sql
+        assert ".created_at <= $7" in sql
     # P-5: the full row's statement moved to substrate_reads_folds.full_row_sql
     assert src.count("_full_row_sql(") == 1
     full = inspect.getsource(substrate_reads_folds.full_row_sql)
-    assert full.count("{CRITIC_SCORE_CTE}") == 1 and full.count("{STRUCTURAL_BADGE_CTE}") == 1
+    assert full.count("{critic_cte}") == 1 and full.count("{badge_cte}") == 1
+    assert "verification_ctes(as_of_param, full=True)" in full
     assert "LATERAL" not in full
 
 

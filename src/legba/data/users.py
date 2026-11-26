@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Local users + PLUGGABLE authentication (X3 lane B3; migration 0236).
+"""Local users + PLUGGABLE authentication (migration 0236).
 
-WHY. Until X3 every viewer was the operator: caddy's basic_auth perimeter
-injected the operator bearer for every browser. The operator decided on 10-08
-"we build it with local users but auth external": the identity is OURS (one
-``users`` row, an internal uuid every other row keys on) and how a person
-proves who they are is a PROVIDER behind one interface. Sign-in is
-INVITE-ONLY under every provider — no row, no entry.
+WHY. Without local users every viewer was the operator: caddy's basic_auth
+perimeter injected the operator bearer for every browser. Identity is local
+but authentication is external: the identity is OURS (one ``users`` row, an
+internal uuid every other row keys on) and how a person proves who they are
+is a PROVIDER behind one interface. Sign-in is INVITE-ONLY under every
+provider — no row, no entry.
 
 THE INTERFACE (:class:`AuthProvider`). ``authenticate(conn, credentials)``
 returns the active :class:`User` the credentials prove, or raises
@@ -232,7 +232,7 @@ def normalize_email(email: Any) -> str:
 def assignable_roles() -> tuple[str, ...]:
     """The role names an invite / an edit may set: the October classes with
     the sign-in switch off, ``reader`` / ``contributor`` / ``admin`` with it
-    on (A-1)."""
+    on."""
     return _signin.ROLES if _signin.signin_enabled() else USER_ROLES
 
 
@@ -284,7 +284,7 @@ class User:
     created_at: str | None = None
     updated_at: str | None = None
     last_sign_in_at: str | None = None
-    #: A-1: the owner flag (migration 0255). ``None`` = not read (every
+    #: The owner flag (migration 0255). ``None`` = not read (every
     #: switch-off query), and then :meth:`public` leaves the key out.
     is_owner: bool | None = None
 
@@ -656,6 +656,7 @@ async def update_user(
             raise AuthRefused("user_unknown", f"no user {user_id!r}", status=404)
         if _signin.signin_enabled():
             await _refuse_owner_change(conn, current.id, role=role, status=status)
+            await _refuse_last_admin(conn, current, role=role, status=status)
         new_role = _check_role(role) if role is not None else current.role
         if status is not None and status not in ("active", "disabled"):
             raise AuthRefused(
@@ -709,7 +710,7 @@ async def update_user(
 async def _refuse_owner_change(
     conn: Any, user_id: str, *, role: str | None, status: str | None,
 ) -> None:
-    """A-1: the owner stays an active admin through the API (409
+    """The owner stays an active admin through the API (409
     ``owner_protected``); changing the owner is a host-side act."""
     is_owner = await conn.fetchval(
         "SELECT is_owner FROM users WHERE id = $1::uuid", user_id,
@@ -722,6 +723,173 @@ async def _refuse_owner_change(
             "the owner account cannot be demoted or disabled through the API",
             status=409,
         )
+
+
+#: Stored role names the sign-in gate reads as admin (the October
+#: ``operator`` reads through the legacy map).
+ADMIN_ROLE_NAMES: tuple[str, ...] = tuple(
+    sorted({_signin.ROLE_ADMIN, *(
+        old for old, new in _signin.LEGACY_ROLE_MAP.items() if new == _signin.ROLE_ADMIN
+    )})
+)
+
+
+async def _refuse_last_admin(
+    conn: Any, current: User, *, role: str | None, status: str | None,
+) -> None:
+    """Refuse (409 ``last_admin``) a change that would leave no active admin:
+    demoting or disabling the only one. Every active admin row is locked
+    first (in id order), so two admins demoting each other at once cannot
+    both succeed: the second waits, then sees the first change."""
+    if current.status != "active" or current.role not in ADMIN_ROLE_NAMES:
+        return
+    keeps_admin = role is None or role in ADMIN_ROLE_NAMES
+    stays_active = status is None or status == "active"
+    if keeps_admin and stays_active:
+        return
+    admins = await conn.fetch(
+        "SELECT id FROM users WHERE status = 'active' AND role = ANY($1::text[]) "
+        "ORDER BY id FOR UPDATE",
+        list(ADMIN_ROLE_NAMES),
+    )
+    others = [r for r in admins if str(r["id"]) != str(current.id)]
+    if not others:
+        raise AuthRefused(
+            "last_admin",
+            "this is the only active admin; make someone else an admin first",
+            status=409,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Account administration (the console's Users page; sign-in on)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class AccountRow:
+    """One account as the Users page lists it: the user (with the owner
+    flag), when it was last seen on any session, and its live sessions."""
+
+    user: User
+    last_seen_at: str | None
+    live_sessions: int
+
+    def public(self) -> dict[str, Any]:
+        out = self.user.public()
+        out["last_seen_at"] = self.last_seen_at
+        out["live_sessions"] = self.live_sessions
+        return out
+
+
+@dataclass(frozen=True)
+class PendingInvite:
+    """An account still waiting on its invite, with its newest unused invite.
+    No token and no token hash: neither is ever read back out."""
+
+    user_id: str
+    email: str | None
+    display_name: str
+    role: str
+    invited_by: str | None
+    created_at: str | None
+    expires_at: str | None
+    expired: bool
+
+    def public(self) -> dict[str, Any]:
+        return {
+            "user_id": self.user_id,
+            "email": self.email,
+            "display_name": self.display_name,
+            "role": _signin.normalize_role(self.role) or self.role,
+            "invited_by": self.invited_by,
+            "created_at": self.created_at,
+            "expires_at": self.expires_at,
+            "expired": self.expired,
+        }
+
+
+async def list_accounts(conn: Any) -> list[AccountRow]:
+    """Every account past its invite (active or disabled), oldest first."""
+    rows = await conn.fetch(
+        f"""
+        SELECT {_U_COLUMNS}, u.is_owner, s.last_seen_at, s.live_sessions
+          FROM users u
+          LEFT JOIN LATERAL (
+                SELECT max(coalesce(last_seen_at, created_at)) AS last_seen_at,
+                       count(*) FILTER (
+                           WHERE revoked_at IS NULL AND expires_at > now()
+                             AND coalesce(last_seen_at, created_at)
+                                 > now() - make_interval(hours => $1)
+                       ) AS live_sessions
+                  FROM user_sessions WHERE user_id = u.id
+          ) s ON true
+         WHERE u.status <> 'invited'
+         ORDER BY u.created_at, u.id
+        """,
+        _signin.idle_hours(),
+    )
+    return [
+        AccountRow(
+            user=User.from_row(r),
+            last_seen_at=_iso(r["last_seen_at"]),
+            live_sessions=int(r["live_sessions"] or 0),
+        )
+        for r in rows
+    ]
+
+
+async def list_pending_invites(conn: Any) -> list[PendingInvite]:
+    """Every account still waiting on its invite, newest first."""
+    rows = await conn.fetch(
+        """
+        SELECT u.id, u.email, u.display_name, u.role AS user_role,
+               i.role, i.invited_by, i.created_at, i.expires_at
+          FROM users u
+          LEFT JOIN LATERAL (
+                SELECT role, invited_by, created_at, expires_at
+                  FROM user_invites
+                 WHERE user_id = u.id AND used_at IS NULL
+                 ORDER BY created_at DESC LIMIT 1
+          ) i ON true
+         WHERE u.status = 'invited'
+         ORDER BY coalesce(i.created_at, u.created_at) DESC, u.id
+        """,
+    )
+    now = datetime.now(tz=timezone.utc)
+    out: list[PendingInvite] = []
+    for r in rows:
+        expires = r["expires_at"]
+        out.append(PendingInvite(
+            user_id=str(r["id"]),
+            email=r["email"],
+            display_name=r["display_name"] or "",
+            role=r["role"] or r["user_role"],
+            invited_by=r["invited_by"],
+            created_at=_iso(r["created_at"]),
+            expires_at=_iso(expires),
+            expired=expires is None or expires <= now,
+        ))
+    return out
+
+
+async def revoke_invite(conn: Any, user_id: Any) -> User:
+    """Withdraw a pending invite: the waiting account and its invites are
+    removed (it never signed in, so nothing else names it). The same email
+    can be invited again. Refuses an account that is past its invite."""
+    uid = _as_uuid(user_id)
+    if uid is None:
+        raise AuthRefused("invite_unknown", "no pending invite for that account", status=404)
+    async with conn.transaction():
+        row = await conn.fetchrow(
+            f"SELECT {_USER_COLUMNS} FROM users WHERE id = $1 FOR UPDATE", uid,
+        )
+        if row is None or row["status"] != "invited":
+            raise AuthRefused(
+                "invite_unknown", "no pending invite for that account", status=404,
+            )
+        await conn.execute("DELETE FROM users WHERE id = $1 AND status = 'invited'", uid)
+    return User.from_row(row)
 
 
 # ---------------------------------------------------------------------------
@@ -901,7 +1069,7 @@ SELECT {_U_COLUMNS}
 """
 
 
-#: A-1 (sign-in switch on): the same read plus the owner flag and the IDLE
+#: Sign-in switch on: the same read plus the owner flag and the IDLE
 #: limit — ``$2`` hours since ``last_seen_at`` (or ``created_at`` when never
 #: touched). Also returns whether ``last_seen_at`` is due a touch (``$3``
 #: seconds old), so a busy session costs one write per window.
@@ -923,7 +1091,7 @@ async def resolve_session(conn: Any, token: str | None) -> User | None:
     """The active user a session token belongs to, or ``None`` (unknown,
     revoked, expired, or the user is no longer active).
 
-    A-1, switch on: also ``None`` past the idle limit
+    Sign-in switch on: also ``None`` past the idle limit
     (``LEGBA_SESSION_IDLE_HOURS``); a live session's ``last_seen_at`` is
     touched at most every five minutes, and the user carries ``is_owner``."""
     if not token or len(token) > 256:
@@ -954,7 +1122,7 @@ async def _resolve_session_signin(conn: Any, token: str) -> User | None:
 
 
 async def get_user_with_owner(conn: Any, user_id: Any) -> User | None:
-    """:func:`get_user` plus ``is_owner`` (A-1; needs migration 0255)."""
+    """:func:`get_user` plus ``is_owner`` (needs migration 0255)."""
     uid = _as_uuid(user_id)
     if uid is None:
         return None
@@ -965,7 +1133,7 @@ async def get_user_with_owner(conn: Any, user_id: Any) -> User | None:
 
 
 async def owner_count(conn: Any) -> int:
-    """Active owners (A-1)."""
+    """Active owners."""
     return int(await conn.fetchval(
         "SELECT count(*) FROM users WHERE is_owner AND status = 'active'",
     ) or 0)
@@ -974,7 +1142,7 @@ async def owner_count(conn: Any) -> int:
 async def create_owner(
     conn: Any, *, email: str, password: str, display_name: str = "",
 ) -> User:
-    """The FIRST OWNER (A-1 bootstrap): an active ``admin`` with
+    """The FIRST OWNER (bootstrap): an active ``admin`` with
     ``is_owner``, its argon2id password set, created in one transaction.
     Refuses (409 ``owner_exists``) when an active owner exists, and
     (409 ``user_exists``) when the email already has an account. The
@@ -1039,6 +1207,12 @@ async def revoke_user_sessions(conn: Any, user_id: str) -> int:
 
 
 __all__ = [
+    "ADMIN_ROLE_NAMES",
+    "AccountRow",
+    "PendingInvite",
+    "list_accounts",
+    "list_pending_invites",
+    "revoke_invite",
     "AuthProvider",
     "AuthRefused",
     "INVITE_TTL_ENV",

@@ -1,11 +1,10 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""``inspect_entity`` — the body, extracted from the port (lane E2).
+"""``inspect_entity`` — the body, extracted from the port.
 
-The port sat near its size ceiling, and E2 gave this reader a ``known_at``
+The port sat near its size ceiling, and this reader's ``known_at``
 record-time cut (classified in :mod:`legba.data.raw_reader_known_at`), so the
-body moved here the way ``search_signals`` moved to ``substrate_signal_search``
-in E0. Without ``known_at`` every statement is byte-identical to the port's
+body moved here the way ``search_signals`` moved to ``substrate_signal_search``. Without ``known_at`` every statement is byte-identical to the port's
 (sha-pinned in ``tests/data_pkg/test_record_reader_known_at.py``).
 
 Under ``known_at`` K: the profile must have entered the record before K (else
@@ -129,7 +128,7 @@ async def inspect_entity(
         # Current facts about this entity, keyed by subject = canonical
         # name (the same enumerate-via-subject convention the prior
         # facts_note pointed callers at).  Gated to OPEN rows only —
-        # the 0032 pair plus the P7 origin-class leg (live_gate_sql)
+        # the 0032 pair plus the origin-class leg (live_gate_sql)
         # — so inspect_entity never surfaces a replaced/expired/history fact.
         # Under known_at: the facts that held at K by validity, recorded
         # before K, live classes only.

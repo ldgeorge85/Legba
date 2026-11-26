@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The desk brief's TYPED ABSENCE section (lane k5b).
+"""The desk brief's TYPED ABSENCE section.
 
 Four layers, mirroring the module's own split:
 
@@ -616,7 +616,7 @@ def test_the_readers_kind_ORDER_matches_the_routes_own() -> None:
 
 
 def test_a_g20_desk_appendix_is_accepted_by_the_route_model():
-    """W11-F78: a 23,000-char client appendix (20 situations × 20 events on a
+    """a 23,000-char client appendix (20 situations × 20 events on a
     G20 desk) was refused at 20,000 and the Brief tab could not render for
     any country desk. The guard is now above the client's own 30,000 cap."""
     from legba.data.registry.export_absences import APPENDIX_MAX_CHARS, ExportAppendixIn

@@ -20,7 +20,7 @@ What it proves:
      a real ``facts`` row with ``source_type='proposed'`` and the run's
      provenance; an ALLOW governor event + a settled invocation ledger row land.
   4. A ``propose_fact`` with NO ``derived_from`` lineage is REFUSED at the
-     handler (review S-1 — an uncited write cannot land).
+     handler (an uncited write cannot land).
   5. A junk triple is rejected (the ingest ``_is_junk_triple`` gate).
   6. A target that does NOT allow the write pack BLOCKS at resolution
      (``not_allowed``) — the operator's allow leg is the off switch.
@@ -264,7 +264,7 @@ async def test_propose_fact_writes_proposed_row_through_gate(pool):
 
 
 # ---------------------------------------------------------------------------
-# 4) propose_fact with no lineage is REFUSED (review S-1).
+# 4) propose_fact with no lineage is REFUSED.
 # ---------------------------------------------------------------------------
 
 
@@ -443,8 +443,8 @@ async def test_request_source_and_open_question_land_rows(pool):
 # 7a) CW-3 — a deictic question is made SELF-CONTAINED before it is stored.
 #
 # The analyst writing this call is looking at a finding, so it writes "the
-# incident" and the answer to "which one" stays in derived_from. K-4 R3
-# measured that class at 0.133 across the open-question set.
+# incident" and the answer to "which one" stays in derived_from. That class
+# measured 0.133 across the open-question set.
 # ---------------------------------------------------------------------------
 
 

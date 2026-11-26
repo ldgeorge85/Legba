@@ -933,70 +933,58 @@ def _grade_one(
 
 
 # ---------------------------------------------------------------------------
-# THE JUDGE-SIDE ARM (H2 §2). What a lexical test cannot decide, the judge is
-# TOLD — by name, with the graded sentences as the negatives.
+# THE JUDGE-SIDE ARM. What a lexical test cannot decide, the judge is TOLD, by
+# name, with an invented example for each shape (the real cases that taught
+# them are in the judge regression set, so the examples do not anchor grading
+# on any one subject). Shapes A-D are clauses that misstate a sub-claim's
+# content or direction; E and F are clauses that keep the content but change
+# its certainty or drop a disagreement. Three of the first four are also
+# checked deterministically; D, E and F are the judge's alone.
 #
-# The three shapes below are not new doctrine. The composition prompt has always
-# carried a collection-scoped absence rule and always asked for faithful
-# attribution, and every one of these sentences shipped anyway — which is why
-# three of them are now deterministic. This block is for the residue: the fourth
-# shape, the IR direction inversion against a desk whose own read holds both
-# poles, which no lexical test can honestly call and which the judge is the only
-# grader in the system positioned to see.
-#
-# House idiom followed (``_ABSENCE_JUDGE_SYSTEM``'s "WHAT GOES WRONG IN THIS
-# SEAT"): a prose list of failure records, each with its example quoted inline,
-# appended as an ADDITIVE block to the composition lead.
-#
-# ONE DELIBERATE DEPARTURE — the shapes are LETTERED, not numbered. That rubric
-# is a SYSTEM prompt, where its "1. / 2. / 3." can never collide with anything;
-# this block rides the USER turn, immediately above the NUMBERED CLAIM LIST the
-# judge must return one verdict per, in order. A numbered rubric there puts four
-# more "N." lines in the same message as the claims and invites exactly the
-# miscount the ``(#116d)`` length contract exists to catch — a test double in
-# ``test_composition_tiered_evidence`` counted six claims where there were two
-# the first time this shipped numbered, which is the cheap version of a real
-# judge doing the same thing.
+# The shapes are LETTERED, not numbered: this block rides the user turn just
+# above the numbered claim list, and more "N." lines there invite a judge to
+# miscount the claims it must answer one by one.
 # ---------------------------------------------------------------------------
 
 RUBRIC = (
-    "WHAT GOES WRONG BETWEEN A DESK AND A COMPOSITION. Ten country reads were "
-    "graded against the world by independent analysts. The composition layer — "
-    "not the desks — produced these four shapes, and each is a claim the cited "
-    "sub-claim does NOT support. Grade a clause that matches one of them "
-    "UNSUPPORTED, or CONTRADICTED where the sub-claim states the opposite.\n"
-    "SHAPE A. SCOPE DELETED. A desk bounds a negative to what it COLLECTED; the "
-    "composition republishes it as a fact about the world. The desk wrote 'No "
-    "coordinated narrative appears in THIS DESK'S COLLECTION for Japan'; the "
-    "composition led with 'No coordinated narrative appears in JAPAN'S "
-    "INFORMATION ENVIRONMENT'. A time bound is not a collection bound — 'in the "
-    "latest 72-hour slice' says when the desk looked, not what it searched, and "
-    "does not restore the deleted qualifier.\n"
-    "SHAPE B. THE DESK CITED FOR ITS OWN NEGATION. 'The military-posture read CONFIRMS "
-    "that the UK is modestly INCREASING offensive support ... EXPANDING its "
-    "standing posture', where that read says 'No material change; the United "
-    "Kingdom's standing offensive support to Ukraine remains UNCHANGED'. Naming "
-    "a desk as the authority for the reverse of its verdict is the worst version "
-    "of this family, because the attribution is what a reader trusts.\n"
-    "SHAPE C. A CLAIM THE NAMED DESK DOES NOT MAKE. 'The internal-stability read notes "
-    "only modest, isolated protests', where that desk reports NO unrest at all; "
-    "or a phrase QUOTED as a desk's own words that appears nowhere in it — "
-    "'translating its \"smart-defence\" doctrine' attributed to a read that "
-    "speaks only of a 'doctrinal shift'. Weakening an absence into a small "
-    "positive is still inventing the positive.\n"
-    "SHAPE D. DIRECTION INVERTED ACROSS THE LAYER. The military-posture desk reported "
-    "the window's maritime change as a joint Iran-Oman NAVIGATIONAL CORRIDOR and "
-    "a MINE-CLEARANCE project — an opening — and the composition synthesised it "
-    "as 'simultaneously TIGHTENING maritime control'. This one is yours alone: "
-    "the mechanical checks decline it, because that desk's own BLUF says "
-    "'tighter control' while its body reports the corridor, and no lexical test "
-    "can say which the composition inverted. Read what the sub-claim reports as "
-    "HAVING CHANGED, not the word its BLUF chose, and mark the clause "
+    "WHAT GOES WRONG BETWEEN A DESK AND A COMPOSITION. Each shape below is a "
+    "clause the cited sub-claim does NOT support. Grade a clause that matches "
+    "one of them UNSUPPORTED, or CONTRADICTED where the sub-claim states the "
+    "opposite.\n"
+    "SHAPE A. SCOPE DELETED. A desk bounds a negative to what it collected; the "
+    "composition republishes it as a fact about the world. The desk wrote 'no "
+    "complaints appear in this desk's collection for the supplier'; the "
+    "composition led with 'no complaints about the supplier exist'. A time "
+    "bound is not a collection bound — 'in the latest 72-hour slice' says when "
+    "the desk looked, not what it searched, and does not restore the deleted "
+    "qualifier.\n"
+    "SHAPE B. THE DESK CITED FOR ITS OWN NEGATION. 'The pricing read confirms "
+    "that the supplier is raising its prices', where that read says 'No "
+    "material change; the supplier's prices remain unchanged'. Naming a desk as "
+    "the authority for the reverse of its verdict is the worst version of this "
+    "family, because the attribution is what a reader trusts.\n"
+    "SHAPE C. A CLAIM THE NAMED DESK DOES NOT MAKE. 'The safety read notes only "
+    "minor, isolated incidents', where that read reports no incidents at all; "
+    "or a phrase quoted as a desk's own words that appears nowhere in it — "
+    "'its \"zero-waste\" policy' attributed to a read that speaks only of a "
+    "'policy change'. Weakening an absence into a small positive is still "
+    "inventing the positive.\n"
+    "SHAPE D. DIRECTION INVERTED ACROSS THE LAYER. A desk reported the window's "
+    "change as a new shared shipping route and a joint inspection programme — "
+    "an opening — and the composition wrote 'simultaneously tightening control "
+    "of shipping'. The desk's own summary line may use the other word while its "
+    "body reports the opening: read what the sub-claim reports as having "
+    "changed, not the word its summary line chose, and mark the clause "
     "CONTRADICTED when the composition sends the change the other way.\n"
-    "A composition that KEEPS the desk's qualifier, relays the desk's direction, "
-    "or names a disagreement it found is behaving correctly and is SUPPORTED. "
-    "Do not penalise ordinary summarisation, shortening, or aggregation — only "
-    "the four shapes above.\n\n"
+    "SHAPE E. CERTAINTY RAISED. The sub-claim says \"may\", \"reportedly\", "
+    "\"one desk assessed\" or carries a low band; the clause states it flatly "
+    "or at a higher band.\n"
+    "SHAPE F. DISAGREEMENT FLATTENED. Two cited sub-claims disagree and the "
+    "clause reports one without saying so.\n"
+    "A composition that keeps the desk's qualifier, relays the desk's "
+    "direction, or names a disagreement it found is behaving correctly and is "
+    "SUPPORTED. Do not penalise ordinary summarisation, shortening, or "
+    "aggregation — only the six shapes above.\n\n"
 )
 
 

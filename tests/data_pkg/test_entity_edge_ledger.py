@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for the V3/P3 entity-edge transition ledger (migration 0206,
+"""Tests for the entity-edge transition ledger (migration 0206,
 spec §3.5) and its ``LEGBA_EDGE_TRANSITION_LEDGER`` gate.
 
 The claims under test:

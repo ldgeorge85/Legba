@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""L-172 meta_findings_synthesizer analyst kind.
+"""meta_findings_synthesizer analyst kind.
 
 Reads OTHER analysts' first-order outputs (rows in ``analyst_outputs`` with
 ``kind == 'finding'``) and synthesizes them into a second-order
@@ -9,8 +9,7 @@ wrapper stamps ``derived_from`` with the contributing finding UUIDs so the
 lineage walker can backtrack one hop to the first-order findings (and two
 hops to the underlying signals).
 
-Per ``plans/design/legba_kind_contracts.md`` §5 (analyst kind contract) and
-``plans/design/legba_topology_redesign.md`` §5.3::
+The analyst kind contract:
 
     Reads:  other analysts' outputs only (NOT raw substrate signals).
     Method: narrower-context LLM — synthesizing already-structured findings
@@ -31,7 +30,7 @@ Subscription / read-side
 
 The analyst descriptor expresses *which* other analysts feed this synth via
 :class:`legba.data.schemas.analyst.SubscriptionAnalyst` entries on
-``subscription.other_analysts`` (per L-101 §4). The runtime resolves those
+``subscription.other_analysts``. The runtime resolves those
 to a concrete ``analyst_id`` set and either (a) calls
 :func:`read_other_analyst_findings` itself before invoking ``run_method``,
 or (b) passes ``options['source_analyst_ids']`` so this module can validate
@@ -54,6 +53,7 @@ second-order claim, not a verbose first-order one. Default
 from __future__ import annotations
 from legba.shared.sampling import HOUSE_TEMPERATURE
 
+import functools
 import json
 import logging
 import os
@@ -71,12 +71,12 @@ from ..provenance.consumption import (
 # ``CHARS_PER_TOKEN`` and ``detect_contradictions`` moved with the PROMPT-
 # ASSEMBLY unit (2026-09-06) and are no longer read here; both are kept as
 # re-exports, the same back-compat obligation every other moved name carries.
-from ._llm_budget import CHARS_PER_TOKEN, budget_chars  # noqa: F401
+from ._llm_budget import CHARS_PER_TOKEN, budget_chars, input_token_budget  # noqa: F401
 from .claim_contradiction import (  # noqa: F401 — re-exported surface
     detect_contradictions,
     render_tension_block,
 )
-# FRAME-1 (2026-08-20) — the composition's ADMISSIBILITY WINDOW and its two-tier
+# the composition's ADMISSIBILITY WINDOW and its two-tier
 # evidence, in the sibling leaf ``composition_window``. Imported ONE WAY and
 # RE-EXPORTED: the C-TIER periphery selection/render moved there under the
 # module-size gate (this file sat three lines under its ceiling) and the
@@ -117,7 +117,7 @@ from .composition_window import (  # noqa: F401 — re-exported surface
     select_floor_fallback,
     units_missing_from_basis,
 )
-# G2 (2026-09-16) — THE CORRECTNESS GATE, flag-off inert (no query, no marker,
+# THE CORRECTNESS GATE, flag-off inert (no query, no marker,
 # no stamp). Its module docstring says why a gated unit is QUOTED into the
 # periphery tier this file already partitions on, rather than dropped.
 from .composition_correctness_gate import (
@@ -126,7 +126,7 @@ from .composition_correctness_gate import (
     gate_ledger_of as _gate_ledger_of,
     stamp_gate_envelope as _stamp_gate_envelope,
 )
-# FRAME-2 (2026-08-20) — THE CARRY. The window ledger AND the CONTINUITY section
+# THE CARRY. The window ledger AND the CONTINUITY section
 # it joins live in the sibling leaf ``window_ledger``: the ledger is shared with
 # the UNIT layer (one definition of the selection, the render, the marker defuse
 # and the clause — a second copy would drift on the first edit), and the
@@ -217,8 +217,8 @@ MAX_WORLD_INPUT_FINDINGS: int = 64
 """Cap for the WORLD/global read (no ``target_id`` stamp). Its slice is folded to
 exactly ONE head per (analyst, target) by ``DISTINCT ON (analyst_id,
 target_id)``, so the natural input count IS the source roster — the cap must stay
->= the roster or the world composition silently drops inputs. The P4 pre-push
-review (C2) found the 15-cap fused a "Global" read WITHOUT the United States. S2-T3
+>= the roster or the world composition silently drops inputs. An earlier
+15-cap fused a "Global" read WITHOUT the United States. The world read is now
 repointed the world read over the FIVE region heads (5-6 inputs), so the cap no
 longer bites in the happy path; it still guards the DEGRADE path, where a region
 with no region head falls back to its ~4-6 member country heads (worst case all
@@ -261,14 +261,14 @@ COMPOSITION_SLICE_BUDGET_SHARE: float = 0.5
 #: ``_build_composition_citation``, its only reader, and is re-exported below.
 
 
-# F-1 (MASTER_PLAN 2026-07-13) — COMPOSE-TIME HEAD RE-RESOLUTION (freshness).
+# COMPOSE-TIME HEAD RE-RESOLUTION (freshness).
 #
 # The direct inputs a composition reads are ALWAYS current heads (the deduped
 # read gates ``f.superseded_by IS NULL``). But a composition head freezes its
 # lower-tier CITATIONS at its own tick: if a sub-finding it cited later REVERSES
 # (is superseded by a materially different current head), that reversal does not
 # propagate up until every intervening tier re-composes. The Italy staleness race
-# (2026-07-13): escalation ``ed158597`` (conf 0.90, "expulsions drive escalation
+#: escalation ``ed158597`` (conf 0.90, "expulsions drive escalation
 # risk") reversed to ``f0cd1c87`` (conf 0.30, "no signs of near-term escalation")
 # at 00:44; the country→region→world heads composed before the propagation caught
 # up, so the world assessment cited the SUPERSEDED high-escalation reading.
@@ -297,7 +297,7 @@ FRESHNESS_MAX_ADVISORY: int = 6
 per-(unit,target) ledger still lands in the trace ``data.freshness``)."""
 
 
-# P3 per-COUNTRY composition — verify-floor gate.
+# Per-COUNTRY composition — verify-floor gate.
 #
 # When this synth runs TARGET-SCOPED (a per-country composition descriptor with a
 # ``subscription.targets`` block → the runtime fans out one worker per G20 target
@@ -311,13 +311,10 @@ per-(unit,target) ledger still lands in the trace ``data.freshness``)."""
 # is excluded by tag. GLOBAL meta runs (no target binding, ``target_filter=None``)
 # are UNAFFECTED — they keep the legacy cross-target, unfiltered read.
 #
-# Default 0.50 (raised from 0.0 on 2026-08-15, operator decision): the shipped
-# default now matches the reference deployment's calibrated ops setting — the
-# outside review found the README's "only verified sub-claims compose" claim
-# stronger than the floor-0 default, and the fix chosen was to raise the
-# default rather than soften the words. The original floor-0 rationale (don't
-# drop data on an UN-calibrated threshold) no longer applies: 0.50 has been
-# the measured live floor since 2026-07. Env-overridable both directions via
+# Default 0.50: the shipped default matches the calibrated live floor, so
+# "only verified sub-claims compose" holds by default. A floor of 0 (don't
+# drop data on an UN-calibrated threshold) no longer applies: 0.50 is the
+# measured live floor. Env-overridable both directions via
 # LEGBA_COMPOSITION_VERIFY_FLOOR (no schema change / registry rebuild).
 DEFAULT_VERIFY_FLOOR: float = 0.50
 """Minimum ``effective_confidence`` a verified sub-claim must clear to enter the
@@ -328,10 +325,9 @@ VERIFY_FLOOR_ENV: str = "LEGBA_COMPOSITION_VERIFY_FLOOR"
 
 # C-TIER (2026-07) — TWO-TIER composition evidence: BASIS + PERIPHERY.
 #
-# The operator's direction verbatim: "can we not include but properly weight or
-# separate it from others. Like even, conflicting points. Don't want to lose
-# real signal but want to distill it." Neither of the two prior behaviors does
-# that: a HARD floor silently DROPS below-floor findings (signal lost), while
+# The goal: weight below-floor findings properly and keep them apart from the
+# basis, including conflicting points, without losing real signal. Neither of
+# the two plain behaviors does that: a HARD floor silently DROPS below-floor findings (signal lost), while
 # the default floor-0 gate lets them BLEND indistinguishably into the basis
 # evidence (signal laundered). The two-tier split keeps both honest:
 #
@@ -355,7 +351,7 @@ VERIFY_FLOOR_ENV: str = "LEGBA_COMPOSITION_VERIFY_FLOOR"
 #     and NO periphery is gathered or rendered.
 #   * flag ON — the split engages on EVERY composition read (PER-COUNTRY,
 #     REGION, WORLD, and THEMATIC): the basis bar becomes the SPLIT floor = the
-#     env floor when the operator pinned ``LEGBA_COMPOSITION_VERIFY_FLOOR``,
+#     env floor when ``LEGBA_COMPOSITION_VERIFY_FLOOR``,
 #     else :data:`TIERED_BASIS_FLOOR_DEFAULT` (0.50 — the scorecard's
 #     system-wide verification floor, lockstep-tested against
 #     ``scorecard_banding.FAITH_FLOOR``). Rationale, from when the OFF-path
@@ -365,7 +361,7 @@ VERIFY_FLOOR_ENV: str = "LEGBA_COMPOSITION_VERIFY_FLOOR"
 #     at 0.50 — the flag no longer moves the bar, it only adds the periphery
 #     section. The copy stays (not collapsed into ``DEFAULT_VERIFY_FLOOR``): it
 #     mirrors the SCORECARD floor, a different decision holding the same number.
-#   * WORLD / THEMATIC scope note (the former SEAMS §44, resolved 2026-07):
+#   * WORLD / THEMATIC scope note (the former SEAMS, resolved 2026-07):
 #     their periphery gather is the complement over the SAME declared analyst
 #     roster + target scope their PRIMARY fetch uses (thematic: the unit across
 #     the desk allow-list / all desks; world: the region/thematic heads,
@@ -413,7 +409,7 @@ def _tiered_evidence_enabled() -> bool:
 def _resolve_split_floor(descriptor: Any) -> float:
     """The BASIS bar for a tiered (flag-ON) composition read.
 
-    The env floor keeps working as the basis bar when the operator pinned it
+    The env floor keeps working as the basis bar when it is pinned
     (clamped to ``[0.0, 1.0]``, same parse as :func:`_resolve_verify_floor`);
     unset ⇒ :data:`TIERED_BASIS_FLOOR_DEFAULT` (0.50, the scorecard lockstep)
     rather than ``DEFAULT_VERIFY_FLOOR`` — a separate constant from when the
@@ -442,7 +438,7 @@ def _resolve_split_floor(descriptor: Any) -> float:
 # of this kind's substrate access lives.
 
 
-# D-2 (2026-09-04) — THE SLICE-ASSEMBLY SEAM, taken. The region / world /
+# THE SLICE-ASSEMBLY SEAM, taken. The region / world /
 # thematic slice-assembly branches, their roster + membership resolvers and the
 # per-mode coverage vocabulary they stamp moved to the sibling leaf
 # ``composition_slice`` (the seam ``test_module_size_gate`` has named as "next in
@@ -452,7 +448,7 @@ def _resolve_split_floor(descriptor: Any) -> float:
 # the assemblers' BASIS gather — is injected as ``basis_reader`` at the
 # ``READ_SLICE`` call sites; see that module's docstring.
 #
-# D-5 (2026-09-04) — THE CASCADE. The module is ALSO bound as a whole
+# THE CASCADE. The module is ALSO bound as a whole
 # (``_slice``) beside the name imports, and ``region_rollup`` as ``_rollup``.
 # Two lines instead of a dozen: this file has 54 lines of headroom under its
 # re-seeded ceiling and the cascade's new surface is nine names, so importing
@@ -494,9 +490,9 @@ from .composition_slice import (  # noqa: F401 — re-exported surface
     _resolve_region_member_target_ids,
     _resolve_region_roster,
 )
-# D-2 (2026-09-04) — THE ASSEMBLY (planning/DEMOTION_D1_SPEC_2026-09-04.md §1).
+# THE ASSEMBLY.
 # Flag-gated behind ``LEGBA_COMPOSITION_ASSEMBLY``; with the flag off this
-# module contributes exactly one thing — the ``regime: "legacy"`` stamp §5.2
+# module contributes exactly one thing — the ``regime: "legacy"`` stamp
 # requires on EVERY composition row from the merge, so the A/B arm is splittable
 # inside one judge stamp. All of the new logic lives in the three sibling leaves
 # (``assembly_payload`` / ``assembly_spans`` / ``assembly_render``); what is
@@ -538,7 +534,7 @@ from .assembly_salience import (  # noqa: F401
     attach_cited_salience_from_db,
 )
 
-# D-6 — the ASSESSMENT CHANNEL (D-1 §2). Same shape as the assembly wiring
+# The ASSESSMENT CHANNEL. Same shape as the assembly wiring
 # above: the channel lives entirely in its own leaves (``assessment_channel`` /
 # ``assessment_prompts`` / ``assessment_unsupported``) and this module
 # contributes a two-branch dispatch — one in ``_run``, one in ``READ_SLICE``.
@@ -555,7 +551,7 @@ _GUARD_EPSILON: float = 1e-6
 
 
 # ---------------------------------------------------------------------------
-# Prompt module (DSPy wrapping deferred to L-176 / L-105 §2)
+# Prompt module (DSPy wrapping deferred)
 # ---------------------------------------------------------------------------
 #
 # MOVED to ``composition_prompts`` (VOICE-4, 2026-08-21) under the module-size
@@ -623,7 +619,7 @@ from .composition_citations import (  # noqa: E402,F401 — re-exported surface
 )
 
 
-# V3/P2 — the entry-point surface (the deps Protocol + the Runner) moved to
+# The entry-point surface (the deps Protocol + the Runner) moved to
 # ``meta_findings_runner.py`` when the pg-plumbing additions pushed this
 # module past its size ceiling; imported back ONE WAY and re-exported, so
 # ``synth.MetaFindingsDeps`` / ``synth.MetaFindingsSynthesizerRunner``
@@ -635,7 +631,7 @@ from .meta_findings_runner import (  # noqa: E402,F401 — re-exported surface
 )
 
 
-# CHILD-REF DEFUSE (P2 gallery finding #2) — a lower-tier composition's own
+# CHILD-REF DEFUSE — a lower-tier composition's own
 # ``[[ref:N]]`` markers survive verbatim INSIDE the body/evidence text a
 # PARENT tier renders as one of ITS OWN evidence blocks. A composition's
 # rendered user turn prefixes EACH block with ITS OWN ``[[ref:N]]`` ordinal
@@ -643,8 +639,8 @@ from .meta_findings_runner import (  # noqa: E402,F401 — re-exported surface
 # BODY is a lower tier's completed prose, written to cite ITS OWN, unrelated
 # ordinals over ITS OWN evidence set (e.g. a region_composition's body reads
 # "...isolated internal security events... [[ref:1]]" pointing at THAT
-# country's own unit #1, not this tier's block #1 — live capture 2026-07-31,
-# P2 gallery §2 Obs.1 / §4 Obs.2). Left verbatim, a model asked to cite
+# country's own unit #1, not this tier's block #1 — live capture).
+# Left verbatim, a model asked to cite
 # ``[[ref:N]]`` can copy one of these foreign markers into its own output,
 # where an in-range collision is silently reinterpreted as pointing at THIS
 # tier's block N (the WRONG evidence) rather than being caught by the honest
@@ -658,12 +654,14 @@ from .meta_findings_runner import (  # noqa: E402,F401 — re-exported surface
 # by ``tests/data_pkg/test_composition_head_window.py``.
 
 
-def composition_body_cap(n_inputs: int) -> int:
+def composition_body_cap(n_inputs: int, budget_tokens: int | None = None) -> int:
     """Per-input body-excerpt cap, sized from the SHARED input-token budget (F-D).
 
-    The findings block may claim :data:`COMPOSITION_SLICE_BUDGET_SHARE` of
-    ``LEGBA_LLM_INPUT_TOKEN_BUDGET``, split evenly across the inputs, then
-    clamped into ``[MAX_BODY_CHARS, MAX_FULL_BODY_CHARS]``.
+    The findings block may claim :data:`COMPOSITION_SLICE_BUDGET_SHARE` of the
+    input budget (``budget_tokens``: the run's, derived from its route's
+    window; absent → ``_llm_budget.input_token_budget()``), split evenly
+    across the inputs, then clamped into ``[MAX_BODY_CHARS,
+    MAX_FULL_BODY_CHARS]``.
 
     The FLOOR is what makes this safe to ship: however small the budget, or
     however many inputs a world read degrades into, every input still renders at
@@ -672,7 +670,8 @@ def composition_body_cap(n_inputs: int) -> int:
     ``MAX_WORLD_INPUT_FINDINGS``) and a dropped input is a country the world read
     cannot see, which is a worse failure than a wide turn.
     """
-    usable = int(budget_chars() * COMPOSITION_SLICE_BUDGET_SHARE)
+    chars = budget_tokens * CHARS_PER_TOKEN if budget_tokens else budget_chars()
+    usable = int(chars * COMPOSITION_SLICE_BUDGET_SHARE)
     per_row = usable // max(int(n_inputs), 1)
     return max(MAX_BODY_CHARS, min(per_row, MAX_FULL_BODY_CHARS))
 
@@ -815,7 +814,7 @@ def _correlation_guard(citations: Sequence[Mapping[str, Any]]) -> dict[str, Any]
 def build_prompt_module() -> Any:
     """Construct and return the DSPy module bound to this analyst kind.
 
-    Wave B prereq #4: backfills the dspy.Module surface for the L-176
+    Backfills the dspy.Module surface for the
     optimizer.  Lazy-imports so this file imports cleanly when dspy
     isn't installed; raises :class:`ModuleNotFoundError` otherwise,
     matching the inline_target contract.
@@ -1033,6 +1032,7 @@ def _render_user_prompt(
     contributing_analysts: Sequence[str],
     *,
     include_source_ids: bool = False,
+    budget_tokens: int | None = None,
 ) -> str:
     """Render the (already-ORIENTed) finding rows into the synth user prompt.
 
@@ -1041,7 +1041,7 @@ def _render_user_prompt(
     bullets. Findings are already structured so we want compact, scannable
     framing, not the verbose snippet rendering used for raw signals.
 
-    ``include_source_ids`` (P3 per-country composition): when True, each block is
+    ``include_source_ids`` (per-country composition): when True, each block is
     PREFIXED with its copyable ordinal handle ``[[ref:{i}]]`` (the resolution key
     the CITE block + verify re-derive) and additionally shows ``finding_id=<uuid>``
     (operator/debug provenance only — the model is told to copy the ordinal, NOT
@@ -1059,7 +1059,7 @@ def _render_user_prompt(
     # F-D: the excerpt width comes from the SHARED input-token budget, not from a
     # fixed constant that made this tier read its inputs at ~7% of the leaves'
     # window. Floored at the historical 600 so no render ever narrows.
-    body_cap = composition_body_cap(len(rows))
+    body_cap = composition_body_cap(len(rows), budget_tokens)
     body_lines: list[str] = []
     for i, row in enumerate(rows, start=1):
         title = str(row.get("title") or "(untitled)")[:MAX_TITLE_CHARS]
@@ -1114,7 +1114,7 @@ def _render_user_prompt(
             # legible. Omitted for an unstamped input (no consequence claim).
             _sal_mag = _input_salience_magnitude(row)
             sal_part = f" salience={_sal_mag:.2f}" if _sal_mag >= 0.0 else ""
-            # R3 (2026-08-05): the desk's own SEVERITY call, on the page beside the
+            # R3: the desk's own SEVERITY call, on the page beside the
             # confidence. The ranking defect (a routine howitzer procurement leading
             # over a war) happened because confidence was THE ONLY NUMBER RENDERED,
             # so an ordering prompt had nothing to order BY. Salience landed here in
@@ -1403,7 +1403,7 @@ async def _attach_trajectory(
     conn,  # type: ignore[no-untyped-def]
     situations: list[dict[str, Any]],
 ) -> None:
-    """CONTINUITY P2 (plan D5) — enrich each register frame with its TRAJECTORY.
+    """Enrich each register frame with its TRAJECTORY.
 
     This is the upgrade from a Phase-1 register to a Phase-2 one. Phase 1 could
     only show a frame's CURRENT numbers, so a composition asked "what changed"
@@ -1486,7 +1486,7 @@ async def _gather_continuity_rows(
     The refs are gathered INDEPENDENTLY (each in its own try) so a failure of
     one never suppresses the others.
 
-    ``ledger_target_id`` (FRAME-2 §2.2) turns on the WINDOW LEDGER at DESK scope
+    ``ledger_target_id`` turns on the WINDOW LEDGER at DESK scope
     — every dimension's verified, severity-tagged heads over the trailing
     fortnight. Passed ONLY by the per-country branch, deliberately: a country
     composition's job IS cross-dimension synthesis over one desk, while a region
@@ -1667,8 +1667,8 @@ async def read_other_analyst_findings(
     safer than scanning the entire ``analyst_outputs`` table when the
     subscription resolved no source analysts.
 
-    P3 per-country composition
-    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    Per-country composition
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~
     Two OPTIONAL, additive filters — both ``None`` reproduces the legacy
     global-meta query byte-for-byte (so the existing global synthesizer is
     unaffected):
@@ -1712,10 +1712,10 @@ async def read_other_analyst_findings(
     finding has its flag at ``data -> 'data' ->> 'meta' = 'true'``, not
     at the top level, and the finding's own ``tags`` array lands at
     ``data -> 'tags'``. The query reflects that. If the storage layout
-    changes (L-190 split into per-kind tables), update this query and
+    changes (split into per-kind tables), update this query and
     the matching test.
 
-    ``include_meta`` (P3-T5 GLOBAL/world composition): default ``False`` keeps
+    ``include_meta`` (GLOBAL/world composition): default ``False`` keeps
     the meta-exclusion clause so the byte-identical legacy behavior holds for
     ALL existing callers (a first-order synth must never recurse on its own
     meta output). When ``True`` the clause is DROPPED — the world composition
@@ -1736,7 +1736,7 @@ async def read_other_analyst_findings(
     if not include_meta:
         where.append(_meta_clause)
 
-    # P4 content-audit fix (2026-07-01): COMPOSITION reads (per-country target
+    # COMPOSITION reads (per-country target
     # scope, or the world include_meta read) must fold to exactly ONE HEAD per
     # (unit, country). Drop superseded prior-cycle findings so ``derived_from``
     # can't double-count a single unit across stale dupes — the audit found
@@ -1768,7 +1768,7 @@ async def read_other_analyst_findings(
         or include_meta
         or dedupe_heads
     )
-    # HEAD INTEGRITY (lane N-A): a head closed BY a failed parse is still live,
+    # HEAD INTEGRITY: a head closed BY a failed parse is still live,
     # and on the floored path the fold to one row per key runs BEFORE the floor
     # (``head_integrity.live_head_select``) so an older open orphan can never
     # stand in for a newer head. The text theme is applied after that fold.
@@ -1808,8 +1808,8 @@ async def read_other_analyst_findings(
         # INNER-joined. INNER (not LEFT) is the "verify must have run" gate —
         # unverified sub-claims never enter the composition. The score →
         # effective_confidence fold mirrors substrate_reads_api._hydrate_finding.
-        # R2 (2026-08-05): the same fold also lifts the CLAIM LEDGER the verify
-        # pass already wrote for this finding. It has been on disk since P2-4 and
+        # R2: the same fold also lifts the CLAIM LEDGER the verify
+        # pass already wrote for this finding. It has long been on disk and
         # no Python has ever read it — the composition gathered its inputs'
         # SCORES and never their CLAIMS, which is precisely why it could not
         # notice that two of them asserted incompatible states of the same fact.
@@ -1883,7 +1883,7 @@ async def read_other_analyst_findings(
         LIMIT {int(limit)}
         """
     rows = [dict(r) for r in await conn.fetch(sql, *params)]
-    # D-2 — the CITED-SIGNAL join `cited_mass.v1` needs (D-1 §1.5.2). Gated on
+    # The CITED-SIGNAL join `cited_mass.v1` needs. Gated on
     # the assembly flag at its coarsest grain, so with the flag off no extra
     # query is issued and this line is invisible: one `if` over an env read.
     if rows and assembly_any_enabled():
@@ -2197,8 +2197,7 @@ CONTENTION_SCORE_FLOOR_DEFAULT: float = 0.50
 clear to enter the world CONTESTED FACTS block.
 
 ``arbiter_score`` is a MULTIPLICATIVE product of four already-normalized
-``[0, 1]`` factors, so it compresses hard — a live capture (2026-07-31, the P2
-gallery) found the system-wide ceiling across all 679 open groups was ~0.37,
+``[0, 1]`` factors, so it compresses hard — a live capture found the system-wide ceiling across all 679 open groups was ~0.37,
 with the prior RECENCY-ordered ``LIMIT 12`` serving pure NER-relation-
 extraction noise ("zionist | member of | hamas", score 0.10) as though it were
 a live geopolitical dispute. This floor is DELIBERATELY the same 0.50
@@ -2242,7 +2241,7 @@ async def read_open_contention(
     ranked by SCORE (not recency), + their non-junk value clusters for the
     world composition's CONTESTED FACTS block.
 
-    THE FIX (P2 gallery finding): a group's rank key is its TOP non-junk
+    THE FIX: a group's rank key is its TOP non-junk
     value cluster's ``arbiter_score`` DESC — not ``updated_at`` — and a group
     whose top score does not clear ``score_floor`` (default
     :func:`_resolve_contention_floor`) is EXCLUDED outright rather than
@@ -2367,7 +2366,7 @@ async def read_open_contention(
 
 
 
-# D-5 (2026-09-04) — THE COVERAGE-RENDER SEAM, taken to pay for the cascade.
+# THE COVERAGE-RENDER SEAM, taken to pay for the cascade.
 # The three per-mode COVERAGE PROSE renderers (region gaps, the world aperture,
 # thematic desk gaps) moved to ``composition_slice`` — beside the mode vocabulary
 # they read (``REGION_MODE_*`` / ``THEMATIC_MODE_*``), which that module already
@@ -2510,7 +2509,7 @@ async def run_method(
         substrate row's ``derived_from`` column carries the lineage edge.
         Token usage rolls up under the ``usage`` dict for budget recording.
     """
-    # Sampling-audit fix (2026-07-24): honor the descriptor's OPTIONAL
+    # Sampling-audit fix: honor the descriptor's OPTIONAL
     # ``method.llm.temperature`` (threaded onto deps by the builder) with the
     # same precedence the unit inline_target path uses — descriptor value when
     # set, else the kind default. getattr-guarded so every existing deps
@@ -2528,7 +2527,7 @@ async def run_method(
         max_tokens=DEFAULT_MAX_TOKENS,
         temperature=temperature,
         system_prompt=_SYSTEM_PROMPT,
-        # V3/P2 — optional substrate pool/conn; getattr-guarded like
+        # Optional substrate pool/conn; getattr-guarded like
         # temperature so llm-only test stubs conform unchanged.
         pg=getattr(deps, "pg", None),
     )
@@ -2547,7 +2546,7 @@ async def _run(
     max_tokens: int,
     temperature: float,
     system_prompt: str,
-    # V3/P2 — optional substrate pool/conn for the event-citation
+    # Optional substrate pool/conn for the event-citation
     # expansion on the composition path (LEGBA_EVENT_CITATIONS).
     pg: Any = None,
 ) -> AnalystMethodResult:
@@ -2557,7 +2556,7 @@ async def _run(
     closure-shape (per-actor configured ``max_tokens`` etc.) and the simpler
     deps-passing entry point share a single body.
     """
-    # --- THE ASSESSMENT CHANNEL (D-6, D-1 §2) --------------------------
+    # --- THE ASSESSMENT CHANNEL (assessment channel) --------------------------
     # First, because the channel shares NONE of the path below: no slice, no
     # orient, no prompt blocks, no CITE resolution over desk heads. It reads ONE
     # assembly payload and returns ``derived_from = [assembly_id]``, which IS
@@ -2627,7 +2626,7 @@ async def _run(
         if periphery_rows
         else tiered_pool
     )
-    # W11-F14 THE CARRY RULE (``legba.data.carried_state``): a head READ_SLICE
+    # THE CARRY RULE (``legba.data.carried_state``): a head READ_SLICE
     # stamped carried, unsupported leaves the basis — the coverage ledger names
     # it as that typed absence; it is never rendered, so never banded.
     basis_inputs, _carried_rows = _carried.partition_carried(basis_inputs)
@@ -2638,7 +2637,7 @@ async def _run(
             _tier_floor = float(_tf)
             break
     tiered_evidence = _tier_floor is not None
-    # G2 — the gate's per-unit ledger, denormalized onto every row by
+    # the gate's per-unit ledger, denormalized onto every row by
     # READ_SLICE. ``None`` on an ungated slice (flag off, or any direct caller)
     # = the byte-for-byte pre-gate path.
     _gate_ledger = _gate_ledger_of(inputs)
@@ -2674,8 +2673,8 @@ async def _run(
     # A per-COUNTRY read fuses only its own ~7 unit heads, so the narrow default
     # cap never bites there. The WORLD read AND a REGION read each fuse one head
     # PER COUNTRY, so their input count is a desk roster (region = its member
-    # subset) and MUST NOT be trimmed to the per-country default (the P4 review
-    # C2 found the 15-cap dropped the US from a "Global" read; the same
+    # subset) and MUST NOT be trimmed to the per-country default (an earlier
+    # 15-cap dropped the US from a "Global" read; the same
     # one-head-per-country invariant holds for a region — a dropped input is a
     # member country the region read cannot see).
     _cap = (
@@ -2732,7 +2731,7 @@ async def _run(
         else None
     )
 
-    # --- ASSEMBLY: THE ORDER (D-2, D-1 §1.5.1 / §1.3) -------------------
+    # --- ASSEMBLY: THE ORDER (D-2) -------------------
     # The assembly's ordinal N and ``derived_from``'s entry N must be the SAME
     # head — that identity is what makes the drop ledger computable at all
     # (``drops == derived_from minus the cited ordinals``). So when the flag is
@@ -2767,7 +2766,7 @@ async def _run(
         # ``rollup_ordinal_index`` relies on it); on a grouped world read the
         # PUBLISHED order is the floor's selection followed by the rest, so
         # ``derived_from`` and the drop ledger rank one order (``assembly_floor``).
-        # W1 — the world read ranks mass-first and plans its carry across the
+        # the world read ranks mass-first and plans its carry across the
         # whole selection (dedup + restraint-shift floor): ``assembly_world``.
         _world_read = world_composition and not region_scoped
         _floor = floor_select(
@@ -2803,7 +2802,7 @@ async def _run(
         # the weak signal is RECORDED, never lost: the envelope names the
         # periphery ids + the floor, and the body says why nothing composed.
         empty_body = "The other-analyst output slice for this run was empty."
-        # FRAME-1 (§3): the empty-slice sentence, re-worded to its only
+        # FRAME-1: the empty-slice sentence, re-worded to its only
         # now-possible HONEST forms. "No source findings to synthesize" was
         # printed over seven 42-hour-old heads on the BF desk because a 24h
         # wall-clock gate had filtered them out; under the admissibility horizon
@@ -2845,7 +2844,7 @@ async def _run(
                     "verification withholding, NOT an absence of reads."
                 )
                 empty_title = "All reads below the verification floor"
-        if _carried_rows:  # W11-F14 — heads exist; what they state is carried
+        if _carried_rows:  # heads exist; what they state is carried
             empty_data["carried_unsupported"] = [r[_carried.CARRIED_ROW_KEY] for r in _carried_rows]
             empty_title, empty_body = _carried.empty_slice_text(len(_carried_rows), _empty_window)
         empty_title, empty_body = _gate_empty_stamp(
@@ -2987,7 +2986,7 @@ async def _run(
                 desk_coverage = [c for c in dc if isinstance(c, Mapping)]
                 break
 
-    # F-1 (MASTER_PLAN 2026-07-13): the compose-time freshness re-resolution the
+    # The compose-time freshness re-resolution the
     # READ_SLICE pass walked onto every input row (mirroring _region_coverage) —
     # any lower-tier sub-finding SUPERSEDED by a materially different current head
     # AFTER the tier that cited it composed (the Italy staleness race). Read once
@@ -3043,7 +3042,10 @@ async def _run(
             _ledger_grain = LEDGER_GRAIN_WORLD_UNIT
     _plan = assemble_composition_prompt(
         renderers=PromptRenderers(
-            user_prompt=_render_user_prompt,
+            # The route's own window sizes the excerpt (``_llm_budget``).
+            user_prompt=functools.partial(
+                _render_user_prompt, budget_tokens=input_token_budget(llm),
+            ),
             periphery=_render_periphery_block,
             continuity=_render_continuity_block,
             tension=render_tension_block,
@@ -3131,7 +3133,7 @@ async def _run(
 
     # --- ASSEMBLE (D-2) — the deterministic path, INSTEAD of the model -----
     # The whole section lives in ``composition_assemble`` (the size-gate seam
-    # this file's gate entry named): the REGION rollup (D-5 §4.1) and the
+    # this file's gate entry named): the REGION rollup and the
     # D-2 assembly, one call, zero tokens. The prompt above is still RENDERED
     # and simply not sent — see that module's banner for why.
     _assembly_payload: dict[str, Any] | None = None
@@ -3179,7 +3181,7 @@ async def _run(
             )
         except Exception:
             # Re-raise — actor classifies (transient / budget / hard fail) per
-            # kind_contracts §7. Don't swallow.
+            # Don't swallow.
             steps.append({"phase": "reason", "kind": "llm_error"})
             raise
 
@@ -3221,13 +3223,13 @@ async def _run(
     if composition_signature is not None:
         finding.data["situation_signature"] = composition_signature
 
-    # --- ASSEMBLY PAYLOAD + REGIME (D-2, D-1 §1.2 / §5.2) ---------------
+    # --- ASSEMBLY PAYLOAD + REGIME (D-2) ---------------
     # The regime label rides EVERY composition row from the moment this merges,
     # flag on OR off. Without it the A/B cutover is invisible inside one judge
     # stamp — the 08-12 failure shape, where a stamp pooled an outage with a
     # working period because it splits on CODE and not on the condition that
-    # actually changed (§F-4). With it, every pooling reader (the stamp reports,
-    # the acceptance counters, R5's lanes) can re-split retroactively, which is
+    # actually changed. With it, every pooling reader (the stamp reports,
+    # the acceptance counters, the other lanes) can re-split retroactively, which is
     # also the whole of the rollback story for a bad pooling.
     # D-5 adds the THIRD arm: a rollup is neither legacy prose nor an assembly,
     # and its payload lives at ``data.rollup``. The regime label still rides the
@@ -3300,7 +3302,7 @@ async def _run(
             register_situations=register_situations,
             rollup_payload=_rollup_payload,
             render_situation_register_lines=_render_situation_register_lines,
-            # V3/P2 — substrate pool-or-conn for the [[event:<uuid>]]
+            # Substrate pool-or-conn for the [[event:<uuid>]]
             # expansion; None (a deps carrier without pg) leaves the
             # tokens ordinary prose.
             conn=pg,
@@ -3339,7 +3341,7 @@ async def _run(
         # to decide whether the body actually surfaced them; without the stamp,
         # "the composition ignored a contradiction" would be unprovable after the
         # fact. ``contradictions_checked`` distinguishes "looked, found none" from
-        # "never looked" — the S-1 habit applied to this check's own zero.
+        # "never looked" — the same habit applied to this check's own zero.
         _eval_block = finding.data.get("eval")
         if not isinstance(_eval_block, dict):
             _eval_block = {}
@@ -3525,9 +3527,9 @@ async def _run(
             continuity_env["window_ledger_lines"] = len(ledger_entries)
         finding.data["continuity"] = continuity_env
 
-    # --- HEAD AGES (FRAME-1 §6.1, composition only) --------------------
+    # --- HEAD AGES (composition only) --------------------
     # The composition STAMPS the per-unit head ages it consumed. Two consumers,
-    # one number: the read itself now discloses staleness in prose, and the §6
+    # one number: the read itself now discloses staleness in prose, and the
     # cadence-staleness gauge (``production_gauge_staleness``) reads this stamp
     # rather than re-deriving an age — so what the operator is paged about is
     # exactly what the product was shown. Derived from rows already in hand at
@@ -3549,7 +3551,7 @@ async def _run(
                 "horizon_h": _head_ages.get("horizon_h"),
             })
         # H4 — the EVIDENCE WINDOW stamp: the SAME ``_evidence_window`` value
-        # shown to the model, so a downstream reader (the §6 gauge, a grading
+        # shown to the model, so a downstream reader (the gauge, a grading
         # packet, the render tests) reads the TRUE span off the envelope
         # instead of parsing the model's prose — checkable, not trusted.
         if _evidence_window is not None:
@@ -3643,7 +3645,7 @@ async def _run(
 def _resolve_other_analyst_ids(descriptor: Any) -> list[str]:
     """Resolve the source-analyst id set from ``subscription.other_analysts``.
 
-    This is the documented read surface for the meta kinds (per L-101 §4 and
+    This is the documented read surface for the meta kinds (and
     the module docstring): the descriptor lists which OTHER analysts feed the
     synth via :class:`legba.data.schemas.analyst.SubscriptionAnalyst` entries
     on ``subscription.other_analysts``. Each entry carries an ``id``. The prior
@@ -3697,7 +3699,7 @@ def _resolve_verify_floor(descriptor: Any, default: float = DEFAULT_VERIFY_FLOOR
     rebuild. ``descriptor`` is accepted for a future per-descriptor override but
     is intentionally not read from an ``extra="forbid"`` schema block today.
 
-    X-1 boundary (2026-07-29): ``method.options`` now exists and IS read at fire
+    X-1 boundary: ``method.options`` now exists and IS read at fire
     time — but only for ``kind=deterministic``, whose sub-handlers route through
     the ``handler_options`` catalog. This composition is an LLM kind, so the
     schema still refuses an options block here and the env var remains the only
@@ -3717,12 +3719,12 @@ def _resolve_verify_floor(descriptor: Any, default: float = DEFAULT_VERIFY_FLOOR
 
 
 def _declares_verify(descriptor: Any) -> bool:
-    """True iff the descriptor declares the ``method.llm.verify`` OR the P2-4
+    """True iff the descriptor declares the ``method.llm.verify`` OR the
     ``method.llm.judge`` KEY (the composition verify OPT-IN).
 
     Mirrors the ``analyst_deps_builder.resolve_judge_route_from_llm_block`` rung-0
     OPT-IN GATE WITHOUT importing it — this kind module stays standalone (no
-    runtime-package load cycle). DEFECT B fix (2026-07-29): this is now a KEY
+    runtime-package load cycle). DEFECT B fix: this is now a KEY
     PRESENCE test (``"verify" in llm or "judge" in llm``), exactly mirroring
     rung 0's ``if "judge" not in llm and "verify" not in llm: return None``.
     Before the fix this tested VALUE presence (``llm.get("verify") is not
@@ -3817,7 +3819,7 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
     descriptor's ``other_analysts[].time_window`` (widest declared window),
     defaulting to 24h.
 
-    P3 per-country vs global-meta split — keyed purely on ``target_filter``:
+    Per-country vs global-meta split — keyed purely on ``target_filter``:
 
       * ``target_filter`` SET (a per-country composition descriptor carries a
         ``subscription.targets`` block, so the runtime fans this synth out one
@@ -3884,7 +3886,7 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
     # branch is byte-for-byte unchanged.
     _spine_analyst = assessment_spine(descriptor)
     if _spine_analyst:
-        # P3 LANE A: ``target_filter`` threaded straight through. A target-LESS
+        # ``target_filter`` threaded straight through. A target-LESS
         # Assessment descriptor (world_assessment) reads the newest live
         # assembly of its spine analyst exactly as it always has; a
         # target-BOUND one (country_assessment, which carries a
@@ -3903,7 +3905,7 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
     # world / legacy switch below stays byte-for-byte. A region ``target_filter``
     # is a FRAME id; resolve it to the member country desks and read THEIR
     # country_composition heads as a target-id SET (multi-country, world-shaped).
-    if await is_region_target(conn, target_filter):  # W10 SPLIT-3: the frame family, flag on
+    if await is_region_target(conn, target_filter):  # the frame family, flag on
         member_ids = await _resolve_region_member_target_ids(conn, str(target_filter))
         # C-TIER: flag ON ⇒ the basis bar is the SPLIT floor (env floor when
         # pinned, else the 0.50 scorecard lockstep) and the member heads the
@@ -3939,7 +3941,7 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
             for row in rows:
                 row[_EVIDENCE_FLOOR_KEY] = _floor
             rows = rows + periphery
-        # D-5 — the ROLLUP needs the frame's FULL member roster, named. It is the
+        # the ROLLUP needs the frame's FULL member roster, named. It is the
         # one input a DB-less ``_run`` cannot recover from the rows that arrived,
         # because the rollup's job is naming the members that did NOT. Stamped
         # only on the rollup path, so the legacy region run issues no extra query.
@@ -4002,7 +4004,7 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
         )
         if _terms:
             _theme.quiet_theme_coverage(rows)
-        await _stale_reads.stamp_unit_cadence(conn, rows)  # lane N-A: the age bar
+        await _stale_reads.stamp_unit_cadence(conn, rows)  # the age bar
         _carried.stamp_head_age_bar(rows)                  # on every live basis head
         if _tiered:
             periphery = await _read(read_periphery_findings, _terms)(
@@ -4037,8 +4039,8 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
     # world_assessor. It now composes the region_composition heads (degrading a
     # headless region to its country reads, naming a fully-absent region as a
     # gap), NOT the ~24 country heads directly. An early return, so the
-    # per-country + legacy switch below is byte-for-byte the P3-T2 code.
-    # C-TIER (former SEAMS §44, resolved): flag ON ⇒ the basis bar is the SPLIT
+    # per-country + legacy switch below is byte-for-byte the plain code.
+    # C-TIER (former SEAMS, resolved): flag ON ⇒ the basis bar is the SPLIT
     # floor (threaded through the whole assemble, degrade reads included) and
     # the region/thematic heads the bar excluded come back as marked PERIPHERY
     # rows over the SAME primary scope (the declared roster, target-unscoped,
@@ -4052,7 +4054,7 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
             if _tiered
             else _resolve_verify_floor(descriptor)
         )
-        # D-5 §4.2 — under the assembly regime the world reads COUNTRY
+        # Under the assembly regime the world reads COUNTRY
         # assemblies, not region heads: a deterministic region rollup carries no
         # faithfulness critique, and the basis gather's INNER lateral would
         # silently degrade every region to country-fallback forever. The world
@@ -4085,7 +4087,7 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
                 # W-2 — the periphery is the COMPLEMENT OF THE BASIS over the
                 # SAME analyst set, and post-D-5 the world's basis set is no
                 # longer the descriptor's raw roster. Reading `ids` here left
-                # `region_composition` in the periphery gather after §4.2 took
+                # `region_composition` in the periphery gather after took
                 # it out of the candidate pool, so five region ROLLUPS — carries
                 # of the very country reads the world did carry, cited mass 0.0,
                 # rank null, never ranked against anything — arrived as
@@ -4123,7 +4125,7 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
             time_window_hours,
         )
 
-    # Two branches (BYTE-FOR-BYTE the P3-T2 per-country + legacy read when the
+    # Two branches (BYTE-FOR-BYTE the plain per-country + legacy read when the
     # C-TIER flag is OFF, its code default):
     #   * TARGET-SCOPED (per-country composition) ⇒ scope to the country
     #     (``target_id``) + verify-floor; meta findings stay EXCLUDED (the units
@@ -4161,7 +4163,7 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
     # "legacy read unchanged" discipline every branch above honors.
     if target_filter:
         rows = await _attach_freshness(conn, rows)
-        # G2 — the CORRECTNESS gate, before C-TIER appends its periphery, so
+        # the CORRECTNESS gate, before C-TIER appends its periphery, so
         # the two never re-decide each other.
         await _apply_correctness_gate(conn, rows, target_id=target_id)
         if _tiered and verify_floor is not None:
@@ -4173,7 +4175,7 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
                 target_id=target_id,
                 include_meta=False,
             )
-            # FRAME-1 (§3): a unit whose LIVE head failed the floor gets its
+            # FRAME-1: a unit whose LIVE head failed the floor gets its
             # newest floor-PASSING head back into the basis (the GB-drone
             # class), while the newer failing head stays in the periphery with
             # its date and score. Gated on the tiered flag DELIBERATELY: with
@@ -4213,10 +4215,10 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
         )
         # W11 — each unit's cadence rides the rows too (``composition_stale_reads``).
         await _stale_reads.stamp_unit_cadence(conn, rows)
-        # W11-F14 THE CARRY RULE — a basis head whose status no read re-evidenced
+        # THE CARRY RULE — a basis head whose status no read re-evidenced
         # inside N of its unit's windows is stamped (``carried_state``).
         await _carried.stamp_carried_state(conn, rows)
-        _carried.stamp_head_age_bar(rows)  # lane N-A: the same bar on every live basis head
+        _carried.stamp_head_age_bar(rows)  # the same bar on every live basis head
         # FRAME-1: the horizon rides the rows to the DB-less ``_run`` (see
         # ``_stamp_horizon``). Stamped LAST so every row — basis, periphery,
         # fallback and continuity — carries it.

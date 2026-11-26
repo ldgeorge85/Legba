@@ -28,7 +28,7 @@ AGE_DIGEST="${AGE_DIGEST:-sha256:4241e2d8bb86a6b2ea44e9ad06c73856e12b209de295124
 # merely get slow under 1 GB — it dies with
 #   DiskFullError: could not resize shared memory segment ... No space left on device
 # because Postgres allocates parallel-query DSM segments out of /dev/shm.
-# 4 GB completes the matrix. See docs/AGE_PROBE_REPORT.md §3.5.
+# 4 GB completes the matrix.
 SHM_SIZE="${SHM_SIZE:-4g}"
 CONTAINER="${CONTAINER:-legba-kg3-probe}"
 VOLUME="${VOLUME:-legba-kg3-probe-data}"

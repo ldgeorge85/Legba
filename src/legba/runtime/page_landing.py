@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""How a fetched PAGE lands — the database half of the ``page`` kind (lane I-2).
+"""How a fetched PAGE lands — the database half of the ``page`` kind.
 
 The handler (``data/sources/page.py``) has no database; three things a page
 needs do. They live here, called from exactly three places:

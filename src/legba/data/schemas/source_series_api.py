@@ -84,11 +84,11 @@ SERIES_API_KIND = "series_api"
 #: How a row's date field is written. ``iso_date`` YYYY-MM-DD; ``iso_datetime``
 #: an ISO 8601 instant (its UTC date is taken); ``year_month`` YYYY-MM;
 #: ``year`` YYYY; ``year_quarter`` YYYY-Qn; ``epoch_ms`` / ``epoch_s``.
-#: Lane I-5 adds three day-first forms, each matched EXACTLY (no free-form
+#: Three more day-first forms, each matched EXACTLY (no free-form
 #: parsing, no day/month guessing): ``dmy_dotted`` DD.MM.YYYY (the National
 #: Bank of Ukraine), ``dmy_slashed`` DD/MM/YYYY (Banco Central do Brasil),
 #: ``day_mon_year`` "DD Mon YYYY" with an English three-letter month (the Bank
-#: of England database CSV). Roll 84 adds ``ymd_compact`` YYYYMMDD, eight
+#: of England database CSV). ``ymd_compact`` adds YYYYMMDD, eight
 #: digits exactly (the National Bank of Ukraine's key-rate directory, ``dt``).
 DATE_FORMATS: tuple[str, ...] = (
     "iso_date", "iso_datetime", "year_month", "year", "year_quarter", "epoch_ms", "epoch_s",

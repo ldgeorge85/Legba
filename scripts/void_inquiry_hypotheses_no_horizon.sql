@@ -1,14 +1,14 @@
 -- SPDX-FileCopyrightText: 2026 Lewis George
 -- SPDX-License-Identifier: AGPL-3.0-or-later
 --
--- SW-10 (wave W1) — ONE-OFF: close the inquiry hypotheses that can never resolve.
+-- ONE-OFF: close the inquiry hypotheses that can never resolve.
 --
--- WHY. Until SW-10 the inquiry ledger minted a hypothesis with no `resolves_by`
+-- WHY. Until the horizon rule the inquiry ledger minted a hypothesis with no `resolves_by`
 -- horizon (the LEDGER prompt called it optional; `ledger_write` accepted NULL).
 -- Every hypothesis the two inquiries (`crossroads`, `inquiry_pilot`) opened from
 -- 2026-09-24 carries `resolves_by` NULL, none is dispatched, none was ever
 -- closed — so the weekly `inquiry_yield` can never score one, and the inquiries'
--- PLAN prompt carries an ever-growing pile of un-settleable rows. SW-10 makes
+-- PLAN prompt carries an ever-growing pile of un-settleable rows. The ledger now makes
 -- such a row un-mintable (plan_ledger_writes + ledger_write both refuse it as
 -- `hypothesis_refused_no_resolves_by`); this script settles the rows that were
 -- minted before that rule rolled.
@@ -30,8 +30,8 @@
 -- voiding them would only re-accumulate. They are counted below for the record.
 --
 -- IDEMPOTENT. The predicate is `status = 'open' AND kind = 'hypothesis' AND
--- resolves_by IS NULL`; a second run closes zero rows. Run it AFTER the SW-10
--- roll — once the rule is live no new row can match, so the predicate needs no
+-- resolves_by IS NULL`; a second run closes zero rows. Run it AFTER the horizon
+-- rule ships — once the rule is live no new row can match, so the predicate needs no
 -- date cutoff. One transaction; the before/after counts print either way.
 --
 -- RUN IT (a live write — the orchestrator's, not a lane's):

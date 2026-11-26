@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""A-1 — the sign-in switch through the REAL app, on the migrated test DB.
+"""The sign-in switch through the REAL app, on the migrated test DB.
 
 ON (``LEGBA_AUTH_SIGNIN=1``):
   * migration 0255 applies twice (idempotent) and widens only what it says;

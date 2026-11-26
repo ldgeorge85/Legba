@@ -166,7 +166,7 @@ observation each, and N=40 showed a possible judgement shift (accepts 47.5% →
 #: independent-source count — and NONE predicts model disagreement (§6.2):
 #: three-way unanimity is flat at 41-48% across every stratum tested.
 #:
-#: The reason is the ceiling. ``core120b`` and the OpenRouter ``gpt-oss-120b``
+#: The reason is the ceiling. ``core120b`` and the OpenRouter copy of the core model
 #: are the SAME WEIGHTS on identical frozen prompts at temperature 0.1, and they
 #: agree on edge-vs-reject only 79.6% of the time — **Cohen's κ = 0.589**. The
 #: model does not agree with ITSELF on one candidate in five, so ~40% of what
@@ -253,21 +253,26 @@ class ReifierDeps:
 
 from ._tradecraft import with_preamble  # noqa: E402
 
+#: The standing sentence for prompts that embed text written by third
+#: parties, from the shared grading text.
+from ..grading_text import PASTED_TEXT_IS_DATA as _PASTED_TEXT_IS_DATA  # noqa: E402
+
 _SYSTEM_PROMPT = with_preamble(
     """TASK — type the relationship between two co-mentioned entities. Decide whether a meaningful, directed relationship holds and, if so, classify it.
 Return ONE JSON object, nothing else:
 {
-  "same_entity": true|false,        // true => A and B are two NAMES for ONE entity
-  "related": true|false,            // false => no real relationship; skip
-  "subject": "<acting entity>",     // who initiates/conducts
-  "object": "<affected entity>",    // who is targeted/affected
-  "intermediary": "<proxy>"|null,   // a cut-out the relationship runs through, else null
+  "same_entity": true|false,
+  "related": true|false,
+  "subject": "<acting entity>",
+  "object": "<affected entity>",
+  "intermediary": "<proxy>"|null,
   "rel_type": "<one of the allowed types>",
-  "polarity": -1|0|1,               // -1 antagonistic, +1 supportive, 0 neutral/dual-use
+  "polarity": -1|0|1,
   "intent": "supportive"|"hostile"|"dual-use"|"neutral",
   "channel": "direct"|"proxy"|"covert"|"institutional",
   "confidence": 0.0-1.0
 }
+Fields: same_entity is true when A and B are two NAMES for ONE entity. related is false when there is no real relationship (skip). subject is who initiates or conducts; object is who is targeted or affected. intermediary is a cut-out the relationship runs through, else null. polarity is -1 antagonistic, +1 supportive, 0 neutral or dual-use.
 Rules: pick rel_type ONLY from the allowed list. If merely co-mentioned with no real relationship, set related=false.
 SAME-ENTITY CHECK FIRST: if A and B are two names for the SAME thing (an acronym and its expansion — IRGC / Revolutionary Guards Corps — an abbreviation, a former name, a translation, a nickname), set same_entity=true and related=false. An entity is not related to itself. A part-whole or membership relation is NOT this: a subsidiary, a subcommittee, a province or a member state is a DIFFERENT entity from its parent.
 INTERMEDIARY rule: set "intermediary" to null UNLESS a "Candidate intermediaries" list is offered AND one of those listed entities genuinely acts as the cut-out the A->B relationship runs through. You MUST copy the intermediary VERBATIM from the offered list — never name a proxy that is not on the list, however plausible. If no offered candidate fits, intermediary=null and channel is direct/institutional as appropriate.
@@ -275,6 +280,7 @@ Worked examples:
   - Hostile supply via a proxy: A arms a militia that attacks B -> subject=A, object=B, intermediary=the militia, rel_type=SuppliesWeaponsTo, polarity=-1, channel=proxy, intent=hostile.
   - Institutional membership: country X joins alliance Y -> subject=X, object=Y, intermediary=null, rel_type=MemberOf, polarity=+1, channel=institutional, intent=supportive.
   - Dual-use presence: company C operates a facility in country D with no stated alignment -> subject=C, object=D, intermediary=null, rel_type=OperatesIn, polarity=0, channel=direct, intent=dual-use."""
+     "\n" + _PASTED_TEXT_IS_DATA
 )
 
 
@@ -501,10 +507,10 @@ def _is_sports_context(evidence_text: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# FU4 (round 2) — conflict / casualty guard on the sports downgrade.
+# Conflict / casualty guard on the sports downgrade.
 #
 # The D14 sports gate now runs over the UNION of the co-mention excerpt + ALL
-# backing source signals' title+summary (FU4 round 1). A proposed_edge
+# backing source signals' title+summary. A proposed_edge
 # accumulates EVERY co-mention signal into ``derived_from``, so a genuinely
 # HOSTILE dyad (Gaza/Israel, Russia/Ukraine) that ever shared ONE signal
 # carrying sports vocabulary ("World Cup") would have the whole union read as a
@@ -514,7 +520,7 @@ def _is_sports_context(evidence_text: str) -> bool:
 # NO conflict/casualty vocabulary anywhere in the union. If ANY backing signal
 # carries conflict vocab, the dyad is treated as real and the reifier's normal
 # hostility typing proceeds (no downgrade). A PURE sports fixture (sports frame,
-# no conflict vocab) is still downgraded — the FU4 round-1 gain is preserved.
+# no conflict vocab) is still downgraded — the union gain is preserved.
 #
 # Curated to strongly-conflict, minimally sports-ambiguous terms (anchored on
 # word boundaries). Err toward NOT downgrading: the far worse error is erasing a
@@ -535,7 +541,7 @@ _CONFLICT_CASUALTY_RE = _re.compile(
 
 
 def _has_conflict_context(text: str) -> bool:
-    """True when the text carries CONFLICT / CASUALTY vocabulary (FU4 round 2).
+    """True when the text carries CONFLICT / CASUALTY vocabulary.
 
     Pure. Used to BLOCK the sports downgrade: a real hostile dyad whose lineage
     union happens to include a stray sports signal must never be erased. The
@@ -655,7 +661,7 @@ def _coerce_typing(
     # false antagonism (World-Cup group draw ≠ geopolitics). Downgrade it to a
     # neutral co-occurrence so the signed graph is not poisoned.
     #
-    # FU4 (round 2) — the gate runs over the UNION of the excerpt + all backing
+    # The gate runs over the UNION of the excerpt + all backing
     # source signals (see :func:`_sports_gate_text`); a genuinely hostile dyad
     # that ever shared one signal carrying sports vocab must NOT be downgraded.
     # So the downgrade fires only when a sports frame is present AND NO conflict/
@@ -744,7 +750,7 @@ async def _read_candidates(
 
 
 def _sports_gate_text(cand: Mapping[str, Any]) -> str:
-    """The text the D14 sports gate runs over (FU4): the co-mention EXCERPT
+    """The text the D14 sports gate runs over: the co-mention EXCERPT
     UNIONED with ALL backing source signals' title+summary. A sports fixture whose
     sports frame ('World Cup') sits in a DIFFERENT source signal than the excerpt
     is thus still gated. Falls back to the excerpt alone on the no-pool / test
@@ -768,6 +774,11 @@ async def _intermediary_candidates_for(
     return only NAMES (the typer SELECTS verbatim from this offered set, never
     free-texts), ordered by combined corroboration so the strongest cut-outs come
     first within the small cap. C is never A or B."""
+    # Finally refused pairs keep only a marker (their full row is removed), so
+    # each side also reads the markers, skipping any pair whose full row still
+    # exists (it is already counted above). A marker holds the lowercased name,
+    # so names are grouped on their lowercase form and the cased spelling wins
+    # when a live row has one.
     rows = await conn.fetch(
         """
         WITH neighbours AS (
@@ -782,6 +793,20 @@ async def _intermediary_candidates_for(
                     OR lower(target_entity) = lower($1))
             UNION ALL
             SELECT
+                CASE WHEN m.source_key = lower($1)
+                     THEN m.target_key ELSE m.source_key END AS c,
+                m.confidence,
+                $1 AS anchor
+              FROM proposed_edge_markers m
+             WHERE m.relationship_type = 'co_occurs'
+               AND (m.source_key = lower($1) OR m.target_key = lower($1))
+               AND NOT EXISTS (
+                   SELECT 1 FROM proposed_edges pe
+                    WHERE lower(pe.source_entity) = m.source_key
+                      AND lower(pe.target_entity) = m.target_key
+                      AND pe.relationship_type = m.relationship_type)
+            UNION ALL
+            SELECT
                 CASE WHEN lower(source_entity) = lower($2)
                      THEN target_entity ELSE source_entity END AS c,
                 confidence,
@@ -790,12 +815,27 @@ async def _intermediary_candidates_for(
              WHERE relationship_type = 'co_occurs'
                AND (lower(source_entity) = lower($2)
                     OR lower(target_entity) = lower($2))
+            UNION ALL
+            SELECT
+                CASE WHEN m.source_key = lower($2)
+                     THEN m.target_key ELSE m.source_key END AS c,
+                m.confidence,
+                $2 AS anchor
+              FROM proposed_edge_markers m
+             WHERE m.relationship_type = 'co_occurs'
+               AND (m.source_key = lower($2) OR m.target_key = lower($2))
+               AND NOT EXISTS (
+                   SELECT 1 FROM proposed_edges pe
+                    WHERE lower(pe.source_entity) = m.source_key
+                      AND lower(pe.target_entity) = m.target_key
+                      AND pe.relationship_type = m.relationship_type)
         )
-        SELECT c, sum(confidence) AS score
+        SELECT (array_agg(c ORDER BY (c = lower(c)), c))[1] AS c,
+               sum(confidence) AS score
           FROM neighbours
          WHERE lower(c) <> lower($1)
            AND lower(c) <> lower($2)
-         GROUP BY lower(c), c
+         GROUP BY lower(c)
         HAVING count(DISTINCT lower(anchor)) = 2
          ORDER BY score DESC
          LIMIT $3
@@ -1337,7 +1377,7 @@ async def run_method(
 
                 idx = start + offset
                 by_idx[idx] = cand
-                # FU4 — the gate runs over the UNION of the excerpt + all backing
+                # The gate runs over the UNION of the excerpt + all backing
                 # source-signal texts, so a sports frame in a CO-SOURCE signal (not
                 # the excerpt) still gates. The PROMPT keeps the terse excerpt.
                 gate_text[idx] = _sports_gate_text(cand)

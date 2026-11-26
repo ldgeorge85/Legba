@@ -1,9 +1,9 @@
 {
-  "_provenance": "GET /api/v1/findings on the live registry, 2026-10-08 (X1/D1, W11-F9). Trimmed to the keys the stamp reader and the brief headline read; every kept value is verbatim. composition = ?target_id=country_g20_br&analyst_id_in=country_composition&limit=1; instrument = ?analyst_id=indicator_tracker&limit=1 (no target: /findings serves no scorecard_producer row, and indicator_tracker writes one world row per run).",
+  "_provenance": "Two finding rows in the shape GET /api/v1/findings returns, trimmed to the keys the stamp reader and the brief headline read; ids and titles are invented. composition = ?target_id=country_g20_br&analyst_id_in=country_composition&limit=1; instrument = ?analyst_id=indicator_tracker&limit=1 (no target: /findings serves no scorecard_producer row, and indicator_tracker writes one world row per run).",
   "composition": {
-    "id": "fe0264c2-3af2-4551-883c-18929b7a2d8f",
+    "id": "00000000-0000-4000-8000-0000000000a1",
     "kind": "finding",
-    "title": "country_g20_br, 2026-10-08 — “A change in Brazil’s top leadership is likely within about three weeks (by 25 October), contingent on the outcome of…”",
+    "title": "country_g20_br, 2026-10-08 — “A change in the top leadership is possible within about three weeks, contingent on the outcome of a pending vote…”",
     "target_id": "country_g20_br",
     "analyst_id": "country_composition",
     "analyst_version": "7ef9f359ae0b70256d279d3371e7cb516a736a1b35e41486702167f4a7910719",
@@ -13,7 +13,7 @@
     "confidence": 0.5,
     "severity": "elevated",
     "data": {
-      "title": "country_g20_br, 2026-10-08 — “A change in Brazil’s top leadership is likely within about three weeks (by 25 October), contingent on the outcome of…”",
+      "title": "country_g20_br, 2026-10-08 — “A change in the top leadership is possible within about three weeks, contingent on the outcome of a pending vote…”",
       "kind_marker": "finding",
       "confidence": 0.5,
       "data": {
@@ -25,7 +25,7 @@
     }
   },
   "instrument": {
-    "id": "cbe17cb3-90c3-4b06-b179-e2bdd96498f9",
+    "id": "00000000-0000-4000-8000-0000000000a2",
     "kind": "finding",
     "title": "Indicator tracker: 48 indicator flip(s), 22 newly triggered, across 42 unit-run(s)",
     "target_id": null,

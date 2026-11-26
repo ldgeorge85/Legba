@@ -30,7 +30,7 @@ v1→v3 shortcut webhook — the latter wins).
 
 Failures route to the existing `descriptor_dead_letter` stream (shared
 with L-110) so the operator UI surfaces conversion failures alongside
-validation failures. NATS topics per L-107 §6.
+validation failures. NATS topics.
 """
 
 from __future__ import annotations
@@ -56,7 +56,7 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# NATS subjects (L-107 §6)
+# NATS subjects
 # ---------------------------------------------------------------------------
 
 CONVERSION_TOPIC_PREFIX = "conversion_webhook"
@@ -352,7 +352,7 @@ class ConversionWebhookRegistry:
         if from_v >= to_v:
             raise WebhookValidationError(
                 f"forward-only conversion: from_uri ({webhook.from_uri}) "
-                f"must precede to_uri ({webhook.to_uri}); per L-101 §7"
+                f"must precede to_uri ({webhook.to_uri})"
             )
 
         # Eager-resolve the impl so an unimportable path fails registration

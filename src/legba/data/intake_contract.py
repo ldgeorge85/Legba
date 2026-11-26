@@ -13,7 +13,7 @@ the archiver's route and the drain all read ONE vocabulary:
   default and an environment override (read when the limits are built, so a
   test or an operator can change one without a code edit);
 * the ADDRESS ADAPTERS — how an address is handed to a pipeline whose kind can
-  fetch one address (``page`` — the production page pipeline, lane I-2 —
+  fetch one address (``page`` — the production page pipeline —
   plus ``scraper`` and ``rss``): the pipeline's own config with the address
   substituted, so the run is that kind's own poll of one address. A kind
   without an adapter cannot take an address request (refused

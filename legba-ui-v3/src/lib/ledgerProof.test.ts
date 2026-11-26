@@ -272,7 +272,7 @@ describe('the evaluation record — GET /v3/eval/runs', () => {
     expect(evalRunFacts(EVAL_RUNS.runs[0])).toEqual([
       'Answered as of 2026-03-05 · published 2026-03-20',
       '36 questions in two classes (alpha 18, beta 18)',
-      'Graded by invented-grader · answering temperature 1',
+      'Marked by invented-model · answering temperature 1',
       'Gold answers: gold v1',
       `Design version 1.0, registered 2026-03-01 · hash ${'1'.repeat(12)}…`,
     ])

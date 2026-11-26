@@ -3,7 +3,7 @@
 """legba.data — Legba data substrate package (L-001).
 
 This package owns the redesigned substrate for the descriptor/registry/runtime
-model described in `design/legba_topology_redesign.md` v2.
+model.
 
 Provides:
   * `legba.data.config`            — typed env configuration per store.
@@ -17,12 +17,6 @@ Provides:
   * `legba.data.schemas`           — vendored pydantic descriptor schemas (L-101).
   * `legba.data.smoke`             — sanity verification utilities.
 
-Phase 1 task L-001. See:
-  * planning/legba_execution_plan.md
-  * planning/design/legba_data_mapping.md
-  * planning/design/legba_storage_layout.md
-  * planning/design/legba_descriptor_schemas.md
-  * planning/design/legba_observability.md
 """
 
 from __future__ import annotations

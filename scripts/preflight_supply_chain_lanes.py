@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Supply-chain pack — READ-ONLY lane preflight (plan §6.1 step 1).
+"""Supply-chain pack — READ-ONLY lane preflight.
 
 Measures, per Tier-A desk, exactly what ``_read_substrate_slice``
 (``src/legba/runtime/actor_substrate_slice.py:164-445``) would face on this
 desk's next fire, and reports it against the 360-row SQL pre-filter that runs
 BEFORE the desk's ``scope.predicate`` does. This is the gate on activating the
 six Tier-A desks: the plan's single most important design rule
-(planning/SUPPLY_CHAIN_PACK_PLAN_2026-07-29.md §0.2) is that every desk must
+is that every desk must
 carry a SQL-pushdown discriminator sized so that (window AND pushdown) lands
 under the cap — the free-text predicate is a REFINER, never the selector.
 
@@ -228,7 +228,7 @@ def _print(title: str, rows: list[dict[str, Any]], *, row_cap: int) -> int:
         mark = " "
         notes: list[str] = []
         if r["has_us"]:
-            notes.append("US IN GEO (plan §0.3 hard NO)")
+            notes.append("US IN GEO (hard NO)")
         if r["over_cap"]:
             notes.append(f"OVER THE {r['fetch_limit']}-ROW CAP")
         if r["lost"]:
@@ -309,7 +309,7 @@ async def main(argv: list[str] | None = None) -> int:
         print(
             f"\nFAIL: {flagged} Tier-A desk(s) flagged. Trim the geo set (or the "
             f"window) and re-run BEFORE activating — a mis-sized desk's findings "
-            f"rest on a silently truncated slice (plan §6.5 kill criterion 4)."
+            f"rest on a silently truncated slice (a kill criterion)."
         )
         return 1
     print("\nPASS: every Tier-A desk is inside the pre-filter cap with no dropped hits.")

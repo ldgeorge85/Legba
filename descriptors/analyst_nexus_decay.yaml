@@ -4,7 +4,7 @@
 # fully built at legba.data.analysts.deterministic_handlers.nexus_decay and
 # wired into SUB_HANDLERS, but it UPDATEs a `nexuses` table that — until
 # migration 0033 — DID NOT EXIST (it was dead code that would fail loud the
-# moment it fired; DEEP_REVIEW §0). PIECE A lands the real table, so this
+# moment it fired). Migration 0033 lands the real table, so this
 # descriptor re-points the decay sweep against the now-real nexuses:
 #
 #   Stale OPEN nexuses (created_at older than 30 days, still temporally active)
@@ -23,7 +23,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: active
-  owner: piece_a_nexus_activation
+  owner: owner@local
 
 subscription:
   # META analyst: one global sweep per tick directly over the `nexuses` table

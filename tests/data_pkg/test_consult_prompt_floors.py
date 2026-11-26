@@ -12,10 +12,10 @@ CONSULT_REVIEW_2026-09-28 §A / §B.4, the four things it found:
     injected only on the inline_target GATHER binding, never on the consult
     binding that is governed through the same pack;
   * ``uncertainty`` = the model's own header number, clamped and nothing else
-    (session 96d7bfc2: two tool calls, one carrying a fabricated result in its
+    (a live session: two tool calls, one carrying a fabricated result in its
     args, published at ``0.30``);
   * "what would change my mind" as prose only, with nothing structured for a
-    later lane to turn into ``claim_watch`` rows.
+    later change to turn into ``claim_watch`` rows.
 
 The pins below are properties, not wording: the floor bands, the absence
 lines, and the rule that an UNMEASURED run is never floored — because
@@ -236,7 +236,13 @@ async def test_no_reader_and_no_binding_leaves_the_prompt_untouched():
     block = await pctx.render_run_context(
         substrate=_NoReaderSubstrate(), agency_binding=None
     )
-    assert block == ""
+    # Nothing else to say: only the banner with today's date.
+    assert block.strip().startswith(pctx.RUN_CONTEXT_HEADER + " Today is ")
+    assert block.strip().endswith("(UTC).") and "\n" not in block.strip()
+    frozen = await pctx.render_run_context(
+        substrate=_NoReaderSubstrate(), agency_binding=None, frozen=True
+    )
+    assert frozen == ""
 
 
 # ---------------------------------------------------------------------------
@@ -258,7 +264,7 @@ async def test_pack_prompt_fragments_and_rules_are_injected_from_the_descriptor(
     assert "substrate_read" in block
     # Folded YAML blocks arrive multi-line; a prompt bullet is ONE line.
     assert "- For the PAST as numbers: series_history reads one." in block
-    assert "Pack rules (hard):" in block
+    assert "Pack rules:" in block
     assert "- Never fabricate substrate refs." in block
 
 
@@ -298,25 +304,25 @@ async def test_the_rendered_run_context_reaches_the_system_turn_of_a_real_run():
 
 
 def test_the_arc_window_rule_is_in_the_survey_block_with_a_90_day_floor():
-    assert "ARC-WINDOW" in _SYSTEM_PROMPT
-    assert "at least 90 DAYS" in _SYSTEM_PROMPT
-    assert "since_hours of at least 2160" in _SYSTEM_PROMPT
-    # Q-1: the platform now names the window in force at the head of the
-    # answer; the model declares a 90-day reach beyond it as wider reach.
+    assert "query_events(since = today minus 90 days)" in _SYSTEM_PROMPT
+    assert "list_situations(as_of = today minus 90 days)" in _SYSTEM_PROMPT
+    assert "since_hours=2160" in _SYSTEM_PROMPT
+    # The platform names the window in force at the head of the answer; the
+    # model declares a reach beyond it as wider reach.
     assert "NAME the window you actually used" not in _SYSTEM_PROMPT
-    assert "declare it in the contract block (wider_reach" in _SYSTEM_PROMPT
-    # It sits inside SURVEY THEN DRILL, before the narrow-question bullet.
-    survey = _SYSTEM_PROMPT.index("Strategy — SURVEY THEN DRILL")
-    narrow = _SYSTEM_PROMPT.index("  - For a NARROW question")
-    assert survey < _SYSTEM_PROMPT.index("ARC-WINDOW") < narrow
+    assert "say so in the contract block's wider_reach" in _SYSTEM_PROMPT
+    # It sits in the plan, after round 1 and before the tool catalogue.
+    plan = _SYSTEM_PROMPT.index("Plan.\nRound 1")
+    tools = _SYSTEM_PROMPT.index("Tools: records.")
+    assert plan < _SYSTEM_PROMPT.index("A question about change over time") < tools
 
 
 def test_the_prompt_describes_the_ranking_list_situations_actually_does():
     """The review: ORDER BY updated_at DESC, restamped hourly by the
     re-cluster, so the prompt promised an intensity ranking it did not do."""
-    assert "ORDERED BY intensity_score" in _SYSTEM_PROMPT
+    assert "Rows are ordered by intensity_score" in _SYSTEM_PROMPT
     assert "then by most recent event" in _SYSTEM_PROMPT
-    assert "ordered by intensity_score, then by most recent event" in _SYSTEM_PROMPT
+    assert "measures activity, not importance or likelihood of change" in _SYSTEM_PROMPT
     assert "it ranks the live frames by intensity_score and event_count" not in (
         _SYSTEM_PROMPT
     )
@@ -392,7 +398,7 @@ async def test_no_classifier_means_unmeasured_not_zero():
 
 @pytest.mark.asyncio
 async def test_the_floor_bites_on_a_real_run_and_the_census_shares_the_read():
-    """96d7bfc2's shape: a confident header over two resolved refs."""
+    """The recorded shape: a confident header over two resolved refs."""
     refs = [uuid4(), uuid4()]
     substrate = _Substrate(signal_refs=refs)
     llm = _ScriptedLLM([
@@ -496,9 +502,8 @@ async def test_both_B4_facts_ride_the_DURABLE_step_trace():
 
 
 def test_the_prompt_carries_the_models_half_of_the_floor():
-    assert "EVIDENCE FLOOR" in _SYSTEM_PROMPT
-    assert "thin-evidence declaration" in _SYSTEM_PROMPT
-    assert "Fewer than five" in _SYSTEM_PROMPT
+    assert "If you cite fewer than five rows, or your rows share one originator" in _SYSTEM_PROMPT
+    assert "If you cite nothing, set uncertainty to at least 0.85" in _SYSTEM_PROMPT
 
 
 # ---------------------------------------------------------------------------
@@ -507,8 +512,8 @@ def test_the_prompt_carries_the_models_half_of_the_floor():
 
 
 def test_the_prompt_allows_a_number_only_beside_a_resolution_test():
-    assert "a NUMBER only beside a resolution test" in _SYSTEM_PROMPT
-    assert "With no such test, use words" in _SYSTEM_PROMPT
+    assert "Write a likelihood as a number in three places only" in _SYSTEM_PROMPT
+    assert "Everywhere else use the likelihood words" in _SYSTEM_PROMPT
 
 
 def test_watch_candidates_is_a_header_line_in_the_contract():

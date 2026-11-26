@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The TYPING seat — one cited sentence in, one typed statement draft out
-(plan P1 §4 lane S3; design B1 §5 "what needs a model").
+"""The TYPING seat — one cited sentence in, one typed statement draft out.
 
 WHAT THE MODEL DOES. Reads one cited sentence of a desk finding, the subjects
 code offers, the cited rows' stored texts (a window code chose) and a short

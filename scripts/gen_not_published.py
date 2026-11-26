@@ -55,9 +55,9 @@ SCHEMA = "legba/not_published/1"
 #:   a subject × unit with no reference has no correctness number at all.
 #: * 60 — the error rate of the curated layer map is not audited.
 #: * 61 — whether any source covers a subject at all is not measured.
-#:   (89, the standing evaluations on the console, was listed here until E-3
-#:   resolved it: the owner publishes runs to ``GET /v3/eval/runs``.)
-#: An id is a number (the numbered seams) or a slug (seams declared since R-1).
+#:   (89, the standing evaluations on the console, was listed here until
+#:   runs became publishable via ``GET /v3/eval/runs``.)
+#: An id is a number (the numbered seams) or a slug (seams declared by slug).
 MEASUREMENT_SEAMS: tuple[int | str, ...] = (46, 55, 60, 61)
 
 #: The routes' declared unmeasured classes. ``kind`` is how the text is found:

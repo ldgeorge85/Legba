@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""S-2 historical re-geocode backfill (W-2b).
+"""Historical re-geocode backfill (W-2b).
 
 Exercises ``scripts/regeocode_contaminated_signals.py``:
 
-  * PURE selection/re-derivation (``assess_row``) — matches the two S-2
+  * PURE selection/re-derivation (``assess_row``) — matches the two 
     contamination signatures (publisher-origin CNA→SG, incidental-dateline
     Yonhap→BR) and does NOT match clean rows: corroborated origin tags,
     geocoder-derived tags, subject datelines, and rows the offline path cannot
@@ -45,7 +45,7 @@ _spec.loader.exec_module(regeo)
 
 
 def test_cna_world_story_uncorroborated_origin_cleared():
-    """The S-2 headline case: a Singapore wire's LeBron story landed geo=SG.
+    """The headline case: a Singapore wire's LeBron story landed geo=SG.
     Content names no country ⇒ the CURRENT gate clears the tag entirely."""
     payload = {
         "publisher_origin": ["SG"],
@@ -94,7 +94,7 @@ def test_geocoder_derived_tag_is_not_a_publisher_origin_candidate():
 
 
 def test_yonhap_dateline_repointed_to_country_entity():
-    """The S-2 dateline case: an incidental Brasília dateline out-voted an
+    """The dateline case: an incidental Brasília dateline out-voted an
     inter-Korean story. The country-class entity wins under current rules."""
     payload = {
         "geo": {"country": "Brazil", "country_iso2": "BR",

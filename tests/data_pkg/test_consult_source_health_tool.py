@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W11-F152 -- the consult can call ``get_source_health``.
+"""The consult can call ``get_source_health``.
 
 The 2026-11-05 consult dig: the consult read ``list_sources`` (a thin row per
 source, ``last_poll_outcome='empty'`` on 59 of 116 healthy feeds) and reported
@@ -62,5 +62,5 @@ async def test_dispatch_routes_get_source_health_to_the_port_with_its_args():
 
 def test_prompt_names_the_tool_and_reads_empty_as_quiet_not_dead():
     assert "get_source_health(" in _SYSTEM_PROMPT
-    assert "NOT a dead one" in _SYSTEM_PROMPT
+    assert "not a dead one" in _SYSTEM_PROMPT
     assert "staleness" in _SYSTEM_PROMPT

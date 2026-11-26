@@ -158,7 +158,7 @@ def _is_registry_terminal(frame: dict) -> bool:
 
 
 async def require_stream_owner(request: Request, request_id: str) -> None:
-    """X4 GATE (W11-F76): refuse (403 ``not_row_owner``) a signed-in user on
+    """X4 GATE: refuse (403 ``not_row_owner``) a signed-in user on
     another principal's run; claim an unowned ``request_id`` for the caller
     (module docstring, "Owner check")."""
     await _auth_state.require_run_owner(request, request_id, what="consult run")

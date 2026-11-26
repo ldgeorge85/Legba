@@ -71,12 +71,12 @@ logger = logging.getLogger(__name__)
 # the descriptor level (predicate filter) rather than here.
 _MAX_NODES = 5_000
 #
-# P1 EVENT-LOOP FREEZE FIX (2026-07-24): ``_proxy_chains`` calls networkx
+# EVENT-LOOP FREEZE FIX: ``_proxy_chains`` calls networkx
 # ``all_simple_paths`` — worst-case EXPONENTIAL path enumeration — over the live
 # reified-nexus graph. Measured live: ~1,980 vertices, max degree 474, avg 8.72,
 # p99 ~99, 120 nodes at degree >= 27. A pairwise all_simple_paths walk over that
-# spins for tens of minutes holding the GIL (caught by py-spy at the 2026-07-24
-# 12:52 freeze; MainThread active+gil ~33 min until the watchdog killed it),
+# spins for tens of minutes holding the GIL (caught by py-spy;
+# MainThread active+gil ~33 min until the watchdog killed it),
 # starving healthchecks + the reminder dispatch on the SAME asyncio loop. The
 # ``cutoff=`` below bounds each DFS to <= ``_MAX_PROXY_PATH_LEN`` edges (a proxy
 # cut-out is subject->intermediary->object = 2 hops; >3 strains the analytic
@@ -122,7 +122,7 @@ def _reify_discovered_chains_enabled() -> bool:
 
 
 def _max_proxy_paths_scanned() -> int:
-    """Total-paths-scanned cap for :func:`_proxy_chains` (P1 freeze bound).
+    """Total-paths-scanned cap for :func:`_proxy_chains` (freeze bound).
 
     Read at call time (not import) so an operator env tweak takes effect on the
     next run. Falls back to :data:`_MAX_PROXY_PATHS_SCANNED` on any bad value; a
@@ -295,7 +295,7 @@ def _proxy_chains(
     (negative product) and laundering-detection (positive via hostile
     intermediate).
 
-    P1 FREEZE BOUND: ``all_simple_paths`` is worst-case exponential and runs
+    FREEZE BOUND: ``all_simple_paths`` is worst-case exponential and runs
     synchronously; on the dense live graph it froze the event loop for ~33 min.
     ``cutoff=max_path_len`` bounds path length, and ``itertools.islice`` over the
     (lazy generator) enumeration caps total paths CONSUMED at
@@ -325,13 +325,13 @@ def _proxy_chains(
     # DETERMINISM FIX (#99): the old code early-broke after the first
     # ``max_chains`` paths in ``list(g.nodes())`` order — WHICH chains surfaced
     # depended on arbitrary node insertion order. Instead enumerate chains
-    # (bounded by the n^2 pair walk + cutoff + the P1 total-scan cap), SCORE
+    # (bounded by the n^2 pair walk + cutoff + the total-scan cap), SCORE
     # each, then return a deterministic top-K. Score rewards a negative
     # sign-product cut-out (the hostile-via-proxy / laundering shape this miner
     # exists to find) and shorter, tighter chains. A stable secondary sort key
     # (the chain tuple) makes ties deterministic regardless of node order.
     #
-    # P1: iterate the pairwise cut-out candidates through ONE islice-bounded
+    # Iterate the pairwise cut-out candidates through ONE islice-bounded
     # chain of generators so the total number of enumerated simple paths is
     # capped at ``max_paths_scanned`` regardless of how dense any single hub is.
     # Node order is sorted → the SCAN is deterministic, so a truncated run still
@@ -395,7 +395,7 @@ def _proxy_chains(
 
 
 # ---------------------------------------------------------------------------
-# Off-loop CPU bundle (P1 event-loop freeze fix)
+# Off-loop CPU bundle (event-loop freeze fix)
 # ---------------------------------------------------------------------------
 
 
@@ -423,7 +423,7 @@ class _CpuMiningResult:
 def _mine_graph_cpu(g: "nx.MultiDiGraph") -> _CpuMiningResult:
     """Run the three CPU-heavy mining phases over an IN-MEMORY graph.
 
-    P1 FREEZE FIX: this is the pure-compute core that ``handle`` runs OFF the
+    FREEZE FIX: this is the pure-compute core that ``handle`` runs OFF the
     asyncio event loop (``asyncio.to_thread``). It touches ONLY the passed
     networkx graph — no asyncpg connection, no Dapr actor state, no ``deps`` —
     so it is safe to run on a worker thread while the loop keeps servicing
@@ -651,19 +651,19 @@ def _is_person_only(ep_classes: set[str] | None) -> bool:
 #: edge is not evidence of alignment. Same table, different question.
 MINING_FAMILIES = ("relation", "reference", "structural")
 
-#: The most edges the augment reads (roll 85). It used to read ``LIMIT 20000``
-#: with no ORDER BY: 36,443 world edges matched on live (2026-11-15), so an
+#: The most edges the augment reads. A bare ``LIMIT 20000``
+#: with no ORDER BY would drop edges: with 36,443 world edges matching, an
 #: arbitrary ~45% were dropped and WHICH ones changed with the plan — the
 #: brokerage graph was a different random subset each run. The whole set is
-#: read now (EXPLAIN ANALYZE on live: 0.76 s for all 36,443 rows sorted, against
-#: 0.54-0.67 s for the old 20,000); this cap is a safety bound only, far above
+#: read (EXPLAIN ANALYZE on live: 0.76 s for all 36,443 rows sorted, against
+#: 0.54-0.67 s for 20,000); this cap is a safety bound only, far above
 #: the live count, and when it is reached the MOST RECENT edges are the ones
 #: kept (``valid_from`` newest first, then the edge id) and the run logs it.
 MAX_MINING_EDGES = 100_000
 
-#: Pre-P4b substrate reads, kept verbatim for the flag-off state (see the
+#: Legacy substrate reads, kept verbatim for the flag-off state (see the
 #: ``projection_disabled`` branch in each reader). They are the queries the
-#: 2026-09-23 P4b review restored: with LEGBA_GRAPH_PROJECTION off the two live
+#: flag-off state needs: with LEGBA_GRAPH_PROJECTION off the two live
 #: analysts must behave exactly as before the projection existed.
 _LEGACY_AUGMENT_SQL = """
                 SELECT sp.canonical_name AS subject,
@@ -724,14 +724,14 @@ async def _augment_from_nexuses(
     degree AND its betweenness, demoting exactly the broker the mining exists
     to surface.
 
-    V3/P4b — READS THE PROJECTION, NOT THE SUBSTRATE. The snapshot now comes
+    READS THE PROJECTION, NOT THE SUBSTRATE. The snapshot now comes
     from ``graph_arcs WHERE plane='world' AND src_table='entity_edges'`` — the
     same rows the ``/graph/arcs`` API serves, so mining and the walk can never
     disagree about what the world graph contains. The join back to
     ``entity_edges`` through ``a.src_id`` restores only what the arc contract
     does not carry (``source_type`` for the #99 guard, ``intermediary_id`` for
     the proxy-chain hop). When the projection is disabled, empty or stale the
-    augment contributes nothing and says why — per spec §4.2 rule 5 a reader
+    augment contributes nothing and says why — a reader
     never silently answers from a table that is not there.
 
     The #99 self-amplification guard survives the move: the reifier's own
@@ -744,15 +744,15 @@ async def _augment_from_nexuses(
     fams = list(families) if families else list(MINING_FAMILIES)
     try:
         async with pool.acquire() as conn:
-            # P4b refusal contract: disabled/empty/stale projections are named
+            # Refusal contract: disabled/empty/stale projections are named
             # states, never a silently-empty graph.
             state, _meta = await graph_projection_state(conn)
             if state == "projection_disabled":
-                # V3/P4b flag-off identity (review, 2026-09-23): while
+                # Flag-off identity: while
                 # LEGBA_GRAPH_PROJECTION is off the projection is not this
-                # reader's declared source, so the pre-P4b substrate read runs
-                # byte-for-byte. Spec §4.2 rule 5 (never answer silently from
-                # a table that is not there) binds only once the flag names
+                # reader's declared source, so the legacy substrate read runs
+                # byte-for-byte. The rule never to answer silently from
+                # a table that is not there binds only once the flag names
                 # graph_arcs as the source — then empty/stale contribute nothing.
                 state = "legacy"
             elif state != "ok":
@@ -830,16 +830,16 @@ async def _recent_hostile_edges(
     fams = list(families) if families else list(MINING_FAMILIES)
     try:
         async with pool.acquire() as conn:
-            # P4b: the projection is the one world-graph read surface — and a
+            # The projection is the one world-graph read surface — and a
             # disabled/empty/stale projection is a named state, not a silently
             # empty answer.
             state, _meta = await graph_projection_state(conn)
             if state == "projection_disabled":
-                # V3/P4b flag-off identity (review, 2026-09-23): while
+                # Flag-off identity: while
                 # LEGBA_GRAPH_PROJECTION is off the projection is not this
-                # reader's declared source, so the pre-P4b substrate read runs
-                # byte-for-byte. Spec §4.2 rule 5 (never answer silently from
-                # a table that is not there) binds only once the flag names
+                # reader's declared source, so the legacy substrate read runs
+                # byte-for-byte. The rule never to answer silently from
+                # a table that is not there binds only once the flag names
                 # graph_arcs as the source — then empty/stale contribute nothing.
                 state = "legacy"
             elif state != "ok":
@@ -1226,10 +1226,10 @@ def _build_finding(
             "modularity": modularity,
             "centrality": centrality,
             "proxy_chains": proxy_chains,
-            # P1: honest truncation marker — True iff the proxy-chain path-scan
+            # Honest truncation marker — True iff the proxy-chain path-scan
             # cap bit and the returned top-K is from a PARTIAL enumeration.
             "proxy_chains_truncated": bool(proxy_chains_truncated),
-            # P1: honest abandon marker — True iff the CPU wall-clock budget bit
+            # Honest abandon marker — True iff the CPU wall-clock budget bit
             # and the empty products are an abandoned run, not an empty graph.
             "mining_abandoned": bool(mining_abandoned),
             "interesting": interesting,
@@ -1272,7 +1272,7 @@ async def handle(
         keep = list(g.nodes())[:_MAX_NODES]
         g = g.subgraph(keep).copy()
 
-    # P1 EVENT-LOOP FREEZE FIX (2026-07-24): the three CPU-heavy mining phases
+    # EVENT-LOOP FREEZE FIX: the three CPU-heavy mining phases
     # (community detection, k-sampled betweenness, and — the caught culprit —
     # bounded ``all_simple_paths`` proxy-chain enumeration) run OFF the asyncio
     # event loop on a worker thread, so even the internally-bounded work cannot
@@ -1323,7 +1323,7 @@ async def handle(
     node_count = g.number_of_nodes()
     edge_count = g.number_of_edges()
 
-    # FIX P2-1: persist the run's mined metrics to the graph_metrics sink (the
+    # Persist the run's mined metrics to the graph_metrics sink (the
     # table had no writer). Best-effort — never fails the run. We store COUNTS
     # + the modularity scalar + the top-centrality slice (already capped to 25
     # nodes upstream) rather than the full community membership lists, keeping

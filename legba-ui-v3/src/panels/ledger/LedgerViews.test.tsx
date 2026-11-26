@@ -59,33 +59,83 @@ describe('the forecasts (view:forecasts)', () => {
     const rows = screen.getAllByTestId('ledger-forecast-row')
     const first = rows.find((r) => r.getAttribute('data-slug') === 'FX1-invented')!
     await waitFor(() => expect(first.getAttribute('data-state')).toBe('awaiting_confirmation'))
-    expect(within(first).getByTestId('ledger-forecast-state').textContent).toBe('Proposed: yes — awaiting confirmation')
-    expect(within(first).getByTestId('ledger-forecast-numbers').textContent).toMatch(/Owner 70 %.*This system · no number stated.*Frontier model 55 %/)
-    expect(within(first).getByTestId('ledger-forecast-rule').textContent).toMatch(
+    expect(within(first).getByTestId('ledger-forecast-status').textContent).toBe('Proposed')
+    expect(within(first).getByTestId('ledger-forecast-p').textContent).toMatch(/70 %/)
+    expect(first.textContent).toMatch(/2026-03-20/)
+    // The full rule, numbers, state and seal are in the detail sheet a click opens.
+    expect(screen.queryByTestId('ledger-forecast-sheet')).toBeNull()
+    fireEvent.click(within(first).getByTestId('ledger-forecast-select'))
+    const sheet = await screen.findByTestId('ledger-forecast-sheet')
+    expect(within(sheet).getByTestId('ledger-forecast-state').textContent).toBe('Proposed: yes — awaiting confirmation')
+    expect(within(sheet).getByTestId('ledger-forecast-numbers').textContent).toMatch(/Owner 70 %.*This system · no number stated.*Frontier model 55 %/)
+    expect(within(sheet).getByTestId('ledger-forecast-rule').textContent).toMatch(
       /^Yes if a fictional ceasefire announcement is reported \(by AA and BB\) between 2026-03-01 and 2026-03-20\. Confirmed by an official statement of either government\./,
     )
-    expect(first.textContent).toMatch(/sealed 2026-02-27 · due 2026-03-20/)
-    await waitFor(() => expect(within(first).getByTestId('ledger-forecast-seal').textContent).toBe('seal: anchored'))
+    expect(sheet.textContent).toMatch(/sealed 2026-02-27 · due 2026-03-20/)
+    await waitFor(() => expect(within(sheet).getByTestId('ledger-forecast-seal').textContent).toBe('seal: anchored'))
     // resolved and voided, the void with its reason
     expect(rows.find((r) => r.getAttribute('data-slug') === 'FX2-invented')!.getAttribute('data-state')).toBe('resolved_no')
     const v = rows.find((r) => r.getAttribute('data-slug') === 'FX3-invented')!
     expect(v.getAttribute('data-state')).toBe('void')
-    expect(v.textContent).toMatch(/Voided: the vote was postponed/)
+    expect(within(v).getByTestId('ledger-forecast-status').textContent).toBe('Void')
+    fireEvent.click(within(v).getByTestId('ledger-forecast-select'))
+    expect((await screen.findByTestId('ledger-forecast-sheet')).textContent).toMatch(/Voided: the vote was postponed/)
     // sealed after the newest anchor
-    expect(within(rows.find((r) => r.getAttribute('data-slug') === 'FX4-invented')!).getByTestId('ledger-forecast-seal').textContent).toBe(
-      'seal: not covered yet',
-    )
+    fireEvent.click(within(rows.find((r) => r.getAttribute('data-slug') === 'FX4-invented')!).getByTestId('ledger-forecast-select'))
+    expect((await screen.findByTestId('ledger-forecast-seal')).textContent).toBe('seal: not covered yet')
     // No score on the forecasts page.
     expect(document.body.textContent).not.toMatch(/Brier|called it|\b0\.\d{3}\b/)
+  })
+
+  it('one compact row per forecast, open first by due date; the headers re-sort', async () => {
+    stubLedger({
+      '/v3/ledger/forecasts': {
+        body: forecasts([
+          forecast(1, { due_at: '2026-03-25T00:00:00Z' }),
+          { ...RESOLVED, due_at: '2026-03-10T00:00:00Z' },
+          { ...VOIDED, due_at: '2026-03-12T00:00:00Z' },
+          { ...LATE, due_at: '2026-03-22T00:00:00Z' },
+        ]),
+      },
+    })
+    wrap(<LedgerForecasts />)
+    await screen.findAllByTestId('ledger-forecast-row')
+    const slugs = () => screen.getAllByTestId('ledger-forecast-row').map((r) => r.getAttribute('data-slug'))
+    expect(slugs()).toEqual(['FX4-invented', 'FX1-invented', 'FX3-invented', 'FX2-invented'])
+    expect(screen.getByTestId('ledger-sort-status').closest('th')!.getAttribute('aria-sort')).toBe('ascending')
+    fireEvent.click(screen.getByTestId('ledger-sort-due'))
+    const asc = slugs()
+    expect(asc).toEqual(['FX2-invented', 'FX3-invented', 'FX4-invented', 'FX1-invented'])
+    expect(screen.getByTestId('ledger-sort-due').closest('th')!.getAttribute('aria-sort')).toBe('ascending')
+    fireEvent.click(screen.getByTestId('ledger-sort-due'))
+    expect(slugs()).toEqual([...asc].reverse())
+  })
+
+  it('a resolved forecast shows a score only once the scorecard says enough have resolved', async () => {
+    stubLedger()
+    wrap(<LedgerForecasts />)
+    await screen.findAllByTestId('ledger-forecast-row')
+    const cell = (slug: string) =>
+      within(screen.getAllByTestId('ledger-forecast-row').find((r) => r.getAttribute('data-slug') === slug)!).getByTestId('ledger-forecast-score')
+    expect(cell('FX2-invented').textContent).toBe('—')
+    expect(cell('FX2-invented').getAttribute('title')).toMatch(/appear once 5 questions/)
+    expect(cell('FX1-invented').textContent).toBe('')
+    cleanup()
+    const sc = scorecard(5)
+    stubLedger({ '/v3/ledger/scorecard': { body: sc } })
+    wrap(<LedgerForecasts />)
+    await screen.findAllByTestId('ledger-forecast-row')
+    await waitFor(() => expect(cell('FX2-invented').textContent).toMatch(/^\d\.\d{3}$/))
   })
 
   it('the seal opens as checkable: what it covers, the hash, the leaf, the anchor, never "verified"', async () => {
     stubLedger()
     wrap(<LedgerForecasts />)
     const row = (await screen.findAllByTestId('ledger-forecast-row'))[0]
-    await waitFor(() => expect(within(row).getByTestId('ledger-forecast-seal').textContent).toBe('seal: anchored'))
-    fireEvent.click(within(row).getByTestId('ledger-forecast-more'))
-    const detail = within(row).getByTestId('forecast-seal-detail')
+    fireEvent.click(within(row).getByTestId('ledger-forecast-select'))
+    const sheet = await screen.findByTestId('ledger-forecast-sheet')
+    await waitFor(() => expect(within(sheet).getByTestId('ledger-forecast-seal').textContent).toBe('seal: anchored'))
+    const detail = within(sheet).getByTestId('forecast-seal-detail')
     expect(detail.textContent).toMatch(/The seal covers: the question as worded; its resolution rule/)
     expect(within(detail).getByTestId('forecast-seal-hash').textContent).toBe('1'.repeat(64))
     await waitFor(() => expect(within(detail).getByTestId('forecast-seal-leaf').textContent).toMatch(/^[0-9a-f]{64}$/))
@@ -95,7 +145,7 @@ describe('the forecasts (view:forecasts)', () => {
     // No proof route in this stub: inclusion is not claimed.
     await waitFor(() => expect(within(detail).getByTestId('forecast-seal-inclusion').getAttribute('data-state')).toBe('unavailable'))
     expect(detail.textContent).not.toMatch(/Included in the anchor/)
-    expect(row.textContent).toMatch(/Void if: Neither government says anything by due \+ grace\./)
+    expect(sheet.textContent).toMatch(/Void if: Neither government says anything by due \+ grace\./)
   })
 
   it('an unreadable ledger is not an empty one; a missing route says so', async () => {
@@ -125,7 +175,7 @@ describe('the forecasts (view:forecasts)', () => {
     expect(useLedgerView.getState()).toMatchObject({ forecast: 'FX1-invented', filter: 'all' })
     const sel = screen.getAllByTestId('ledger-forecast-row').find((r) => r.getAttribute('aria-current') === 'true')!
     expect(sel.getAttribute('data-slug')).toBe('FX1-invented')
-    expect(sel.className).toMatch(/border-l-point/) // the reader's point, the one accent
+    expect(screen.getByTestId('ledger-forecast-sheet').className).toMatch(/border-l-point/) // the reader's point, the one accent
     expect(ledgerOnScreen()).toEqual({ forecast: 'FX1-invented', filter: 'all', run: null })
     expect(applyPanelAction('view:forecasts', 'show_forecast', { forecast: 'nope' }).state).not.toBe('executed')
   })
@@ -166,7 +216,7 @@ describe('the evaluation record (view:proof)', () => {
     const facts = within(run).getByTestId('proof-facts').textContent
     expect(facts).toMatch(/Answered as of 2026-03-05 · published 2026-03-20/)
     expect(facts).toMatch(/36 questions in two classes \(alpha 18, beta 18\)/)
-    expect(facts).toMatch(/Graded by invented-grader · answering temperature 1/)
+    expect(facts).toMatch(/Marked by invented-model · answering temperature 1/)
     expect(facts).toMatch(/Gold answers: gold v1/)
     // no verdict styling on any score: no accent, no good/bad colour
     const classes = [run, ...run.querySelectorAll('*')].map((e) => e.getAttribute('class') ?? '').join(' ')

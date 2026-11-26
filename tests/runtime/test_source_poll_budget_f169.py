@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W11-F169 — a per-source poll budget for the sources whose items cost NER.
+"""a per-source poll budget for the sources whose items cost NER.
 
 GDELT and ISW polled under the generic 30 s budget while enrichment costs
 ~7-15 s an item, so each poll wrote ~2-4 items and GDELT (whose handler commits

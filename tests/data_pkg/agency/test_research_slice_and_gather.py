@@ -61,7 +61,7 @@ from legba.runtime.dapr_actors import _read_substrate_slice
 
 # The ``restore_source_credibility_seed`` fixture (tests/data_pkg/conftest.py)
 # re-applies the baseline source_credibility rows onto an open connection —
-# see its docstring for why (09-05 merge-wave: this file's reset fixture runs
+# see its docstring for why (this file's reset fixture runs
 # an unscoped ``DELETE FROM source_credibility`` that commits on the shared
 # test DB).
 
@@ -207,7 +207,7 @@ async def _reset(dsn, restore_source_credibility_seed):
         await _wipe_owned(conn)
         await conn.execute("DELETE FROM source_credibility")
     yield
-    # Two-sided (W11-F94): the setup wipe protects THIS module's next test,
+    # Two-sided: the setup wipe protects THIS module's next test,
     # nothing protected the module AFTER it. Whichever test ran last left its
     # rows in the shared session DB — test_research_geo_must_match_the_target
     # leaves one live (web_retrieval) geo=['CA'] signal fetched now, which
@@ -216,7 +216,7 @@ async def _reset(dsn, restore_source_credibility_seed):
     # setup wipe emptied these tables, so this removes only this test's rows.
     # RESTORE the canonical source_credibility seed — the unscoped delete above
     # commits on the shared test DB, so leaving it wiped poisons every later
-    # source_credibility test in the suite (09-05 merge-wave ordering pollution).
+    # source_credibility test in the suite (test-ordering pollution).
     async with _conn(dsn) as conn:
         await _wipe_owned(conn)
         await restore_source_credibility_seed(conn)

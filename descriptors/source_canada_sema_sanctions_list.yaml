@@ -1,11 +1,11 @@
-# X-1 source expansion (2026-11-14) — Canada's consolidated list under the
+# Canada's consolidated list under the
 # Special Economic Measures Act (Global Affairs Canada), as the INSTRUMENT
 # itself (kind instrument_snapshot: fetch, hash, archive, diff). Ships DRAFT;
 # the reference host walks it to CONFIGURED (descriptors/LIFECYCLE.md), never
-# active — activation is the owner's call, and the kind refuses activation
+# active — activation is the operator's call, and the kind refuses activation
 # without a writable evidence archive.
 #
-# THE ENDPOINT. Checked 2026-11-14 by the source-expansion review (one GET,
+# THE ENDPOINT. Checked (one GET,
 # generic client identity): HTTP 200, text/xml, 2.9 MB; root
 # <data-set xmlns:xsi=...>. robots.txt allows the path for `*`. The entry
 # element and its identifier were not part of the check, so the list is read
@@ -25,7 +25,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: x1_source_expansion
+  owner: owner@local
   created: "2026-11-14T00:00:00Z"
 
 scope:

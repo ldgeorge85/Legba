@@ -9,7 +9,7 @@ Covers:
     OUTPUT_KIND = OutputKind.JOURNAL; the 11th OutputKind is in KIND_REGISTRY.
   * deps-build smoke: build_analyst_run_method('journal_assessor') returns the
     journal run_method + OutputKind.JOURNAL, with READ_SLICE threaded through the
-    quint (None in Wave 0 — the default META reader).
+    quint (None for the default META reader).
   * GATHER-gate generalization (§4.9): the helpers admit journal_assessor and
     point it at the journal_read pack; the binding-kind sets in dapr_host /
     dapr_actors are in lock-step.
@@ -60,7 +60,7 @@ def test_journal_assessor_discovers_with_journal_output_kind():
     assert handler.output_kind == OutputKind.JOURNAL
     assert callable(handler.run_method)
     assert callable(handler.build_prompt_module)
-    # Wave 0: the default META reader (delta-priming reader is Wave 1).
+    # The default META reader (the delta-priming reader is separate).
     assert handler.read_slice is None
 
 
@@ -120,7 +120,7 @@ def _journal_descriptor() -> AnalystDescriptor:
 
 
 def _consolidator_descriptor() -> AnalystDescriptor:
-    """The REAL Wave 2 consolidation-tier descriptor, loaded from its YAML so the
+    """The REAL consolidation-tier descriptor, loaded from its YAML so the
     on-disk file (id / kind / cadence / prompt_module) is what we bind. Mirrors
     the bringup loader (`_load`): stamp a placeholder version, validate strict=False.
     """
@@ -133,7 +133,7 @@ def _consolidator_descriptor() -> AnalystDescriptor:
 
 
 def test_consolidator_descriptor_is_same_kind_distinct_id_daily_cadence():
-    """Wave 2 §4.7 — the consolidation tier is the SAME kind, a DISTINCT id, with
+    """The consolidation tier is the SAME kind, a DISTINCT id, with
     the slow daily beat and the cooldown<interval trap honored (22h < 24h)."""
     d = _consolidator_descriptor()
     assert d.identity.id == "journal_consolidator"
@@ -145,18 +145,18 @@ def test_consolidator_descriptor_is_same_kind_distinct_id_daily_cadence():
     assert d.cadence.fallback_schedule == "0 2 * * *"
     assert d.cadence.cooldown_seconds == 79200
     assert d.cadence.cooldown_seconds < 86400
-    # Larger token budget than the 4096 entry tier (the digest is longer, §4.7).
-    assert int(d.method.llm["max_tokens"]) > 4096
+    # No output limit of ours: the digest gets the model's own maximum.
+    assert "max_tokens" not in d.method.llm
     # META: no targets block (global single run per tick).
     assert not getattr(d.subscription, "targets", None)
-    # Grant invariant (§7.6): ONLY the journal_read + journal_propose packs (both
-    # non-write-fact). Wave 4 adds journal_propose (the PROPOSE-AND-GATE surface).
+    # Grant invariant: ONLY the journal_read + journal_propose packs (both
+    # non-write-fact). journal_propose is the PROPOSE-AND-GATE surface.
     assert {p.pack_id for p in d.action_packs} == {"journal_read", "journal_propose"}
 
 
 @pytest.mark.asyncio
 async def test_consolidator_deps_build_canary_journal_kind_and_consolidation_voice():
-    """The consolidation tier's OWN activation canary (§12 Wave 2): a daily META
+    """The consolidation tier's OWN activation canary: a daily META
     analyst that 404s / mis-binds dies SILENTLY for ~24h, so prove the bind path
     for the `journal_consolidator` id specifically — it returns OutputKind.JOURNAL,
     threads the InlineTargetDeps bundle, carries the CONSOLIDATION persona (NOT the
@@ -252,7 +252,7 @@ async def test_journal_deps_build_returns_journal_kind_and_read_slice():
     assert "Poetry without evidence is noise" in (kind_deps.system_prompt or "")
     assert "first character must be" not in (kind_deps.system_prompt or "").lower()
     assert kind_deps.max_rounds == 6
-    # Wave 0 read_slice is None (the default META reader).
+    # read_slice is None (the default META reader).
     assert read_slice is None
 
 
@@ -348,7 +348,7 @@ def test_journal_read_tool_has_a_global_handler():
 
 
 def test_journal_wave1_instrument_tools_all_present():
-    """Wave 1 adds the ~9 net-new self-instrument tools + wires the shared reads
+    """The ~9 net-new self-instrument tools + wires the shared reads
     (§5). Assert the full set is in the tuple so a dropped tool fails loud."""
     from legba.data.analysts.agency.journal_read import JOURNAL_READ_TOOLS
 
@@ -364,7 +364,7 @@ def test_journal_wave1_instrument_tools_all_present():
         "get_lens_reads",
     }
     assert set(JOURNAL_READ_TOOLS) == expected, (
-        "JOURNAL_READ_TOOLS drifted from the Wave 1 §5 read surface "
+        "JOURNAL_READ_TOOLS drifted from the declared read surface "
         f"(missing: {expected - set(JOURNAL_READ_TOOLS)}; "
         f"extra: {set(JOURNAL_READ_TOOLS) - expected})"
     )
@@ -413,7 +413,7 @@ def test_journal_known_tools_subset_in_pack():
 
 
 # ---------------------------------------------------------------------------
-# Wave 4 (plan §7) — the journal_propose PROPOSE-AND-GATE pack: its OWN drift
+# The journal_propose PROPOSE-AND-GATE pack: its OWN drift
 # test (tuple == descriptor == handlers), the GATHER write-tool recognition, and
 # the §7.6 grant invariant (the journal stays NOT effective for any write-fact
 # pack). NOTE the propose tools are deliberately a SEPARATE pack from journal_read
@@ -434,7 +434,7 @@ def test_journal_propose_tuple_descriptor_handlers_agree():
 
     tuple_names = set(JOURNAL_PROPOSE_TOOLS)
     # The §7.5 build order is asserted: correction + change FIRST, self_revision
-    # LAST (the highest-scrutiny class ships last within Wave 4).
+    # LAST (the highest-scrutiny class ships last).
     assert JOURNAL_PROPOSE_TOOLS == (
         "propose_correction", "propose_change", "propose_self_revision",
     )
@@ -510,7 +510,7 @@ def test_journal_propose_handlers_call_no_provenance_writer():
     for forbidden in ("write_fact", "write_nexus", "write_hypothesis"):
         assert not hasattr(journal_propose, forbidden), (
             f"journal_propose binds {forbidden} — the journal PROPOSES, it never "
-            "writes the knowledge layer (§3.1 / §7.6)"
+            "writes the knowledge layer"
         )
     # Also: nothing the module imported is one of the provenance writers (catch a
     # rename-import like `from ...provenance import write_fact as wf`).
@@ -523,7 +523,7 @@ def test_journal_propose_handlers_call_no_provenance_writer():
     module_callables = [v for v in vars(journal_propose).values() if callable(v)]
     assert not any(v in forbidden_callables for v in module_callables), (
         "journal_propose imported a provenance writer (write_fact/write_nexus/"
-        "write_hypothesis) — forbidden (§3.1 / §7.6)"
+        "write_hypothesis) — forbidden"
     )
 
 
@@ -540,12 +540,12 @@ def test_journal_grant_invariant_only_nonwrite_packs():
         granted = {p["pack_id"] for p in body["action_packs"]}
         assert granted == {"journal_read", "journal_propose"}, (
             f"{fname} grants {granted} — the journal must grant ONLY journal_read "
-            "+ journal_propose (§7.6)"
+            "+ journal_propose"
         )
         # The journal NEVER grants the live write-fact pack.
         assert WRITE_PACK_ID not in granted, (
             f"{fname} grants the live write-fact pack {WRITE_PACK_ID!r} — forbidden "
-            "(§7.6: the journal proposes, it never writes facts)"
+            "(the journal proposes, it never writes facts)"
         )
 
 

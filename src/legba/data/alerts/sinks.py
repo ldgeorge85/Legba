@@ -213,7 +213,7 @@ class AlertSinkPayload(BaseModel):
     receipt_path: str | None = None
     #: Absolute receipt link when ``LEGBA_PUBLIC_BASE_URL`` is set.
     receipt_url: str | None = None
-    #: Roll 84 (additive): the CONSOLE page that opens the record
+    #: The CONSOLE page that opens the record
     #: (``#rec=<kind>:<id>``, :mod:`.console_link`) — a push's tap target,
     #: never the JSON receipt. None without ``LEGBA_PUBLIC_BASE_URL``.
     console_url: str | None = None

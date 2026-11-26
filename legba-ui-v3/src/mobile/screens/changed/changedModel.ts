@@ -1,11 +1,11 @@
 /**
- * changedModel — the data behind the phone's landing (M-3a): ONE read of
+ * changedModel — the data behind the phone's landing: ONE read of
  * `GET /v3/since?cursor=<window start>&include=needs_you` per window, and the
- * Changed badge's poll of `GET /v3/since/counts` (roll 85: its `needs_you`
+ * Changed badge's poll of `GET /v3/since/counts` (its `needs_you`
  * is the same paged-only predicate as the list, `NEEDS_YOU_SQL`).
  *
- *   NEEDS YOU   the alert log's open episodes that PAGED (the owner's rule:
- *               "needs you" shows what actually paged). S-1's section also
+ *   NEEDS YOU   the alert log's open episodes that PAGED ("needs you"
+ *               shows what actually paged). The section also
  *               carries open episodes at medium and above that did not page
  *               (`why: open_at_severity`); the phone leaves those to Watch.
  *   CHANGED     the Board's ranked list (`lib/morningReadBands::changedList`,
@@ -123,7 +123,7 @@ export function badgeCount(counts: PhoneSinceCounts | null | undefined, since: P
   return pagedOnly(since).length
 }
 
-/** Only what paged (the owner's rule), worst first as the server ranks them. */
+/** Only what paged, worst first as the server ranks them. */
 export function pagedOnly(since: PhoneSince | null | undefined): NeedsYouEpisode[] {
   return (since?.needs_you?.items ?? []).filter((e) => e.why === 'paged' || !!e.last_paged_at)
 }

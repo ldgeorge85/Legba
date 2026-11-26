@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W11-F150 / W11-F155 regressions on the consult surface.
+"""Regressions on the consult surface.
 
 * the per-round tool-result bound must re-render from the RAW result, so a
   result trimmed once is never trimmed again with its ``rows_total`` replaced
@@ -141,7 +141,7 @@ async def test_census_resolves_every_drill_ref_kind_and_the_unclassified_ones():
 
 
 # ---------------------------------------------------------------------------
-# W11-F150 survey/paging x the per-round trimmer (roll 59 merge follow-up)
+# Survey/paging x the per-round trimmer
 # ---------------------------------------------------------------------------
 
 

@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Conftest for the Journal Wave 2 (consolidation tier) tests.
+"""Conftest for the Journal consolidation-tier tests.
 
-ISOLATION (same rule as Wave 1): these tests run against a DISPOSABLE throwaway
+ISOLATION (same rule as the instrument-tool tests): these tests run against a DISPOSABLE throwaway
 Postgres+AGE container — NEVER the live ``legba`` / ``legba-postgres-1``. We
-REUSE the Wave-1 disposable harness verbatim (same 5544 default, same fresh
+REUSE the instrument-tool disposable harness verbatim (same 5544 default, same fresh
 per-session ``legba_w1_test_<uuid>`` DB created + dropped), so there is one
 disposable fixture, not two. Run with::
 

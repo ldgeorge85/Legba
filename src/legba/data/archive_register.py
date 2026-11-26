@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Register the evidence archive into ``fetch_versions`` BY HASH (lane B-1).
+"""Register the evidence archive into ``fetch_versions`` BY HASH.
 
 ``evidence_archive`` (migration 0104) holds the evidence archiver's copy of a
 cited signal's page, one row per signal, the bytes in the content-addressed

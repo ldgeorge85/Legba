@@ -2,14 +2,13 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Re-extraction tool for ALREADY-STORED JS-wall/bot-check/redirect garbage
-bodies (V-E1 historical backfill).
+bodies (historical backfill).
 
-planning/VERIFY_PATH_STRUCTURAL_FIXES_SPEC_2026-07-31.md §V-E1: the
-``evidence_archiver`` deny-gate (:func:`legba.data.analysts.deterministic_
+The ``evidence_archiver`` deny-gate (:func:`legba.data.analysts.deterministic_
 handlers.evidence_archiver._match_wall_pattern`) rejects a JS-wall/bot-check/
 redirect-interstitial body AT EXTRACTION TIME, going forward. It does nothing
 for rows the OLD (un-gated) code already wrote. A read-only live-DB audit
-(2026-07-31) found the SAME artifact JUDGE_READOUT §5 named ("JavaScript is
+(2026-07-31) found the SAME artifact ("JavaScript is
 disabled in your browser" — Le Monde) sitting in 86 rows
 (lemonde.fr x83, press.un.org x3), plus 148 france24.com rows ("One of your
 browser extensions seems to be blocking the video player..."), 83 en.irna.ir
@@ -47,7 +46,7 @@ Per-row correction (``--apply`` only):
      STRIP ``payload.archived_text`` and ``payload.archived_text_chars``
      entirely (counted ``stripped``). The ``evidence_archive`` sidecar's
      ``text_extracted`` is reset to ``false`` — the row returns to exactly
-     the state it would be in had V-E1 existed at original archive time:
+     the state it would be in had the deny-gate existed at original archive time:
      "bytes archived, text not (yet) successfully extracted."
   4. Genuinely clean now (rare — e.g. a decode/library difference) ->
      UPGRADE: write the new text + char count (counted ``upgraded``).
@@ -323,7 +322,7 @@ async def main() -> int:
     ap = argparse.ArgumentParser(
         description="Find + (with --apply) correct ALREADY-STORED JS-wall/"
         "bot-check/redirect garbage bodies in signals.payload.archived_text "
-        "(V-E1 historical backfill). Dry-run by default.",
+        "(historical backfill). Dry-run by default.",
     )
     ap.add_argument("--apply", action="store_true",
                     help="execute (default: dry-run, read-only)")

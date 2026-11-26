@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Register the Desk Baseline analyst descriptor (P3-7 CAST-recipe baseline).
+"""Register the Desk Baseline analyst descriptor (CAST-recipe baseline).
 
 Reads ``descriptors/analyst_desk_baseline.yaml`` and POSTs it to the registry.
 Idempotent: if a head row is already present we report it and exit 0 without
@@ -14,7 +14,7 @@ that, on its DAILY cadence, computes a falsifiable quantitative prior per desk
 uncertainty band + current-window deviation, plus the CAST feature recipe —
 into the ``desk_baselines`` sidecar (migration 0103, which MUST be applied
 first) and emits an honest distribution finding. NOT a forecast (no Brier / no
-skill / no prediction-as-claim); the deviation feeds the P1-3
+skill / no prediction-as-claim); the deviation feeds the
 baseline_deviation trigger + gives desk LLM reads a prior, and the
 ``/eval/desk_baselines`` route projects the sidecar.
 

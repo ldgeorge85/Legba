@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W7 TAXON-1 — four code-literal vocabularies become registered families.
+"""Four code-literal vocabularies become registered families.
 
 ``salience_class`` / ``collection_gap_kind`` / ``band`` / ``source_layer``
 are platform vocabulary families seeded by the bring-up walker from the

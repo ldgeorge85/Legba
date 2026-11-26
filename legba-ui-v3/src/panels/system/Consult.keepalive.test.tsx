@@ -5,7 +5,7 @@
  * comment never reaches script). The panel shows "synthesising · Ns" on the
  * last round while keepalives vouch for the silence, "working · Ns" when the
  * drilling has not visibly ended, and nothing at all for a silence no
- * keepalive has vouched for — the 2026-09-28 "hung at round 8" read.
+ * keepalive has vouched for.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""X2 lane C1 — consult first-class: usage per turn, judged-or-labelled, the
+"""Consult first-class: usage per turn, judged-or-labelled, the
 usage route, and the per-turn ceiling knob (declared, off, refusing loud).
 
 THE DONE TEST is the first one: ten live-shaped consult turns go through the
@@ -163,7 +163,7 @@ _TURNS: list[tuple[str, Any, Any]] = [
     ("core", _receipt(priced=False),
      {"state": "unassessable", "score": None, "reason": "no_cited_claims"}),
     # A runtime that (wrongly) stamped the fleet's 0.5 on an unassessable
-    # turn: the front door strips the number — W11-F29.
+    # turn: the front door strips the number.
     ("core", _receipt(priced=False),
      {"state": "unassessable", "score": 0.5, "reason": "no_checkable_claims"}),
     ("core", _receipt(priced=False),
@@ -245,7 +245,7 @@ async def test_ten_live_shaped_turns_persist_usage_and_a_stamp(pg_pool, monkeypa
             ver = json.loads(row["verification"])
             assert row["request_id"] == bodies[i]["request_id"]
             assert row["synthesis_status"] == "complete"
-            # USAGE — always the receipt, never `{}` (W1-F1).
+            # USAGE — always the receipt, never `{}`.
             assert usage["schema"] == "consult_usage/1"
             assert usage["plane"] == plane
             assert usage["route"] == consult_api.CONSULT_MODEL_ALLOWLIST[plane]
@@ -339,7 +339,7 @@ async def test_a_failed_run_persists_its_label_and_the_usage_reason(pg_pool, mon
 
 @pytest.mark.asyncio
 async def test_a_deep_answer_turn_carries_both_labels(pg_pool):
-    """W1-F2 — the deep task's answer turn (written by the status poll) says
+    """The deep task's answer turn (written by the status poll) says
     its usage was not carried and that it was not judged; never blank."""
     from legba.data.registry import consult_persistence
 
@@ -373,7 +373,7 @@ async def test_a_deep_answer_turn_carries_both_labels(pg_pool):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("value", ["0", "-1", "two dollars"])
 async def test_the_turn_ceiling_knob_refuses_loud_when_invalid(pg_pool, monkeypatch, value):
-    """Q-1 closed SEAMS #72: a positive ceiling is enforced by the runner
+    """Closed SEAMS #72: a positive ceiling is enforced by the runner
     (``consult_turn_cost``); a value that cannot be enforced still refuses."""
     queue: deque = deque()
     monkeypatch.setattr(consult_api.httpx, "AsyncClient", _sidecar(queue))

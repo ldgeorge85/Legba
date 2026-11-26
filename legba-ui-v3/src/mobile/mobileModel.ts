@@ -221,7 +221,7 @@ export function titleLead(title: string | null | undefined): string {
  * The lead sentence of a markdown body (the assessment channel's shape).
  *
  * The body opens with an italic as-of slice, then a `**BLUF:**` line, then
- * `##` sections. The thread the operator wants is the BLUF — which a naive
+ * `##` sections. The thread a reader wants is the BLUF — which a naive
  * "first line that isn't italic" rule SKIPS, because `**BLUF:**` also starts
  * with an asterisk, landing on the `## The picture` heading instead. So the
  * BLUF is sought explicitly, headings are never eligible, and the emphasis
@@ -291,8 +291,8 @@ export function readSubjectTitle(
 }
 
 /**
- * M-0a, roll 84 — the path that reads ONE read at full weight when it is
- * opened: `GET /findings/{id}` (P-8), exact and one row. `null` when the row is
+ * The path that reads ONE read at full weight when it is
+ * opened: `GET /findings/{id}`, exact and one row. `null` when the row is
  * not in the summary page (an old link): the caller then says the read is not
  * in the loaded window, as before.
  */

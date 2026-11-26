@@ -41,6 +41,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Awaitable, Callable, Mapping, Protocol, runtime_checkable
 
+from ..schemas.env_refs import resolve_model_env_refs
+from ..schemas.legacy_name_digests import canonical_nlp_provider
 from ..schemas.stack import (
     EmbeddingServiceConfig,
     LLMProviderConfig,
@@ -506,10 +508,11 @@ class NLPServiceChecker:
         path = health_path.raw if health_path is not None else "/health"
         url = f"{endpoint}{path}"
 
-        # W11-F107: the innoai gateway is Bearer-only and has no /health — its
+        # The model gateway is Bearer-only and has no /health — its
         # model list answering 200 IS the liveness signal.
         provider_field = getattr(cfg, "provider", None)
-        gateway = provider_field is not None and provider_field.raw == "innoai_gateway"
+        gateway = provider_field is not None and canonical_nlp_provider(
+            str(provider_field.raw)) == "bearer_gateway"
         if gateway and path == "/health":
             url = f"{endpoint}/models"
         headers: dict[str, str] = {}
@@ -597,12 +600,12 @@ _SCHEME_DEFAULT_PORTS = {"http": 80, "https": 443}
 
 
 def _split_probe_endpoint(endpoint: str, default_port: int) -> tuple[str | None, int]:
-    """``(host, port)`` for a TCP reachability probe (W11-F97).
+    """``(host, port)`` for a TCP reachability probe.
 
     An explicit port wins; otherwise a written ``http``/``https`` scheme
     decides (80 / 443); only a scheme-less ``host`` falls back to
     ``default_port``. ``_split_endpoint`` ignores the scheme, so the embedding
-    probe of ``https://api.innoai.net/v1`` reported ``tcp api.innoai.net:80``
+    probe of ``https://gateway.example.invalid/v1`` reported ``tcp gateway.example.invalid:80``
     — a port the https client never dials.
     """
     _, host, port = _split_full_endpoint(endpoint, default_port, scheme_port=True)
@@ -867,8 +870,13 @@ class StackHealthDispatcher:
                 detail=f"no checker registered for kind={kind!r}",
             )
         else:
-            resolved = ResolvedConfig(config=typed_config, resolver=resolver)
             try:
+                # ${env:NAME} fields resolve from this process's environment;
+                # an unset one makes the probe UNHEALTHY, naming the variable.
+                typed_config = resolve_model_env_refs(
+                    typed_config, component_id=component_id,
+                )
+                resolved = ResolvedConfig(config=typed_config, resolver=resolver)
                 health = await checker.check(component_id, resolved)
             except Exception as exc:
                 logger.exception("checker for %s raised", component_id)

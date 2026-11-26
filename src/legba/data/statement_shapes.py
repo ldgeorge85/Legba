@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The statement gates' INPUT and OUTPUT shapes — the interface lane S3 (typing
-and verifier seats), S1 (the store) and S4 (the backfill) build against.
+"""The statement gates' INPUT and OUTPUT shapes — the interface the typing and
+verifier seats, the store and the backfill build against.
 
 WHAT THIS IS. The code gates in :mod:`legba.data.statement_gate` decide whether
 a proposed statement's support survives the checks code can run without a
-model (plan P1 §3: G1 quote, G2 content, G3 handed rows, G7 independence, G8
+model (G1 quote, G2 content, G3 handed rows, G7 independence, G8
 support roles, G13 access ceiling). They are pure functions over three inputs:
 
 * a **statement** (:class:`StatementLike`) — text, kind, subject, valid time,
@@ -16,21 +16,20 @@ support roles, G13 access ceiling). They are pure functions over three inputs:
   of each cited fetch version, signal and observation, resolved by the caller.
 
 STORAGE-NEUTRAL ON PURPOSE. Whether statements land in a new layer beside
-``facts`` or in an extension of ``facts`` is still the owner's decision (plan
-§1.2 d03). Nothing here names a table, a column type or an ORM class. The
+``facts`` or in an extension of ``facts`` is still undecided. Nothing here names a table, a column type or an ORM class. The
 inputs are :class:`typing.Protocol` s that any row object satisfies by
 attribute — the frozen dataclasses below, a ``SimpleNamespace``, an asyncpg
 ``Record`` wrapped in one, or a future store's own row type. Field names follow
-the plan's §2.1 column names so a row of either storage shape maps 1:1.
+the column names so a row of either storage shape maps 1:1.
 
-THE CLAIM SOURCE CLASS IS AN INPUT. A parallel lane is building the source
-class that marks a source as a party making claims; its field name is not
-final. The gates never import that lane: a support row carries
+THE CLAIM SOURCE CLASS IS AN INPUT. The source class that marks a
+source as a party making claims is built separately and its field name is not
+final. The gates never import it: a support row carries
 ``source_class`` as a :class:`SourceClass` (or its string value), and the
 caller maps whatever field lands to it with :func:`coerce_source_class`.
 
 A LEAF: stdlib only — no I/O, no model, no package import beyond the stdlib,
-so every lane may import it without closing a cycle.
+so every module may import it without closing a cycle.
 """
 from __future__ import annotations
 
@@ -65,7 +64,7 @@ class _StrEnum(str, enum.Enum):
 
 
 class StatementKind(_StrEnum):
-    """Plan §2.1 ``statements.kind`` — decides how a statement ages."""
+    """``statements.kind`` — decides how a statement ages."""
 
     EVENT = "event"
     STATE = "state"
@@ -81,7 +80,7 @@ class StatementKind(_StrEnum):
 
 
 class SubjectKind(_StrEnum):
-    """Plan §1.3 / §2.1 — the one subject reference type shared with the
+    """The one subject reference type shared with the
     knowledge design (``subject_kind``, ``subject_key``)."""
 
     TARGET = "target"
@@ -91,7 +90,7 @@ class SubjectKind(_StrEnum):
 
 
 class SupportRole(_StrEnum):
-    """Plan §2.1 ``statement_support.role``. Only ``evidence`` counts toward
+    """``statement_support.role``. Only ``evidence`` counts toward
     support; ``contradicts`` is kept and shown."""
 
     EVIDENCE = "evidence"
@@ -101,8 +100,8 @@ class SupportRole(_StrEnum):
 
 
 class SupportKind(_StrEnum):
-    """Plan §2.1 ``statement_support.support_kind`` (``person_assertion`` is
-    dropped by merged-note row 5; ``fact`` is background-only)."""
+    """``statement_support.support_kind`` (``person_assertion`` is
+    dropped; ``fact`` is background-only)."""
 
     SIGNAL = "signal"
     OBSERVATION = "observation"
@@ -127,7 +126,7 @@ class SourceClass(_StrEnum):
 
 class TextOrigin(_StrEnum):
     """Which stored text a quote was checked against — the row records which
-    (plan §3 G1: "the row records which")."""
+    (G1: "the row records which")."""
 
     FETCH_VERSION = "fetch_version"
     #: B-1: the ITEM as the response carried it (a slice of the fetch version
@@ -153,19 +152,19 @@ class QuoteFoundIn(_StrEnum):
 
 
 class ValidFromPrecision(_StrEnum):
-    """Plan §2.1 ``valid_from_precision``."""
+    """``valid_from_precision``."""
 
     DAY = "day"
     MONTH = "month"
     UNKNOWN = "unknown"
 
 
-#: The four closed slot names (plan §2.1 ``slots`` — "predicate, value, unit,
+#: The four closed slot names (``slots`` — "predicate, value, unit,
 #: counterpart"), kind-checked in code.
 SLOT_NAMES: frozenset[str] = frozenset({"predicate", "value", "unit", "counterpart"})
 
 #: The value a support row carries when its source declares no access class.
-#: Its own value — never silently promoted to ``public`` (design B1 §3).
+#: Its own value — never silently promoted to ``public``.
 UNDECLARED_ACCESS = "undeclared"
 
 
@@ -221,7 +220,7 @@ class StatementLike(Protocol):
 
 @runtime_checkable
 class SupportLike(Protocol):
-    """One support edge, as the gates read it (plan §2.1 ``statement_support``
+    """One support edge, as the gates read it (``statement_support``
     plus the three inputs the store copies at write: ``published_at``,
     ``title``, ``source_class``).
 

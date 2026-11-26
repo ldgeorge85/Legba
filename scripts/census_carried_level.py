@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Carried-state census, before and after level-shaped indicators (X4 LEVEL,
-W11-F36) — READ-ONLY.
+"""Carried-state census, before and after level-shaped indicators
+— READ-ONLY.
 
 Over every bounded unit's head on every desk (the newest read per unit and
 subject produced in the last ``--head-days``), three columns:
 
-BEFORE — the carried-state rule as it stood at 765cc216: a status-bearing head
+BEFORE — the carried-state rule as it stood before level-shaped indicators: a status-bearing head
     with no ``triggered`` indicator whose newest ``triggered`` read is older
     than N of the unit's cadence windows is ``carried_unsupported``.
 

@@ -1,7 +1,7 @@
-# S-1 — EIA daily crude spot prices (Europe Brent, WTI Cushing) as SERIES.
+# EIA daily crude spot prices (Europe Brent, WTI Cushing) as SERIES.
 # Ships DRAFT. Kind: series_api (the generic series kind, no provider code).
 #
-# WHY: forecast F6 (sealed 2026-11-11) asks whether "EIA Brent spot (series
+# WHY: a forecast asks whether "EIA Brent spot (series
 # RBRTE) is at or above $100/bbl on 2026-12-31 (the last trading day before,
 # if 12-31 is a holiday)". WTI (RWTC) comes from the same
 # route in the same request at no extra cost.
@@ -28,13 +28,13 @@
 # Date 11/18/2026", newest value 2026-11-11. So a poll is daily, most polls
 # write nothing, and each re-reads lag_days + revision_days (2 + 30) days so a
 # revised value is a new vintage. The first poll reads 400 days back (covers
-# F6's sealing on 2026-11-11, its date 2026-12-31 and a 35-day detector
+# a forecast's sealing date, its resolution date and a 35-day detector
 # baseline many times over: ~560 rows, one page).
 #
 # The row's record_time is the poll that first saw the value (the release it
 # came in). The API requires registration (a free key); one request a day here.
 #
-# Register / activate: see the S-1 lane report (orchestrator steps). Needs the
+# Register / activate: through the registry (see LIFECYCLE.md). Needs the
 # key in the vault first; without it the poll refuses loud
 # (SeriesApiAuthNotConfigured / a vault miss), it never polls unauthenticated.
 
@@ -46,7 +46,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: s_1_series_sources
+  owner: owner@local
   created: "2026-11-13T00:00:00Z"
 
 scope:

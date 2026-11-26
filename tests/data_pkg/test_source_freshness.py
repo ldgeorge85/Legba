@@ -122,7 +122,7 @@ def test_warn_multiple_contract():
 
 # ---------------------------------------------------------------------------
 # next_fire_after — the "when does this next run" half, added for the typed
-# absence route's `expires_at` stamp (lane k5).
+# absence route's `expires_at` stamp.
 # ---------------------------------------------------------------------------
 
 

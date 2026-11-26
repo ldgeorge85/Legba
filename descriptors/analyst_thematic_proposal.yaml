@@ -9,7 +9,7 @@
 # targets.py) to give that situation its own focused signal slice + dedicated
 # analyst.
 #
-# Capability model (ratified): analysts PROPOSE, operators ACTIVATE — NO
+# Capability model: analysts PROPOSE, operators ACTIVATE — NO
 # control-plane writes. This handler NEVER registers a target; it emits a single
 # FINDING whose data.proposals lists the candidate frames. Once a thematic
 # target covers a situation (its predicate mentions the situation's terms), the
@@ -31,7 +31,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: active
-  owner: thematic_proposal
+  owner: owner@local
 
 subscription:
   # No `targets` block → META analyst: one global sweep per cadence tick over the

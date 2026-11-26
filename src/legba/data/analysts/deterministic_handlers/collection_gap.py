@@ -670,7 +670,7 @@ _EXISTING_NATURAL_KEYS_SQL = (
     "WHERE natural_key = ANY($1::text[])"
 )
 
-#: Who writes these rows (lane 9): this deterministic rule, named once.
+#: Who writes these rows: this deterministic rule, named once.
 _WRITTEN_BY = rule_handle("collection_gap")
 
 _INSERT_REQUIREMENT_SQL = f"""

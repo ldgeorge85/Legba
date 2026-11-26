@@ -11,25 +11,24 @@ Reads the operator's ``R5_SCORESHEET.csv`` plus the bundle (for the Read-1/Read-
   * guess accuracy — how much of the result rests on a blind that held
   * an explicit verdict block stating what THIS result implies
 
-WHAT EACH OUTCOME MEANS (review3 §9, review1 §9)
-------------------------------------------------
-The reviews wrote the interpretation in advance, which is the only reason this
+WHAT EACH OUTCOME MEANS
+-----------------------
+The interpretation is written in advance, which is the only reason this
 experiment is worth running — the conclusion cannot be negotiated after seeing
 the number.
 
   TOWER SWEEPS (3-0 preference, positive axis deltas)
-      review3 §9: *"If Legba wins, the cathedral has a congregation."*
+      A win would show the pipeline earns its complexity.
       But n=3 cannot clear significance: a 3-0 sweep is p=0.25 two-sided. This
       is a SCREENING PASS, not a result. It licenses the decision-grade run
       (n>=10 desks via the harness's ``--desks``), and it does not license a
       product claim until that run lands.
 
   TOWER LOSES OR TIES
-      review1 §9: *"If no reported number moves, that is the most important
-      finding the project will ever produce and it belongs at the top of
-      STATUS.md."*
-      review3 §9: everything else — *"the receipts, the seams, the chorus diff —
-      is ornamentation on a very well-documented RSS reader with a diary."*
+      If no reported number moves, that is the most important finding the
+      project can produce and it belongs at the top of STATUS.md. Absent a win,
+      the receipts, the seams and the chorus diff are ornamentation on a
+      well-documented RSS reader.
       n=3 is ENOUGH to act on a loss. A pipeline of this size losing to one
       prompt on even one desk out of three is a finding; losing or tying on the
       aggregate is a verdict. No larger n is required to justify investigating.

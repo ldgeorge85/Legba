@@ -112,7 +112,7 @@ async def test_calibration_runs_over_seeded_hypotheses(pg_pool):
     assert all(r["claim_kind"] == "hypothesis" for r in mine)
     # Exogenous outcomes read straight off resolved_outcome (1/1/0).
     assert sorted(r["outcome"] for r in mine) == [0, 1, 1]
-    # Claimed confidence is SIGNED (lane E): balance +3 -> 0.95, -3 -> 0.05,
+    # Claimed confidence is SIGNED: balance +3 -> 0.95, -3 -> 0.05,
     # +2 -> 0.8 — strong evidence AGAINST a thesis is low confidence IN it.
     assert sorted(round(r["claimed_confidence"], 2) for r in mine) == [0.05, 0.8, 0.95]
 

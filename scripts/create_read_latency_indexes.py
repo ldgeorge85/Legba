@@ -3,9 +3,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Build the read-latency indexes out of transaction — DRY RUN by default.
 
-Lane R-1, the out-of-transaction half of migrations 0251 and 0257 (lane P-5).
-Those migrations build their indexes only on a small table; on the live tables
-(signals ~436k rows, analyst_outputs ~200k, audit_checkpoints ~290k) the build
+The out-of-transaction half of migrations 0251, 0257 and
+20261125T0844_trace_bulk_bundles. Those migrations build their indexes only on
+a small table; on the live tables (signals ~436k rows, analyst_outputs ~200k,
+audit_checkpoints ~290k, analyst_traces ~137k) the build
 is this script's job, because the runner holds every migration inside one
 transaction and CREATE INDEX CONCURRENTLY cannot run there.
 
@@ -55,6 +56,11 @@ INDEXES: dict[str, tuple[str, str]] = {
         "public.audit_checkpoints",
         "ON public.audit_checkpoints USING btree (chain_head_hash)",
     ),
+    "idx_analyst_traces_bulk_pending": (
+        "public.analyst_traces",
+        "ON public.analyst_traces USING btree (run_started_at, analyst_id)"
+        " WHERE (bulk_bundle_id IS NULL)",
+    ),
 }
 
 #: name -> the migration file that carries the same definition.
@@ -66,6 +72,7 @@ MIGRATION_OF: dict[str, str] = {
         "0257_critique_and_checkpoint_read_indexes.sql",
     "idx_audit_checkpoints_chain_head":
         "0257_critique_and_checkpoint_read_indexes.sql",
+    "idx_analyst_traces_bulk_pending": "20261125T0844_trace_bulk_bundles.sql",
 }
 
 

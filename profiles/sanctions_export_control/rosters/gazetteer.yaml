@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# THE GAZETTEER of the sanctions / export-control skeleton (W10 CANON-1). It
+# THE GAZETTEER of the sanctions / export-control skeleton. It
 # declares ONLY what this case can honestly supply today: the polity universe
 # (a regime is a jurisdiction's, and a counterparty has one — so a country name
 # a designation prints still types `country`) and the spellings of the four
@@ -21,8 +21,8 @@
 #     is a per-country-desk guard;
 #   * demonym_map / region_adjective_map / known_regions / iso2_home_aliases /
 #     irregular_demonyms / slug_to_abbrev / screen_stopwords — no curated
-#     geography beyond the authorities is claimed here. INST-2 adds what the
-#     instance actually needs (counterparty jurisdictions, programme names).
+#     geography beyond the authorities is claimed here. An instance adds what it
+#     actually needs (counterparty jurisdictions, programme names).
 #
 # Declared by profile.yaml `rosters.gazetteer`; loaded by
 # src/legba/data/gazetteer.py (closed). docs/PROFILES.md "The gazetteer".

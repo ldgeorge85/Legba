@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The held family (data-model lane 10, DM-C): what one desk shadow record
+"""The held family: what one desk shadow record
 would put in the record — the rules, as a pure plan.
 
 The tables are migration ``20261115T1940_held_record`` (``assertions``,

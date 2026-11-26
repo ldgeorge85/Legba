@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""K-4 R4 F3/F4 — the article-id URL identity and the URL-embedded-date read.
+"""R4 F3/F4 — the article-id URL identity and the URL-embedded-date read.
 
 F3 (the slug-rewrite class): the same Dawn article id served under every
 headline the story has worn defeated every canonical-URL dedupe surface —

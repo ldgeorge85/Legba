@@ -11,9 +11,7 @@
 # operator credential setup) — the lowest-friction bind of the 5 adapters in
 # this pass.
 #
-# ⚠ CORRECTION vs the source CODE_CLEANUP_ANALYSIS_2026-08-02.md list: that
-# doc's "Never-bound source adapters" table used the MODULE filename
-# (`common_crawl`) as if it were the dispatch kind. It is not.
+# NOTE: the dispatch kind is not the module filename (`common_crawl`).
 # `source_factory.discover_source_kinds()` keys its registry by the handler
 # CLASS's `kind: ClassVar[str]` attribute, which for
 # `CommonCrawlNewsSourceHandler` is `"common_crawl_news"`, not
@@ -34,7 +32,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: w1e_built_but_unbound
+  owner: owner@local
   created: "2026-08-03T00:00:00Z"
 
 scope:
@@ -43,7 +41,7 @@ scope:
   languages: [en]
   tags: [backfill, news, historical, global]
   source_class: analysis
-  access_class: restricted          # Wave-E — never-bound draft adapter; no concrete source to review terms for — fail-closed until classified at activation
+  access_class: restricted          # never-bound draft adapter; no concrete source to review terms for — fail-closed until classified at activation
 
 acquisition: poll
 

@@ -48,7 +48,7 @@ export const ABSENCE_VOCABULARY = {
     meaning:
       'A memory-only verdict: every citation was the unit\'s own prior read or window ledger, so its score is a ' +
       'capped gate number, not a grade. Counted beside the means ("N carried, ungraded"), never averaged into them.',
-    source: 'lib/evalOps.ts CARRIED_UNGRADED (SW-9)',
+    source: 'lib/evalOps.ts CARRIED_UNGRADED',
   },
   floor_honoured: {
     phrase: 'floor honoured',

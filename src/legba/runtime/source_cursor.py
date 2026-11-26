@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The poll-path ``since`` cursor policy (W11-F151), a leaf beside ``source_actor``.
+"""The poll-path ``since`` cursor policy, a leaf beside ``source_actor``.
 
 INCIDENT 2026-11-05 (consult dig 01): seven live feeds were polling "empty"
 while their documents carried items we never ingested — ISW lost 17 of 20

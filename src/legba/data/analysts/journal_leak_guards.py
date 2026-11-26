@@ -17,7 +17,7 @@ class NarrateToolCallLeakError(RuntimeError):
     """The NARRATE completion returned raw tool-call JSON as the entry body
     (task #236) even after one retry with a hard prose-only instruction.
 
-    Caught live 2026-07-24: the core-plane model (gpt-oss-120b) sometimes
+    Caught live 2026-07-24: the core-plane model sometimes
     emits its LAST turn as bare tool-call JSON — e.g.
     ``{"tool": "get_assessments", "args": {}}`` (39 chars) — instead of prose,
     and (pre-fix) that JSON became BOTH the journal entry's body AND its

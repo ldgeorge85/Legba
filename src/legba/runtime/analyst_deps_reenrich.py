@@ -16,7 +16,7 @@ threaded onto its ``deps.extras``:
     rebuild a row's source descriptor and run the very chain the ingest path
     runs.
 
-A fourth, ``verify_backfill`` (W11-F84), is not a re-enrichment but rides the
+A fourth, ``verify_backfill``, is not a re-enrichment but rides the
 same dispatch for the same reason (one call in the builder, which sits at its
 ceiling): it re-runs the faithfulness verify leg over cited findings left with no
 critique, and needs only the registry client (the secrets resolver is already on
@@ -81,7 +81,7 @@ def _wire_verify_backfill(
     registry_client: Any | None,
 ) -> StandardDeps:
     """Thread the registry client onto ``deps.extras`` for the verify-backfill
-    sweep (W11-F84) — it resolves each analyzed analyst's CURRENT judge chain
+    sweep — it resolves each analyzed analyst's CURRENT judge chain
     from its typed descriptor, as ``dapr_host`` does. Degrade-not-break: no
     client → ``deps`` unchanged and the sweep no-ops (``skipped_no_judge``)."""
     from dataclasses import replace as _dc_replace
@@ -108,7 +108,7 @@ async def _wire_reenrich_pending(
     registry_client: Any | None,
     source_enrichment_factory: Any | None,
 ) -> StandardDeps:
-    """Thread the pending sweep's two chains onto ``deps.extras`` (W11-F118).
+    """Thread the pending sweep's two chains onto ``deps.extras``.
 
     * The DESCRIPTOR chain: the registry client + the host's
       ``_source_enrichment_factory`` — the sweep fetches each row's source

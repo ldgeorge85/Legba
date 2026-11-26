@@ -1,4 +1,4 @@
-"""Lane E — forecast/calibration honesty (signed confidence, own-n, staleness,
+"""Forecast/calibration honesty (signed confidence, own-n, staleness,
 collection-volume exclusion, legacy label, one named threshold)."""
 from __future__ import annotations
 

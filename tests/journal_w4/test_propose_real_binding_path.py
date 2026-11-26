@@ -4,10 +4,10 @@
 
 WHY THIS FILE EXISTS. ``journal_propose`` was granted, registered, catalogued,
 bound end-to-end and covered by a green e2e test — and had **0 invocations
-EVER** in production (engine-review p5; confirmed live 2026-08-03 via
+EVER** in production (confirmed live via
 ``action_pack_invocations`` = no journal_propose row, ``governor_events`` = not
 one decision of ANY kind for the pack, ``journal_proposals`` = 0). The existing
-``test_gather_propose_e2e`` is the standing exhibit for the operator's rule
+``test_gather_propose_e2e`` is the standing exhibit for the rule
 "tests must traverse the REAL binding path": it calls :func:`_gather` DIRECTLY
 with ``binding=None``, a hand-built ``tool_bindings`` dict, and a hand-built
 META self-allow (``target_allows=grants``) — three of the four legs production
@@ -29,8 +29,7 @@ WHAT THIS TEST TRAVERSES INSTEAD, in production order:
      ``dapr_actors`` shapes them (``gather_tool_bindings`` +
      ``gather_write_prompt_fragments``);
   4. ``Agency.run_pack_tool`` → resolve ∩ allow ∩ applicability → governor →
-     the ``action_pack_invocations`` ledger — the counter the operator's own
-     audit rule says is the proof of life;
+     the ``action_pack_invocations`` ledger — the counter that is the proof of life;
   5. the ``journal_proposals`` row.
 
 Assert 4 explicitly: a test that produces a proposal row but no invocation row

@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for :class:`legba.data.sources.intelmq.IntelMQCollectorBridge` (L-140).
+"""Tests for :class:`legba.data.sources.intelmq.IntelMQCollectorBridge`.
 
 Coverage:
 
   * Config schema validation (mode literal, required queue in redis_pipe mode).
-  * Conformance with the L-102 source-kind class-var contract.
+  * Conformance with the source-kind class-var contract.
   * IDF -> Signal translation:
       - uuid preserved as ``Signal.signal_id`` when it parses
       - time.source -> payload["published_at"]
@@ -169,7 +169,7 @@ def _make_ctx(
 
 
 def test_handler_contract_classvars():
-    """L-102 §2 source-kind class-vars are populated."""
+    """§2 source-kind class-vars are populated."""
     assert IntelMQCollectorBridge.kind == "intelmq_collector_bridge"
     assert IntelMQCollectorBridge.family == "source"
     assert IntelMQCollectorBridge.schema_version.startswith(
@@ -180,7 +180,7 @@ def test_handler_contract_classvars():
 
 
 def test_factory_function_returns_class():
-    """handler() returns the class per L-102 §1 registration convention."""
+    """handler() returns the class per §1 registration convention."""
     assert handler() is IntelMQCollectorBridge
 
 

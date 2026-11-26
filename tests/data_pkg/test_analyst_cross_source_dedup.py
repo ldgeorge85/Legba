@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""P-09 tests for the ``cross_source_dedup`` deterministic sub-handler.
+"""Tests for the ``cross_source_dedup`` deterministic sub-handler.
 
 Two layers:
 
@@ -8,14 +8,14 @@ Two layers:
     canonical selection over pre-shaped input rows. No substrate needed; runs
     in every CI lane.
   * **Live pivot DB** (env-gated, ``LEGBA_PIVOT_PG_DSN`` or the dev-rig default)
-    — the P-09 acceptance: insert the same content via 2 ``source_id``s into the
+    — the acceptance: insert the same content via 2 ``source_id``s into the
     ``legba_pivot_test`` ``signals`` table, run the handler, and assert it links
     1 canonical + 1 alias with BOTH raw rows preserved and a ``canonical_only``
     subscription seeing exactly 1. Skips cleanly when the dev rig is down.
 
 The dispatcher contract (registered in
-:data:`legba.data.analysts.deterministic.SUB_HANDLERS`) is asserted too — P-09
-requires this be a *first-class* deterministic sub-handler, not hidden magic.
+:data:`legba.data.analysts.deterministic.SUB_HANDLERS`) is asserted too — the
+requirement is that this be a *first-class* deterministic sub-handler, not hidden magic.
 """
 
 from __future__ import annotations
@@ -112,7 +112,7 @@ class _FakeQdrant:
 
 
 # ---------------------------------------------------------------------------
-# Registration — P-09 demands a real registered deterministic sub-handler
+# Registration — requires a real registered deterministic sub-handler
 # ---------------------------------------------------------------------------
 
 
@@ -197,9 +197,9 @@ async def test_semantic_pool_qdrant_error_counts_the_candidate_not_the_pass():
 
 
 # ---------------------------------------------------------------------------
-# B-4 — the query_points migration + the LOUD client-contract failure
+# The query_points migration + the LOUD client-contract failure
 #
-# Root cause (P2 §2.1, 2026-08-02): `_qdrant_neighbours` reached the vector
+# Root cause: `_qdrant_neighbours` reached the vector
 # store through `getattr(qdrant, "recommend", None)` with an
 # `if recommend is None: return []` fallthrough. `recommend()` was deprecated in
 # qdrant-client 1.10 and REMOVED in favour of `query_points()`; the runtime
@@ -343,7 +343,7 @@ async def test_semantic_candidates_exclude_the_embedder_drain_sentinels():
 
 
 # ---------------------------------------------------------------------------
-# B-5 — THE NEIGHBOUR GATE
+# THE NEIGHBOUR GATE
 #
 # Filtering the CANDIDATE side is not enough. A neighbour arrives from Qdrant,
 # and the collection holds points the substrate no longer vouches for: orphans
@@ -461,7 +461,7 @@ async def test_a_fully_gated_candidate_never_becomes_a_canonical():
 
 
 # ---------------------------------------------------------------------------
-# B-5 — THE PAIRWISE-SCAN COLLAPSE
+# THE PAIRWISE-SCAN COLLAPSE
 #
 # The pass issued one query_points AND one Postgres PK lookup per candidate,
 # over an unbounded 99,946-row candidate set. It was the single largest analyst
@@ -728,7 +728,7 @@ async def pivot_pool():
 
 
 async def test_live_pivot_acceptance(pivot_pool):
-    """P-09 acceptance — same content via 2 sources => 1 canonical + 1 alias,
+    """Acceptance — same content via 2 sources => 1 canonical + 1 alias,
     both raw rows preserved, canonical_only sees 1, rerun idempotent."""
     import json
 

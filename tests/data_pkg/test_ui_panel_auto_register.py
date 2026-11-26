@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""L-192 wire-up: `DescriptorRegistry` auto-registers `ui_panel` outputs.
+"""Wire-up: `DescriptorRegistry` auto-registers `ui_panel` outputs.
 
-These tests pin down the contract the L-204 frontend relies on: when an
+These tests pin down the contract the frontend relies on: when an
 operator registers (or updates) a descriptor whose ``outputs`` block
 includes a ``ui_panel`` entry, a matching row materializes in
 ``ui_panel_registrations`` synchronously, inside the same DB transaction.
@@ -98,7 +98,7 @@ def _draft_target(*, descriptor_id: str, panels: list[OutputBinding],
         version="0" * 16,
         abstraction_level=AbstractionLevel.L1,
         state=state,
-        owner="lewis@local",
+        owner="owner@local",
         created=_FIXED_CREATED,
     )
     # Source-first pivot: targets reference SHARED sources via SourceRef
@@ -132,7 +132,7 @@ def _draft_analyst(*, descriptor_id: str,
             input_type="legba.x.In",
             output_type="legba.x.Out",
         ),
-        owner="lewis@local",
+        owner="owner@local",
     )
     return AnalystDescriptor(
         identity=identity,
@@ -176,7 +176,7 @@ async def test_register_target_with_ui_panel_materializes_row(
             title="Test overview",
         )],
     )
-    head = await registry.register(desc, actor="lewis@local")
+    head = await registry.register(desc, actor="owner@local")
 
     rows = await _panel_rows(pg_store, desc_id)
     assert len(rows) == 1
@@ -211,7 +211,7 @@ async def test_register_analyst_with_multiple_panels(
                           mode="above_ai"),
         ],
     )
-    head = await registry.register(desc, actor="lewis@local")
+    head = await registry.register(desc, actor="owner@local")
 
     rows = await _panel_rows(pg_store, desc_id)
     assert len(rows) == 2
@@ -236,7 +236,7 @@ async def test_register_without_ui_panel_outputs_is_noop(
 ):
     desc_id = f"t_nopanel_{uuid4().hex[:8]}"
     desc = _draft_target(descriptor_id=desc_id, panels=[])
-    await registry.register(desc, actor="lewis@local")
+    await registry.register(desc, actor="owner@local")
 
     rows = await _panel_rows(pg_store, desc_id)
     assert rows == []
@@ -261,13 +261,13 @@ async def test_retire_descriptor_retires_ui_panels(
             slot=f"dashboard.test.retire.{desc_id}",
         )],
     )
-    await registry.register(desc, actor="lewis@local")
+    await registry.register(desc, actor="owner@local")
 
     rows_before = await _panel_rows(pg_store, desc_id)
     assert len(rows_before) == 1
     assert rows_before[0]["retired"] is False
 
-    await registry.retire(desc_id, actor="lewis@local", family=Family.TARGET)
+    await registry.retire(desc_id, actor="owner@local", family=Family.TARGET)
 
     rows_after = await _panel_rows(pg_store, desc_id)
     assert len(rows_after) == 1
@@ -292,14 +292,14 @@ async def test_update_rotates_panel_rows_to_new_version(
         panels=[_panel_output(panel="target_overview", slot=slot,
                               title="v1 title")],
     )
-    head_v1 = await registry.register(desc_v1, actor="lewis@local")
+    head_v1 = await registry.register(desc_v1, actor="owner@local")
 
     desc_v2 = _draft_target(
         descriptor_id=desc_id,
         panels=[_panel_output(panel="target_overview", slot=slot,
                               title="v2 title")],
     )
-    head_v2 = await registry.update(desc_id, desc_v2, actor="lewis@local")
+    head_v2 = await registry.update(desc_id, desc_v2, actor="owner@local")
     assert head_v2.version != head_v1.version
 
     rows = await _panel_rows(pg_store, desc_id)

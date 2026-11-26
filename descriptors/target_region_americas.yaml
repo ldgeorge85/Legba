@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# target region_americas — the live head, folded into the tree 2026-10-04 (W6 SPLIT-1, DEC-13).
+# target region_americas — the live head, folded into the tree.
 # It was registered by scripts/bringup_register_region_targets.py;
 # scripts/bringup_register_descriptors.py now registers this file and nothing else does.
 # identity.version is the 16-zero placeholder: the registry stamps the content hash.
@@ -10,7 +10,7 @@ identity:
   id: region_americas
   inherits: []
   name: Region — Americas
-  owner: region_tier
+  owner: owner@local
   retire_after: null
   schema_uri: legba/target/2.0.0
   state: active

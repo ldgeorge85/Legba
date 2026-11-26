@@ -154,7 +154,7 @@ async def test_no_new_situations_run_is_trace_only():
 
 
 # ---------------------------------------------------------------------------
-# DQ P6 — snapshot/JSON name reject + steady_state tag + composition exclusion
+# snapshot/JSON name reject + steady_state tag + composition exclusion
 # ---------------------------------------------------------------------------
 
 
@@ -607,7 +607,7 @@ async def test_one_desk_materializes_one_frame_per_dimension(desk):
         assert frame["event_count"] == 3
         # `target_id` is resolved from the topic BEFORE the marker: a split frame
         # that lost it would vanish from its own desk's grounding read.
-        # W9 TAX-4: the column holds a registered class (`unclassified` here);
+        # The column holds a registered class (`unclassified` here);
         # the topic rides in data.category_raw, byte for byte.
         assert frame["category"] == "unclassified"
         assert json.loads(frame["data"])["category_raw"] == target

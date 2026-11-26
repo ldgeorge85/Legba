@@ -174,7 +174,10 @@ class StackTransport:
         if row is None:
             raise SystemExit(f"stack component {self.component_id!r} not found")
         body = json.loads(row["body"]) if isinstance(row["body"], str) else row["body"]
-        cfg = LLMProviderConfig.model_validate(dict(body["config"]), strict=False)
+        from legba.data.schemas.env_refs import resolve_config_env_refs
+
+        config = resolve_config_env_refs(body["config"], component_id=self.component_id)
+        cfg = LLMProviderConfig.model_validate(config, strict=False)
         sub = infer_llm_subprovider(self.component_id, endpoint=cfg.api_endpoint.raw)
         handler_cls = LLM_HANDLERS[sub]
         self._handler = handler_cls()
@@ -241,7 +244,7 @@ class OpenRouterTransport:
                 "Content-Type": "application/json",
                 # OpenRouter attribution headers — identify the caller.
                 "HTTP-Referer": "https://github.com/ldgeorge85/Legba",
-                "X-Title": "Legba K-G2 typing bake-off",
+                "X-Title": "Legba typing bake-off",
             },
         )
 

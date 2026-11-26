@@ -133,7 +133,7 @@ class AuditLogger:
         participates in the surrounding transaction (so it rolls back with
         the mutation on failure).
 
-        ``actor_role`` omitted (W11-F62) follows the principal the ``actor_id``
+        ``actor_role`` omitted follows the principal the ``actor_id``
         label names (``service:…`` -> ``service``, else ``operator``).
         """
         if actor_role is None:

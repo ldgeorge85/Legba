@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane N-U — ``scripts/unalias_valueless_id_urls_once.py`` against a real
+"""``scripts/unalias_valueless_id_urls_once.py`` against a real
 migrated Postgres: a dry run writes nothing; ``--apply`` restores every false
 tier-1 alias of a SPIP ``?article<N>`` host to its own canonical, re-points a
 genuine re-ingest at its article's first row, leaves a non-tier-1 link alone,

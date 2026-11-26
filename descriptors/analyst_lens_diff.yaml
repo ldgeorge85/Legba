@@ -1,5 +1,4 @@
-# lens_diff — the chorus DIFF pass (VOICES LV-1, DL-7; build spec
-# planning/VOICES_BUILD_DESIGN.md §3, plan planning/VOICES_PLAN_2026-07-21.md).
+# lens_diff — the chorus DIFF pass (VOICES LV-1, DL-7).
 #
 # The FIFTH id on the journal_assessor kind, fired AFTER the four faculties. The
 # kind module maps this id → entry_kind='lens_diff' in journal_entries — append-
@@ -15,7 +14,7 @@
 # right.
 #
 # Cadence: WEEKLY, 30min AFTER the last faculty (lens_intent 08:00) so all four
-# reads have landed (§4.1). Model plane: $0 core.
+# reads have landed. Model plane: $0 core.
 
 identity:
   id: lens_diff
@@ -28,7 +27,7 @@ identity:
     output_type: legba.runtime.Journal
     deps_type: legba.runtime.deps.StandardDeps
   state: active
-  owner: voices_lv1
+  owner: owner@local
 
 subscription:
   other_analysts: []
@@ -43,7 +42,7 @@ method:
   kind: llm_planner
   prompt_module: "legba.prompts.lens_diff:LENS_DIFF_SYSTEM"
   llm:
-    # Model-card sampling (gpt-oss ships generation_config temperature=1.0; the vLLM
+    # Model-card sampling (the core model ships generation_config temperature=1.0; the vLLM
     # client always sends temperature, so the card default can never apply on its own).
     # Fleet-wide per the 2026-07-24 sampling audit + A/B (+0.055 faith at 1.0).
     temperature: 1.0
@@ -56,11 +55,10 @@ method:
       raw: llm.primary.openai_compat
       expected_family: llm_provider
     narrate:
-      thinking: "on"   # T-2: the VOICE thinks; GATHER and PROPOSE stay on the plain alias
+      thinking: "on"   # the VOICE thinks; GATHER and PROPOSE stay on the plain alias
       factory_kind: stack_ref
       raw: llm.primary.openai_compat
       expected_family: llm_provider
-    max_tokens: 12288
   budget_tokens_per_day: 0
   gather:
     max_rounds: 6
@@ -69,7 +67,7 @@ method:
       strategy: pause_until_next_window
 
 cadence:
-  fallback_schedule: "30 8 * * 1"     # weekly — Mondays 08:30 UTC (after all 4, §4.1)
+  fallback_schedule: "30 8 * * 1"     # weekly — Mondays 08:30 UTC (after all 4)
   cooldown_seconds: 518400            # 6d — below the 7d interval
 
 grounding:

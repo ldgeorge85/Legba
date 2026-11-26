@@ -6,7 +6,7 @@
 Since Q-2 the recovery run settles its OWN contract over the original turn's
 window / grounding / coverage (``test_consult_contract_gaps_q2``); it wins.
 When the run produced none (an unarmed runtime, no synthesis), the original
-turn's 0223 response bag supplies it, as roll 81 made it. Nothing is
+turn's 0223 response bag supplies it. Nothing is
 invented: none from either recovers with none.
 """
 
@@ -120,7 +120,7 @@ def test_the_recovered_turn_stores_the_same_contract_it_answers_with() -> None:
     assert recovered_contract({"schema": "consult_contract/1"}, {}) == {
         "schema": "consult_contract/1"
     }
-    # Q-2: a recovery run that settled its OWN contract (it carries
+    # A recovery run that settled its OWN contract (it carries
     # ``recovery``) wins over the original's — the original's grounding
     # accounting describes prose that is no longer the answer.
     own = {"schema": "consult_contract/1", "recovery": {"window_from": "original_turn"}}

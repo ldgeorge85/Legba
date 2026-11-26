@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # Supply-chain pack — TIER-B desk 7/10: the Panama Canal.
-# planning/SUPPLY_CHAIN_PACK_PLAN_2026-07-29.md §1.2.
 #
 # ============================ ACTIVATION GATE =============================
 # TIER B: registered so the topology is DECLARED and the collection gap is
@@ -11,14 +10,14 @@
 # disruption_status unit never fans onto it (AnalystActor._cadence_targets
 # evaluates its predicate against `is_head AND state='active'` targets only).
 #
-#   GATE (plan §1.2): needs a canal-authority feed — the plan's §5.2 slot M-2.
+#   GATE: needs a canal-authority feed (source slot M-2).
 #   ACTIVATE AT: >= 40 titles / 30d matching this desk's vocabulary.
 #   MEASURED 2026-07-29 (live, read-only): 13 titles ("panama canal") / 30d — up
-#   from the plan's 4 — and 26 canonical rows / 24h on the geo set below.
+#   from 4 earlier — and 26 canonical rows / 24h on the geo set below.
 #   STILL UNDER THE GATE. Activating now would emit "insufficient evidence" twice
-#   a day forever — the failure mode plan §6.3 item 8 says NO to out loud.
+#   a day forever — a failure mode to avoid.
 #
-#   NOTE: slot M-2 IS FILLED. `source.pancanal.news`
+#   NOTE: the canal-authority gap IS FILLED. `source.pancanal.news`
 #   (descriptors/source_pancanal.yaml, Panama Canal Authority, `official`, geo PA)
 #   went `state: active` on 2026-07-29 and is ingesting. Its first day already
 #   makes it 46% of this lane's 24h rows — which is why the gate is a 30d TITLE
@@ -39,14 +38,14 @@ identity:
   abstraction_level: L1
   inherits: []
   state: draft
-  owner: supply_chain_pack
+  owner: owner@local
   created: "2026-07-29T00:00:00Z"
 
 scope:
   domain: thematic
   themes: [supply_chain, maritime, chokepoint, canal, shipping]
   # THE SQL PUSHDOWN — the canal state plus its immediate isthmus neighbours.
-  # No US (plan §0.3: a PA,CR,CO,US variant measured 2,626 rows/72h of which
+  # No US (a PA,CR,CO,US variant measured 2,626 rows/72h of which
   # 1,338 — 51% — were US weather alerts).
   geo: [PA, CR, CO]
   entity_classes:

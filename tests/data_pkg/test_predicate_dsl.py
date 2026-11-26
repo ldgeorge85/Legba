@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for the Starlark predicate DSL (L-104 / L-242).
+"""Unit tests for the Starlark predicate DSL.
 
 Covers:
 
@@ -208,7 +208,7 @@ def test_org_match_refused_under_production_contract():
 
 def test_has_tag_unions_across_contexts():
     # Same helper available on every surface; tags from any ctx slot count —
-    # a SIGNAL tag under its namespaced key (W7 TAG-1): bare → src:<tag>.
+    # a SIGNAL tag under its namespaced key: bare → src:<tag>.
     ctx_signal = {"signal": {"tags": ["energy"]}}
     assert _eval_scope('has_tag("src:energy")', ctx_signal) is True
     assert _eval_scope('has_tag("energy")', ctx_signal) is False
@@ -468,7 +468,7 @@ def test_io_attempt_fails():
 
 
 # ---------------------------------------------------------------------------
-# Sandbox — compile-time ITERATION / MATERIALIZATION bound (S-2)
+# Sandbox — compile-time ITERATION / MATERIALIZATION bound
 # ---------------------------------------------------------------------------
 #
 # The grammar gate bans `for` *statements* but permits comprehensions, and the

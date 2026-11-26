@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for the honest skill-scoreboard route on the v3 telemetry API (P4-T4).
+"""Unit tests for the honest skill-scoreboard route on the v3 telemetry API.
 
 Covers the read route added to :mod:`legba.data.registry.v3_api`:
 
@@ -200,7 +200,7 @@ async def test_eval_calibration_reads_writer_shape_nested() -> None:
     assert sb.brier_exogenous == 0.3976
     assert sb.exogenous_sample_size == 537
     assert sb.pooled_sample_size == 600
-    # lane E: legacy label + staleness ride the route
+    # legacy label + staleness ride the route
     assert sb.label == "untrusted — legacy, under diagnosis"
     assert sb.stale is True and sb.newest_member_at.startswith("2026-07-01")
     assert sb.calibration_thin is False

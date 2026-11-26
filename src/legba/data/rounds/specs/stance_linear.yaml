@@ -90,7 +90,7 @@ round:
     verifier:
       kind: judge
       card: cards/verifier.md
-      plane: llm.verify.innoai_gemma.openai_compat
+      plane: llm.verify.gateway_judge.openai_compat
       family_rule: {differs_from: [adjudicator, collector_a]}
       reads: [{from: adjudicator, view: sentence_table}]
       output: verdict/1

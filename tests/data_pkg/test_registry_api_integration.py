@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Integration tests for the L-113 registry HTTP + WebSocket API.
+"""Integration tests for the registry HTTP + WebSocket API.
 
 Runs against the live substrate via the `migrated_pg` fixture from
 `conftest.py`. Builds a real FastAPI app, wires it to real
@@ -9,7 +9,7 @@ Runs against the live substrate via the `migrated_pg` fixture from
 WebSocket endpoints, and asserts both the response and the side effects
 (rows in Postgres, NATS events fire).
 
-No mocks for substrate boundaries — same rule as L-110 / L-111.
+No mocks for substrate boundaries — same rule as the other registry tests.
 
 Note: the FastAPI lifespan handler is *not* used here. We construct the
 stores + registries ourselves so the test fixture controls connect/close
@@ -70,7 +70,7 @@ def _target_body(descriptor_id: str, *, entity_classes=("organization", "country
             "version": "0" * 16,
             "abstraction_level": "L1",
             "state": "draft",
-            "owner": "lewis@local",
+            "owner": "owner@local",
             "created": "2026-05-16T10:00:00+00:00",
         },
         "scope": {
@@ -99,7 +99,7 @@ def _analyst_body(descriptor_id: str) -> dict[str, Any]:
                 "input_type": "legba.x.In",
                 "output_type": "legba.x.Out",
             },
-            "owner": "lewis@local",
+            "owner": "owner@local",
         },
         "subscription": {},
         "method": {
@@ -160,7 +160,7 @@ async def api_app(migrated_pg: PostgresConfig):
         dlq=dlq,
     )
 
-    # Wire L-112 conversion registry too if the module is present.
+    # Wire conversion registry too if the module is present.
     conversion_registry = None
     try:
         from legba.data.registry.conversion import ConversionWebhookRegistry
@@ -477,10 +477,10 @@ async def test_conversion_register_list_delete(client: AsyncClient):
             "notes": "http test",
         },
     )
-    # 201 = real L-112 path; 400/422 if validation rejects the impl shape.
+    # 201 = real path; 400/422 if validation rejects the impl shape.
     # We accept either as long as the contract is enforced.
     if r.status_code != 201:
-        # L-112 may reject; that's still a meaningful behaviour test.
+        # May reject; that's still a meaningful behaviour test.
         assert r.status_code in (400, 409, 422)
         return
     webhook_id = r.json()["id"]
@@ -523,7 +523,7 @@ async def test_stack_register_via_http_with_secret_indirection(
         "schema_uri": "legba/stack/postgres/1.0.0",
         "version": "0" * 16,
         "state": "draft",
-        "owner": "lewis@local",
+        "owner": "owner@local",
         "config": {
             "host": {"factory_kind": "text", "raw": "localhost"},
             "port": {"factory_kind": "number", "raw": 5432},
@@ -623,7 +623,7 @@ async def test_websocket_receives_descriptor_registered_event(api_app):
             "descriptor_id": desc_id,
             "family": "target",
             "action": "registered",
-            "actor": "lewis@local",
+            "actor": "owner@local",
             "schema_uri": "legba/target/2.0.0",
         }
         # Publish from the test event loop; the WS thread will receive it

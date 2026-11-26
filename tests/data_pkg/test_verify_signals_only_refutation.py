@@ -61,11 +61,13 @@ class _StubJudge:
     def __init__(self, payload: dict[str, Any]) -> None:
         self._json = json.dumps(payload)
         self.prompts: list[str] = []
+        self.systems: list[str] = []
 
     async def chat_complete(
         self, messages, *, max_tokens=None, temperature=None, system=None, **kw
     ):
         self.prompts.append(messages[0]["content"])
+        self.systems.append(system or "")
         return _Response(self._json)
 
 
@@ -382,15 +384,19 @@ def test_signal_backed_ordinals_excludes_grounding_and_subclaims() -> None:
 def test_the_judge_prompt_states_the_anti_update_rule() -> None:
     """Enforcement is mechanical, but the judge is told the rule as well — a
     demotion the judge could have avoided is a wasted call and a worse verdict."""
-    rule = V._JUDGE_QUOTE_RULE.lower()
+    from legba.data.grading_text import CLAIM_EVIDENCE_RULES
+
+    rule = CLAIM_EVIDENCE_RULES.lower()
     assert "prior read" in rule
     assert "baseline" in rule
     assert "source reporting" in rule
+    # And a refutation is asked for from source reporting in the quote rule.
+    assert "source reporting" in V._JUDGE_QUOTE_RULE.lower()
 
 
 async def test_the_rule_reaches_every_judge_route(monkeypatch) -> None:
-    """The unit lead, the composition lead and the absence rubric share ONE
-    constant, so the rule cannot be live on some routes and missing on others."""
+    """Every judge system prompt imports ONE shared block of claim-and-evidence
+    rules, so the rule cannot be live on some routes and missing on others."""
     monkeypatch.setenv("LEGBA_VERIFY_LLM_JUDGE", "1")
     judge = _StubJudge({"verdicts": ["supported", "supported"], "quotes": ["", ""]})
     await verify_finding_faithfulness(
@@ -398,9 +404,11 @@ async def test_the_rule_reaches_every_judge_route(monkeypatch) -> None:
         citations=_de_citations(),
         judge_llm=judge,
     )
-    assert judge.prompts, "the judge must actually have been called"
-    for prompt in judge.prompts:
-        assert "BASELINE this claim is updating" in prompt
+    from legba.data.grading_text import CLAIM_EVIDENCE_RULES
+
+    assert judge.systems, "the judge must actually have been called"
+    for system in judge.systems:
+        assert CLAIM_EVIDENCE_RULES in system
 
 
 # ---------------------------------------------------------------------------
@@ -493,7 +501,7 @@ async def test_the_carve_outs_and_scale_ride_into_the_judge_prompt(
     assert "QUALIFIERS" in prompt
     assert "beyond the existing diplomatic and border measures" in prompt
     assert "SCALE/KIND qualifier: 'new'" in prompt
-    assert "already EXEMPTS" in prompt
+    assert "lists exemptions and scale words" in prompt
 
 
 def test_a_claim_with_no_qualifiers_renders_byte_identically() -> None:

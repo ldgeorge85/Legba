@@ -11,6 +11,7 @@ import { resetScope } from '@/state/scope'
 import { useSelection } from '@/state/selection'
 import { SUBJECT_NOUN } from '@/lib/subjectNoun'
 import type { PanelRegistration } from '@/types'
+import { openConsultMenu } from '@/test/consultMenu'
 
 const reg: PanelRegistration = {
   id: 'c1',
@@ -40,7 +41,9 @@ describe('the Consult context chip noun', () => {
   it('a subject pin reads "<profile noun>:", not "target:"', async () => {
     render(<ConsultPanel registration={reg} scope={{}} mode="personal" />)
     act(() => consultActions().addPin('c1', { kind: 'target', id: 'country_g20_br', label: 'Brazil' }))
+    openConsultMenu()
     await waitFor(() => expect(screen.getByTestId('consult-pin-chip')).toBeInTheDocument())
+    openConsultMenu()
     const chip = screen.getByTestId('consult-pin-chip')
     expect(chip.textContent ?? '').toContain(`${SUBJECT_NOUN.toLowerCase()}:`)
     expect(chip.textContent ?? '').not.toMatch(/\btarget:/)
@@ -50,7 +53,9 @@ describe('the Consult context chip noun', () => {
   it('a pin of another kind keeps its own word', async () => {
     render(<ConsultPanel registration={reg} scope={{}} mode="personal" />)
     act(() => consultActions().addPin('c1', { kind: 'finding', id: 'f-1', label: 'Finding One' }))
+    openConsultMenu()
     await waitFor(() => expect(screen.getByTestId('consult-pin-chip')).toBeInTheDocument())
+    openConsultMenu()
     expect(screen.getByTestId('consult-pin-chip').textContent ?? '').toContain('finding:')
   })
 })

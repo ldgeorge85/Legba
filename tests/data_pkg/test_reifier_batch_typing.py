@@ -301,7 +301,7 @@ async def test_demonym_self_loop_is_dropped_before_it_costs_a_batch_slot():
 
 
 # ---------------------------------------------------------------------------
-# descriptor-declared knobs (X-1 / QW1-B kind lane)
+# descriptor-declared knobs (kind lane)
 # ---------------------------------------------------------------------------
 
 from pathlib import Path  # noqa: E402
@@ -349,7 +349,7 @@ async def test_every_shipped_option_is_accepted_by_the_catalog():
 
 
 async def test_the_shipped_cap_matches_the_documented_arithmetic():
-    """The tree carries the LIVE operating point (2026-10-04, W6 SPLIT-1 fold):
+    """The tree carries the LIVE operating point (2026-10-04):
     three runs an hour, batch 6, a 600-candidate cap per run. Pin the numbers
     the descriptor comment states so the comment and the knobs cannot drift
     apart. Measured 10-01..10-03 on the exemplar: ~3,400 typed/day, ~330

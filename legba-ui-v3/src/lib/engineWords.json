@@ -1,0 +1,35 @@
+{
+  "_about": "Engine terms that must not reach a reader, each with the plain words a reader sees instead (or 'operator side only' when the figure moves there). Read by lib/readerVocabulary.ts, by tools/lint-engine-words.mjs and by the browser walk (tools/walk/walk.mjs). A pattern matches visible text, so it is written to catch the engine's use of a word and not ordinary prose that happens to contain it.",
+  "terms": [
+    { "term": "judge", "pattern": "\\bjudge(?:\\s+(?:\\d|stats?|verdict|window|status|pending)|:)", "flags": "i", "reader": "the check" },
+    { "term": "verify judge", "pattern": "\\bverify judge\\b", "flags": "i", "reader": "the check" },
+    { "term": "grader", "pattern": "\\bgrader\\b", "flags": "i", "reader": "operator side only" },
+    { "term": "faithfulness", "pattern": "\\bfaithfulness\\b|\\bfaithful \\d", "flags": "i", "reader": "held against its sources" },
+    { "term": "correctness", "pattern": "\\bcorrectness\\b", "flags": "i", "reader": "confirmed by an outside reference" },
+    { "term": "gold set", "pattern": "\\bgold[- ]set\\b", "flags": "i", "reader": "graded by a person" },
+    { "term": "units carried", "pattern": "\\bunits? carried\\b", "flags": "i", "reader": "reads used" },
+    { "term": "typed absence", "pattern": "\\btyped absences?\\b|\\b\\d+ typed\\b", "flags": "i", "reader": "gaps recorded" },
+    { "term": "scale not stated", "pattern": "\\bscale not stated\\b|\\bno declared scale\\b", "flags": "i", "reader": "no scale given (in How this was produced)" },
+    { "term": "staleness debt", "pattern": "\\bstaleness (?:debt|flags?)\\b", "flags": "i", "reader": "operator side only" },
+    { "term": "match_verified", "pattern": "\\bmatch_verified\\b", "flags": "", "reader": "operator side only" },
+    { "term": "page rule", "pattern": "\\bpage rule\\b", "flags": "i", "reader": "admin only" },
+    { "term": "mean and spread symbols", "pattern": "[μσ]\\s*=", "flags": "", "reader": "admin only" },
+    { "term": "API route", "pattern": "\\b(?:GET|POST|PUT|DELETE) /|/v3/[a-z]|/api/v1/", "flags": "", "reader": "a sentence saying what the thing is" },
+    { "term": "caps abbreviation badge", "pattern": "\\bUNCORROB\\b|\\buncorrob\\b", "flags": "", "reader": "Single source" },
+    { "term": "Runtime tab", "pattern": "^Runtime$", "flags": "", "reader": "operator side only" },
+    { "term": "Unit (operator object)", "pattern": "^Unit\\b|\\bUnit ·", "flags": "", "reader": "operator side only" },
+    { "term": "Investigate", "pattern": "^Investigate\\b", "flags": "", "reader": "operator side only" },
+    { "term": "analyst id", "pattern": "\\b[a-z]+_(?:assessor|assessment|composition)\\b", "flags": "", "reader": "the profile's name for the read (World, Country …)" },
+    { "term": "verify pass", "pattern": "\\bverify (?:pass|verdict|0\\.\\d+)\\b", "flags": "i", "reader": "the check" },
+    { "term": "substrate", "pattern": "\\bsubstrate\\b", "flags": "i", "reader": "the record" },
+    { "term": "spine", "pattern": "\\bspine\\b", "flags": "i", "reader": "the daily read" },
+    { "term": "engine row kinds", "pattern": "severity_delta|meta_finding|prompt_module_candidate", "flags": "", "reader": "operator side only" },
+    { "term": "rung codes", "pattern": "\\bC-A R\\d", "flags": "", "reader": "operator side only" },
+    { "term": "arm that grades", "pattern": "\\barm that grades\\b", "flags": "i", "reader": "operator side only" },
+    { "term": "gate failed", "pattern": "\\bgate failed\\b", "flags": "i", "reader": "operator side only" }
+  ],
+  "allow": {
+    "_about": "Words that look like engine terms but are genuinely reader words. A visible text equal to one of these is never counted.",
+    "texts": ["Checked", "Not yet checked", "Not checked", "Single source", "How this was produced"]
+  }
+}

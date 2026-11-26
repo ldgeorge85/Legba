@@ -2,15 +2,14 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Supply-chain pack — register the 10 desks + the 1 bounded unit (all draft).
 
-Registers the analysis half of the supply-chain exemplar domain per
-planning/SUPPLY_CHAIN_PACK_PLAN_2026-07-29.md (the collection half — 8 source
-descriptors — shipped separately via
+Registers the analysis half of the supply-chain exemplar domain (the collection half — 8 source
+descriptors — ships separately via
 ``scripts/bringup_register_supply_chain_sources.py``):
 
-  * 10 TargetDescriptors — 6 Tier-A desks (§1.1) + 4 Tier-B desks (§1.2), two new
+  * 10 TargetDescriptors — 6 Tier-A desks + 4 Tier-B desks, two new
     functional families: ``lane_*`` (a geo-anchored physical corridor) and
     ``flow_*`` (a geo-anchored commodity/product flow).
-  * 1 AnalystDescriptor — ``disruption_status`` (§2), the pack's ONE new bounded
+  * 1 AnalystDescriptor — ``disruption_status``, the pack's ONE new bounded
     reasoning unit.
 
 Mirrors ``scripts/bringup_register_supply_chain_sources.py``'s structure
@@ -154,11 +153,11 @@ def _load_analyst(name: str) -> AnalystDescriptor:
 
 
 def _assert_unit_eval_coverage(name: str) -> None:
-    """The P2-T7 bounded-unit drift guard, applied on THIS path.
+    """The bounded-unit drift guard, applied on THIS path.
 
     ``scripts/bringup_register_analysts.py`` runs this guard over its own
     ANALYST_FILES set; this pack registers its unit through its own registrar
-    (the convention every post-P2 analyst wave follows), so the guard is
+    (the convention every later analyst registrar follows), so the guard is
     re-asserted here rather than skipped. A bounded unit (inline_target + an
     inline ``method.system_prompt``) that lacks ``eval.rubric`` makes the critic
     HARD-FAIL, and one that lacks ``method.llm.verify`` silently falls back to
@@ -226,7 +225,7 @@ async def main() -> int:
             "  3. flip disruption_status draft -> configured -> active\n"
             "  4. force one live run per desk; require >= 3 [N] markers and a "
             "non-empty data.indicators array\n"
-            "  5. one 7-day watch cycle + the verify readout (plan §6.5) BEFORE "
+            "  5. one 7-day watch cycle + the verify readout BEFORE "
             "activating the remaining 3 Tier-A desks\n"
             "  Tier-B desks stay draft until their per-descriptor collection "
             "gate is met."

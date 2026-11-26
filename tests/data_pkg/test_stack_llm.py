@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for the L-120 LLM provider stack handlers.
+"""Tests for the LLM provider stack handlers.
 
 Two flavors:
 
@@ -101,7 +101,7 @@ class _FakeBudgetReporter:
 
 @dataclass
 class _FakeCtx:
-    """Lightweight test stand-in for L-103's `RuntimeContext`."""
+    """Lightweight test stand-in for 's `RuntimeContext`."""
 
     instance_id: str
     instance_version: str
@@ -191,7 +191,7 @@ async def _install_mock_transport(handler: LLMProviderHandler, handler_fn):
 
 
 def test_subprovider_registry_complete():
-    """The three chat providers and the W11-F108 decision client are
+    """The three chat providers and the decision client are
     registered in `LLM_HANDLERS`."""
     from legba.data.stack.llm import DecisionProviderHandler
 
@@ -205,7 +205,7 @@ def test_subprovider_registry_complete():
 
 
 def test_kindhandler_classvars():
-    """All concrete subproviders carry the L-102 §1 KindHandler classvars."""
+    """All concrete subproviders carry the §1 KindHandler classvars."""
     for cls in (AnthropicProviderHandler, VLLMProviderHandler, OpenAIProviderHandler):
         assert cls.kind == "llm_provider"
         assert cls.family == "stack"
@@ -250,7 +250,7 @@ def test_estimate_cost_prefix_match():
 
 
 def test_estimate_cost_longest_prefix_wins_opus_5_5():
-    """W11-F136(b): ``claude-opus-5-5`` (and its revisions) price at its OWN
+    """(b): ``claude-opus-5-5`` (and its revisions) price at its OWN
     row ($4 / $20), never under the shorter ``claude-opus-5`` key ($5 / $25),
     whatever order the table lists them in. Also the list prices of 2026-11-05."""
     from legba.data.provenance.budget import _lookup_price
@@ -944,7 +944,7 @@ async def test_health_check_no_api_key():
 
 @pytest.mark.asyncio
 async def test_health_check_does_not_call_model(monkeypatch):
-    """The Phase-1/L-120 healthcheck must NOT issue a chat_complete to the
+    """The Phase-1/healthcheck must NOT issue a chat_complete to the
     model — that would burn tokens every 60s. We assert by replacing
     _call_chat with a sentinel that raises if invoked."""
     h = OpenAIProviderHandler()
@@ -1205,7 +1205,7 @@ async def test_anthropic_streams_tool_use_via_input_json_deltas():
 
 @pytest.mark.asyncio
 async def test_anthropic_stream_tells_an_installed_sink_when_a_tool_call_starts():
-    """W11-F132: a consult round cut mid-stream must tell a tool round's
+    """A consult round cut mid-stream must tell a tool round's
     preamble from an answer. The accumulator marks the sink at the first
     ``tool_use`` block; a text-only generation never marks it."""
     from legba.data.stack.llm.stream_observer import TextDeltaSink, capture_text_deltas
@@ -1701,7 +1701,7 @@ async def test_stream_complete_default_yields_one_chunk():
 
 
 def test_handler_consumes_real_llm_provider_descriptor():
-    """The pydantic LLMProvider schema from L-101 §5 → handler config.
+    """The pydantic LLMProvider schema from §5 → handler config.
 
     Builds a real `LLMProvider` stack-component descriptor (the same model
     the stack registry stores) and verifies the handler can extract its
@@ -1711,7 +1711,7 @@ def test_handler_consumes_real_llm_provider_descriptor():
         name="Anthropic Opus",
         schema_uri="legba/stack/llm_provider/1.0.0",
         version="0" * 16,
-        owner="lewis@local",
+        owner="owner@local",
         config=LLMProviderConfig(
             api_endpoint=Property.Text.of("https://api.anthropic.com"),
             api_key=Property.Secret.of("llm.anthropic.opus_4_7.api_key"),
@@ -1814,14 +1814,15 @@ async def test_integration_openai_smoke():
     assert response.content
 
 
-def test_vllm_max_tokens_env_opt_in(monkeypatch):
-    """Default: max_tokens is OMITTED (self-hosted server budget governs).
-    LEGBA_LLM_SEND_MAX_TOKENS=1 includes it (hosted-API truncation guard).
-    Per-call send_max_tokens kwarg keeps working independently of the env.
-    Roll-86 follow-up: what is sent is the model's maximum output (the
-    component's declared ``max_tokens``), never the caller's 2048."""
+def test_vllm_max_tokens_is_the_declared_maximum_by_default(monkeypatch):
+    """A component that declares its alias's maximum output sends it as
+    ``max_tokens`` on every call, never the caller's 2048. The deployment-wide
+    off switch (LEGBA_LLM_SEND_MAX_TOKENS=0/false) and the per-call
+    ``send_max_tokens=False`` stop it; any other value of the variable keeps
+    it. A component that declares nothing sends nothing."""
     h = VLLMProviderHandler()
-    h._cfg = _make_cfg(endpoint="https://x/v1", model="m", secret_id="s", max_tokens=65_536)  # noqa: SLF001
+    h._cfg = _make_cfg(endpoint="https://x/v1", model="m", secret_id="s")  # noqa: SLF001
+    h._cfg = h._cfg.model_copy(update={"max_output_tokens": Property.Number.of(65_536)})  # noqa: SLF001
     common = dict(
         messages=[{"role": "user", "content": "hi"}],
         system=None,
@@ -1832,15 +1833,18 @@ def test_vllm_max_tokens_env_opt_in(monkeypatch):
         reasoning_effort=None,
     )
     monkeypatch.delenv("LEGBA_LLM_SEND_MAX_TOKENS", raising=False)
-    assert "max_tokens" not in h._build_chat_payload(**common)  # noqa: SLF001
-    assert (
-        h._build_chat_payload(**common, send_max_tokens=True)["max_tokens"]  # noqa: SLF001
-        == 65_536
-    )
+    assert h._build_chat_payload(**common)["max_tokens"] == 65_536  # noqa: SLF001
+    assert "max_tokens" not in h._build_chat_payload(**common, send_max_tokens=False)  # noqa: SLF001
     monkeypatch.setenv("LEGBA_LLM_SEND_MAX_TOKENS", "1")
     assert h._build_chat_payload(**common)["max_tokens"] == 65_536  # noqa: SLF001
-    monkeypatch.setenv("LEGBA_LLM_SEND_MAX_TOKENS", "false")
-    assert "max_tokens" not in h._build_chat_payload(**common)  # noqa: SLF001
+    for off in ("0", "false", "off", "no"):
+        monkeypatch.setenv("LEGBA_LLM_SEND_MAX_TOKENS", off)
+        assert "max_tokens" not in h._build_chat_payload(**common)  # noqa: SLF001
+    monkeypatch.delenv("LEGBA_LLM_SEND_MAX_TOKENS")
+    bare = VLLMProviderHandler()
+    bare._cfg = _make_cfg(endpoint="https://x/v1", model="m", secret_id="s", max_tokens=65_536)  # noqa: SLF001
+    # The legacy ``max_tokens`` field declares nothing: no field on the wire.
+    assert "max_tokens" not in bare._build_chat_payload(**common)  # noqa: SLF001
 
 
 # ---------------------------------------------------------------------------

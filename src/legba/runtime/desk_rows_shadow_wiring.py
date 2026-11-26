@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Runtime wiring for the contract-v2 desk SHADOW (lane D-1).
+"""Runtime wiring for the contract-v2 desk SHADOW.
 
 :func:`build_rows_shadow` is called by the ``inline_target`` deps builder for
 every desk. It returns ``None`` — and the desk runs exactly as before — unless

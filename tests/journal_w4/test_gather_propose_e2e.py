@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""End-to-end GATHER → propose → queue (plan §7 / §4.9 / Wave 4).
+"""End-to-end GATHER → propose → queue.
 
 Proves the FULL governed path the runtime wires: the journal's GATHER loop
 recognises a propose tool as an ``extra_write_tools`` name, routes it through the

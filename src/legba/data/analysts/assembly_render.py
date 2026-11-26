@@ -1,4 +1,4 @@
-"""THE ASSEMBLY RENDER — `body` and `title`, both deterministic (D-1 §1.8, F-9).
+"""THE ASSEMBLY RENDER — `body` and `title`, both deterministic.
 
 The body is RENDERED FROM the payload, never authored beside it. It is not a
 second source of truth: ``render_assembly_body(payload)`` is byte-stable, and
@@ -30,9 +30,8 @@ first-order desk body never contains ``[[ref:``. The CANONICAL text is
 ``spans[].text`` in the payload, which is byte-identical to the origin body and
 is what every quote check reads.
 
-THE TITLE (F-9, ratified). ``analyst_outputs.title`` is NOT NULL and is the page
-``<h1>``; VOICE §4.3 calls the hole "the title hole in D-1". It is closed
-deterministically: a short prefix plus the lead span's own quoted fragment when
+THE TITLE. ``analyst_outputs.title`` is NOT NULL and is the page
+``<h1>``. It is filled deterministically: a short prefix plus the lead span's own quoted fragment when
 the lead is EARNED, a shape line naming the co-lead subjects when it is not, and
 the bare masthead on a flat day. It carries no authored claim, so it needs no
 title rubric — and the model no longer decides whether concentration was earned,
@@ -237,7 +236,7 @@ def _lead_fragment(blocks: Sequence[Mapping[str, Any]], ordinal: int) -> str:
 def assembly_title(payload: Mapping[str, Any]) -> str:
     """The row's ``title`` — deterministic, and carrying no authored claim.
 
-    Three shapes, one per lead verdict (D-1 §1.5.3 / F-9):
+    Three shapes, one per lead verdict:
 
       * ``earned_single`` — masthead + the lead span's own QUOTED fragment. The
         only claim in it is one the desk already made and the record already
@@ -292,8 +291,8 @@ def _fmt(value: Any, digits: int = 2) -> str:
 
 def _attribution(block: Mapping[str, Any]) -> str:
     """The GENERATED attribution line. Every field is a column on the origin
-    head, so D-3's arm 3 is a regression test on this function rather than a
-    check on a model — which is what kills the R3 §4.2 specimen (an assessment
+    head, so a regression test on this function rather than a
+    check on a model — which rules out a whole class of error (an assessment
     attributed to a "proliferation-watch desk" that does not exist) outright.
     """
     v = block.get("verify") or {}
@@ -527,7 +526,7 @@ def render_assembly_body(payload: Mapping[str, Any]) -> str:
             f"### {b.get('ordinal')} — {b.get('question')}"
             + (f" ({subject})" if subject else "")
         )
-        # P3-A: QUOTED spans only. A country block additionally carries its
+        # QUOTED spans only. A country block additionally carries its
         # origin head in FULL (role ``context_body``) for the fenced reader; the
         # RECORD quotes the lead sentence and nothing else, and that is the whole
         # demotion. ``quoted_spans`` is the identity on every block with no

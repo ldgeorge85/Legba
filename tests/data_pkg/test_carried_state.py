@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W11-F14 — CARRIED STATE EXPIRES (``legba.data.carried_state``).
+"""CARRIED STATE EXPIRES (``legba.data.carried_state``).
 
 flow_semiconductors read "degraded, held by border seizures" for 45 days off
 one seizure: every read since had all its indicators ``not_observed`` and

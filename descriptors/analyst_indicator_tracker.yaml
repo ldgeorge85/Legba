@@ -1,7 +1,7 @@
-# S3-T2 — Indicator Tracker analyst descriptor.
+# Indicator Tracker analyst descriptor.
 #
 # A `deterministic`-kind META analyst over the SHARED analyst-output pool. It
-# closes the S3-T1 structured-I&W loop: every bounded unit now mirrors its
+# closes the structured-I&W loop: every bounded unit now mirrors its
 # forward-looking "Indicators to watch" prose into a machine-checkable
 # FindingPayload.data.indicators[] block (stable `id` slug + `status` of
 # triggered / not_observed / expired, stored at
@@ -18,13 +18,13 @@
 # handler pulls the indicator-bearing findings newer than each unit-stream's
 # watermark directly via deps.pg_pool (it ignores the materialized input slice).
 #
-# Honesty / idempotency (W11-F55, X3): a per-stream watermark
+# Honesty / idempotency: a per-stream watermark
 # (alert_trigger_watermarks, class indicator_tracker) means every source run
 # is walked once. Each consecutive-run change is recorded as a RAW flip in
 # indicator_flips (migration 0237) and never fed; a change counts — a
 # DEBOUNCED flip — only once the new status has held (method.options
 # hysteresis_runs, default 2, or hysteresis_hours, default one cadence of the
-# source unit; docs/TUNABLES.md §3). The summary finding is a per-run RECEIPT
+# source unit; docs/TUNABLES.md). The summary finding is a per-run RECEIPT
 # carrying only the debounced flips that run inserted; a run that inserted
 # none sets force_trace_only, so an idempotent re-run never repeats a feed row.
 #
@@ -58,7 +58,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: active
-  owner: s3_indicator_tracker
+  owner: owner@local
 
 subscription:
   # No `targets` block → META analyst: one global sweep per cadence tick over the

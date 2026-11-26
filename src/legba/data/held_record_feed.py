@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""What feeds the held family (data-model lane 10, DM-C): the desk-row
+"""What feeds the held family: the desk-row
 shadow records, and nothing else, behind a switch that is OFF by default.
 
 ``LEGBA_HELD_RECORD_SHADOW`` — a comma list of analyst ids (unset / empty =
@@ -16,8 +16,8 @@ WHY HERE AND NOT IN THE SHADOW ITSELF: the shadow (``desk_rows_shadow``) is a
 measurement that writes one ledger row and nothing else (its isolation test
 holds that); the held family READS that ledger afterwards, so the desk run,
 its finding and its shadow are untouched whether this is on or off. The
-prompts of the seats that produce the rows have not been reviewed by the owner;
-so this feeds the tables ONLY, and nothing a reader sees reads them (the two
+prompts of the seats that produce the rows are not yet reviewed, so this feeds the
+tables ONLY, and nothing a reader sees reads them (the two
 ``GET /v3/record/assertions`` routes and the verify script are the readers).
 
 This module is one of the two places allowed to name the shadow ledger

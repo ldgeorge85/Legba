@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Register the Composition Lineage Sweep analyst descriptor (P3-T6).
+"""Register the Composition Lineage Sweep analyst descriptor.
 
 Reads ``descriptors/analyst_composition_lineage_sweep.yaml`` and POSTs it to the
 registry. Idempotent: if a head row is already present we report it and exit 0

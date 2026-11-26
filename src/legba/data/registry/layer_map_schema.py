@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Program 6 L0 — the ``layer_map`` descriptor kind (migration 0214).
+"""The ``layer_map`` descriptor kind (migration 0214).
 
 ``descriptors/layer_map_<cc>.yaml`` is a LAYER TABLE for one country: which
 curated sources read as which layer (``official`` / ``domestic_press`` /

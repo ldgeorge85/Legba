@@ -64,7 +64,7 @@ def _informer(evict_all) -> NatsVaultRotationInformer:
 def _isolate_registry():
     """Each test owns the sweep set — see the S-2 test file for why — and the
     process's import-time registrations are put back exactly at teardown
-    (W11-F112: a bare clear here emptied the sweep set for every later test in
+    (a bare clear here emptied the sweep set for every later test in
     a shuffled session; nothing re-registers them)."""
     saved = list(llm_handler_cache._CACHES)
     clear_handler_cache_registry()

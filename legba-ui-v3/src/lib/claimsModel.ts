@@ -84,7 +84,7 @@ export function corroborationScore(data: Record<string, unknown>): number | null
 }
 
 // ---------------------------------------------------------------------------
-// Freshness / decay (P1-T6).
+// Freshness / decay.
 //
 // A claim fades as its evidence ages. Two honest, defensively-read signals on
 // the row `data`, both written by the deterministic temporal passes:
@@ -156,7 +156,7 @@ export function decayInfo(
 }
 
 // ---------------------------------------------------------------------------
-// Why-NOT (P1-T6).
+// Why-NOT.
 //
 // When the P0-T2/T3 faithfulness verify pass flags a claim's prose, the row
 // carries a top-level `verification` block NAMING the unsupported spans (a
@@ -188,8 +188,8 @@ export interface WhyNot {
 const _REASON_LABELS: Record<string, string> = {
   no_citation: 'no citation',
   unresolved_citation: 'citation resolves to nothing',
-  judge_unsupported: 'unsupported by the verify judge',
-  judge_contradicted: 'contradicted by the verify judge',
+  judge_unsupported: 'not supported by its sources, by the check',
+  judge_contradicted: 'contradicted by its sources, by the check',
 }
 
 /** Derive the why-not note from a finding's faithfulness `verification` block.

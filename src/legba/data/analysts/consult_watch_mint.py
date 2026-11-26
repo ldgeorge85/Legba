@@ -95,7 +95,7 @@ logger = logging.getLogger(__name__)
 MINT_OPTION = "mint_watch_candidates"
 #: ON by default: a minted row costs nothing paid — claim_watch's bearing
 #: pipeline runs on the self-hosted planes (its descriptor's primary is the
-#: core plane, the gate is the self-hosted 8B, the embedder is ai1's).
+#: core plane, the gate is the self-hosted 8B, the embedder is the models host's).
 DEFAULT_MINT = True
 
 #: The response-bag key (``consult_persistence.RESPONSE_BAG_KEYS``).

@@ -84,6 +84,15 @@ export type SlotId = 'slot:subject_forecasts' | 'slot:coverage' | 'slot:subject_
  */
 export type MountedViewId = 'view:forecasts' | 'view:track_record' | 'view:proof' | 'view:resolutions'
 
+/**
+ * The Board's stage: the ranked list of what changed (`v4/read/BoardList.tsx`),
+ * a view registered with its own component. The long-form daily read
+ * (`v4.morning_read`) is one link from it.
+ */
+export const BOARD_LIST_VIEW = 'view:board_changed' as const
+/** The long-form daily read, reached from the Board's list. */
+export const DAILY_READ_VIEW = 'v4.morning_read' as const
+
 export const MOUNTED_VIEWS: Readonly<Record<MountedViewId, { title: string }>> = {
   'view:forecasts': { title: 'Forecasts' },
   'view:track_record': { title: 'Track record' },
@@ -145,7 +154,7 @@ export const SLOTS: Readonly<Record<SlotId, SlotDef>> = {
   'slot:subject_field': {
     title: 'Subjects',
     what: 'This profile declares no map geometry, so the subject field (a tile per subject, with the same change and blank marks a map would carry) stands in for the map.',
-    waits: 'nothing — built (U-4); the region renders the field itself',
+    waits: 'nothing — built; the region renders the field itself',
   },
 }
 
@@ -194,15 +203,15 @@ const DECLARED_SURFACES: readonly SurfaceDef[] = [
     label: 'Board',
     question: 'What changed, ranked.',
     key: 1,
-    // The landing: today's read on the stage, the chat open under it, the map
-    // leading the panel side, the at-a-glance band and coverage beside it.
-    stage: 'v4.morning_read',
-    regions: [
-      { id: 'a', views: ['v4.map'], weight: 3 },
-      { id: 'b', views: ['system.wall', 'slot:coverage'], weight: 2 },
-    ],
+    // The landing: the ranked list of what changed on the stage, the chat
+    // open under it, and the map alone on the panel side, full height, with
+    // its coverage strip under it. Nothing else competes on a first look; the
+    // full daily read is one link from the list, and an opened panel joins
+    // the map's region as a tab.
+    stage: BOARD_LIST_VIEW,
+    regions: [{ id: 'a', views: ['v4.map'], weight: 1 }],
     chat: 'open',
-    openRegion: 'b',
+    openRegion: 'a',
   },
   {
     id: 'subject',
@@ -210,13 +219,13 @@ const DECLARED_SURFACES: readonly SurfaceDef[] = [
     label: capitalised(PROFILE_UI.subject.singular),
     question: `What is established about one ${PROFILE_UI.subject.singular.toLowerCase()}, and what moved.`,
     key: 2,
+    // The subject's page on the stage, following the point; the map beside
+    // it, marking the subject. (No placeholder region: a region that waits on
+    // something unbuilt is not part of the default.)
     stage: 'subject.page',
-    regions: [
-      { id: 'a', views: ['v4.map'], weight: 3 },
-      { id: 'b', views: ['slot:subject_forecasts'], weight: 2 },
-    ],
+    regions: [{ id: 'a', views: ['v4.map'], weight: 1 }],
     chat: 'open',
-    openRegion: 'b',
+    openRegion: 'a',
   },
   {
     id: 'ledger',
@@ -225,12 +234,12 @@ const DECLARED_SURFACES: readonly SurfaceDef[] = [
     question: 'What was expected, what happened, and how good this system is.',
     key: 3,
     // U-11: the forecasts on the stage; the track record (behind its
-    // five-resolution gate) and the evaluation record beside them, with the
-    // roster-wide Accuracy page a tab behind the evaluations.
+    // five-resolution gate) and the evaluation record beside them. The
+    // roster-wide Accuracy page is the operator's (Evaluation).
     stage: 'view:forecasts',
     regions: [
       { id: 'a', views: ['view:track_record'], weight: 1 },
-      { id: 'b', views: ['view:proof', 'system.eval_scorecard'], weight: 1 },
+      { id: 'b', views: ['view:proof'], weight: 1 },
     ],
     chat: 'open',
     openRegion: 'a',
@@ -242,12 +251,13 @@ const DECLARED_SURFACES: readonly SurfaceDef[] = [
     question: 'Did anything happen that I asked to be told about?',
     key: 4,
     // U-9: the one alert log on the stage; the silences and the pages
-    // changed after they were read beside it. The older source-health table
-    // and the watches' own definitions stay one tab behind each.
+    // changed after they were read beside it. The source-health table (with
+    // its re-check flags) and the watches' own definitions are the
+    // operator's (Engine).
     stage: 'view:watch_alerts',
     regions: [
-      { id: 'a', views: ['view:watch_silences', 'system.source_health'], weight: 1 },
-      { id: 'b', views: ['view:watch_edits', 'system.alerts_watches'], weight: 1 },
+      { id: 'a', views: ['view:watch_silences'], weight: 1 },
+      { id: 'b', views: ['view:watch_edits'], weight: 1 },
     ],
     chat: 'open',
     openRegion: 'a',
@@ -261,8 +271,8 @@ const DECLARED_SURFACES: readonly SurfaceDef[] = [
     key: 5,
     stage: 'system.status',
     regions: [
-      { id: 'a', views: ['system.registry', 'system.flow', 'system.settings'], weight: 3 },
-      { id: 'b', views: ['system.ledgers'], weight: 2 },
+      { id: 'a', views: ['system.registry', 'system.flow', 'system.settings', 'system.source_health'], weight: 3 },
+      { id: 'b', views: ['system.ledgers', 'system.alerts_watches'], weight: 2 },
     ],
     chat: 'collapsed',
     openRegion: 'a',
@@ -276,7 +286,7 @@ const DECLARED_SURFACES: readonly SurfaceDef[] = [
     stage: 'system.eval_boards',
     regions: [
       { id: 'a', views: ['system.read_scoreboard', 'system.judge_stats', 'system.layer_divergence'], weight: 1 },
-      { id: 'b', views: ['analysis.contentions'], weight: 1 },
+      { id: 'b', views: ['analysis.contentions', 'system.eval_scorecard'], weight: 1 },
     ],
     chat: 'collapsed',
     openRegion: 'a',
@@ -392,6 +402,9 @@ export function readerKinds(): PanelKind[] {
   for (const s of READER_SURFACES) for (const k of surfaceKinds(s)) out.add(k)
   out.add('system.consult')
   out.add('system.inspector')
+  // The full daily read is no page's default any more, but a reader opens it
+  // from the Board's list.
+  out.add(DAILY_READ_VIEW)
   return [...out]
 }
 
@@ -428,7 +441,9 @@ export interface Home {
  *      says it is page-sized (a subject, the read, the forecasts, a record),
  *      else this page's open region;
  *   3. an operator view from a reader page → the operator section that shows
- *      it, else Investigate (the reader side never hosts engine views).
+ *      it, else the page its contract names (`page`), else Investigate (the
+ *      reader side never hosts engine views). A view whose contract names a
+ *      page opens there from any page.
  */
 export function homeOf(kind: string, current: SurfaceId, surfaces: readonly SurfaceDef[] = SURFACES): Home {
   const here = surfaces.find((s) => s.id === current)
@@ -441,6 +456,9 @@ export function homeOf(kind: string, current: SurfaceId, surfaces: readonly Surf
   // A reader view: a reader page's own, or one registered with a reader contract.
   const reader = isReaderKind(kind) || isReaderFrameView(kind) || (!PANEL_REGISTRY[kind as PanelKind] && contract?.side === 'reader')
   const stageHome = contract?.home === 'stage'
+  // An operator view that names its page (the Users page: Engine) opens there, from anywhere.
+  const named = !reader && contract?.page ? surfaces.find((s) => s.id === contract.page && s.side === 'operator') : undefined
+  if (named) return { surface: named.id, place: stageHome ? 'stage' : named.openRegion, seeded: false }
   if (here && (here.side === 'operator' || reader)) {
     return { surface: here.id, place: stageHome ? 'stage' : here.openRegion, seeded: false }
   }

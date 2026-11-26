@@ -1,5 +1,5 @@
 /**
- * Component test for the forecast Ledger (ST0-C): rows from the mocked route,
+ * Component test for the forecast Ledger: rows from the mocked route,
  * open first by due date, an absent arm shown as `absent`, the Brier
  * placeholder column, and the unreadable-ledger notice.
  */

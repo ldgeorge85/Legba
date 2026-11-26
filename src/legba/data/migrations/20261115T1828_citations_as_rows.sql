@@ -3,7 +3,7 @@
 --
 -- 20261115T1828_citations_as_rows.sql
 --
--- CITATIONS AS ROWS (data-model lane 7, DM-A). A finding's citations live
+-- CITATIONS AS ROWS. A finding's citations live
 -- inside its document (`analyst_outputs.data->'data'->'citations'`) and its
 -- prose markers ([N]); "what does this sentence rest on, and which stored
 -- bytes was it read from" is a walk through jsonb. These five insert-only
@@ -51,7 +51,7 @@
 -- deleted by that route.
 --
 -- `written_by` (nullable, every table) is the principal that wrote the row
--- (lane DM-B, migration `20261115T1827_principals_origins_written_by`, which
+-- (migration `20261115T1827_principals_origins_written_by`, which
 -- sorts first): the finding's seat (`agent:<id>@<version>`) or deterministic
 -- handler (`rule:<id>`) on a live write, `rule:citation_rows_backfill` on a
 -- backfill row, filled with `legba_principal($handle)` inside the INSERT.
@@ -85,8 +85,8 @@ CREATE TABLE IF NOT EXISTS public.finding_sentences (
     char_end        integer NOT NULL CHECK (char_end >= char_start),
     text            text NOT NULL,                 -- as written, markers normalised to ASCII [N]
     text_sha256     text NOT NULL CHECK (text_sha256 ~ '^[0-9a-f]{64}$'),
-    -- What the sentence is, where known at write: 'heading' today; the typing
-    -- step (lane 10) adds statement / assessment / absence. NULL = not known.
+    -- What the sentence is, where known at write: 'heading' today; a later
+    -- typing step adds statement / assessment / absence. NULL = not known.
     kind            text CHECK (kind IS NULL OR kind ~ '^[a-z][a-z0-9_]{0,63}$'),
     marker_count    integer NOT NULL DEFAULT 0 CHECK (marker_count >= 0),  -- distinct markers in it
     run_id          uuid,
@@ -241,7 +241,7 @@ CREATE TABLE IF NOT EXISTS public.finding_citation_receipts (
 );
 
 -- ---------------------------------------------------------------------------
--- Indexes: the reads named in 03b §1 (sentence → bytes; what rests on this
+-- Indexes: the reads (sentence → bytes; what rests on this
 -- item / these bytes) and the report's day window. Partial on the sparse
 -- typed columns; the rarely-cited kinds (situation, event, question, inquiry)
 -- carry none until a reader needs one.

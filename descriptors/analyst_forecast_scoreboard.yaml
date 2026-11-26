@@ -1,4 +1,4 @@
-# forecast_scoreboard — P4-T7 acute-forecast scoreboard producer (deterministic META).
+# forecast_scoreboard — acute-forecast scoreboard producer (deterministic META).
 #
 # A `deterministic`-kind META analyst (sub_handler=forecast_scoreboard) — the
 # dedicated DRIVER for the pre-registered acute-binary forecast pilot (#92). Each
@@ -41,7 +41,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: active
-  owner: p4_honest_top
+  owner: owner@local
 
 subscription:
   # META analyst: one global sweep per tick over the G20 acute-forecast pilot.

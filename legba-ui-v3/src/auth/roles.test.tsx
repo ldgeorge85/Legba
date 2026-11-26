@@ -9,7 +9,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactElement } from 'react'
 import type { PanelRegistration } from '@/types'
 import { IDENTITY_QUERY_KEY, type IdentityState } from '@/auth/session'
-import { below, OPERATOR_SIDE_REASON, RANK_ADMIN, RANK_CONTRIBUTOR, rankOf, rankOfState } from '@/auth/roles'
+import { below, RANK_ADMIN, RANK_CONTRIBUTOR, rankOf, rankOfState } from '@/auth/roles'
 import AlertsWatchesMerged, { DELIVERIES_NEEDS_ADMIN } from '@/panels/merged/AlertsWatches'
 import SourceEdits from '@/v4/watch/SourceEdits'
 import { alertLogRoute, ALERT_LOG_ROUTE, READER_ALERT_LOG_ROUTE } from '@/v4/watch/AlertLog'
@@ -94,17 +94,14 @@ describe('the role a console acts on', () => {
 })
 
 describe('a reader sees a reason, never a refused request', () => {
-  it('the operator side: the button is disabled and says why; nothing switches', () => {
+  it('the operator side: the button is not drawn for a reader; nothing switches', () => {
     stubFetch({})
     const onSwitch = vi.fn()
     render(wrap(
       <SurfaceBar mode="personal" active="board" onSwitch={onSwitch} onReset={() => {}} onCopyLink={() => {}} onOpenPalette={() => {}} />,
       signedIn('reader'),
     ))
-    const btn = screen.getByTestId('to-operator-side')
-    expect(btn).toBeDisabled()
-    expect(btn.getAttribute('title')).toBe(OPERATOR_SIDE_REASON)
-    fireEvent.click(btn)
+    expect(screen.queryByTestId('to-operator-side')).toBeNull()
     expect(onSwitch).not.toHaveBeenCalled()
   })
 

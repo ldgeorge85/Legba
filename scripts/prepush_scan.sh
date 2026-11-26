@@ -7,8 +7,9 @@
 # The repo (github.com/ldgeorge85/legba) is PUBLIC. Before any push this
 # scan exits NON-ZERO on anything that must not reach the public remote:
 #
-#   1. Prior-host CODENAME in tracked file content (terms in .prepush_terms).
-#   1b. Private infra-host fragments (api.ai1 / ai1.infra / .ai1.) in content.
+#   1. Internal TERMS in tracked file content: the generic patterns in the
+#      tracked .prepush_terms plus the deployment's private terms (codenames,
+#      private host names, vendor names) in the git-ignored .prepush_terms.local.
 #   2. Operator DOMAIN in tracked file content (civislux).
 #   3. A tracked .env / secrets file (must stay gitignored).
 #   4. Private-key material (BEGIN ... PRIVATE KEY) in tracked content.
@@ -44,35 +45,37 @@ FOUND=0
 report() { echo "  HIT [$1] $2"; FOUND=1; }
 section() { echo ">> ${1}"; }
 
-# 1. Prior-host codename(s) in tracked content. The term list lives in the
-#    .prepush_terms DATA file (one term per line; '#'/blank lines ignored) —
-#    extracted from the old inline list so the terms are maintained as data, not
-#    code. All terms are distinctive with zero false-positive risk. The regex
-#    alternation is built from that file; the file itself is EXCLUDED from the
-#    scan (it necessarily contains the terms). An empty/missing terms file is a
-#    hard FAIL — a silent empty regex would neuter the whole codename gate.
+# 1. Internal terms in tracked content. Two DATA files, same format (one
+#    extended regex per line; '#'/blank lines ignored), joined into one
+#    case-insensitive alternation:
+#      .prepush_terms        TRACKED — generic patterns only (private-network
+#                            name shapes); a public file must not list the
+#                            deployment's own names, or it publishes them.
+#      .prepush_terms.local  GIT-IGNORED — the deployment's private terms
+#                            (prior-host codenames, private host names and
+#                            host-name fragments, vendor and model codenames).
+#                            Read when present; a checkout without it runs the
+#                            generic patterns only and prints a NOTE.
+#    Both files are EXCLUDED from the scan (they necessarily contain the
+#    terms). A missing/empty TRACKED file is a hard FAIL — a silent empty regex
+#    would neuter the whole gate.
 TERMS_FILE="${REPO_ROOT}/.prepush_terms"
-CODENAME_RE="$(grep -vE '^[[:space:]]*(#|$)' "${TERMS_FILE}" 2>/dev/null \
-  | sed -E 's/[[:space:]]//g' | grep -v '^$' | paste -sd '|' -)"
-section "1. codename (from .prepush_terms) in tracked content"
-if [[ -z "${CODENAME_RE}" ]]; then
-  report prepush-terms "missing/empty ${TERMS_FILE} — codename scan cannot run"
+LOCAL_TERMS_FILE="${PREPUSH_LOCAL_TERMS:-${REPO_ROOT}/.prepush_terms.local}"
+_terms() { grep -vE '^[[:space:]]*(#|$)' "$1" 2>/dev/null | sed -E 's/[[:space:]]+$//; s/^[[:space:]]+//' | grep -v '^$'; }
+GENERIC_RE="$(_terms "${TERMS_FILE}" | paste -sd '|' -)"
+LOCAL_RE=""
+[[ -r "${LOCAL_TERMS_FILE}" ]] && LOCAL_RE="$(_terms "${LOCAL_TERMS_FILE}" | paste -sd '|' -)"
+CODENAME_RE="${GENERIC_RE}${LOCAL_RE:+${GENERIC_RE:+|}${LOCAL_RE}}"
+section "1. internal terms (.prepush_terms + .prepush_terms.local) in tracked content"
+if [[ -z "${LOCAL_RE}" ]]; then
+  echo "  NOTE  no private term list at ${LOCAL_TERMS_FILE} — generic patterns only"
+fi
+if [[ -z "${GENERIC_RE}" ]]; then
+  report prepush-terms "missing/empty ${TERMS_FILE} — term scan cannot run"
 elif git grep -nI -iE "${CODENAME_RE}" -- . \
      ':(exclude)scripts/prepush_scan.sh' ':(exclude)docs/RUNBOOK.md' \
-     ':(exclude).prepush_terms' >/tmp/_ps_codename 2>/dev/null; then
+     ':(exclude).prepush_terms' ':(exclude).prepush_terms.local' >/tmp/_ps_codename 2>/dev/null; then
   while IFS= read -r line; do report codename "${line}"; done < /tmp/_ps_codename
-fi
-
-# 1b. Private infra-host FRAGMENTS. Bare `ai1` is deliberately NOT in
-#     .prepush_terms (too short — real false-positive risk), but the distinctive
-#     multi-part forms of the operator's GPU/gateway host family
-#     (api.ai1 / ai1.infra / .ai1.) have ~zero false-positive risk and are
-#     exactly what leaked (5x `api.ai1`) uncaught before. Scanned directly here.
-section "1b. private infra-host fragments (api.ai1 / ai1.infra / .ai1.)"
-if git grep -nI -E -- '\bapi\.ai1\b|ai1\.infra|\.ai1\.' . \
-     ':(exclude)scripts/prepush_scan.sh' ':(exclude)docs/RUNBOOK.md' \
-     ':(exclude).prepush_terms' >/tmp/_ps_ai1 2>/dev/null; then
-  while IFS= read -r line; do report infra-host "${line}"; done < /tmp/_ps_ai1
 fi
 
 # 2. Operator domain in tracked content.
@@ -182,16 +185,16 @@ if [[ -n "${BAD_IDENT}" ]]; then
   done <<< "${BAD_IDENT}"
 fi
 
-# 7b. Codename / infra-host fragments in the ABOUT-TO-PUSH commit MESSAGES.
-#     `git grep` (sections 1/1b) only sees the tree; commit bodies ship in
+# 7b. Internal terms in the ABOUT-TO-PUSH commit MESSAGES.
+#     `git grep` (section 1) only sees the tree; commit bodies ship in
 #     history too. This is a NON-FATAL WARN, not a hard fail: the release path
 #     is a clean-slate squash-before-push (see RUNBOOK §20) which discards every
 #     range message and writes ONE fresh commit — so these resolve at push time.
 #     It is surfaced so a NON-squash push is never made blind to a message leak.
-section "7b. codename / infra-host in commit messages (${RANGE}) — WARN"
+section "7b. internal terms in commit messages (${RANGE}) — WARN"
 if [[ -n "${CODENAME_RE}" ]]; then
   MSG_HITS="$(git log "${RANGE}" --format='%H %s%n%b' 2>/dev/null \
-    | grep -inE "${CODENAME_RE}|\\bapi\\.ai1\\b|ai1\\.infra|\\.ai1\\." || true)"
+    | grep -inE "${CODENAME_RE}" || true)"
   if [[ -n "${MSG_HITS}" ]]; then
     echo "  WARN  commit messages name internal terms — squash-before-push resolves; reword first if NOT squashing:"
     printf '%s\n' "${MSG_HITS}" | sed 's/^/    /'
@@ -211,7 +214,7 @@ section "9. tracked corpora/ files"
 while IFS= read -r f; do report tracked-corpora "${f}"; done < <(git ls-files corpora/ 2>/dev/null)
 
 # 10. The README front door. The centred logo block at the top of README.md is
-#     the operator's front page; a docs lane rewrote the file on 2026-09-26 and
+#     the project's front page; a rewrite of the file once
 #     dropped it, and the squash carried that to the public main. It never ships
 #     without the logo again: the check reads the file as it is TRACKED (what a
 #     push would carry), not the working copy.

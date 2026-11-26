@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W11-F86 - the markers a span carries are the markers its sentence carries.
+"""The markers a span carries are the markers its sentence carries.
 
 THE DEFECT the tracker row named (7 d to 2026-10-14, two units): on the judge
 path ``unsupported_spans[].markers`` was ``[]`` on 492 of 771
@@ -102,16 +102,16 @@ class _AllUnsupportedJudge:
         return _Response(self._json)
 
 
-#: Three sentences of the 2026-08-07 internal_stability / Argentina read
-#: (fixtures/confidence_word_token/int_ar_0807__new__s1.txt), one re-spelled in
+#: Three sentences of the internal_stability read
+#: (fixtures/confidence_word_token/int_rep_0807__new__s1.txt), one re-spelled in
 #: full-width brackets and one with a range - the three marker shapes a unit
 #: span carries.
 _JUDGED_BODY = (
-    "Police use of tear gas, rubber bullets and water cannons demonstrates "
-    "state repression [1][2].\n"
+    "Police use of tear gas and water cannons demonstrates "
+    "a hard-line state response [1][2].\n"
     "The surge of several thousand demonstrators on 6-7 August was reported "
-    "by DW and Al Jazeera 【4】.\n"
-    "The ruling bloc withdrew the foreign-land-ownership chapter on 5 August [1-2].\n"
+    "by the Example Port Gazette and a wire service 【4】.\n"
+    "The ruling bloc withdrew the harbour-ownership chapter on 5 August [1-2].\n"
 )
 
 
@@ -126,7 +126,7 @@ async def test_a_judge_unsupported_span_carries_its_markers(monkeypatch) -> None
     )
     assert report.judge_status == "llm"
     spans = [s for s in report.unsupported_spans if s.reason == "judge_unsupported"]
-    # Before W11-F86 every one of these was [].
+    # Before the fix every one of these was [].
     assert [s.markers for s in spans] == [[1, 2], [4], [1, 2]]
     # ... and they are the ledger's own reading of the same sentences.
     ledger = {cv.text: cv.markers for cv in report.claim_verdicts}
@@ -178,7 +178,7 @@ def test_a_marker_behind_a_closing_quote_stays_on_its_sentence() -> None:
         assert uncited_share_fields(body)["uncited_fact_sentences"] == 1 == _no_citation(body)
 
 
-#: The P7-F1(2) rule as it stood until W11-F86, verbatim.
+#: The earlier trailing-marker rule, verbatim.
 _P7_PULL_RE = re.compile(
     r"([.!?])(\s+)((?:\[\d+\]|\[\[ref:\d+\]\])(?:\s*(?:\[\d+\]|\[\[ref:\d+\]\]))*)"
 )
@@ -200,7 +200,7 @@ def _p7_pull(text: str) -> str:
     ],
 )
 def test_the_original_trailing_marker_shape_is_rewritten_byte_identically(text) -> None:
-    """P7-F1(2)'s shape - terminator, whitespace, markers - comes out exactly as
+    """The earlier shape - terminator, whitespace, markers - comes out exactly as
     the rule this one replaces wrote it."""
     assert _pull_trailing_markers(text) == _p7_pull(text)
     assert _P7_PULL_RE.search(text) or "marker" in text
@@ -267,24 +267,24 @@ def test_the_bluf_label_edges() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 4. Goldens - five real unit bodies, counts unchanged by the fix
+# 4. Goldens - five unit bodies, counts unchanged by the fix
 # ---------------------------------------------------------------------------
 
-#: The live 2026-08 bodies behind the V-P1 confidence-token fixtures:
-#: disruption_status (Hormuz), internal_stability (Argentina) and three
-#: narrative_coordination (Japan) reads - all written BEFORE any cited-sentence
-#: rule, all with an uncited BLUF, which is the shape W11-F86 extends the rule to.
+#: The bodies behind the confidence-token fixtures (invented subjects):
+#: a disruption_status, an internal_stability and three narrative_coordination
+#: reads - all written without any cited-sentence rule, all with an uncited
+#: BLUF, which is the shape the newer rule extends to.
 _GOLDEN = {
-    "dis_hormuz_0818__new__s2.txt": (5, 2, BLUF_UNCITED),
-    "int_ar_0807__new__s1.txt": (5, 3, BLUF_UNCITED),
-    "nar_jp_0817__v2r4__s8.txt": (4, 3, BLUF_UNCITED),
-    "nar_jp_0818__old__s2.txt": (5, 4, BLUF_UNCITED),
-    "nar_jp_0818__v2r2__s5.txt": (5, 3, BLUF_UNCITED),
+    "dis_port_0818__new__s2.txt": (5, 2, BLUF_UNCITED),
+    "int_rep_0807__new__s1.txt": (5, 3, BLUF_UNCITED),
+    "nar_rep_0817__v2r4__s8.txt": (4, 3, BLUF_UNCITED),
+    "nar_rep_0818__old__s2.txt": (5, 4, BLUF_UNCITED),
+    "nar_rep_0818__v2r2__s5.txt": (5, 3, BLUF_UNCITED),
 }
 
 
 @pytest.mark.parametrize("name", sorted(_GOLDEN))
-def test_the_real_bodies_keep_their_counts(name: str) -> None:
+def test_the_fixture_bodies_keep_their_counts(name: str) -> None:
     body = json.loads(repair_confidence_word_token((FIXTURES / name).read_text()))["body"]
     f = uncited_share_fields(body)
     assert (f["fact_sentences"], f["uncited_fact_sentences"], f["bluf_marker"]) == _GOLDEN[name]

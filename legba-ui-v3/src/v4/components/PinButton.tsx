@@ -1,5 +1,5 @@
 /**
- * PinButton — the cross-room "pin to case" affordance (v4 Wave 3).
+ * PinButton — the cross-room "pin to case" affordance.
  *
  * A small, self-contained toggle that pins/unpins one typed ref (signal /
  * finding / entity / situation / source / target / analyst) to the casework

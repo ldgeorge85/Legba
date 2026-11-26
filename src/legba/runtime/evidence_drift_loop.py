@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The source-drift pass (lane D-1): classify new drift rows, flag their
+"""The source-drift pass: classify new drift rows, flag their
 dependants, raise ``evidence_drift`` — on a loop, OFF by default.
 
 Every ``LEGBA_EVIDENCE_DRIFT_INTERVAL_S`` (900) the loop runs

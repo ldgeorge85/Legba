@@ -7,7 +7,7 @@ Run 1b (``arm_open.py``) answers the same questions with arms B-open (and its
 second sample B-open-2) and C-record. Everything grader-facing is run 1's:
 
   * normaliser v1.2 (``normalise.py``, unchanged), primary grader
-    ``lightning-think`` with its pin RE-CHECKED against run 1's pin (any drift
+    the grader alias with its pin RE-CHECKED against run 1's pin (any drift
     in served model, alias, component version or ``/v1/models`` entry refuses);
   * gold = run 1's ``gold.json`` byte for byte (sha256 checked);
   * the grade prompt = ``grade_run.GRADE_PROMPT`` (its sha256 must equal run 1's).
@@ -93,7 +93,7 @@ def build_tell(dz: Any, run1: Path, run1b: Path, seed: int,
                f_from: Path | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
     """6 answers per letter A–G, stratified 2/2/1/1 by class, seeded.
 
-    ``f_from`` (lane E2): the run directory letter F (B-open) is drawn from,
+    ``f_from``: the run directory letter F (B-open) is drawn from,
     when the run being tested has no B-open of its own (an M1 record-only
     baseline). Answers an earlier run-1b tell key in that directory opened are
     not drawn again; the prompt, the letters and the arm descriptions are run
@@ -488,7 +488,7 @@ def report_main(a: argparse.Namespace) -> int:
 # Secondary analysis: every arm against the gold v2 CANDIDATE
 # ---------------------------------------------------------------------------
 #
-# Gold v2 (run1/gold_v2/gold_v2_candidate.json, deviation D9) re-verified 17
+# Gold v2 (a re-verified candidate gold file) re-verified 17
 # rows. Handling, as the design handles what cannot be met:
 #   * an atom with v2_status VOID / v2_exclude_from_scoring is not gold: it is
 #     removed before the grader sees the row;
@@ -501,8 +501,8 @@ def report_main(a: argparse.Namespace) -> int:
 # WHICH rows and atoms those are is a property of the gold, and evaluation data
 # never enters the public repo: ``goldv2-prep`` reads them from a rules file
 # passed by path (``--v2-rules``, JSON ``{"core_void_rows": [qid, ...],
-# "post_t_only_atoms": ["qid.gN", ...]}``, kept beside the gold under
-# planning/), stamps them into ``gold_v2_meta.json``, and every later step reads
+# "post_t_only_atoms": ["qid.gN", ...]}``, kept beside the gold outside the
+# repo), stamps them into ``gold_v2_meta.json``, and every later step reads
 # them from that meta file.
 # Rows whose RENDERED gold (atom ids + texts, error atoms, prior-state note,
 # absence proof) is identical to v1 reuse their v1 grades unchanged; only the
@@ -763,7 +763,7 @@ def main(argv: list[str] | None = None) -> int:
             s.add_argument("--json-out", required=True)
         if name == "goldv2-prep":
             s.add_argument("--v2-rules", required=True,
-                           help="JSON of the gold-derived v2 rules (kept under planning/, never in the repo)")
+                           help="JSON of the gold-derived v2 rules (kept outside the repo)")
     a = ap.parse_args(argv)
     common.load_env()
     if a.cmd == "sheet":

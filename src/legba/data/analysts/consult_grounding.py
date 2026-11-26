@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-""""Record only", ENFORCED (lane Q-1, rules C and D) — the post-verification pass.
+""""Record only", ENFORCED — the post-verification pass.
 
-THE DEFECT. The reviewed consult (2026-11-14) was told "Answer from the record
+THE DEFECT. A reviewed consult was told "Answer from the record
 only. Cite every statement to its row … do not fill from general knowledge".
 Its answer still carried sentences resting on no row — general expectations of
 "what would normally appear within 72 hours", a parenthetical "[cited in
@@ -148,7 +148,7 @@ _INFERENCE_RE = re.compile(
     re.IGNORECASE,
 )
 
-#: A sentence leaning on what is ON SCREEN (lane U-6's ``on_screen``) — context,
+#: A sentence leaning on what is ON SCREEN (the ``on_screen`` context) — context,
 #: never evidence: with no resolving row it is cut in ``record_only``.
 _SCREEN_RE = re.compile(
     r"\b(?:on\s+(?:the\s+|your\s+)?screen|in\s+(?:your\s+)?view\b|you\s+can\s+see"

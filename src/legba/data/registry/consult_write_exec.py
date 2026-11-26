@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""THE consult write EXECUTOR — one, in the registry process (C-2b-1; design C-2a §2–§6).
+"""THE consult write EXECUTOR — one, in the registry process.
 
 Every consult write lands here: the model's call (posted by the runtime's thin
 handler through ``POST /consult/writes``), the operator's Confirm click, the
@@ -9,28 +9,28 @@ button. The last four execute STORED canonical args with no model in the loop.
 
 What it owns:
 
-* **The kill switches, re-read on every write** (§5): env
+* **The kill switches, re-read on every write**: env
   ``LEGBA_CONSULT_WRITES`` (default OFF), the ``consult_write`` pack's own
   lifecycle state (binding ignores it — W3-F6 — so it is read HERE), and the
   per-class ``classes_enabled`` list in the called tool's pack config.
-* **The operator's turn** (§3): ``operator_words`` is read from
+* **The operator's turn**: ``operator_words`` is read from
   ``consult_turns`` by the turn id the REGISTRY recorded when it armed the run —
   never passed by the model or the runtime. No durable turn → ``no_operator_turn``.
-* **Per-turn caps** (§5): executed ≤ the pack's ``max_invocations_per_run``
+* **Per-turn caps**: executed ≤ the pack's ``max_invocations_per_run``
   (10), staged ≤ 5, counted from the ledger itself.
-* **Tier A / Tier B** (§2): Tier A executes inside the call; Tier B is staged
+* **Tier A / Tier B**: Tier A executes inside the call; Tier B is staged
   ``pending_confirmation`` with a server-minted 4-character code (unambiguous
   alphabet), hashed at rest and kept in clear only in this process's memory
   for the 15-minute window — the model never sees it. A new staged write on
   the same object cancels the older one; Stop on the run expires the turn's.
-* **One transaction per executed write** (§3): the registry mutation, the
+* **One transaction per executed write**: the registry mutation, the
   ``consult_writes`` row moving to ``executed`` and one signed audit row
   (actor ``consult_write:<id>``, role ``operator_via_consult``, the receipt in
   ``change_summary``) commit together through the registry's ``in_tx`` hook,
   which also re-checks compare-and-set against ``expected_version``.
-* **Reversal** (§4): ``revert`` executes the stored handle, refused
+* **Reversal**: ``revert`` executes the stored handle, refused
   ``superseded_since`` when the post-image is no longer the head.
-* **The activation probe** (§4, D10): after a new head, watch for parse
+* **The activation probe**: after a new head, watch for parse
   failure or the first poll under it, deadline 3 minutes; a proven
   ``parse_failed`` rolls back to ``pre.version`` and stamps the receipt.
 
@@ -297,7 +297,7 @@ class ConsultWriteExecutor:
         }
         placeholders = ", ".join(f"${i + 1}{casts.get(n, '')}" for i, n in enumerate(names))
         async with self.pg.acquire() as conn:
-            # Lane 9: the write names the person whose Consult session armed it
+            # The write names the person whose Consult session armed it
             # (consult_sessions.principal is the server-stamped actor).
             actor = None
             if cols.get("session_id"):
@@ -352,7 +352,7 @@ class ConsultWriteExecutor:
         return len(rows)
 
     async def expire_for_request(self, request_id: str, *, session_id: str | None) -> int:
-        """Stop on a run expires the turn's staged writes (§5). Stop is not an undo."""
+        """Stop on a run expires the turn's staged writes. Stop is not an undo."""
         async with self.pg.acquire() as conn:
             rows = await conn.fetch(
                 "UPDATE consult_writes SET status = 'expired', "

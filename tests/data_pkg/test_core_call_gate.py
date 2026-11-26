@@ -206,7 +206,7 @@ def test_the_core_component_is_gated_with_the_defaults_and_nothing_else_is() -> 
     gate = cg.gate_for_component(CORE_ID)
     assert gate is not None and gate is cg.gate_for_component(CORE_ID)
     assert (gate.limit, gate.reserved) == (cg.DEFAULT_LIMIT, cg.DEFAULT_RESERVED) == (12, 2)
-    assert cg.gate_for_component("llm.verify.innoai_gemma.openai_compat") is None
+    assert cg.gate_for_component("llm.verify.gateway_judge.openai_compat") is None
     assert cg.gate_for_component("") is None and cg.gate_for_component(None) is None
     assert [s["gate"] for s in cg.gate_snapshots()] == [CORE_ID]
 
@@ -332,7 +332,7 @@ async def test_a_waited_call_carries_gate_wait_ms_on_its_receipt(
 async def test_another_component_keeps_its_own_per_instance_limit() -> None:
     hold = asyncio.Event()
     wire = _SlowWire(hold)
-    h = _handler("llm.verify.innoai_gemma.openai_compat", max_concurrent=2)
+    h = _handler("llm.verify.gateway_judge.openai_compat", max_concurrent=2)
     _install(h, wire)
     calls = [asyncio.create_task(h.chat_complete([{"role": "user", "content": "q"}], stream=False))
              for _ in range(4)]
@@ -349,9 +349,9 @@ def test_the_runtime_healthz_reports_the_gates() -> None:
 
 @pytest.mark.asyncio
 async def test_the_runtime_healthz_answers_its_own_body_not_daprs() -> None:
-    """Roll 86: ``DaprActor(app)`` registers its own ``GET /healthz``
+    """``DaprActor(app)`` registers its own ``GET /healthz``
     (``{"status": "ok"}``) and the first matching route answers, so the
-    runtime's route mounted after it was dead (roll 85 live: no
+    runtime's route mounted after it was dead (no
     ``llm_gates``). Mounted first, through the same helper ``main()`` and the
     spike builder call, the runtime's body is what a probe reads."""
     from dapr.ext.fastapi import DaprActor
@@ -398,7 +398,7 @@ def test_main_mounts_the_runtime_healthz_before_dapractor() -> None:
 async def test_a_consult_turns_call_receipts_come_from_the_real_call_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Roll 86: a consult turn's ``usage.call_receipts`` is the run account's
+    """A consult turn's ``usage.call_receipts`` is the run account's
     per-call entries (recorded by the provider handler itself), normalised by
     ``consult_turn_stamps.call_receipts``: the alias that answered, tokens in
     and out, reasoning tokens (``None`` when the gateway reports none), the
@@ -441,7 +441,7 @@ async def test_a_consult_turns_call_receipts_come_from_the_real_call_path(
 
 @pytest.mark.asyncio
 async def test_a_consult_turn_names_the_model_its_calls_ran_on() -> None:
-    """Roll 86: every call of a live core chat turn ran the thinking alias
+    """Every call of a live core chat turn ran the thinking alias
     ``deep`` while the turn said ``fast`` — the handler's configured name,
     which ``SpendGuard.receipt`` reads off the config. Through the real handler
     and the real account: the turn now says what the calls ran, and when they

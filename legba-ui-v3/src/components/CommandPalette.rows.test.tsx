@@ -15,6 +15,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactElement } from 'react'
 import { CommandPalette, orderPaletteEntries, recordEntries, type PaletteEntry } from './CommandPalette'
+import { SUBJECT_NOUN } from '@/lib/subjectNoun'
 import { PortalHost } from '@/ui/portal'
 import profileUiJson from '@/lib/profile_ui.json'
 import { subjectWordsIn } from '@/lib/subjectNoun'
@@ -134,7 +135,7 @@ describe('⌘K opens on subjects, by activity — never an alphabetical wall', (
 
 describe('the row model, pure', () => {
   const run = vi.fn()
-  it("a subject's Enter opens its READ — set_scope, focus, open_panel subject.page — and ⌘Enter only focuses", () => {
+  it("a subject's Enter opens its READ — set_scope, focus, then its home tab — and ⌘Enter only focuses", () => {
     const [row] = recordEntries(
       [{ recordKind: 'target', id: 'country_g20_br', label: 'G20 — Brazil', state: 'active' }],
       run,
@@ -143,11 +144,25 @@ describe('the row model, pure', () => {
     expect(row.family).toBe('subject')
     row.open()
     const actions = run.mock.calls.at(-1)![0] as { action: string; args: Record<string, unknown> }[]
-    expect(actions.map((a) => a.action)).toEqual(['set_scope', 'focus', 'open_panel'])
+    expect(actions.map((a) => a.action)).toEqual(['set_scope', 'focus', 'arrange'])
     expect(actions[0].args).toMatchObject({ kind: 'target', id: 'country_g20_br' })
-    expect(actions[2].args).toMatchObject({ kind: 'subject.page', params: { tab: 'brief' } })
+    expect(actions[2].args).toMatchObject({ layout: 'subject', layout_type: 'stance' })
     row.alt!()
     expect((run.mock.calls.at(-1)![0] as { action: string }[]).map((a) => a.action)).toEqual(['focus'])
+  })
+
+  it('a reader is offered subjects only: no units, no sources, no Investigate; each hint uses the profile noun for its kind', () => {
+    const records = [
+      { recordKind: 'target' as const, id: 'country_g20_br', label: 'G20 — Brazil', state: 'active' },
+      { recordKind: 'analyst' as const, id: 'escalation', label: 'Escalation', state: 'active' },
+      { recordKind: 'source' as const, id: 'source.a', label: 'A source', state: 'active' },
+    ]
+    const reader = recordEntries(records, run, new Map(), undefined, true)
+    expect(reader.map((e) => e.key)).toEqual(['record:target:country_g20_br'])
+    expect(reader[0].hint.split(' · ')[0]).toBe(SUBJECT_NOUN.toLowerCase())
+    const all = recordEntries(records, run)
+    expect(all.some((e) => e.label.startsWith('Investigate'))).toBe(true)
+    expect(all.some((e) => e.key.startsWith('record:analyst'))).toBe(true)
   })
 
   it('a query still sinks a paused source below every other match', () => {

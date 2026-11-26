@@ -1,12 +1,12 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The FIRST read's movement call, decided in code (roll 83).
+"""The FIRST read's movement call, decided in code.
 
 Every desk prompt that asks for a ``severity_delta:<rose|fell|steady|new>`` tag
 defines ``new`` as "you have no prior read of this dimension to compare
 against — never 'steady', which claims a comparison you did not make". Whether
 a prior read EXISTS is not a judgement: it is a row in ``analyst_outputs`` or
-it is not. The cyber desk's first run (roll 82) tagged ``steady`` with no prior
+it is not. A desk's first run tagged ``steady`` with no prior
 finding anywhere — a comparison it could not have made — and the steady-state
 paging guard reads ``steady`` as "the desk checked and it held".
 

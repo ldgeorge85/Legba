@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""PIECE A — the reified-typed-Nexus descriptors validate + the bringup wires
+"""The reified-typed-Nexus descriptors validate + the bringup wires
 them.
 
 Covers the producer + the lit-up dormant consumers:

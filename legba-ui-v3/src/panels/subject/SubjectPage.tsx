@@ -48,11 +48,15 @@ import type { PanelProps, PanelRegistration } from '@/types'
 import { PanelTabStrip } from '@/components/PanelTabs'
 import { PanelEmbedProvider } from '@/components/PanelEmbedContext'
 import { useMergedTab } from '@/panels/merged/useMergedTab'
+import { readLastSubject, usePointSubject } from '@/state/scope'
 import { useSelection } from '@/state/selection'
-import { useScope } from '@/state/scope'
+import { useActiveSurface } from '@/state/activeSurface'
+import { mostChanged } from '@/v4/read/boardList'
+import { useChangeCounts } from '@/v4/read/boardData'
 import { usePinScope } from '@/lib/consultContext'
-import { subjectName, useSubjectIndex } from '@/lib/deskNames'
+import { humanizeId, subjectName, useSubjectIndex } from '@/lib/deskNames'
 import { PROFILE_UI } from '@/lib/profileUi'
+import { useBelowAdminPassive as useBelowAdmin } from '@/auth/roles'
 import {
   SUBJECT_DEFAULT_TAB,
   subjectNoun,
@@ -73,6 +77,9 @@ export const SUBJECT_TAB_COMPONENTS: Record<SubjectTab, LazyExoticComponent<Comp
   runtime: lazy(() => import('./RuntimeTab')),
 }
 
+/** Tabs only an admin is offered. */
+const OPERATOR_TABS: ReadonlySet<SubjectTab> = new Set<SubjectTab>(['runtime'])
+
 /** The subject a BOUND page was opened on, or null for the following page. */
 export function boundSubjectOf(props: Pick<PanelProps, 'scope' | 'registration'>): string | null {
   const fromScope = props.scope?.target_id
@@ -82,19 +89,48 @@ export function boundSubjectOf(props: Pick<PanelProps, 'scope' | 'registration'>
 }
 
 /**
- * The subject an UNBOUND page follows: the selected subject, else the wall
- * scope's; the last one is kept when the reader drills off it.
+ * The subject an UNBOUND page follows: THE POINT (`state/scope.ts`), the one
+ * subject the top bar names and every region filters by. With no point it
+ * keeps showing the last subject it followed, else the last one the reader
+ * looked at, else the subject with the most changes since the last visit —
+ * the page is never empty — and says that it is not the point.
  */
-function useFollowedSubject(enabled: boolean): string | null {
-  const selection = useSelection((s) => s.selection)
-  const scope = useScope((s) => s.scope)
-  const candidate =
-    selection?.kind === 'target' ? selection.id : scope?.kind === 'target' ? scope.id : null
-  const [kept, setKept] = useState<string | null>(candidate)
+function useFollowedSubject(enabled: boolean): { id: string | null; isPoint: boolean; why: 'point' | 'kept' | 'last' | 'most' | null } {
+  const point = usePointSubject()?.id ?? null
+  const [kept, setKept] = useState<string | null>(point)
   useEffect(() => {
-    if (enabled && candidate) setKept(candidate)
-  }, [enabled, candidate])
-  return enabled ? (candidate ?? kept) : null
+    if (enabled && point) setKept(point)
+  }, [enabled, point])
+  const counts = useChangeCounts(enabled && !point && !kept)
+  const last = useMemo(() => (enabled ? readLastSubject() : null), [enabled])
+  if (!enabled) return { id: null, isPoint: false, why: null }
+  if (point) return { id: point, isPoint: true, why: 'point' }
+  if (kept) return { id: kept, isPoint: false, why: 'kept' }
+  if (last) return { id: last, isPoint: false, why: 'last' }
+  const most = mostChanged(counts)
+  return most ? { id: most, isPoint: false, why: 'most' } : { id: null, isPoint: false, why: null }
+}
+
+/**
+ * On the subject tab, a page that has never shown a subject makes its
+ * default (the last one looked at, else the most changed) the point, so the
+ * top bar, Consult and the page name the same subject from the first look.
+ * After the reader clears the point the page keeps what it showed and does
+ * not take the point back.
+ */
+function useAdoptDefault(followed: ReturnType<typeof useFollowedSubject>): void {
+  const onSubjectTab = useActiveSurface((s) => s.surface === 'subject')
+  const adopted = useRef(false)
+  useEffect(() => {
+    if (adopted.current || !onSubjectTab || followed.isPoint) {
+      if (followed.isPoint) adopted.current = true
+      return
+    }
+    if ((followed.why === 'last' || followed.why === 'most') && followed.id) {
+      adopted.current = true
+      useSelection.getState().select({ kind: 'target', id: followed.id, origin: 'shell' })
+    }
+  }, [onSubjectTab, followed.isPoint, followed.why, followed.id])
 }
 
 function capitalised(word: string): string {
@@ -104,13 +140,20 @@ function capitalised(word: string): string {
 export default function SubjectPage(props: PanelProps) {
   const bound = boundSubjectOf(props)
   const followed = useFollowedSubject(bound === null)
-  const subject = bound ?? followed
+  useAdoptDefault(followed)
+  const subject = bound ?? followed.id
   const index = useSubjectIndex()
   const name = useMemo(() => (subject ? subjectName(subject, index) : null), [subject, index])
 
   // A tab the mode does not ship (Signals, Sources in `cis`) is not offered,
   // and a request for one falls back to the Brief, never an empty surface.
-  const tabs = useMemo(() => subjectTabsFor(props.mode), [props.mode])
+  // The Runtime tab is the engine's view of the subject (its producers'
+  // runs): an admin's, not a reader's.
+  const belowAdmin = useBelowAdmin()
+  const tabs = useMemo(
+    () => subjectTabsFor(props.mode).filter((t) => !belowAdmin || !OPERATOR_TABS.has(t.id as SubjectTab)),
+    [props.mode, belowAdmin],
+  )
   const [tab, setTab] = useMergedTab<SubjectTab>(subjectPageKey(bound), props.initialTab, tabs, SUBJECT_DEFAULT_TAB)
 
   // THE PIN (UI-B6): the page pins its subject, re-asserted on every tab
@@ -121,7 +164,11 @@ export default function SubjectPage(props: PanelProps) {
     lastTab.current = tab
     tabRev.current += 1
   }
-  usePinScope(subject ? { kind: 'target', id: subject, label: name ?? subject } : null, 'subject page', tabRev.current)
+  // A page showing a subject that is not the point (the last one looked at,
+  // after the point was cleared) does not pin it: Consult asks about the
+  // point, never about something the top bar does not name.
+  const pins = bound !== null || followed.isPoint
+  usePinScope(subject && pins ? { kind: 'target', id: subject, label: name ?? subject } : null, 'subject page', tabRev.current)
 
   const childProps = useMemo<PanelProps | null>(() => {
     if (!subject) return null
@@ -142,13 +189,18 @@ export default function SubjectPage(props: PanelProps) {
         <span className="text-label uppercase tracking-wider text-ink-3">{capitalised(noun)}</span>
         {subject ? (
           <span className="flex min-w-0 items-baseline gap-1.5" data-testid="subject-page-name">
-            <span className="truncate text-body text-ink-1">{name ?? subject}</span>
-            {name && name !== subject && (
+            <span className="truncate text-body text-ink-1">{name ?? humanizeId(subject)}</span>
+            {!belowAdmin && name && name !== subject && (
               <span className="truncate font-mono text-label text-ink-3">{subject}</span>
             )}
-            {!bound && (
+            {!bound && followed.isPoint && (
               <span className="text-label italic text-ink-3" data-testid="subject-page-following">
                 following the selected {noun}
+              </span>
+            )}
+            {!bound && !followed.isPoint && (
+              <span className="text-label italic text-ink-3" data-testid="subject-page-not-point" data-why={followed.why ?? ''}>
+                {followed.why === 'most' ? `the ${noun} with the most changes` : `the last ${noun} you looked at`} — not the point
               </span>
             )}
           </span>

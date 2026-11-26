@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The round-spec validator: refusal rules V1-V12 (plan P4 §5.2, lane G-1).
+"""The round-spec validator: refusal rules V1-V12.
 
 Every refusal names its rule, a stable reason and the path in the spec:
 

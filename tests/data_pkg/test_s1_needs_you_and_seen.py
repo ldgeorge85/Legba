@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""S-1 — the phone's "what needs me" on the server (plan 4.1-4.3).
+"""The phone's "what needs me" on the server (plan 4.1-4.3).
 
   * ``GET /v3/since?include=needs_you`` — the alert LOG's open episodes that
-    paged (paged-only since roll 84), opened or paged since the cursor;
+    paged (paged-only), opened or paged since the cursor;
     world kinds only below admin; capped with ``total`` / ``truncated``.
-    Without ``include`` the response is the pre-S-1 envelope byte for byte.
+    Without ``include`` the response is the pre-change envelope byte for byte.
   * ``GET /v3/since/counts`` — the same counts without rows, reused 30 s.
   * ``GET/PUT /v3/me/seen`` — the signed-in person's own cursor; 404 with the
     sign-in switch off or for a credential with no person behind it.
@@ -66,7 +66,7 @@ os.environ.setdefault(
 )
 os.environ.setdefault("LEGBA_REGISTRY_SIGNING_KEY", "33" * 32)
 
-#: The /since envelope's keys, in order, as they were before S-1. A caller
+#: The /since envelope's keys, in order, as they were before. A caller
 #: that does not ask for ``needs_you`` must see exactly these.
 PRE_S1_SINCE_KEYS = [
     "cursor", "server_now", "counts", "new_findings", "superseded",
@@ -375,7 +375,7 @@ async def test_needs_you_inclusion_rule_and_class(s1_app, monkeypatch) -> None:
     ny = r.json()["needs_you"]
     ids = _ids(ny)
     assert {paged_world, repaged} <= ids
-    # roll 84: paged-only — an open medium (or higher) episode that never
+    # Paged-only — an open medium (or higher) episode that never
     # paged is NOT in needs-you.
     assert not ({medium_world, low_world, stale, closed, engine} & ids)
     assert ny["total"] >= 2 and ny["total"] == r.json()["counts"]["needs_you"]
@@ -429,7 +429,7 @@ async def test_since_counts_match_since_and_are_reused(s1_app, monkeypatch) -> N
     monkeypatch.setattr(since_api, "datetime", _Frozen)
     await _episode(pg, kind="verified_finding", severity="high",
                    opened_at=now - timedelta(minutes=1), paged_at=now - timedelta(minutes=1))
-    # roll 85 (SEAMS #93 closed): open at medium, never paged — in neither
+    # SEAMS #93 closed: open at medium, never paged — in neither
     # the list nor the badge's count.
     unpaged = await _episode(pg, kind="volume_surge", severity="medium",
                              opened_at=now - timedelta(minutes=2))

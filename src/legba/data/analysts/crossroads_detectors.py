@@ -1,10 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The CROSSROADS pre-pass — four deterministic detectors over the day's
-substrate, rendered as a block the model narrates and cites by ordinal
-(Program 5 lane 3, ``planning/PROGRAM5_INQUIRY_DESIGN_2026-09-24.md`` §5/§7).
+substrate, rendered as a block the model narrates and cites by ordinal.
 
-THE SHAPE THIS COPIES, AND WHY. :mod:`spread_block` (Program 7 piece 7e) fixed
+THE SHAPE THIS COPIES, AND WHY. `spread_block` fixed
 one class of defect: a model asked to eyeball "coordination" off a numbered list
 will keep finding it, because the judgment call has no anchor. Its fix was not a
 better prompt — it was to COMPUTE the arithmetic in code, hand the model the
@@ -17,7 +16,7 @@ just another voice guessing. So the four detectors run here, in code, over rows
 the governed read tools returned, and the block hands the model a row it did not
 compute and may not restate differently.
 
-THE FOUR DETECTORS (§5, the fixed mandate):
+THE FOUR DETECTORS (the fixed mandate):
 
   * **PATTERNS** — one entity or one commodity term carried by
     >= :data:`PATTERN_MIN_DESKS` DISTINCT desks' verified findings in the window.
@@ -33,10 +32,9 @@ THE FOUR DETECTORS (§5, the fixed mandate):
 
 EVERY ROW CARRIES ITS OWN WARRANT. A :class:`CrossroadsRow` is the kind, the
 desks, the ARITHMETIC as a sentence a reviewer can recompute, the cited refs,
-and one PROPOSED LEDGER ROW with a frozen ``resolution_test`` (the H13 shape the
-design's §3 constraint ``inquiry_ledger_hypothesis_needs_test`` enforces at the
-table). The detector proposes; the inquiry kind's REFLECT phase writes. Nothing
-here writes anything.
+and one PROPOSED LEDGER ROW with a frozen ``resolution_test`` (the shape the
+``inquiry_ledger_hypothesis_needs_test`` constraint enforces at the table). The detector proposes; the inquiry kind's REFLECT phase
+writes. Nothing here writes anything.
 
 TWO EMPTIES THAT ARE NOT THE SAME EMPTY (the B-8 lesson from
 ``get_assessments``'s ``disagreements: null`` vs ``[]``). "The detectors ran and
@@ -133,7 +131,7 @@ METHOD_VERSION: str = "crossroads_detectors/2026-09.2"
 DEFAULT_WINDOW_HOURS: int = 24
 
 #: PATTERNS: a term must be carried by at least this many DISTINCT desks.
-#: Three is the design's number (§5) and it is the whole precision story — two
+#: Three is the chosen number and it is the whole precision story — two
 #: desks naming an actor is ordinary coverage, not a crossroads.
 PATTERN_MIN_DESKS: int = 3
 

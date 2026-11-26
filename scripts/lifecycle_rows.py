@@ -4,12 +4,12 @@
 """The host lifecycle overlay, one row per file (R-1).
 
 ``descriptors/LIFECYCLE.md`` was a single hand-kept table that fifteen commits
-edited in three days: every lane that activated a descriptor appended a row to
+edited in three days: every change that activated a descriptor appended a row to
 the same place. The rows now live one per file in ``descriptors/LIFECYCLE.d/``
 (``<family>__<id>.md``, the row's table line), and the walker
 (``scripts/bringup_register_descriptors.py``, ``load_lifecycle``) reads both
 the directory and any rows still in ``LIFECYCLE.md`` (refusing a row named
-twice). Two lanes recording different flips touch different files.
+twice). Two changes recording different flips touch different files.
 
     python3 scripts/lifecycle_rows.py set analyst kev_digest active draft
     python3 scripts/lifecycle_rows.py unset analyst kev_digest

@@ -4,14 +4,12 @@
 
 THE FIXTURES ARE RECORDED, NOT INVENTED. Every claim text, every excluded span,
 every reference development and every graded verdict below was taken from the
-Program 1 step-2 run of 2026-09-16 over Israel (``planning/PROGRAM1_2026-09-16/
-step2/``: ``segmentation_IL.json``, ``claims_IL.json``, ``ref_IL_A.json``,
-``scoring/step2_cal_F{0,2,3}.jsonl``). That matters because the whole claim this
+recorded hand run of 2026-09-16 over Israel (segmentation, claims, reference
+and per-family scoring files). That matters because the whole claim this
 port makes is that a claim the hand run kept is a claim the job keeps, and a
 span the hand run excluded is excluded here under the SAME NAMED REASON. A
-fixture somebody made up could not test that. ``planning/`` is gitignored, so
-the rows are inlined here rather than read from it — this file is the committed
-record of them.
+fixture somebody made up could not test that. The rows are inlined here, so
+this file is the committed record of them.
 
 The live half (``test_the_real_binding_path_*``) drives
 ``deterministic.run_method`` with ``options.sub_handler='correctness_grader'``,
@@ -181,17 +179,19 @@ DIMENSIONS = frozenset({
 # ---------------------------------------------------------------------------
 
 
-def test_the_rubric_in_the_tree_is_the_one_the_gate_passed():
-    """The digest pinned in code is the digest VERDICT_P1v4 names.
+def test_the_rubric_in_the_tree_is_the_pinned_one():
+    """The digest pinned in code is the digest of ``ANNEX_C_v5.md``.
 
     If this fails the rubric file moved, and every ``unit_correctness`` row
-    already written under ``1b51d7f5…`` describes a different instrument from
-    the one that would run next.
+    already written under the pinned sha describes a different instrument from
+    the one that would run next. v5 has no passing grading-gate row yet; the
+    calibration gate refuses to grade under it until one is recorded. v4
+    (``1b51d7f5…``) stays in the tree for the rows graded under it.
     """
     assert RUBRIC_SHA256 == (
-        "1b51d7f5187c7f93af2e2cccc0775e21ab7efc41678bc28c4a2dcbe287fe7d8c"
+        "954c4ac59280a089c09a0c41c80eb829df556b786fb153ed46cf65ac8d83ccfb"
     )
-    assert "# ANNEX C v4" in RUBRIC_TEXT
+    assert "# ANNEX C v5" in RUBRIC_TEXT
 
 
 def test_the_labels_are_read_out_of_the_rubric_not_hardcoded():
@@ -739,7 +739,7 @@ def test_the_guard_stops_before_the_call_that_would_breach():
 def test_a_paid_call_that_reports_no_cost_is_priced_from_the_registry(monkeypatch):
     """An unpriced component would otherwise make a paid run look free, and a
     ceiling that cannot see spend is not a ceiling."""
-    # Since the 2026-10-23 cutover F2 is a $0 lane on our own box; the fallback
+    # F2 is a $0 lane on our own box; the fallback
     # pricing is exercised here with a PAID price on the same table entry.
     monkeypatch.setitem(GRADE.FAMILIES["F2"], "price_in", 0.13)
     monkeypatch.setitem(GRADE.FAMILIES["F2"], "price_out", 0.40)
@@ -775,7 +775,7 @@ async def test_at_a_zero_ceiling_the_paid_families_are_never_called():
 @pytest.mark.asyncio
 async def test_the_paid_families_are_never_called_past_the_ceiling(monkeypatch):
     """Two claims, a ceiling that affords one paid call. The guard fires BEFORE
-    the second, not after it. (F2 is a $0 lane since the 2026-10-23 cutover; the
+    the second, not after it. (F2 is a $0 lane on our own box; the
     guard is exercised with a paid price patched onto its table entry.)"""
     monkeypatch.setitem(GRADE.FAMILIES["F2"], "price_in", 0.13)
     monkeypatch.setitem(GRADE.FAMILIES["F2"], "price_out", 0.40)
@@ -1712,13 +1712,14 @@ async def test_the_population_sweep_uses_the_same_grace_as_the_lookup(
 # ---------------------------------------------------------------------------
 
 
-def test_the_rubric_file_on_disk_still_hashes_to_the_gated_digest():
-    """The strongest form of the pin, and the one the 2026-09-20 work needs.
+def test_the_rubric_file_on_disk_still_hashes_to_the_pinned_digest():
+    """The strongest form of the pin (re-pinned to v5 when the scale and
+    limiting-word rules changed).
 
     ``_correctness_rubric`` already refuses to import if the file moves, but it
     compares against its OWN constant — a commit that edited both would pass
-    that check. This test hashes the FILE and compares it to the literal
-    VERDICT_P1v4 names, so the two can never move together silently.
+    that check. This test hashes the FILE and compares it to a literal, so the
+    two can never move together silently.
 
     It matters here because the ``prior_relative`` exclusion class changes which
     spans are HANDED to the rubric and not one byte of the rubric itself: no
@@ -1733,7 +1734,7 @@ def test_the_rubric_file_on_disk_still_hashes_to_the_gated_digest():
     with open(RUB.RUBRIC_PATH, "rb") as handle:
         raw = handle.read()
     assert _hashlib.sha256(raw).hexdigest() == (
-        "1b51d7f5187c7f93af2e2cccc0775e21ab7efc41678bc28c4a2dcbe287fe7d8c"
+        "954c4ac59280a089c09a0c41c80eb829df556b786fb153ed46cf65ac8d83ccfb"
     )
 
 
@@ -1941,16 +1942,16 @@ def test_the_f3_family_names_the_model_the_component_now_serves():
     component id does not move; the model id and the prices that back the
     ceiling do."""
     # Cutover 2026-10-23: F3 moved again, off OpenRouter onto our own box
-    # (Nemotron Lightning via the innoai gateway, a $0 lane); F2 moved with it
+    # (Nemotron via the model gateway, a $0 lane); F2 moved with it
     # (Gemma 4). The same property holds: the table names what is served.
     f3 = GRADE.FAMILIES["F3"]
     assert f3["model"] == "lightning"
-    assert f3["component"] == "llm.grader.innoai_lightning.openai_compat"
+    assert f3["component"] == "llm.grader.gateway_third_family.openai_compat"
     assert (f3["price_in"], f3["price_out"]) == (0.0, 0.0)
     assert GRADE.model_ids()["F3"] == "lightning"
     f2 = GRADE.FAMILIES["F2"]
     assert f2["model"] == "gemma"
-    assert f2["component"] == "llm.verify.innoai_gemma.openai_compat"
+    assert f2["component"] == "llm.verify.gateway_judge.openai_compat"
     assert GRADE.model_ids()["F2"] == "gemma"
 
 
@@ -2301,7 +2302,7 @@ async def test_a_deferred_target_is_the_next_sweeps_first_pick(
 
 
 def test_loader_refuses_ref_bands_off_the_ladder():
-    """2026-09-25: a top-up lane wrote ``energy_security: "severe"`` and the
+    """A top-up lane wrote ``energy_security: "severe"`` and the
     merge carried it into a new reference row unrecognised. The loader's pure
     fence refuses any band outside the five-band ladder + insufficient-basis."""
     import pytest

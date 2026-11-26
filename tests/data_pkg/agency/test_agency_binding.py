@@ -1,14 +1,14 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""A-3 (review G2) — agency wired into real reasoning loops, end-to-end.
+"""Agency wired into real reasoning loops, end-to-end.
 
 The review's G2: the resolve ∩ allow ∩ applicability + governor + ledger
 pipeline was mechanism-complete with ZERO production callers. A-3 wires two:
 
   * the consult kind routes every ReAct tool call through a
-    ``substrate_read`` :class:`AgencyToolBinding` (A-3a);
+    ``substrate_read`` :class:`AgencyToolBinding`;
   * the actor run path fires the ``escalate_finding`` pack when a landed
-    finding crosses the pack's gate (A-3c) — the D1 example pack, no stub
+    finding crosses the pack's gate — the D1 example pack, no stub
     anywhere in its path.
 
 Real migrated Postgres (0025 governor tables); the LLM boundary is a
@@ -103,7 +103,7 @@ class _RecorderPort:
         self.calls.append(("search_context", {
             "query": query, "corpus": corpus, "country": country, "k": k,
         }))
-        # W2-T4 ref honesty: the real port returns ctx:-prefixed chunk ids
+        # Ref honesty: the real port returns ctx:-prefixed chunk ids
         # (non-substrate, excluded from lineage) + the parallel context_refs.
         return {
             "rows": [{
@@ -155,7 +155,7 @@ async def _events(conn, *, requested_by: str):
 
 
 # ---------------------------------------------------------------------------
-# A-3a — the substrate_read binding
+# The substrate_read binding
 # ---------------------------------------------------------------------------
 
 
@@ -287,7 +287,7 @@ async def test_governor_rate_cap_blocks(pool):
 
 
 # ---------------------------------------------------------------------------
-# A-3a — the consult ReAct loop dispatches THROUGH the binding
+# The consult ReAct loop dispatches THROUGH the binding
 # ---------------------------------------------------------------------------
 
 
@@ -372,7 +372,7 @@ async def test_consult_loop_folds_block_back_to_planner(pool):
 
 
 # ---------------------------------------------------------------------------
-# A-3c — the escalate_finding hook (the D1 example pack lifecycle)
+# The escalate_finding hook (the D1 example pack lifecycle)
 # ---------------------------------------------------------------------------
 
 
@@ -705,7 +705,7 @@ async def test_escalate_target_not_allowing_blocks_visibly(pool):
 
 
 # ---------------------------------------------------------------------------
-# X-1 Stage 1 — the ACTION the crossing invokes is config-driven
+# The ACTION the crossing invokes is config-driven
 #
 # It was the string literal ``"escalate"`` at the fire site. These prove the
 # whole edge — gate → three-way resolution → governor → dispatch → channel emit

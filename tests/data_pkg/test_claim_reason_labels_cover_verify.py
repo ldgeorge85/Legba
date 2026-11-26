@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Every verify span reason has a plain-English label in the UI (W1 F-5).
+"""Every verify span reason has a plain-English label in the UI.
 
 ``legba-ui-v3/src/lib/claimVerdicts.ts`` ``CLAIM_REASON_LABELS`` says it is a
 superset of every ``UnsupportedSpan.reason``. ``verify._FAIL_CLASS_BY_REASON``

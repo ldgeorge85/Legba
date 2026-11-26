@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane E2 — the record readers' ``known_at`` cut, and ``live_series`` (pure).
+"""The record readers' ``known_at`` cut, and ``live_series`` (pure).
 
 Fakes only (a recording pool; no database). Pinned here:
 

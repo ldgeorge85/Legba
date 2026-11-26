@@ -3,11 +3,11 @@
 
 """Deterministic handler ``forecast_resolver``.
 
-Output: ST1 forecast_resolver — the REAL product is the side-written
+Output: forecast_resolver — the REAL product is the side-written
 forecast_resolution_records proposals (migration 0244); the returned summary
 is a per-run counts receipt.
 
-Dispatch: ST1 forecast_resolver — every 6 h: due sealed forecast questions
+Dispatch: forecast_resolver — every 6 h: due sealed forecast questions
 get a rule's PROPOSAL (no model), series_threshold settles by rule, every
 new proposal / needed judgement raises one alert. The operator confirms or
 overrides the rest (scripts/resolve_forecasts.py).

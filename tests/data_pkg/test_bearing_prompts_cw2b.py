@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""CW-2b — the consequence-specificity prompt line (K-4 R4 §11.3), pinned.
+"""The consequence-specificity prompt line (K-4 R4 §11.3), pinned.
 
 R4's F1 class: 3 of the round's 6 residual failures were the same shape —
 "the question names a country's imports and the signal never mentions that

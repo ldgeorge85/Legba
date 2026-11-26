@@ -13,7 +13,7 @@
  * `resolveBasemapStyle()` HEAD-probes the file and returns a self-hosted dark
  * style if present, else the fallback. The minimal style here is land/water/
  * borders only (no label glyphs → no external font dependency); the World map
- * agent layers labels (self-hosted glyphs) on top in Wave 1.
+ * agent layers labels (self-hosted glyphs) on top.
  */
 import type { StyleSpecification } from 'maplibre-gl'
 

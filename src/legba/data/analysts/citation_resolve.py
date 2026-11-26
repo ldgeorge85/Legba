@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Resolving a desk's ``[N]`` markers against its render-time index.
 
-EXTRACTED VERBATIM from ``inline_target`` (2026-11-15, lane DM-A) to pay for
+EXTRACTED VERBATIM from ``inline_target`` to pay for
 the run's typed handed list (``AnalystMethodResult.handed_refs``) under the
 module-size gate: :func:`_citation_from_index_entry`, :func:`_extract_citations`
 and :data:`_PREBUILT_CITATION_KEY` are imported back ONE WAY and re-exported

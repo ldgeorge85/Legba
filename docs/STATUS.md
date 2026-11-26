@@ -16,7 +16,7 @@ Not-built things and their guards are in [SEAMS.md](SEAMS.md). Knob defaults are
 | State | Means |
 |---|---|
 | **live** | Runs in a stock deployment once its descriptor is active. |
-| **off by default** | Built and tested, behind an environment variable or descriptor option that ships off. |
+| **off by default** | Built and tested, behind an environment variable or descriptor option whose shipped default is off. An installation may have switched it on; this page states the default, not any one installation's settings. |
 | **ships draft** | The descriptor ships `draft`. An admin activates it through the lifecycle route. The example profile's lifecycle overlay activates it. |
 | **partial** | Part of it runs; the note says which part. |
 | **not built** | No code. Where a surface exists it refuses with an error. |
@@ -49,7 +49,7 @@ drift.
 | Capability | State | Note |
 |---|---|---|
 | Source-first acquisition and predicate fan-out | live | One fetch per source; signals routed to every subject whose predicate matches. |
-| Enrichment (language, translation, geo, entities, relations) | live | Runs on the `legba-models` service. |
+| Enrichment (language, translation, geo, entities, relations) | live | Runs on whichever NLP component the instance binds (`LEGBA_NLP_COMPONENT_ID`): the `legba-models` service by default, or the model gateway's language-processing component, which has no summaries and translates through the chat model ([AI_MODELS.md](AI_MODELS.md#the-legba-models-nlp-service)). |
 | Bounded reasoning units writing cited findings | live | Each unit answers one question over a cited slice; every run ends in verification. |
 | Claim-checking pass | live | Citation floor plus a judge model. `effective_confidence = min(confidence, faithfulness)`; nothing is deleted. |
 | Unscoped-absence backstop | live | Flags a strong "nothing happened" claim that cites nothing. |

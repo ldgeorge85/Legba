@@ -123,7 +123,7 @@ KIND_NAME: str = "critic"
 SCHEMA_VERSION: str = "legba/analyst.critic/1-0-0"
 HANDLER_VERSION: str = "0.1.0"
 PROMPT_MODULE_PATH: str = "legba.prompts.critic.v1"
-"""Canonical ``legba.prompts.<kind>.v1`` path per Wave B prereq #4."""
+"""Canonical ``legba.prompts.<kind>.v1`` path."""
 
 # Output kind the host's analyst-output dispatcher writes for this kind.
 # CritiquePayload + ``analyst_outputs`` table with kind='critique'.

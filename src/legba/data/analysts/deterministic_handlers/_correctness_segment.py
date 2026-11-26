@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """G1 — FREEZE and SEGMENT: the live heads become gradable claim atoms.
 
-A straight port of ``planning/PROGRAM1_2026-09-16/freeze_step2_heads.py``'s
+A straight port of the hand-run freeze script's
 pure half (the halves that touch the DB live in the handler). Semantics are
 carried, not reinvented — this module's whole job is that a claim the hand-run
 kept is a claim the job keeps, and a span the hand-run excluded is excluded here

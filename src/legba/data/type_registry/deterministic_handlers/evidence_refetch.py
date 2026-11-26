@@ -3,14 +3,14 @@
 
 """Deterministic handler ``evidence_refetch``.
 
-Output: evidence_refetch (W11-F138) — the textless-backlog drain for hosts
+Output: evidence_refetch — the textless-backlog drain for hosts
 whose fetch policy changed (timesofisrael.com / jpost.com): re-runs the
 archiver's own fetch leg on the newest N payload.text-less signals, oldest
 first inside the window. Pure side-effect sweep; the per-run counts
 (refetched / archived / blocked_by_challenge / per_source) live in the
 trace.
 
-Dispatch: evidence_refetch — W11-F138: the backlog drain that re-runs the
+Dispatch: evidence_refetch — The backlog drain that re-runs the
 archiver's fetch leg on textless signals from hosts whose fetch policy
 changed (the _fetch_policy registry's impersonate=on set). Ships DRAFT; the
 VM applies it, nothing runs it live from the tree.

@@ -1,4 +1,4 @@
-# P3-T1 — per-COUNTRY composition over the P2 verified UNIT sub-claims.
+# Per-COUNTRY composition over the verified UNIT sub-claims.
 #
 # The COMPOSITION leg: a second-order finding per G20 country that
 # reads the bounded units for THAT country — leadership_transition,
@@ -7,7 +7,7 @@
 # proliferation_watch — and synthesizes ONE per-country read. It reuses the EXISTING
 # meta_findings_synthesizer kind
 # (Approach A: CONFIGURE, no new Python kind); the per-country behavior is all
-# descriptor + the P3-T2 READ_SLICE change (target-scope + verify-floor).
+# descriptor + the READ_SLICE change (target-scope + verify-floor).
 #
 # WHY this is per-country while analyst_meta_synthesizer.yaml is global: this
 # descriptor carries a `subscription.targets` block. The runtime's
@@ -16,7 +16,7 @@
 # per matched target with `target_filter=<country target id>`; absent ⇒ one
 # global run. So the SAME kind runs global under analyst_meta_synthesizer.yaml and
 # per-country here, with no code fork. The kind's READ_SLICE honors the run's
-# `target_filter` (P3-T2): it scopes the source-finding slice to that country AND
+# `target_filter`: it scopes the source-finding slice to that country AND
 # admits ONLY faithfulness-verify-PASSED sub-claims above the floor.
 #
 # HONESTY: a country whose four units produced no verify-passed sub-claim yields
@@ -24,7 +24,7 @@
 # "No source findings to synthesize" finding rather than inventing a read.
 #
 # derived_from is stamped by the kind from the contributing unit finding ids, so
-# the per-country composition lineage back-walks one hop to the four P2 units and
+# the per-country composition lineage back-walks one hop to the four units and
 # two hops to their cited signals.
 
 identity:
@@ -38,7 +38,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: active
-  owner: p3_t1
+  owner: owner@local
 
 subscription:
   # PRESENT `targets` block ⇒ per-COUNTRY analyst. `_cadence_targets` matches the
@@ -52,9 +52,9 @@ subscription:
   # The synth reads the OUTPUTS of these six units, not raw signals. READ_SLICE
   # resolves this set from other_analysts[].id and — because the run is
   # target-scoped — restricts to the RUNNING country's findings, verify-floored.
-  # FRAME-1 (2026-08-20, ratified): the window on these SOURCES is an
+  # The window on these SOURCES is an
   # ADMISSIBILITY HORIZON, not a freshness cliff. 24h was a wall-clock gate over
-  # an 11h-cooldown cadence that HOLDS on a quiet desk: on 2026-08-20 the BF
+  # an 11h-cooldown cadence that HOLDS on a quiet desk: in one case the BF
   # units had last fired 42h earlier, the trailing-24h slice was mechanically
   # empty, and the product printed "No source findings to synthesize" over seven
   # heads carrying the window's major story. 336h (14 days) admits each unit's
@@ -82,7 +82,7 @@ subscription:
     - id: economic_coercion
       data_types: [finding]
       time_window: 336h
-    # S1-T6: proliferation_watch is a NARROW unit (has_tag("nuclear_watch") — 8
+    # Proliferation_watch is a NARROW unit (has_tag("nuclear_watch") — 8
     # desks). Safe to list here: the READ_SLICE is verify-floored via an INNER
     # JOIN, so on the 17 non-nuclear desks it contributes ZERO rows (naturally
     # absent), and on a nuclear desk it contributes its head. It is deliberately
@@ -104,7 +104,7 @@ method:
   # chat_complete shape the kind uses (same as analyst_meta_synthesizer.yaml).
   kind: llm_planner
   prompt_module: "legba.prompts.meta_findings_synthesizer.v1"
-  # F-3 (DEMOTION_D1_SPEC §7) — no method.bounded_question here, deliberately.
+  # No method.bounded_question here, deliberately.
   # This tier synthesizes across the eight bounded units (each with its OWN
   # bounded_question) into one composite country read; it does not answer a
   # single bounded question itself. When THIS composition's head is cited as a
@@ -115,15 +115,15 @@ method:
     # Model-card sampling (fleet-wide 1.0 per the 2026-07-24 audit + A/B). Honored by
     # the meta kind since the W-3 deps-builder fix (descriptor-else-kind-default).
     temperature: 1.0
-    # MODEL POLICY (operator): synthesis on the CORE plane gpt-oss-120B via a
+    # MODEL POLICY (operator): synthesis on the CORE plane model via a
     # stack_ref ($0). NEVER hardcode a model — keeping it a stack_ref makes
     # switching to Opus later a one-line descriptor PUT.
     primary:
       factory_kind: stack_ref
       raw: llm.primary.openai_compat
       expected_family: llm_provider
-    # P3-T3: faithfulness VERIFY judge over the COMPOSITION itself. Currently the
-    # SAME core reasoning model (llm.primary.openai_compat, gpt-oss-120B) that
+    # Faithfulness VERIFY judge over the COMPOSITION itself. Currently the
+    # SAME core reasoning model (llm.primary.openai_compat, the core model) that
     # writes the units + this composition — NOT a cross-family judge. Temporary:
     # the 8B Llama-3.1-8B judge proved too weak (harsh + mis-aimed), so the strong
     # model runs the judging to prove the flow; a dedicated reasoning judge is
@@ -139,7 +139,6 @@ method:
       factory_kind: stack_ref
       raw: llm.primary.openai_compat
       expected_family: llm_provider
-    max_tokens: 768            # the kind's DEFAULT_MAX_TOKENS (narrower context)
   budget_tokens_per_day: 0
   retry:
     budget:
@@ -156,7 +155,7 @@ cadence:
   # each country's cadence (12h→24h). 11h keeps a 1h margin (matches the units).
   cooldown_seconds: 39600
 
-# S3-T4 — agency grant: the escalate_finding pack. A per-country COMPOSITION
+# Agency grant: the escalate_finding pack. A per-country COMPOSITION
 # whose second-order READ crosses the alert gate (effective_confidence ×
 # severity, folded post-verify) fires `escalate` through the full agency
 # pipeline. This composition runs PER-COUNTRY (target_id = the desk), so the

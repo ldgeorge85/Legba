@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W10 TAX-2 — source-side classification stamping.
+"""Source-side classification stamping.
 
-* The tag shape (W8-F1): one regex, bare OR ``<family>:<value>``, the prefix a
+* The tag shape: one regex, bare OR ``<family>:<value>``, the prefix a
   family shape; a declared classification is never bare and never ``src``;
   the new ``scope.classifications`` key is HASH-NEUTRAL when empty.
 * The ingest coercion keeps a family-shaped tag verbatim and still flattens a
@@ -153,7 +153,7 @@ def test_a_target_scope_tag_admits_frame_kind():
 
 
 # ---------------------------------------------------------------------------
-# The ingest coercion (W8-F1)
+# The ingest coercion
 # ---------------------------------------------------------------------------
 
 

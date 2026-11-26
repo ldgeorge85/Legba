@@ -3,8 +3,7 @@
 # A META analyst kind (no subscription.targets => single global sweep per tick,
 # the relationship_reifier / situation_clustering precedent). It is the REAL
 # hypotheses producer (the situation-gated deterministic hypothesis_lifecycle
-# emitted 0 rows because every situation went dormant — see
-# planning/DATA_ANALYSIS_DEEP_REVIEW_2026-06-16.md §1.2). This kind is NOT gated
+# emitted 0 rows because every situation went dormant). This kind is NOT gated
 # on active situations; it reads the temporally-current evidence base directly.
 #
 # Each tick, per focal topic (recent situation, ranked by intensity):
@@ -36,7 +35,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: active
-  owner: piece_c_ach_activation
+  owner: owner@local
 
 subscription:
   # No `targets` block => META analyst (single global sweep; _cadence_targets
@@ -61,12 +60,11 @@ method:
   kind: llm_planner
   prompt_module: "legba.prompts.competing_hypotheses.v1"
   llm:
-    thinking: "on"   # T-2: low-volume synthesis seat thinks on every call
+    thinking: "on"   # low-volume synthesis seat thinks on every call
     primary:
       factory_kind: stack_ref
       raw: llm.primary.openai_compat
       expected_family: llm_provider
-    max_tokens: 1024           # a small JSON list of competing theses per topic
     temperature: 1.0
     max_topics: 12             # hard per-run cap on focal topics (budget bound)
   budget_tokens_per_day: 0

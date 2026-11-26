@@ -1,108 +1,20 @@
 /**
- * Tests for wallModel (P1-7) — cursor lifecycle, movers grouping/sorting,
+ * Tests for wallModel (P1-7) — the since path, movers grouping/sorting,
  * top-severe ordering, and the health rollup. Pure logic, no DOM.
  */
 import { describe, it, expect } from 'vitest'
 import {
-  DEFAULT_LOOKBACK_HOURS,
-  MAX_LOOKBACK_DAYS,
-  WALL_CURSOR_KEY,
-  __resetWallVisit,
-  markWallRead,
-  wallVisitForPage,
   bandChangeDeskLabel,
   bandDirectionTone,
   buildMovers,
   healthRollup,
-  loadWallCursor,
-  resolveWallCursor,
   sincePath,
-  storeWallCursor,
   topSevereVerified,
   type SinceFinding,
   type SinceResponse,
 } from './wallModel'
 import type { AnalystCadenceRow, SourceFiringRow } from '@/lib/api'
 
-const NOW = Date.parse('2026-07-24T12:00:00Z')
-
-// ---------------------------------------------------------------------------
-// Cursor lifecycle
-// ---------------------------------------------------------------------------
-
-describe('resolveWallCursor', () => {
-  it('first-ever open → 24h default lookback', () => {
-    const r = resolveWallCursor(null, NOW)
-    expect(r.firstVisit).toBe(true)
-    expect(r.clamped).toBe(false)
-    expect(Date.parse(r.cursor)).toBe(NOW - DEFAULT_LOOKBACK_HOURS * 3_600_000)
-  })
-
-  it('an invalid stored value falls back to the 24h default', () => {
-    const r = resolveWallCursor('not-a-date', NOW)
-    expect(r.firstVisit).toBe(true)
-    expect(Date.parse(r.cursor)).toBe(NOW - DEFAULT_LOOKBACK_HOURS * 3_600_000)
-  })
-
-  it('a valid stored cursor is used verbatim', () => {
-    const stored = '2026-07-23T08:30:00.000Z'
-    const r = resolveWallCursor(stored, NOW)
-    expect(r.firstVisit).toBe(false)
-    expect(r.clamped).toBe(false)
-    expect(Date.parse(r.cursor)).toBe(Date.parse(stored))
-  })
-
-  it('clamps a cursor older than the 90d server bound (route 400s beyond it)', () => {
-    const ancient = new Date(NOW - 200 * 86_400_000).toISOString()
-    const r = resolveWallCursor(ancient, NOW)
-    expect(r.clamped).toBe(true)
-    const age = NOW - Date.parse(r.cursor)
-    expect(age).toBeLessThanOrEqual(MAX_LOOKBACK_DAYS * 86_400_000)
-  })
-
-  it('clamps a future cursor (clock skew) back to now', () => {
-    const future = new Date(NOW + 3_600_000).toISOString()
-    const r = resolveWallCursor(future, NOW)
-    expect(r.clamped).toBe(true)
-    expect(Date.parse(r.cursor)).toBe(NOW)
-  })
-})
-
-describe('load/storeWallCursor', () => {
-  function memStorage(): Pick<Storage, 'getItem' | 'setItem'> & { map: Map<string, string> } {
-    const map = new Map<string, string>()
-    return {
-      map,
-      getItem: (k: string) => map.get(k) ?? null,
-      setItem: (k: string, v: string) => void map.set(k, v),
-    }
-  }
-
-  it('round-trips server_now through the storage key', () => {
-    const s = memStorage()
-    storeWallCursor('2026-07-24T11:59:00Z', s)
-    expect(s.map.get(WALL_CURSOR_KEY)).toBe('2026-07-24T11:59:00Z')
-    expect(loadWallCursor(s)).toBe('2026-07-24T11:59:00Z')
-  })
-
-  it('never moves the cursor backwards (a stale poll cannot rewind)', () => {
-    const s = memStorage()
-    storeWallCursor('2026-07-24T11:00:00Z', s)
-    storeWallCursor('2026-07-24T10:00:00Z', s)
-    expect(s.map.get(WALL_CURSOR_KEY)).toBe('2026-07-24T11:00:00Z')
-  })
-
-  it('ignores an unparseable server_now', () => {
-    const s = memStorage()
-    storeWallCursor('garbage', s)
-    expect(s.map.size).toBe(0)
-  })
-
-  it('tolerates a null storage (private mode)', () => {
-    expect(loadWallCursor(null)).toBe(null)
-    expect(() => storeWallCursor('2026-07-24T11:00:00Z', null)).not.toThrow()
-  })
-})
 
 describe('sincePath', () => {
   it('URL-encodes the cursor', () => {
@@ -339,43 +251,5 @@ describe('healthRollup', () => {
   it('empty inputs → green zeros (honest, not fabricated red)', () => {
     const h = healthRollup([], [])
     expect(h).toMatchObject({ signals24h: 0, sourcesTotal: 0, analystsTotal: 0, worst: 'green' })
-  })
-})
-
-// ---------------------------------------------------------------------------
-// X1/D1 — one anchor per page load; only a real read moves the cursor
-// ---------------------------------------------------------------------------
-
-describe('wallVisitForPage + markWallRead (X1/D1)', () => {
-  function memStorage(initial: Record<string, string> = {}) {
-    const m = new Map(Object.entries(initial))
-    return {
-      getItem: (k: string) => m.get(k) ?? null,
-      setItem: (k: string, v: string) => void m.set(k, v),
-    }
-  }
-
-  it('resolves the anchor once per page load — a later stamp does not move it', () => {
-    __resetWallVisit()
-    const store = memStorage({ [WALL_CURSOR_KEY]: '2026-07-24T06:00:00Z' })
-    const first = wallVisitForPage(store, NOW)
-    store.setItem(WALL_CURSOR_KEY, '2026-07-24T11:59:00Z')
-    const second = wallVisitForPage(store, NOW + 60_000)
-    expect(second).toBe(first)
-    expect(second.cursor).toBe('2026-07-24T06:00:00.000Z')
-    __resetWallVisit()
-    expect(wallVisitForPage(store, NOW).cursor).toBe('2026-07-24T11:59:00.000Z')
-    __resetWallVisit()
-  })
-
-  it('a fetch the reader could not see is not a read', () => {
-    const store = memStorage()
-    const at = '2026-07-24T12:00:00Z'
-    expect(markWallRead(at, { tileVisible: false, documentVisible: true }, store)).toBe(false)
-    expect(markWallRead(at, { tileVisible: true, documentVisible: false }, store)).toBe(false)
-    expect(markWallRead(null, { tileVisible: true, documentVisible: true }, store)).toBe(false)
-    expect(store.getItem(WALL_CURSOR_KEY)).toBeNull()
-    expect(markWallRead(at, { tileVisible: true, documentVisible: true }, store)).toBe(true)
-    expect(store.getItem(WALL_CURSOR_KEY)).toBe(at)
   })
 })

@@ -1,12 +1,12 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W11-F108 — the bearing gate's SHADOW (a decision model or a chat model).
+"""the bearing gate's SHADOW (a decision model or a chat model).
 
 WHAT IT IS
 ----------
 The bearing gate (:mod:`.bearing_gate`) asks a small chat model, per candidate
 edge, whether new evidence bears on an open question — ≈ 32,000 calls a week.
-A DECISION model behind the same gateway (``clef-flash``, ``POST /decide``)
+A DECISION model behind the same gateway (``POST /decide``)
 answers exactly that shape of question — a typed choice with a probability per
 option, in ≈ 0.3 s — and may do it better or cheaper. Before it may decide
 anything it is measured: every edge the gate ASKED is also asked of the shadow,
@@ -34,9 +34,9 @@ its eight few-shot exemplars are NOT sent: a decision model takes instructions
 and criteria, not a conversation, and the measurement is of the model as it
 would be deployed.
 
-EITHER SHAPE OF SHADOW (W11-F148)
+EITHER SHAPE OF SHADOW
 ---------------------------------
-On 2026-11-05 the roles swapped: clef-flash became the GATE and the chat judge
+On 2026-11-05 the roles swapped: the decision model became the GATE and the chat judge
 (Gemma) its shadow for a week. So the shadow, like the gate, asks whichever
 shape of component it is given:
 
@@ -109,8 +109,8 @@ __all__ = [
 ]
 
 #: ``bearing_shadow_ref`` — OFF in code. Turning the shadow on is a
-#: descriptor PUT naming a decision component (``llm.decide.innoai_clef_flash``)
-#: or, since W11-F148, a chat component (``llm.verify.innoai_gemma.openai_compat``).
+#: descriptor PUT naming a decision component (``llm.decide.gateway_typed_choice``)
+#: or, since W11-F148, a chat component (``llm.verify.gateway_judge.openai_compat``).
 DEFAULT_BEARING_SHADOW_REF: str | None = None
 
 #: The ``leg`` tag on the shadow's ``analyst_traces.llm_calls`` receipts and
@@ -121,7 +121,7 @@ SHADOW_LEG = "bearing_shadow"
 #: a future pre-resolved wiring) — the gate's ``SLM_DEPS_EXTRA_KEY`` idiom.
 SHADOW_DEPS_EXTRA_KEY = "claim_watch_bearing_shadow_decider"
 
-#: The question, ONE definition shared with the gate (W11-F148): these names
+#: The question, ONE definition shared with the gate: these names
 #: are the gate module's, re-exported under the shadow's original names.
 SHADOW_QUESTION_ID = BEARING_QUESTION_ID
 SHADOW_INSTRUCTIONS = BEARING_INSTRUCTIONS
@@ -254,7 +254,7 @@ async def _ask_all(
             )
             answer = answers[SHADOW_QUESTION_ID]
             return str(answer["choice"]), answer
-        # W11-F148 — a CHAT shadow: the gate's own conversation and call.
+        # A CHAT shadow: the gate's own conversation and call.
         response = await asyncio.wait_for(
             gate_llm_call(client, cand), timeout=SHADOW_TIMEOUT_SECONDS
         )
@@ -409,7 +409,7 @@ async def run_bearing_shadow(
             return []
         try:
             client = await _resolve_client(deps, ref)
-            # W11-F148 — a decision OR a chat component; the shape is the
+            # A decision OR a chat component; the shape is the
             # branch in ``_ask_all``. Only a client with neither surface is
             # refused.
             if not is_decide_client(client) and not callable(

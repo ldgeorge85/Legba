@@ -533,7 +533,7 @@ def _is_json_option_value(value: Any) -> bool:
 class MethodBlock(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
 
-    # Per L-105 §2.1 / Wave B prereqs:
+    # Handler kinds:
     #
     #   * ``llm_planner``      — multi-step planner with a static prompt.
     #   * ``llm_single_turn``  — one-shot Predict-style LLM call.

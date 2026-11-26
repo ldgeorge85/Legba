@@ -369,19 +369,28 @@ With `LEGBA_AUTH_SIGNIN=1`:
    shows your name, `admin` and `owner`. `GET /api/v1/auth/me` with each service token answers
    `kind: service` and its name. The registry log shows no `principal=shared` line and no
    `registry.auth.break_glass` line from a service.
-6. **Invite people.** The console has no user-management screen; an admin calls the API. From the
-   host, with the break-glass token (logged on every use):
+6. **Invite people from the Users page.** Signed in as an admin, open **Users** from the `＋`
+   catalog on the operator side or with ⌘K. Readers and contributors are not offered the page. It
+   lists every account with its role, whether it is active or disabled, when it was added and last
+   seen, and how many sessions it holds, then the invites still waiting to be accepted.
 
-   ```bash
-   curl -s -X POST -H "Authorization: Bearer $LEGBA_REGISTRY_API_TOKEN" -H "Content-Type: application/json" \
-     -d '{"email":"someone@example.org","role":"reader","display_name":"Someone"}' \
-     http://127.0.0.1:8090/api/v1/auth/invite
-   ```
+   - **Invite** asks for an email, an optional name and a role, and shows the invitation link once,
+     with a copy button. The platform sends no email: send the link to the person yourself. The
+     registry keeps only a hash of it, so it cannot be shown again; it works once and expires after
+     seven days (`LEGBA_INVITE_TTL_HOURS`). The person chooses a password on the invitation screen.
+   - **Withdraw** on a pending invite stops its link at once. The same email can be invited again.
+   - **Role**, **Disable** / **Enable** and **End sessions** on an account each ask you to confirm
+     first, in one sentence that says what will happen. Disabling ends every session the account
+     holds at once; ending sessions signs the person out everywhere without stopping them signing in
+     again.
+   - The owner always stays an active admin, and the page will not let the last active admin step
+     down or be disabled. Every change is recorded in the audit log under your name.
 
-   The answer carries `invite_path` (`/#invite=<token>`) once; send the person your instance's address
-   with that fragment, and they choose a password on the invitation screen. Each link works once.
-   `GET /api/v1/auth/users` lists accounts; `PATCH /api/v1/auth/users/{user_id}` changes a role or
-   disables an account, which ends every session it holds.
+   With sign-in off the page says so and lists these steps instead of an empty table. The same
+   actions are routes under `/api/v1/auth/admin/` ([API_ROLES.md](API_ROLES.md)), for admins only; the
+   service credentials are refused on them. What still needs the command line is creating the owner
+   (step 2): the console cannot make an owner, grant or remove the owner flag, or move it to someone
+   else.
 7. **Optionally drop the perimeter.** Once sign-in works for everyone who needs it, set
    `LEGBA_EDGE_PERIMETER=0` and recreate the edge.
 

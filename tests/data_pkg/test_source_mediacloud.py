@@ -1,13 +1,12 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for :class:`legba.data.sources.mediacloud.MediaCloudSourceHandler`
-(L-133).
+"""Tests for :class:`legba.data.sources.mediacloud.MediaCloudSourceHandler`.
 
 Coverage:
 
   * Config schema validation (required api_key_secret + query, defaults,
     rejection of unknown fields).
-  * L-102 source-kind class-var contract conformance.
+  * Source-kind class-var contract conformance.
   * Happy path: single page → multiple Signals, payload shape, cursor
     persistence, health record on success.
   * Pagination: multi-page sweep — pagination_token flows through and the

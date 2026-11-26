@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """THE RESEARCH PROGRAM'S ONE FLAG — ``LEGBA_RESEARCH_EVIDENCE``.
 
-``planning/RESEARCH_PROGRAM_SPEC_2026-09-05.md`` §6.2 / §0.12 rules ONE flag
-with THREE values for the whole outbound-research program::
+The outbound-research program is governed by ONE flag
+with THREE values::
 
     off        the write path is dark. ``web_evidence`` refuses loudly, the
                coverage-floor dispatch writes NO question, and the pre-program
@@ -14,14 +14,13 @@ with THREE values for the whole outbound-research program::
                and research is EXCLUDED from every desk's reactive slice.
     desks      the slice exclusion lifts. This is the cutover.
 
-WHY THREE VALUES AND NOT TWO BOOLEANS (§6.2, flagged F-4). The middle rung is
-not a build stage, it is the POISONING ROLLBACK: on a bad day the operator
-pulls research out of every desk's eyes with one env var while keeping the
+WHY THREE VALUES AND NOT TWO BOOLEANS. The middle rung is
+not a build stage, it is the POISONING ROLLBACK: on a bad day one pulls research out of every desk's eyes with one env var while keeping the
 evidence, the archive, the counters and the audit trail intact. Two booleans
 would admit the incoherent state "excluded from desks but never written",
 which means nothing. The cost is a STRING flag where the house style
 (``LEGBA_COMPOSITION_ASSEMBLY``, ``assembly_payload.assembly_enabled``) is
-boolean 0/1 — the spec flags that trade and takes it deliberately.
+boolean 0/1 — a deliberate trade.
 
 WHY THIS MODULE EXISTS RATHER THAN A PRIVATE READER PER TRAIN. Three trains
 read the same flag from three packages — R-A's ``web_evidence`` tool

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """One-shot generator: emit ``0019_iso_countries_seed.sql``.
 
-Owned by the L-181 brief. Re-running regenerates the same file deterministically
+Owned by the brief. Re-running regenerates the same file deterministically
 because pycountry's underlying ISO-3166-1 dataset is fixed per pycountry
 release, and the UN M49 region / subregion / languages mappings below are
 inlined verbatim from the official UN Statistics Division M49 listing
@@ -291,7 +291,7 @@ M49: dict[str, tuple[str, str]] = {
     "WF": ("Oceania", "Polynesia"),
     "WS": ("Oceania", "Polynesia"),
 
-    # --- Antarctica (own region per L-106 §3 worked example) ---
+    # --- Antarctica (own region per worked example) ---
     "AQ": ("Antarctica", "Antarctica"),
     "BV": ("Antarctica", "Antarctica"),
     "GS": ("Antarctica", "Antarctica"),
@@ -582,10 +582,10 @@ def main() -> int:
         rows.append((iso2, iso3, numeric, name, official, region, subregion, languages_json))
 
     out = sys.stdout
-    out.write("-- L-181 migration 0019 — ISO 3166-1 country snapshot.\n")
+    out.write("-- migration 0019 — ISO 3166-1 country snapshot.\n")
     out.write("--\n")
     out.write("-- Per-row snapshot of the ISO 3166-1 country list, the default backing\n")
-    out.write("-- list for the L-181 `country_list_discovery` discovery kind. One row per\n")
+    out.write("-- list for the `country_list_discovery` discovery kind. One row per\n")
     out.write("-- country / dependent territory recognised by ISO 3166-1 (249 entries as\n")
     out.write("-- of the pycountry snapshot used at generation time). Columns mirror what\n")
     out.write("-- the kind's CandidateTarget.label_set exposes:\n")
@@ -597,7 +597,7 @@ def main() -> int:
     out.write("--   official     Official name when distinct from `name`.\n")
     out.write("--   region       UN M49 region (`Americas`, `Africa`, `Asia`, `Europe`,\n")
     out.write("--                `Oceania`, `Antarctica`). The `keep`/`drop` predicates in the\n")
-    out.write("--                L-106 §3 worked example branch on this column.\n")
+    out.write("--                worked example branch on this column.\n")
     out.write("--   subregion    UN M49 subregion (`Northern America`, `Latin America and\n")
     out.write("--                the Caribbean`, …).\n")
     out.write("--   languages    JSONB list of BCP-47 locale strings, ordered by usage.\n")

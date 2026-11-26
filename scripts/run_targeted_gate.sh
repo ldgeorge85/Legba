@@ -97,8 +97,8 @@ PYTEST_ARGS=()
 if [ "${GATE_FULL}" = "1" ]; then PYTEST_ARGS=(tests/); else PYTEST_ARGS=(${TESTS[@]+"${TESTS[@]}"}); fi
 PYTEST_ARGS+=(-p no:randomly -rfE)
 # node_modules is the checkout's own (mounted): refreshed with `npm ci` when it is
-# missing or OLDER than the lockfile (roll 81: maplibre-gl 4.7.1 sat installed for
-# a day after the lockfile moved to 5.24.0, and the gate tested the old library).
+# missing or OLDER than the lockfile (a stale node_modules once sat on maplibre-gl 4.7.1
+# for a day after the lockfile moved to 5.24.0, and the gate tested the old library).
 UI_CMD='if [ ! -f node_modules/.package-lock.json ] || [ package-lock.json -nt node_modules/.package-lock.json ]; then npm ci --no-audit --no-fund; fi && npm run lint && npm run lint:tokens && npm run lint:absence && npm run test'
 
 if [ "${DRY_RUN}" -eq 1 ]; then

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Gate G2's NUMBER rule (lane S-6): what a figure in a statement claims, and
+"""Gate G2's NUMBER rule: what a figure in a statement claims, and
 which figures in a quote state it.
 
 A desk writes "killed ten", "about 300", "18–19 November", "a 48-hour

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""``stream_json`` — the first SUBSCRIBE-capable source kind (lane I-4).
+"""``stream_json`` — the first SUBSCRIBE-capable source kind.
 
 A subscribed source's transport (``subscribe.transport``, e.g. ``sse``)
 hands the spine one :class:`~.stream_event.StreamEvent` at a time; this kind

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Geocoding filter handler (L-153).
 
-Implements the L-102 §3 filter/enrichment-kind contract. Each in-flight
+Implements the filter/enrichment-kind contract. Each in-flight
 :class:`legba.data.sources.Signal` is annotated with a structured ``geo``
 block on its ``payload``:
 
@@ -50,7 +50,7 @@ publisher's origin. ``transform`` runs, in order:
    payload (NWS Polygon, USGS/GDACS/NASA point) is attributed offline by
    point-in-country and short-circuits everything below. A point the record
    declares authoritative that lies in no country stops the ladder too: the
-   signal is filed AT SEA, under no country (lane N-R, ``_geo_precedence``).
+   signal is filed AT SEA, under no country (``_geo_precedence``).
 1. **geo.location_name**: if ``signal.payload["geo"]["location_name"]`` is
    present, geocode that directly.
 2. **entities** (in-body NER): the ``country`` / ``location`` -class
@@ -80,7 +80,7 @@ publisher's origin. ``transform`` runs, in order:
    (``.me``) — neither describes the story, so it only fires when nothing
    in the body resolved.
 
-Lane N-O: an OFFICIAL source with a declared ``scope.geo`` (an issuing
+An OFFICIAL source with a declared ``scope.geo`` (an issuing
 authority) runs tiers 0-3-lead only; its declared country is always in the
 block and the subject-zone countries are added beside it
 (:mod:`._geo_precedence` — ``payload.geo.countries`` / ``derivation``).
@@ -104,7 +104,7 @@ Failure semantics
 The handler never drops a signal: if every candidate fails to resolve,
 :meth:`transform` returns the signal unchanged (no ``geo`` block
 populated). Transient backend errors (timeouts, 5xx, quota exceeded) are
-logged and surface in the next ``health_check``; per L-102 §7 they map to
+logged and surface in the next ``health_check``; they map to
 ``TransientFailure``-style retry semantics at the runtime layer.
 
 This module never imports from ``legba.data.runtime`` — the runtime
@@ -419,8 +419,8 @@ class GoogleBackend:
     """:mod:`geopy` Google V3 adapter, wrapped to be async-safe.
 
     Requires an API key resolved from the credentials vault. The runtime
-    injects the resolved key at handler construction time (per topology
-    §9.9 — credentials never live inline in the descriptor).
+    injects the resolved key at handler construction time (credentials never
+    live inline in the descriptor).
     """
 
     name: ClassVar[str] = "google"
@@ -590,8 +590,8 @@ class GeocodeConfig(BaseModel):
     # req/sec client-side throttle.
     nominatim_url: str | None = None
 
-    # Vault reference for the Google API key. Resolved by the runtime
-    # (per topology §9.9); the handler never sees the raw value via
+    # Vault reference for the Google API key. Resolved by the runtime; the
+    # handler never sees the raw value via
     # config. Tests pass `api_key` directly to :class:`GoogleBackend`.
     google_api_key_secret_ref: str | None = None
 
@@ -717,7 +717,7 @@ def _build_country_name_index() -> dict[str, str]:
         "czech republic": "CZ",
     }
     idx.update(aliases)
-    # Lane N-B: the DRC / Republic-of-Congo forms pycountry lacks
+    # The DRC / Republic-of-Congo forms pycountry lacks
     # (_geocode_rules.EXTRA_COUNTRY_NAMES), so "DR Congo" beats its "Congo".
     idx.update(EXTRA_COUNTRY_NAMES)
     return idx
@@ -741,7 +741,7 @@ _DEMONYM_INDEX = _rules.build_demonym_index(_DEMONYM_MAP, _COUNTRY_NAME_INDEX)  
 
 # ISO2 / ISO3 standalone-token regex (e.g. "BR" or "BRA" appearing as a
 # whole word). We filter these by membership in pycountry's tables.
-# Lane N-O: a DIGIT also bounds a code ("...56BA9105E..." image-hash hex was
+# A DIGIT also bounds a code ("...56BA9105E..." image-hash hex was
 # Bosnia, "MQ-9" / "GLP-1" model numbers were Martinique / Guadeloupe).
 _ISO_TOKEN_REGEX = re.compile(r"(?<![A-Za-z0-9])([A-Z]{2,3})(?![A-Za-z0-9]|-\d)")
 
@@ -795,7 +795,7 @@ _GEO_TOKEN_STOPSET = _US_STATE_CODES | _TZ_ABBREVS | _COMMON_WORD_ISO_TOKENS
 
 def _iso_token_iso2(token: str, language: str | None) -> str | None:
     """ISO2 for a bare uppercase token, or ``None`` when the token is in the
-    stopset or the source language's abbreviation table (lane N-O)."""
+    stopset or the source language's abbreviation table."""
     if token in _GEO_TOKEN_STOPSET or token in abbreviation_collisions(language):
         return None
     c = (pycountry.countries.get(alpha_2=token) if len(token) == 2
@@ -805,13 +805,13 @@ def _iso_token_iso2(token: str, language: str | None) -> str | None:
 
 def _shouting(text: str) -> bool:
     """ALL-CAPS copy (NWS watch bodies, wire slugs): every short word is an
-    uppercase token there, so a bare code is no signal (lane N-O)."""
+    uppercase token there, so a bare code is no signal."""
     letters = [ch for ch in text if ch.isalpha()]
     return len(letters) >= 40 and sum(ch.isupper() for ch in letters) > 0.6 * len(letters)
 
 
 def _name_hits(text: str, language: str | None):
-    """Country-name matches, minus lower-case common words (lane N-O)."""
+    """Country-name matches, minus lower-case common words."""
     for m in _COUNTRY_REGEX.finditer(text):
         if not is_common_word_name(m.group(1), language):
             yield m
@@ -833,7 +833,7 @@ def _first_country_hit(
     agenda" resolved to IRAN — the name "Iran" (offset 33) beat the code "US"
     (offset 21) purely because of pass order, not text order.
 
-    Lane N-B: an AMBIGUOUS bare name ("Congo") resolves by the places that
+    An AMBIGUOUS bare name ("Congo") resolves by the places that
     co-occur with it in ``context`` (default: ``text`` itself) —
     :data:`_geocode_rules.AMBIGUOUS_NAMES`.
     """
@@ -848,7 +848,7 @@ def _first_country_hit(
             iso = disambiguate(m.group(1), iso, text if context is None else context)
             best = (m.start(), iso)
     # Only ISO tokens STRICTLY LEFT of the name hit can beat it.
-    # ALL-CAPS copy: no bare token counts (lane N-O).
+    # ALL-CAPS copy: no bare token counts.
     limit = 0 if _shouting(text) else (best[0] if best is not None else len(text))
     for m2 in _ISO_TOKEN_REGEX.finditer(text):
         if m2.start() >= limit:
@@ -873,7 +873,7 @@ def extract_country_iso2_from_text(
 
     "First" is by POSITION IN THE TEXT — see :func:`_first_country_hit`.
 
-    Lane N-B PERSON-NAME GUARD: with ``entities`` (the payload's NER list) every
+    PERSON-NAME GUARD: with ``entities`` (the payload's NER list) every
     ``person`` surface is blanked first, so "Jim Jordan" is not the country
     (:func:`_geocode_rules.mask_person_names`).
     """
@@ -918,7 +918,7 @@ _LEAD_CHARS = 400
 
 
 def _lead(value: str, max_chars: int = _LEAD_CHARS) -> str:
-    """``value``'s lead zone, never cut mid-word (lane N-O: a 400-char cut
+    """``value``'s lead zone, never cut mid-word (a 400-char cut
     turned NWS "SOUTHEAST INDIANA" into "INDIA")."""
     end = max_chars
     while end < len(value) and value[end].isalnum():
@@ -1175,7 +1175,7 @@ _CACHE_KEY_PREFIX = "legba:filter:geocode"
 class GeocodeHandler:
     """Filter handler for the ``geocode`` kind.
 
-    L-102 §3 conformance:
+    Conformance to the filter contract:
 
       * ``kind = "geocode"``, ``family = "filter"``.
       * Idempotent on ``(signal.content_hash, handler_version)`` — re-running
@@ -1184,7 +1184,7 @@ class GeocodeHandler:
         warn when downstream filters require ``payload.geo``.
     """
 
-    # --- L-102 §1 class-vars ------------------------------------------------
+    # --- class-vars ------------------------------------------------
     kind: ClassVar[str] = "geocode"
     family: ClassVar[str] = "filter"
     schema_version: ClassVar[str] = "legba/filter.geocode/1-0-0"
@@ -1257,7 +1257,7 @@ class GeocodeHandler:
             self._stats["signals_out"] += 1
             return signal
 
-        # Lane N-O: an official source's declared country is ALWAYS in its geo;
+        # An official source's declared country is ALWAYS in its geo;
         # its ladder runs the subject tiers only, and subject-zone countries
         # are ADDED beside the declared one (``_geo_precedence``).
         declared = _prec.issuer_declared_countries(ctx)
@@ -1440,7 +1440,7 @@ class GeocodeHandler:
         return None, None
 
     def subject_country_iso2s(self, payload: Mapping[str, Any]) -> list[str]:
-        """Countries a signal is clearly ABOUT (lane N-O, issuer sources):
+        """Countries a signal is clearly ABOUT (issuer sources):
         named in a configured text field's LEAD zone, or a country-class NER
         entity whose surface sits in one. Offline; token rules applied."""
         lang = _prec.payload_language(payload)
@@ -1501,7 +1501,7 @@ class GeocodeHandler:
 
         Tiers 1-2 are the subject tiers. Everything a previous release emitted
         is still emitted, only re-ranked, so a signal that resolved before
-        still resolves. ``subject_only`` (lane N-O, issuer sources whose
+        still resolves. ``subject_only`` (issuer sources whose
         declared country is the default) stops after tier 2.
         """
         out: list[str] = []

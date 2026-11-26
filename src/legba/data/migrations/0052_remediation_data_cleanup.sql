@@ -21,7 +21,7 @@
 -- fresh cold-start substrate both sets are empty -> a clean no-op.
 --
 -- NOTE: 0052_entity_cross_class_merge.sql (D8 option-B, the 623-fragment drain) is
--- held OPERATOR-OPT-IN in planning/ and is intentionally NOT in this sequence.
+-- held opt-in, outside this sequence, and is intentionally NOT in it.
 
 -- D29: prune the legacy bookkeeping finding backlog (pre-fix housekeeping rows).
 DELETE FROM analyst_outputs

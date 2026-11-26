@@ -1,5 +1,5 @@
 /**
- * The phone's touch floor is 44 × 44 px, BOTH ways (roll 87: the live walk at
+ * The phone's touch floor is 44 × 44 px, BOTH ways (a live walk at
  * 360 px found a subject button reading "Iran" 28 × 44 — `.ph-link` was 44 px
  * tall at any width, so a short name made a narrow control).
  *

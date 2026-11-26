@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane DM-C — the held family on a migrated Postgres (the isolated test
+"""The held family on a migrated Postgres (the isolated test
 stack only).
 
 * the migration sorts after the DM-A / DM-B / DM-G migrations and applies on a

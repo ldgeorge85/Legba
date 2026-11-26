@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W11-G1 — the bake-off grading steps: grader calls, gold drafting, the §6 report.
+"""The bake-off grading steps: grader calls, gold drafting, the §6 report.
 
 Fakes only: no registry, no gateway, no database. The grader / drafter is an
 ``async chat(messages)`` fake and the route probe an ``async probe(run_dir)``
@@ -55,16 +55,16 @@ ARMS6 = ("A", "A-r", "B", "C", "D", "E")
 # ---------------------------------------------------------------------------
 
 
-def _pin(root="nvidia/nemotron-lightning-x", probed_at="T1"):
+def _pin(root="nvidia/nemotron-x", probed_at="T1"):
     comps = {
-        grade_sheet.GRADER_COMPONENT: {"model_name": "lightning-think", "version": "a" * 16,
+        grade_sheet.GRADER_COMPONENT: {"model_name": grade_sheet.GRADER_ALIAS, "version": "a" * 16,
                                        "state": "active", "api_endpoint": "https://gw/v1"},
-        grade_sheet.GOLD_DRAFTER_COMPONENT: {"model_name": "gemma-think", "version": "b" * 16,
+        grade_sheet.GOLD_DRAFTER_COMPONENT: {"model_name": grade_sheet.GOLD_DRAFTER_ALIAS, "version": "b" * 16,
                                              "state": "active", "api_endpoint": "https://gw/v1"},
     }
     listings = {
-        grade_sheet.GRADER_COMPONENT: {"data": [{"id": "lightning-think", "root": root}]},
-        grade_sheet.GOLD_DRAFTER_COMPONENT: {"data": [{"id": "gemma-think"}]},
+        grade_sheet.GRADER_COMPONENT: {"data": [{"id": grade_sheet.GRADER_ALIAS, "root": root}]},
+        grade_sheet.GOLD_DRAFTER_COMPONENT: {"data": [{"id": grade_sheet.GOLD_DRAFTER_ALIAS}]},
     }
     return grade_sheet.grader_pin(comps, listings, probed_at=probed_at)
 
@@ -91,7 +91,7 @@ class FakeChat:
         text = self.rule(messages)
         if isinstance(text, Exception):
             raise text
-        return {"text": text, "usage": _usage(), "response_model": "lightning-think", "elapsed_s": 0.1}
+        return {"text": text, "usage": _usage(), "response_model": grade_sheet.GRADER_ALIAS, "elapsed_s": 0.1}
 
 
 def _run_dir(tmp_path, **extra):
@@ -116,10 +116,10 @@ def _run(d):
 
 
 def test_chat_body_is_temperature_one_with_no_max_tokens():
-    body = common.chat_body("lightning-think", [{"role": "user", "content": "x"}])
-    assert body == {"model": "lightning-think", "temperature": 1.0, "messages": [{"role": "user", "content": "x"}]}
-    assert common.chat_url("https://api.innoai.net/v1") == "https://api.innoai.net/v1/chat/completions"
-    assert common.chat_url("http://ai1:8000/") == "http://ai1:8000/v1/chat/completions"
+    body = common.chat_body(grade_sheet.GRADER_ALIAS, [{"role": "user", "content": "x"}])
+    assert body == {"model": grade_sheet.GRADER_ALIAS, "temperature": 1.0, "messages": [{"role": "user", "content": "x"}]}
+    assert common.chat_url("https://gateway.example.invalid/v1") == "https://gateway.example.invalid/v1/chat/completions"
+    assert common.chat_url("http://models-host:8000/") == "http://models-host:8000/v1/chat/completions"
     assert common.extract_json_object('<think>{"no": 1}</think>\n```json\n{"arm": "B"}\n```') == {"arm": "B"}
     assert common.extract_json_object("I think {\"a\": 1} then {\"arm\": \"C\"}") == {"arm": "C"}
     assert common.extract_json_object("no json") is None
@@ -606,7 +606,7 @@ def _synthetic_report_run(tmp_path, *, closed=True):
     (d / "grading" / "packet_ceiling.json").write_text(json.dumps(
         {"questions": {"HE01": {"share_present": 0.9}, "HE02": {"share_present": 0.8}, "LM01": {"share_present": 0.0}}}))
     run = {"run_id": "r1", "as_of": "2026-11-05T12:00:00+00:00", "design_sha256": "d" * 64, "design_version": "1.1",
-           "grader_model_served": "nvidia/nemotron-lightning-x",
+           "grader_model_served": "nvidia/nemotron-x",
            "blind_keys": [{"purpose": "sheet", "sha256": common.sha256_file(d / "sealed" / "blind_key.json"),
                            "seed": 77}]}
     grade_sheet.apply_pin(run, _pin())
@@ -728,3 +728,11 @@ def test_report_counts_a_grade_error_and_drops_it_from_the_pairs(tmp_path):
     pb = rep["analysis"]["per_arm"]["B"]
     assert pb["grade_errors"] == 1 and pb["correct"] == pytest.approx(4.5 / 5)
     assert rep["analysis"]["primary"]["n"] == 5 and "IE02" not in rep["analysis"]["primary"]["questions"]
+
+
+@pytest.fixture(autouse=True)
+def _gateway_env(monkeypatch):
+    """The gateway descriptors name their endpoint and models as ${env:NAME}."""
+    from tests._gateway_env import set_gateway_env
+
+    set_gateway_env(monkeypatch)

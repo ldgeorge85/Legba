@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Roll 84 — a page's tap target is the console's record address, never JSON."""
+"""A page's tap target is the console's record address, never JSON."""
 from __future__ import annotations
 
 import pathlib

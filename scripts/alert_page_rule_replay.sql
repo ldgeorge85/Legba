@@ -2,7 +2,7 @@
 -- SPDX-License-Identifier: AGPL-3.0-or-later
 --
 -- alert_page_rule_replay.sql — export the last 7 days (edit the one interval) of alert-like records
--- (the three pre-L-1 systems) as one JSON line per would-be RAISE, with what
+-- (the three earlier alerting systems) as one JSON line per would-be RAISE, with what
 -- actually happened to it on the push service. READ-ONLY: run it inside a
 -- read-only transaction, e.g.
 --

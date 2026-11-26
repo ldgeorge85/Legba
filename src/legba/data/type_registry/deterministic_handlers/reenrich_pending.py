@@ -3,12 +3,12 @@
 
 """Deterministic handler ``reenrich_pending``.
 
-Output: reenrich_pending (W11-F118) — the standing sweep over rows the
+Output: reenrich_pending — the standing sweep over rows the
 source actor wrote UNENRICHED (payload.enrichment_pending): re-runs the
 row's own source chain and un-marks it. Side-written enrichment; the counts
 live in the trace.
 
-Dispatch: reenrich_pending (W11-F118) — re-enriches the rows written with
+Dispatch: reenrich_pending — re-enriches the rows written with
 payload.enrichment_pending through the same chain the ingest path runs
 (run_baseline + the source's own pipeline.enrichment stage), oldest first,
 bounded per run; the marker is removed on success and kept on failure.

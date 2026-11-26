@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""P0-T2 — the actor-side verify seam: verify_inline_target_finding persists a
+"""the actor-side verify seam: verify_inline_target_finding persists a
 faithfulness critique whose data carries the gate keys.
 
 DETERMINISTIC: the LLM judge is OFF (env unset) so no live call. We capture the
@@ -149,7 +149,7 @@ async def test_verify_seam_all_resolved_high_score():
 
 
 # ---------------------------------------------------------------------------
-# P3-T3 / P3-T7 — the COMPOSITION seam: the SAME helper verifies a target-scoped
+# The COMPOSITION seam: the SAME helper verifies a target-scoped
 # meta_findings_synthesizer finding via its [[ref:N]] sub-claim bridge and
 # caps confidence via the T7 evidence ceiling.
 # ---------------------------------------------------------------------------
@@ -244,7 +244,7 @@ async def test_verify_seam_composition_no_citations_key_is_noop():
 
 
 # ---------------------------------------------------------------------------
-# P3-T5 — the GLOBAL/world composition: the SAME helper verifies a TARGET-LESS
+# The GLOBAL/world composition: the SAME helper verifies a TARGET-LESS
 # meta_findings_synthesizer finding whose [[ref:N]] bridge cites the COUNTRY
 # reads, and the dispatch discriminator (dapr_actors._descriptor_declares_verify)
 # fires it while the old global meta_synthesizer (no verify block) stays excluded.

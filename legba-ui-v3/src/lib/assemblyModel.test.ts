@@ -110,7 +110,7 @@ describe('projectAssembly', () => {
   })
 })
 
-describe('the drop ledger identity (§1.3)', () => {
+describe('the drop ledger identity', () => {
   it('|blocks| == counts.carried on every tier', () => {
     for (const row of [world, country, thematic]) {
       const a = projectAssembly(row)!
@@ -155,7 +155,7 @@ describe('the drop ledger identity (§1.3)', () => {
   })
 })
 
-describe('the earned-lead test (§1.5.3)', () => {
+describe('the earned-lead test', () => {
   it('stamps the reason whichever branch fired', () => {
     for (const row of [world, country, thematic]) {
       const a = projectAssembly(row)!
@@ -259,7 +259,7 @@ describe('tensions', () => {
   })
 })
 
-describe('the record badge (§2.3)', () => {
+describe('the record badge', () => {
   it('carries quote fidelity, coverage and a drop count — and NO faithfulness', () => {
     const a = projectAssembly(world)!
     const badge = recordBadge(a, projectArms(world))
@@ -301,7 +301,7 @@ describe('the evidence map grain', () => {
   })
 })
 
-describe('the history row (VOICE §4.6.1)', () => {
+describe('the history row', () => {
   it('names the lead, the block count and the drop count — not a truncated title', () => {
     const label = historyLabel(projectAssembly(world))!
     expect(label.blocks).toBe(8)
@@ -332,7 +332,7 @@ describe('the history row (VOICE §4.6.1)', () => {
   })
 })
 
-describe('the Assessment channel (§2)', () => {
+describe('the Assessment channel', () => {
   it('projects the payload and its single-element derived_from', () => {
     const p = projectAssessment(assessment)!
     expect(p.schema).toBe('assessment.v1')
@@ -378,7 +378,7 @@ describe('the Assessment channel (§2)', () => {
 
 // ── W-7 · the standing badge, on the reader's side ───────────────────────────
 
-describe('the standing number (§3.4)', () => {
+describe('the standing number', () => {
   const block = (over: Record<string, unknown> = {}) =>
     projectStanding({
       value: 0.7125,
@@ -451,7 +451,7 @@ describe('the standing number (§3.4)', () => {
 })
 
 // ── W-3 — the Assessment's citations all resolve to ONE uuid ────────────────
-describe('the Assessment citation chain (W-3)', () => {
+describe('the Assessment citation chain', () => {
   it('projects every fenced citation off the live double-nested shape', () => {
     const cites = projectAssessmentCitations(assessmentCitations)
     expect(cites).toHaveLength(4)

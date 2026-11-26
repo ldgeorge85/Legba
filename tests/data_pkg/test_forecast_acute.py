@@ -269,7 +269,7 @@ def test_class_k_definition_frozen():
 # `resolved=0 resolved_total=0` receipt read as a leg that had been dead its
 # whole life. It was not. Read-only against the live DB, the resolver's own
 # open-row query returns ZERO rows: 19 forecasts are `voided:pre_clamp_degenerate`
-# (withdrawn from grading BY DESIGN by the P7-F6 guard, so permanently unresolved
+# (withdrawn from grading BY DESIGN by the void guard, so permanently unresolved
 # and correctly skipped) and the other 19 have a window that has not closed yet.
 # `_count_class_k` never even ran — no per-row exception existed to find, and the
 # counting SQL executes cleanly against live data.
@@ -441,7 +441,7 @@ async def test_backlog_selfcheck_reports_stale_gradeable_rows(caplog):
 
 
 def test_voided_rows_are_excluded_by_the_open_row_scan():
-    """Pin the P7-F6 guard IN THE SQL — this clause is the whole reason the live
+    """Pin the void guard IN THE SQL — this clause is the whole reason the live
     pilot shows 19 permanently-unresolved rows, and removing it would silently
     re-admit the known-degenerate batch."""
     src = inspect.getsource(fa.resolve_open_acute_forecasts)

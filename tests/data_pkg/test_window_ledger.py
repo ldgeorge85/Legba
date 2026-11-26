@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""FRAME-2 — THE CARRY (``planning/FRAME_PROGRAM_2026-08-20.md`` §2).
+"""FRAME-2 — THE CARRY.
 
 CORRECTNESS-R1's largest attributed failure class was one sentence long: **a
 72-hour pipeline forgets its own window.** ≈12 of 23 missed majors were events
@@ -778,7 +778,7 @@ async def test_read_slice_gathers_the_desk_ledger_for_a_country_composition():
 async def test_region_and_world_reads_get_no_ledger():
     """§2.2 scope discipline: a region or world read would be handed five to
     twenty-four desks' fortnights, which is a second evidence slice wearing a
-    ledger's clothes. Widening it is an R2 decision, not a round-1 one."""
+    ledger's clothes. Widening it is a separate decision."""
     region = _CapturingConn(ledger_rows=_ar_desk_rows())
     await synth.READ_SLICE(
         region, descriptor=_descriptor(["country_composition"]),

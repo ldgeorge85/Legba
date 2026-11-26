@@ -1,11 +1,9 @@
-# sources_wave_2 — draft SourceDescriptor. Ships DRAFT (operator activates).
+# Draft SourceDescriptor. Ships DRAFT (operator activates).
 #
 # GroundUp — Cape Town non-profit newsroom, social-justice / community-level
-# South African reporting. Closes the audit-flagged gap
-# (planning/COVERAGE_VS_SELECTION_AUDIT_2026-09-07.md item #6): the Durban
+# South African reporting. Closes a coverage gap: the Durban
 # refugee-camp raid was found to be carried ONLY via France24 Afrique in
-# French, with English-only search under-reading a corpus that (per the
-# audit) is not actually thin there so much as unindexed in English —
+# French, with English-only search under-reading a corpus that is not actually thin there so much as unindexed in English —
 # GroundUp is exactly the outlet whose beat (informal settlements, refugee
 # and migrant communities, township-level policing) would carry this story
 # and similar ones directly in English. Verified live 2026-09-07: valid
@@ -33,7 +31,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: sources_wave_2
+  owner: owner@local
   created: "2026-09-07T00:00:00Z"
 
 scope:
@@ -42,7 +40,7 @@ scope:
   languages: [en]
   tags: [news, africa, south_africa, sources_wave_2]
   source_class: reporting
-  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
+  access_class: public          # free no-auth feed, no separate reuse agreement
 
 acquisition: poll
 
@@ -67,7 +65,7 @@ pipeline:
   enrichment:
     # language_detect FIRST so ner_multilingual uses the detected language.
     # No fact_extractor on the draft: the operator adds it after confirming the
-    # route yields full article text (mirrors the RSSHub-lane conservative default).
+    # route yields full article text (mirrors the other RSSHub routes' conservative default).
     - kind: language_detect
       config: {}
     - kind: ner_multilingual

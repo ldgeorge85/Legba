@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Pack-tool dispatch robustness — per-call timeout + orphan reconcile.
 
-Two guarantees layered on the P-11 hard gate (real migrated Postgres, no mocks):
+Two guarantees layered on the hard gate (real migrated Postgres, no mocks):
 
   1. ``run_pack_tool`` bounds the handler dispatch with a wall-clock timeout: a
      wedged handler is caught at the tool boundary, the invocation row is settled

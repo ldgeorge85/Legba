@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Program 6 L0 — the retag generator (``scripts/gen_layer_map_draft.py``) on a
+"""The retag generator (``scripts/gen_layer_map_draft.py``) on a
 small fixture of source descriptors: deterministic output, the documented
 rule order, and every generated aperture stamped ``declared: unmeasured``.
 """

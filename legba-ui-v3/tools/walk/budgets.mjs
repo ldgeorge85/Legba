@@ -7,6 +7,7 @@
  * since U-3 landed the type scale on the reader surfaces; `--report-text-floor`
  * turns it back into a reported number.
  */
+import { READER_ROLES, readerEngineHits, readerSurfacesMeasured } from './engineWords.mjs'
 
 /*
  * The landing's request budgets (U-5, 2026-11-13; tightened by U-4,
@@ -90,15 +91,15 @@ const WATCH_BYTES_LIVE = 2_000_000
  * fixture is cut to 10 rows) — so 0.4 MB (largest 0.25 MB)
  * live leaves room, and any return of a full-weight list (MBs) fails it.
  */
-/* M-2 (the phone shell, 2026-11-14): the landing is Changed — the identity,
+/* Phone shell: the landing is Changed — the identity,
    ONE `/v3/since?include=needs_you` for the window, the seen cursor, the
-   subject roster — and the plan's landing budget (§6) replaces M-0a's list
-   budget: ≤ 10 requests and ≤ 0.2 MB on fixtures, ≤ 12 and ≤ 0.8 MB live.
+   subject roster. Budget: ≤ 10 requests and ≤ 0.2 MB on fixtures, ≤ 12 and
+   ≤ 0.8 MB live.
    The largest response is the since envelope (fixture ~0.03 MB; live, priced:
    50 rows a section at ~0.3 kB plus 50 needs-you episodes ≈ 0.1–0.2 MB) or the
-   roster. Roll 85 raised the live largest to 0.40 MB for the target roster
-   (descriptors?family=target, 0.279 MB at full weight); the W walk-fix lane
-   reads it at fields=summary (73 KB), so roll 86 puts it back to 0.25 MB. */
+   roster. The live largest is 0.25 MB: the target roster
+   (descriptors?family=target) is 0.279 MB at full weight but is read at
+   fields=summary (73 KB). */
 const PHONE_REQUESTS_FIXTURE = 10
 const PHONE_REQUESTS_LIVE = 12
 const PHONE_BYTES_FIXTURE = 200_000
@@ -122,12 +123,16 @@ export const DEFAULT_BUDGETS = {
   enforceTextFloor: true,
   /** The Consult question box must be at least this wide at 1366 and 1680 (px). */
   consultMinWidthPx: 300,
+  /** Consult's answers take at least this share of the dock's height (when the dock is open). */
+  consultTranscriptMinFraction: 0.6,
   /** A count shown before any data was read ("0 …" while every API answer is held). */
   zeroBeforeRead: 0,
   /** Page errors and console errors (WebSocket and refused-write noise excluded). */
   consoleErrors: 0,
   /** Machine ids as titles on the phone reader. */
   phoneMachineIds: 0,
+  /** Engine words on a reader surface walked as a reader (`engineWords.mjs`). */
+  readerEngineWords: 0,
   /**
    * THE LANDING'S REQUEST BUDGET (U-5): what the landing at 1680 asks the
    * registry for, from navigation until 3 s past "ready". Set from U-5's
@@ -141,9 +146,9 @@ export const DEFAULT_BUDGETS = {
   duplicateRequests: 0,
   /** Query fetches made for a region nobody can see (a hidden tab, the closed palette). */
   hiddenRegionFetches: 0,
-  // ── THE FRAME (U-6) — the budgets that would have caught the owner's
-  // screenshots of the U-2 shell (a 380 px Consult ribbon at 1920; at 3840
-  // tiny text, a dead band between the map and the read, Consult a sliver).
+  // ── THE FRAME — budgets that catch layout failures in the shell
+  // (a 380 px Consult ribbon at 1920; at 3840 tiny text, a dead band between
+  // the map and the read, Consult a sliver).
   /**
    * No full-height strip of the main area with nothing in it (no text, no
    * map, no control) wider than this fraction of the viewport.
@@ -216,8 +221,8 @@ export const DEFAULT_BUDGETS = {
   phoneComposerMinFraction: 0.6,
   /** Every citation in a phone Consult answer is a button reachable ±22 px from its centre (a 44 px target). */
   phoneCitationTargetPx: 44,
-  // ── THE PHONE SHELL (M-2, 2026-11-14; plan §2.3, §3.4, §6) ──
-  /** API requests and bytes per phone screen, its own reads from the tap to quiet (fixture; live is priced in the plan). */
+  // ── THE PHONE SHELL ──
+  /** API requests and bytes per phone screen, its own reads from the tap to quiet (fixture; live is priced separately). */
   phoneScreens: {
     'Changed (landing)': { requests: 10, bytes: 200_000 },
     Read: { requests: 2, bytes: 300_000 },
@@ -335,9 +340,9 @@ export function landingStats(log, phase = 'landing', fetchLog = null) {
 
 /**
  * The request that ended last in a phase — what held the landing's "ready"
- * (the API quiet for a second) open. Reported beside the figure (U-8: after
- * roll 80 it was `/v3/system/judge-stats` at 18–22 s, a server defect; the
- * console draws the footer's judge figure as "not read yet" until it answers).
+ * (the API quiet for a second) open. Reported beside the figure (e.g. a slow
+ * `/v3/system/judge-stats` at 18–22 s; the console draws the footer's judge
+ * figure as "not read yet" until it answers).
  */
 export function heldBy(log, phase = 'landing') {
   let last = null
@@ -382,8 +387,34 @@ export function evaluate(result, budgets = DEFAULT_BUDGETS, mode = 'fixture') {
   const smallTotal = small.reduce((n, s) => n + (s.smallText ?? 0), 0)
   row(`reader text under ${budgets.textFloorPx} px`, '0', `${smallTotal} (${small.map((s) => `${s.name} ${s.smallText}`).join(', ')})`, smallTotal === 0, budgets.enforceTextFloor)
 
+  // Engine words on reader surfaces. Seen AS A READER (the reader pass, or a
+  // walk signed in as a reader or contributor) the budget is zero and
+  // enforced; seen as an admin they are reported only (an admin may see the
+  // engine's readout on a reader page).
+  {
+    const measuredAsReader = readerSurfacesMeasured(result.surfaces)
+    const hits = readerEngineHits(result.surfaces)
+    row(
+      'engine words on reader surfaces, as a reader',
+      `${budgets.readerEngineWords ?? 0}`,
+      measuredAsReader === 0 ? 'not measured (no reader surface was walked as a reader)' : hits.length ? hits.map((h) => `${h.where}: ${h.words.join(' | ')}`).join('; ') : `0 (${measuredAsReader} views)`,
+      measuredAsReader > 0 && hits.reduce((n, h) => n + h.words.length, 0) <= (budgets.readerEngineWords ?? 0),
+      // nothing walked as a reader is reported, not failed: the walk's own
+      // "the reader side walked as a reader" step fails when the pass could not run
+      measuredAsReader > 0,
+    )
+    const adminHits = (result.surfaces ?? []).filter((x) => x.reader && !READER_ROLES.has(x.role) && (x.engineWords ?? []).length > 0)
+    row('engine words on reader surfaces, as an admin', 'reported', adminHits.length ? adminHits.map((x) => `${x.name} ${x.width}: ${x.engineWords.join(' | ')}`).join('; ') : '0', adminHits.length === 0, false)
+  }
+
   for (const c of result.consult ?? []) {
     row(`Consult box width at ${c.width}${c.where ? ` (${c.where})` : ''}`, `≥ ${budgets.consultMinWidthPx} px`, c.boxWidth == null ? 'no Consult box found' : `${c.boxWidth} px`, c.boxWidth != null && c.boxWidth >= budgets.consultMinWidthPx)
+  }
+
+  for (const c of result.consult ?? []) {
+    const at = `${c.width}${c.where ? ` (${c.where})` : ''}`
+    if (c.askVisible !== undefined) row(`Consult's Ask button is fully on screen at ${at}`, 'inside the window and the dock', c.askVisible == null ? 'no Ask button found' : c.askVisible ? `at ${(c.askRect ?? []).join(',')}` : `cut off at ${(c.askRect ?? []).join(',')}`, c.askVisible === true)
+    if (c.transcriptFraction != null) row(`Consult's answers share of the dock at ${at}`, `≥ ${Math.round(budgets.consultTranscriptMinFraction * 100)} %`, `${Math.round(c.transcriptFraction * 100)} %`, c.transcriptFraction >= budgets.consultTranscriptMinFraction)
   }
 
   for (const l of result.layout ?? []) {

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Origin-group derivation (data-model lane 9), pure. Every descriptor here is
+"""Origin-group derivation (data model), pure. Every descriptor here is
 invented (the Northaven family of fictional publishers)."""
 
 from __future__ import annotations

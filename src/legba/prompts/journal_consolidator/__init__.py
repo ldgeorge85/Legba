@@ -4,8 +4,8 @@
 
 The consolidation tier (``journal_consolidator``) is the SAME analyst kind
 (``identity.kind: journal_assessor``) as the entry tier, with a distinct
-``identity.id`` and the SLOW (daily / INTROSPECTION-altitude) beat (plan §4.7 /
-§12 Wave 2). Where the entry tier narrates the freshest window, the consolidator
+``identity.id`` and the SLOW (daily / INTROSPECTION-altitude) beat. Where the entry tier narrates the freshest
+window, the consolidator
 DISTILLS: it reads the prior consolidation (its "current inner landscape") +
 recent entries via ``get_journal_delta`` and folds them into ONE forward-carried
 narrative — build-on-don't-repeat, not a re-narration.

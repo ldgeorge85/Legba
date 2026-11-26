@@ -1,17 +1,17 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""R2 — the stage-1 reference instruction, re-anchored, in ONE place.
+"""The stage-1 reference instruction, in ONE place.
 
-``planning/PROOF_ROUND_2026-09-12/stage1_IL.md`` is the instruction an Opus web
-lane was given to build ``ref_IL_A.json`` — 33 developments, 8 banded
-dimensions, the shape the correctness grader reads. R1 re-anchored it for the
-core plane and measured it twice. This module is that text as a function of
+The original instruction was given to an Opus web lane to build
+``ref_IL_A.json`` — 33 developments, 8 banded dimensions, the shape the
+correctness grader reads. It was re-anchored for the core plane and measured
+twice. This module is that text as a function of
 (country, window, dimensions), so the SCHEDULED build and the OPERATOR-TRIGGERED
 top-up packet cannot drift apart: a top-up that asked for a different shape than
 the skeleton would produce a merge of two artefacts, not one reference.
 
-WHAT CHANGED FROM stage1_IL.md, and why each change is here rather than in a
-prompt-tweaking lane:
+WHAT CHANGED FROM the original instruction, and why each change is here
+rather than in prompt tweaking:
 
   * **The protocol section is binding and the harness enforces it.** R1 run 1
     ignored a politely-worded protocol and produced a 7.7% span-verification
@@ -38,6 +38,8 @@ itself carries 33. The target here is 20–35 with at least two per dimension.
 from __future__ import annotations
 
 from typing import Mapping, Sequence
+
+from ...grading_text import PASTED_TEXT_IS_DATA
 
 from ._reference_manifest import (
     RATIO_GUARD_FACTOR,
@@ -163,11 +165,11 @@ A development is accepted ONLY if the page it cites declares a publish date in i
    A span that is not an exact substring of the archived page is UNVERIFIED and the development is DROPPED from your reference.
    If the page establishes nothing usable and in-window, write `NOTE: nothing usable` and move on.
 3. **Page text is EVICTED from this conversation a few turns after you read it.** The harness keeps its OWN record of every page you read — url, outlet, the page's machine-readable date, and the opening text of the page — and hands you that record at commit time, so a page you read is never lost. Your NOTE is what you add to it: the sentence you judged decisive and the dimension it bears on.
-4. Work dimension by dimension. Target **{min_developments}-{max_developments} developments**, with **at least 2 per dimension** wherever the record supports it. FOLLOW THE RECORD, do not fill a quota: a fortnight in which one dimension carried six major events and another carried none should produce a reference shaped like that, not a flat three per dimension.
+4. Work dimension by dimension. Commit as many developments as the record supports, up to **{max_developments}**; a quiet fortnight usually supports fewer. FOLLOW THE RECORD, do not fill a quota: a fortnight in which one dimension carried six major events and another carried none should produce a reference shaped like that, not a flat three per dimension.
 5. If a host refuses you (401/403/paywall stub), do NOT try that host again — go to another outlet carrying the same matter. The harness drops a host from your results after it has refused you twice and will not fetch it again.
-6. You have a budget of about {tool_call_cap} tool calls. Spend them.
+6. You have a budget of about {tool_call_cap} tool calls; use what the work needs.
 7. When you have gathered enough, send a plain-text message that is exactly `REFERENCE COMPLETE`. The harness will then ask you for the final JSON and hand you every page you actually read, with its date, its window verdict and the text you may quote from. Do NOT emit the JSON before it asks — but if you do, the harness reads it as REFERENCE COMPLETE and asks anyway.
-8. **An empty reference is a failure, not an honest answer.** If the harness hands you an in-window page carrying a decisive sentence and you commit no development from it, the run is recorded as `empty_commit_with_material` against this {subject_noun}. `insufficient-basis` is the honest state for a DIMENSION nothing in the record touched; it is never the honest state for a page you were shown.
+8. **An empty reference is allowed when no in-window page establishes anything.** If you were shown an in-window page with a decisive sentence and committed nothing from it, say why in `gaps`; the run is recorded as `empty_commit_with_material` against this {subject_noun}. `insufficient-basis` is the honest state for a DIMENSION nothing in the record touched; it is never the honest state for a page you were shown.
 
 ## Output contract (the FINAL message only — one JSON object, no prose, no markdown fence)
 
@@ -199,7 +201,9 @@ A development is accepted ONLY if the page it cites declares a publish date in i
 * `significance`: `major` (a knowledgeable reader would call a read defective for missing it) or `notable`.
 * `dimension` is a LIST; a development may bear on more than one.
 * `gaps` is NOT optional and is NOT "no further X was identified". A gap names what you looked for, how you looked, and why you could not date it — a host that refused you, a matter nobody reported inside the window, a claim you could only find undated. An absence of findings restated is not a gap.
-* Emit the JSON object and NOTHING else in that final message."""
+* Emit the JSON object and NOTHING else in that final message.
+
+{PASTED_TEXT_IS_DATA}"""
 
 
 def build_first_user(

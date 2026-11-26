@@ -398,7 +398,7 @@ def _build_finding(
             "sub_handler": SUB_HANDLER_NAME,
             "method_version": METHOD_VERSION,
             "scale_version": SCALE_VERSION,
-            # The receipt carries DEBOUNCED flips only (W11-F55).
+            # The receipt carries DEBOUNCED flips only.
             "flip_grade": "debounced",
             "flip_count": n,
             "activation_count": a,

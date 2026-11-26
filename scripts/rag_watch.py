@@ -14,8 +14,7 @@ BEFORE vs AFTER the RAG flip:
   * avg tokens/run            — cost visibility (input side)
   * avg run latency           — cost visibility (retrieval hop)
 
-and evaluates the PRE-REGISTERED rollback rule
-(``planning/RAG_EXPANSION_WATCH_2026-07-03.md``).
+and evaluates the PRE-REGISTERED rollback rule.
 
 WHAT COUNTS (the load-bearing exclusion). A **product finding** is
 ``kind='finding' AND target_id IS NOT NULL``. The ``target_id IS NOT NULL``
@@ -95,7 +94,7 @@ BOUNDED_UNITS: tuple[str, ...] = (
     "narrative_coordination",
 )
 
-# Pre-registered thresholds (see planning/RAG_EXPANSION_WATCH_2026-07-03.md).
+# Pre-registered thresholds.
 LOW_FAITH_THRESHOLD = 0.30
 DEFAULT_WINDOW = 15
 FAITH_DROP_TRIGGER = 0.08  # (a): absolute trailing-mean drop that fires rollback
@@ -280,7 +279,7 @@ def _evaluate_rollback(
     decision = evaluate_rollback(
         _to_window(before), _to_window(after), window=window,
     )
-    print("  ROLLBACK CHECK (rule: planning/RAG_EXPANSION_WATCH_2026-07-03.md):")
+    print("  ROLLBACK CHECK (rule):")
     trig_a = any("faithfulness dropped" in r for r in decision.reasons)
     trig_b = any("low-faith rate" in r for r in decision.reasons)
     trig_c = any("tokens/run" in r for r in decision.reasons)
@@ -375,7 +374,7 @@ async def _amain(args: argparse.Namespace) -> int:
     print(f"# rag_watch — db={cfg.database}@{cfg.host}:{cfg.port} "
           f"window(N)={args.n} low-faith<{LOW_FAITH_THRESHOLD}")
     print("# faithfulness monitors CITATION DISCIPLINE ONLY — a SAFETY net, not a "
-          "value proof (S5-T5 A/B is the value measurement).")
+          "value proof (the A/B comparison is the value measurement).")
     conn = await asyncpg.connect(dsn=cfg.dsn)
     try:
         if args.all_units:

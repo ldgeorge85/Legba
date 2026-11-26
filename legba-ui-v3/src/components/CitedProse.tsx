@@ -177,7 +177,7 @@ function CardVerdictLine({ verdict }: { verdict: ClaimVerdict }) {
         data-testid="citation-card-verdict"
         data-verdict={verdict.kind}
       >
-        verify judge: {verdict.label}
+        the check: {verdict.label}
         {verdict.checkable != null && verdict.supported != null && (
           <span className="text-ink-3">
             {' '}
@@ -198,7 +198,7 @@ function CardVerdictLine({ verdict }: { verdict: ClaimVerdict }) {
     >
       <span className={`inline-flex items-center gap-1 font-medium ${tone}`}>
         <AlertTriangle className="h-2.5 w-2.5 shrink-0" aria-hidden />
-        verify judge: {verdict.label}
+        the check: {verdict.label}
       </span>
       {firstSpan && (
         <span className="mt-0.5 block leading-snug text-ink-3">

@@ -88,6 +88,37 @@ SUB_HANDLER_NAME = "entity_resolution"
 
 _DEFAULT_BATCH = 500
 MAX_ENTITIES_PER_SIGNAL = 8   # cap pairwise co-occurrence edges per signal
+
+
+#: The co-occurrence upsert: one candidate pair per call. A pair that was
+#: finally rejected or retired is held in ``proposed_edge_markers`` (its full
+#: row may already be gone), so the insert is skipped for it: the same guarantee
+#: the unique key gives while the full row exists. Any other existing pair
+#: accrues confidence and lineage as before.
+CO_OCCURS_UPSERT_SQL = """
+INSERT INTO proposed_edges
+    (source_entity, target_entity, relationship_type, confidence,
+     evidence_text, status, derived_from)
+SELECT $1::text, $2::text, 'co_occurs', 0.4, $3::text, 'pending',
+       $4::uuid[]
+ WHERE NOT EXISTS (
+     SELECT 1 FROM proposed_edge_markers m
+      WHERE m.source_key = lower($1::text)
+        AND m.target_key = lower($2::text)
+        AND m.relationship_type = 'co_occurs')
+ON CONFLICT (lower(source_entity), lower(target_entity), relationship_type)
+DO UPDATE SET confidence = LEAST(1.0, proposed_edges.confidence + 0.05),
+             evidence_text = EXCLUDED.evidence_text,
+             -- union the originating signal id (deduped),
+             -- so a re-corroborated edge accrues every signal
+             -- that produced it as lineage (never re-grows).
+             derived_from = (
+                 SELECT COALESCE(array_agg(DISTINCT m), '{}'::uuid[])
+                   FROM unnest(proposed_edges.derived_from
+                               || EXCLUDED.derived_from) AS m
+             )
+"""
+
 MIN_NAME_LEN = 2
 # Co-mention snippet window stored in proposed_edges.evidence_text. The
 # reifier truncates evidence_text to ~1200 chars, so we cap the prose window
@@ -228,7 +259,7 @@ def _fallback_class_compatible(stored_cls: str, cls: str) -> bool:
 #      case; the alt codes match ('PLT' = 'PLT'). A naive whole-string
 #      dmetaphone appears to work only because it truncates to four characters —
 #      coincidence, not signal, and not relied on for the decision.
-#   5. NO DIRECTION token distinguishes the pair (W3-C, 2026-08-04). Added after
+#   5. NO DIRECTION token distinguishes the pair. Added after
 #      a full population census: of the 726 pairs conditions 1-4 accept, THIRTY
 #      differ only by an opposing compass bearing — "East Germany" / "West
 #      Germany", "Eastern Pendleton" / "Western Pendleton", "Northeast El Paso"
@@ -410,7 +441,7 @@ _CLASS_PRIORITY_SQL = (
 #: Warriors", "the Foreign Ministry"). E6-faucet-2 (`517e8fe`) closed the
 #: article→person DEFAULT on the NER side, but the NER model can still emit a
 #: positive person label for such a span and this write-path election accepted
-#: it — the 2026-07-21 review found the leak live (16 article-prefixed persons
+#: it — a review found the leak live (16 article-prefixed persons
 #: minted in 4 days). Demote to the generic bucket; the entity_researcher's
 #: reclassify pass assigns the true class.
 _ARTICLE_PREFIX_RE = re.compile(r"^(?:the|a|an)\s+", re.IGNORECASE)
@@ -779,7 +810,7 @@ async def _resolve_batch(
                     # pre-lookup only ever elects the ACTIVE survivor for the name.
                     #
                     # FAST exact-name path first (uses idx_entity_profiles_name_class).
-                    # Roll 85: a profile merged away (merged_into set) is
+                    # A profile merged away (merged_into set) is
                     # followed to its keeper (_entity_resolve.FOLLOW_SQL), so a
                     # tombstone's own name converges onto the survivor.
                     pre = await conn.fetchrow(
@@ -1089,23 +1120,7 @@ async def _resolve_batch(
                         f"{evidence}\nco_mentioned: {', '.join(others)}"
                     )
                 await conn.execute(
-                    """
-                    INSERT INTO proposed_edges
-                        (source_entity, target_entity, relationship_type, confidence,
-                         evidence_text, status, derived_from)
-                    VALUES ($1,$2,'co_occurs',0.4,$3,'pending',$4::uuid[])
-                    ON CONFLICT (lower(source_entity), lower(target_entity), relationship_type)
-                    DO UPDATE SET confidence = LEAST(1.0, proposed_edges.confidence + 0.05),
-                                 evidence_text = EXCLUDED.evidence_text,
-                                 -- D15: UNION the originating signal id (deduped),
-                                 -- so a re-corroborated edge accrues every signal
-                                 -- that produced it as lineage (never re-grows).
-                                 derived_from = (
-                                     SELECT COALESCE(array_agg(DISTINCT m), '{}'::uuid[])
-                                       FROM unnest(proposed_edges.derived_from
-                                                   || EXCLUDED.derived_from) AS m
-                                 )
-                    """,
+                    CO_OCCURS_UPSERT_SQL,
                     a, b, evidence, edge_derived,
                 )
                 edges_upserted += 1

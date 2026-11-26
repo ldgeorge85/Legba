@@ -3,8 +3,8 @@
 --
 -- 0214_source_layers.sql
 --
--- Program 6 L0 — the LAYER TABLE and the APERTURE DECLARATION
--- (docs/DIRECTION.md, "The layered source fan-out"). The next widening ingests,
+-- The LAYER TABLE and the APERTURE DECLARATION (the layered source
+-- fan-out). The next widening ingests,
 -- per country, the same stack of source LAYERS (the press split domestic and
 -- foreign, official and state media, public data, a channel-level social
 -- digest) and makes the CHANGE in that country's own layer-to-layer divergence
@@ -89,8 +89,8 @@ CREATE TABLE IF NOT EXISTS public.source_layers (
                  CHECK (layer IN ('official', 'domestic_press', 'foreign_press',
                                   'social_digest', 'public_data', 'physical')),
 
-    -- WHY THIS ENTRY IS IN. Never optional — curation IS the layer's bias
-    -- (docs/DIRECTION.md), so an entry with no stated reason hides exactly
+    -- WHY THIS ENTRY IS IN. Never optional — curation IS the layer's bias,
+    -- so an entry with no stated reason hides exactly
     -- the judgement the table exists to make visible. Mirrored by
     -- `registry/layer_map_schema.py:LayerMapEntry`'s identical, non-bypassable
     -- pydantic check.

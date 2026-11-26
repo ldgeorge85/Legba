@@ -32,6 +32,7 @@ import { withRecordAddress } from './record.mjs'
 import { atRequestedWeight, placesDeclaringNoSource } from './weights.mjs'
 import { signalPlacement } from './flatSignals.mjs'
 import { passwordFromFile, roleFrom, roleGateFor, sessionCookieFrom, skipsForRole } from './signin.mjs'
+import { loadEngineWords, READER_IDENTITY } from './engineWords.mjs'
 
 const require = createRequire(import.meta.url)
 const HERE = path.dirname(fileURLToPath(import.meta.url))
@@ -53,7 +54,7 @@ const RECORD = arg('record', null)
 const PORT = Number(arg('port', '8080'))
 const SHOTS = !flag('no-shots')
 const CHROME = arg('chrome', process.env.LEGBA_WALK_CHROME || '/ms-playwright/chromium-1148/chrome-linux/chrome')
-// live sign-in as a named account (roll 89; signin.mjs): both variables, live only
+// live sign-in as a named account (signin.mjs): both variables, live only
 const WALK_EMAIL = MODE === 'live' ? process.env.LEGBA_WALK_EMAIL || '' : ''
 const WALK_PASSWORD_FILE = MODE === 'live' ? process.env.LEGBA_WALK_PASSWORD_FILE || '' : ''
 const SIGN_IN = !!(WALK_EMAIL && WALK_PASSWORD_FILE)
@@ -65,6 +66,9 @@ if (SIGN_IN) {
 const TOKEN = MODE === 'live' ? (SIGN_IN ? '' : process.env.LEGBA_TOKEN || '') : 'walk-fixture-token'
 // the signed-in session: the cookie (name=value, memory only) and the account's role
 const session = { cookie: '', role: null, signInStatus: null }
+/** The role the walk's pages are seen as: the signed-in account's, else the bearer's (an operator). */
+let roleOverride = null
+const walkRole = () => roleOverride ?? (SIGN_IN ? session.role ?? 'reader' : 'operator')
 const budgets = { ...DEFAULT_BUDGETS }
 if (arg('text-floor')) budgets.textFloorPx = Number(arg('text-floor'))
 if (flag('enforce-text-floor')) budgets.enforceTextFloor = true
@@ -214,7 +218,7 @@ function routeFixture(u) {
   return hit ? hit.entry : null
 }
 /**
- * Roll 84 (P-8): `GET /findings/{id}` answers ONE full row. The fixtures were
+ * `GET /findings/{id}` answers ONE full row. The fixtures were
  * recorded before the route existed, so the row is taken from a recorded
  * `/findings` page that holds it at full weight (a row with `data`), else any.
  */
@@ -265,7 +269,7 @@ const REBASED = new Set([
   '/api/v1/v3/system/alerts/log', '/api/v1/v3/watch/alerts', '/api/v1/v3/system/source-firing', '/api/v1/v3/evidence/drift/flags', '/api/v1/v3/evidence/drift/history',
 ])
 //
-// Roll 84: in fixture mode the BROWSER'S CLOCK is pinned to the fixtures'
+// In fixture mode the BROWSER'S CLOCK is pinned to the fixtures'
 // clock instead (`pinBrowserClock`, every context): `Date` in the page starts
 // at `map_clock` and runs at real speed. The fixtures' other time-relative
 // answers — the Board's "changed since" wash (`/v3/since`), the reads' ages,
@@ -282,7 +286,7 @@ const rebase = (body) => (MAP_SHIFT_MS ? body.replace(/"(\d{4}-\d{2}-\d{2}T[0-9:
 }) : body)
 const REFUSED_GET = /\/consult\/(ask|stream|turn)|deep_consult|\/model\/|\/llm\//
 const net = { total: 0, paths: new Map(), refusedWrites: [], blockedOutside: 0, unfixtured: new Set(), standIns: new Set(), slow: [], inflight: 0, refusedGets: [], log: [], phase: 'start', override: new Map(), signalRows: [], roster: null }
-// roll 86: what the map was served — the subject roster (who declares a
+// what the map was served — the subject roster (who declares a
 // source), and the /signals rows while the flat map is walked
 const noteSignals = (u, text) => {
   // RA-1: the console reads the reader's roster (`/v3/roster`); the admin list
@@ -310,7 +314,7 @@ const startHold = () => { let release; const promise = new Promise((r) => (relea
 const endHold = ({ discard = false } = {}) => { if (hold) { hold.discard = discard; hold.release(); hold = null } }
 
 /**
- * Roll 89: the one write a signed-in live walk lets through — the sign-in
+ * The one write a signed-in live walk lets through — the sign-in
  * itself, from the real sign-in screen. The registry's Set-Cookie is kept in
  * memory (never handed to the page, never printed); every later GET of a
  * signed-in context carries it.
@@ -383,14 +387,14 @@ async function answerApi(route, withToken, ctxState = {}) {
         done(404, 0)
         return await route.fulfill({ status: 404, contentType: 'application/json', body: '{"detail":"not in the walk fixtures"}' })
       }
-      // roll 86: a summary read gets the summary row, not the full recording (weights.mjs)
+      // a summary read gets the summary row, not the full recording (weights.mjs)
       let body = typeof hit.body === 'string' ? hit.body : JSON.stringify(atRequestedWeight(u.pathname, u.searchParams, hit.body))
       if (REBASED.has(u.pathname)) body = rebase(body)
       noteSignals(u, body)
       done(hit.status ?? 200, Buffer.byteLength(body))
       return await route.fulfill({ status: hit.status ?? 200, contentType: hit.contentType ?? 'application/json', body })
     }
-    // a step's own answer for one path holds live too (roll 86): the reader's
+    // a step's own answer for one path holds live too: the reader's
     // /auth/me on the phone, the empty drift summary — the step asserts how the
     // console answers THAT answer, so it is the same answer on both runs
     const ov = net.override.get(u.pathname)
@@ -410,7 +414,7 @@ async function answerApi(route, withToken, ctxState = {}) {
     const buf = Buffer.from(await resp.arrayBuffer())
     const dt = Date.now() - t0
     done(resp.status, buf.length)
-    // roll 89: with an account, a 403 is the account's role, not the console:
+    // with an account, a 403 is the account's role, not the console:
     // the route is counted by name and kept out of the request budgets
     if (SIGN_IN && resp.status === 403) {
       result.roleRefused[u.pathname] = (result.roleRefused[u.pathname] || 0) + 1
@@ -444,7 +448,11 @@ const result = {
 const errorsSeen = new Set()
 // the operator side's four sections (U-2 shell); everything else is a reader surface
 const OPERATOR_SURFACES = new Set(['engine', 'evaluation', 'gate', 'investigate'])
-const ENGINE_WORDS = [/\bsubstrate\b/i, /\bspine\b/i, /\bC-A R\d/, /severity_delta/, /meta_finding/, /prompt_module_candidate/, /no declared scale/i, /\barm that grades\b/i]
+// The engine words: ONE list, shared with the console (`src/lib/readerVocabulary.ts`)
+// and the source lint (`tools/lint-engine-words.mjs`), each term with the
+// reader words that replace it. A reader surface walked as a reader must show
+// none of them (`budgets.mjs`, "engine words on reader surfaces, as a reader").
+const { ENGINE_WORDS, READER_ALLOW } = loadEngineWords(path.join(HERE, '..', '..', 'src', 'lib', 'engineWords.json'))
 const MACHINE_ID = /^[a-z][a-z0-9]*(_[a-z0-9]+){2,}$/
 // Routes the console reads whose 404 is a DESIGNED state, each a declared seam:
 // the browser logs the 404 as a console error, which is not a defect here.
@@ -452,6 +460,10 @@ const MACHINE_ID = /^[a-z][a-z0-9]*(_[a-z0-9]+){2,}$/
 // `runs: []`; a 404 there is now a registry older than the route, an error).
 //   /v3/me/seen — the seen cursor with sign-in off (S-1): "seen_cursor_unavailable"; the phone keeps it on the device
 const DESIGNED_404 = ['/api/v1/v3/me/seen']
+
+/** A change row on the Board's list that opens a record (or, on the full daily read, one of its rows). */
+const CHANGE_ROW = 'button[data-testid="board-row"], [data-testid="morning-read-changed-row"]'
+const CHANGE_ROW_VISIBLE = 'button[data-testid="board-row"]:visible, [data-testid="morning-read-changed-row"]:visible'
 
 /**
  * Pin the page's wall clock: `Date.now()` / `new Date()` start at `startMs` and
@@ -541,9 +553,10 @@ async function shot(page, name) {
 }
 
 /** Visible text metrics for the current view. */
-async function measure(page, name, { reader, width, within = null }) {
-  const m = await withTimeout(page.evaluate(({ floor, engineSrc, idSrc, within }) => {
+async function measure(page, name, { reader, width, within = null, role = walkRole() }) {
+  const m = await withTimeout(page.evaluate(({ floor, engineSrc, allow, idSrc, within }) => {
     const engine = engineSrc.map(([s, f]) => new RegExp(s, f))
+    const allowed = new Set(allow)
     const idRe = new RegExp(idSrc)
     const vis = (el) => {
       const r = el.getBoundingClientRect()
@@ -563,7 +576,7 @@ async function measure(page, name, { reader, width, within = null }) {
       textEls++
       const fsz = parseFloat(getComputedStyle(el).fontSize)
       if (fsz < floor) { small++; if (smallSamples.length < 80) smallSamples.push(`${fsz}px "${own.slice(0, 30)}"`) }
-      for (const re of engine) { const mm = own.match(re); if (mm) engineHits.add(mm[0]) }
+      if (!allowed.has(own)) for (const re of engine) { const mm = own.match(re); if (mm) engineHits.add(mm[0]) }
       if (idRe.test(own)) ids.push(own)
     }
     for (const el of document.querySelectorAll('textarea,input')) {
@@ -575,9 +588,9 @@ async function measure(page, name, { reader, width, within = null }) {
       tiles: document.querySelectorAll('.dv-tab').length, groups: document.querySelectorAll('.dv-groupview').length,
       docWidth: document.documentElement.scrollWidth,
     }
-  }, { floor: budgets.textFloorPx, engineSrc: ENGINE_WORDS.map((r) => [r.source, r.flags]), idSrc: MACHINE_ID.source, within }), 10000, name).catch(() => null)
+  }, { floor: budgets.textFloorPx, engineSrc: ENGINE_WORDS.map((r) => [r.source, r.flags]), allow: [...READER_ALLOW], idSrc: MACHINE_ID.source, within }), 10000, name).catch(() => null)
   if (!m) { result.unresponsive.push('measure ' + name); return null }
-  result.surfaces.push({ name, width, reader, ...m })
+  result.surfaces.push({ name, width, reader, role, ...m })
   result.overflow.push({ where: name, width, docWidth: m.docWidth })
   return m
 }
@@ -609,6 +622,29 @@ async function consultBox(page) {
     if (!t || !vis(t)) return null
     return Math.round(t.getBoundingClientRect().width)
   }), 10000, 'consult').catch(() => null)
+}
+
+/**
+ * Where the Consult composer's Ask button is, and how much of the dock the
+ * answers get: Ask must lie wholly inside the window (and the dock), and the
+ * transcript must take most of the dock's height. Null fields when the dock is
+ * folded to the ask bar (the transcript is hidden by design).
+ */
+async function consultComposer(page) {
+  return withTimeout(page.evaluate(() => {
+    const box = (sel) => { const el = document.querySelector(sel); if (!el) return null; const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 ? r : null }
+    const ask = box('[data-testid="consult-submit"]')
+    const dock = box('[data-testid="consult-dock"]')
+    const scroll = box('[data-testid="consult-scroll"]')
+    if (!ask) return { askVisible: null, transcriptFraction: null }
+    const inView = ask.left >= 0 && ask.top >= 0 && ask.right <= window.innerWidth && ask.bottom <= window.innerHeight
+    const inDock = !dock || (ask.left >= dock.left - 1 && ask.right <= dock.right + 1 && ask.top >= dock.top - 1 && ask.bottom <= dock.bottom + 1)
+    return {
+      askVisible: inView && inDock,
+      askRect: [Math.round(ask.left), Math.round(ask.top), Math.round(ask.right), Math.round(ask.bottom)],
+      transcriptFraction: dock && scroll ? Math.round((scroll.height / dock.height) * 100) / 100 : null,
+    }
+  }), 10000, 'consult composer').catch(() => ({ askVisible: null, transcriptFraction: null }))
 }
 
 /**
@@ -728,8 +764,8 @@ async function walkSurfaces(page, tabs, prefix) {
 
 /**
  * Wait until the Board map is SETTLED — on its own signals, never on a clock
- * (roll 84: "a place selected" and "did not reach the stage at 3840" flaked in
- * three lanes under load because the walk slept a fixed time and then acted on
+ * ("a place selected" and "did not reach the stage at 3840" flaked
+ * under load because the walk slept a fixed time and then acted on
  * a map that was still flying back from the reset, re-reading a changed window
  * or re-laying out after a move). Settled = the map's own ready stamp
  * (`data-ready="1"` with `data-ready-at` set), the maplibre instance loaded
@@ -784,11 +820,13 @@ async function walkMap(page, t0) {
   m.software = (await attr('data-software')) === '1'
   m.marks = Number(await attr('data-marks'))
   step('map: the Board map is ready', ready, ready ? `${m.renderer}, ${m.projection ?? 'drawn'}, ${m.marks} marks, ready ${m.readyMs} ms from navigation` : 'never ready')
-  // roll 86: "not covered" only where the roster says no source (the summary
+  // "not covered" only where the roster says no source (the summary
   // roster once dropped `sources`: every place hatched, over every change)
   {
-    const fig = await page.locator('[data-testid="globe-layer-figure-blanks"]').textContent().catch(() => null)
-    const shown = Number(/(\d+) uncovered/.exec(fig ?? '')?.[1] ?? NaN)
+    // the coverage strip under the map says it (the layer card rests folded)
+    const fig = await page.locator('[data-testid="coverage-strip-uncovered"]').first().textContent({ timeout: 5000 }).catch(() => null)
+      ?? await page.locator('[data-testid="globe-layer-figure-blanks"]').textContent({ timeout: 2000 }).catch(() => null)
+    const shown = Number(/(\d+) (?:uncovered|not covered)/.exec(fig ?? '')?.[1] ?? NaN)
     const most = net.roster ? placesDeclaringNoSource(net.roster).size : null
     m.uncovered = { shown: Number.isFinite(shown) ? shown : null, rosterAtMost: most }
     const ok = Number.isFinite(shown) && most != null && shown <= most
@@ -828,6 +866,20 @@ async function walkMap(page, t0) {
     const since = await now(page)
     if (!(await page.locator('[data-testid="globe-layer-toggle-events"]').count().catch(() => 0))) await page.click('[data-testid="globe-layers-button"]').catch(() => {})
     await page.click('[data-testid="time-band"] [aria-label="Window span"] button:has-text("7d")').catch(() => {})
+    // the time band is a chart with a brush, not a player: bars drawn, the
+    // window read in words, no playback-speed buttons
+    {
+      const band = await page.evaluate(() => {
+        const b = document.querySelector('[data-testid="time-band"]')
+        if (!b) return null
+        const bars = (b.querySelector('[data-testid="time-band-histogram"]')?.getAttribute('data-buckets') ?? '').split(',').filter((n) => Number(n) > 0).length
+        const brush = b.querySelector('[role="slider"][aria-label="Time window"]')?.getAttribute('aria-valuetext') ?? null
+        const speeds = [...b.querySelectorAll('button')].filter((x) => /^\d(\.\d)?x$/.test((x.textContent ?? '').trim())).length
+        return { bars, brush, speeds }
+      }).catch(() => null)
+      const ok = !!band && band.bars > 0 && !!band.brush && /7 days/.test(band.brush) && band.speeds === 0
+      step('time band: a histogram under a brush that reads the window in words', ok, band ? `${band.bars} bars; "${band.brush}"; ${band.speeds} speed buttons` : 'no time band')
+    }
     const ok = await page.click('[data-testid="globe-layer-toggle-events"]', { timeout: 5000 }).then(() => true).catch(() => false)
     const drawn = ok && (await page.waitForSelector('[data-testid="globe-layer-figure-events"][data-state="read"]', { timeout: 20000 }).then(() => true).catch(() => false))
     await quiet(page, 15000)
@@ -888,7 +940,7 @@ async function walkMap(page, t0) {
 }
 
 /**
- * Roll 86: the flat World map (the globe flag off, `?globe=0`) draws each
+ * The flat World map (the globe flag off, `?globe=0`) draws each
  * signal at its own point — the `/signals` rows it was served, read back from
  * what the map rendered (flatSignals.mjs). Its own page, so the desktop
  * page's map, layers and stored choices are not touched.
@@ -987,7 +1039,7 @@ async function mapFit(page, where, width) {
 
 /** Send the map's region to the stage (the header's to-stage button on the map's group). */
 async function mapToStage(page) {
-  // roll 84: act on signals, not clocks. The old step clicked the tab and the
+  // Act on signals, not clocks. The old step clicked the tab and the
   // to-stage button with 5 s click timeouts straight after the surface switch
   // and slept 1.5 s; at 3840 under load the Board's dock had not laid out yet,
   // a click timed out, and the step read "the map did not reach the stage".
@@ -1052,6 +1104,7 @@ async function walkWatch(browser, desk) {
     w.shown = await shownAttr('data-shown')
     w.expectPaged = await shownAttr('data-shown-paged')
     const before = net.log.length
+    await p.click('[data-testid="watch-filters-toggle"]', { timeout: 5000 }).catch(() => {})
     await p.click('[data-testid="watch-filter-paged-paged"]', { timeout: 5000 }).catch(() => {})
     await p.waitForTimeout(400)
     w.filtered = await count('[data-testid="watch-alert-row"]')
@@ -1486,7 +1539,7 @@ function step(name, ok, note) {
   result.steps.push({ name, ok, note: note ? scrub(note) : undefined }); log(`STEP ${ok ? 'ok  ' : 'FAIL'} ${name}${note ? ' — ' + scrub(note) : ''}`)
 }
 /**
- * Roll 89: true, and the check is recorded as SKIPPED by name, when a
+ * True, and the check is recorded as SKIPPED by name, when a
  * signed-in account's role is below what the check rests on (signin.mjs
  * ROLE_GATED). Without an account (fixtures, or the bearer) nothing is skipped.
  */
@@ -1514,7 +1567,7 @@ async function main() {
     const found = await p.waitForSelector('[data-testid="sign-in-email"], [data-testid="sign-in-submit"]', { timeout: 20000 }).then(() => true).catch(() => false)
     step('sign-in screen without a token', found, found ? undefined : 'no sign-in form appeared')
     await shot(p, 'W01-sign-in')
-    // roll 89: a live walk with an account signs in here, through the real screen
+    // a live walk with an account signs in here, through the real screen
     if (SIGN_IN) {
       await p.fill('[data-testid="sign-in-email"]', WALK_EMAIL, { timeout: 10000 }).catch(() => {})
       await p.fill('[data-testid="sign-in-password"]', WALK_PASSWORD, { timeout: 10000 }).catch(() => {})
@@ -1563,7 +1616,7 @@ async function main() {
   result.hiddenFetches = await withTimeout(page.evaluate(() => (window.__legbaFetchLog ?? null)), 10000, 'fetch log').catch(() => null)
   await stepLongTasks(page, 'landing', 0)
   await measure(page, 'landing', { reader: true, width: 1680 })
-  result.consult.push({ width: 1680, where: 'landing', boxWidth: await consultBox(page) })
+  result.consult.push({ width: 1680, where: 'landing', boxWidth: await consultBox(page), ...(await consultComposer(page)) })
   await shot(page, 'W03-landing-1680')
   await walkMap(page, t0)
   await walkFlatSignals(ctx)
@@ -1572,6 +1625,42 @@ async function main() {
   for (const id of ['surface-bar', 'frame-rail', 'stage', 'consult-dock', 'panel-side']) {
     const there = (await page.locator(`[data-testid="${id}"]`).count().catch(() => 0)) > 0
     step(`the frame draws ${id}`, there, there ? undefined : 'not in the page')
+  }
+
+  // ONE "SINCE": every "since you last looked" read of this page load asked
+  // the same cursor, the Board states it, and no region says "first visit"
+  // beside a since-time (a convergence or phone read with its own window is
+  // not a "since last visit" read and is left out)
+  {
+    const asked = [...new Set(net.log
+      .filter((r) => (r.phase === 'landing' || r.phase === 'after-landing') && r.url.startsWith('/api/v1/v3/since?') && !/[?&](channel|include)=/.test(r.url))
+      .map((r) => new URLSearchParams(r.url.split('?')[1]).get('cursor')))]
+    const board = await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="board-list-since"]')
+      return el ? { since: el.getAttribute('data-since'), text: el.textContent ?? '', firstVisitElsewhere: /first visit/i.test(document.body.innerText) } : null
+    }).catch(() => null)
+    result.oneSince = { asked, board }
+    const ok = !!board && asked.length === 1 && asked[0] === board.since && !board.firstVisitElsewhere
+    step('one "since" on the Board: one cursor asked, the list states it, no "first visit" beside it', ok,
+      !board ? 'no since line on the Board list' : `${asked.length} cursor(s) asked (${asked.join(', ') || 'none'}); the list says "${board.text.slice(0, 60)}"${board.firstVisitElsewhere ? '; a region says "first visit"' : ''}`)
+  }
+
+  // ONE WINDOW: Consult shows (and sends) the time band's window, read-only
+  {
+    const w = await page.evaluate(() => {
+      const band = document.querySelector('[data-testid="time-scrubber"]')
+      const line = document.querySelector('[data-testid="consult-point-window"]')
+      return {
+        band: band ? [band.getAttribute('data-window-start'), band.getAttribute('data-window-end')] : null,
+        consult: line ? [line.getAttribute('data-window-start'), line.getAttribute('data-window-end')] : null,
+        words: line?.textContent?.trim() ?? null,
+        selector: !!document.querySelector('[data-testid="consult-window"]'),
+      }
+    }).catch(() => null)
+    result.oneWindow = w
+    const ok = !!w && !!w.band && !!w.consult && w.band[0] === w.consult[0] && w.band[1] === w.consult[1] && !w.selector
+    step("one window: Consult's window is the time band's, read-only", ok,
+      !w ? 'not read' : !w.band ? 'no time band' : !w.consult ? 'no window on Consult' : `band ${w.band.join('…')}, Consult ${w.consult.join('…')} (${w.words})${w.selector ? '; Consult has its own window selector' : ''}`)
   }
 
   // the reader side's surfaces
@@ -1635,20 +1724,20 @@ async function main() {
     await quiet(page, 20000)
     let how = 'a change on the Board clicked'
     const fromBoard = await openSheet('a Board row', 'record: a Board row', async () => {
-      // the stage may hold a page an earlier step opened: back to today's read first
+      // the stage may hold a page an earlier step opened: back to the Board's list first
       for (let i = 0; i < 3; i++) {
-        if (await page.locator('[data-testid="morning-read-changed-row"]').first().isVisible().catch(() => false)) break
+        if (await page.locator(CHANGE_ROW).first().isVisible().catch(() => false)) break
         if (!(await page.click('[data-testid="stage-back"]', { timeout: 3000 }).then(() => true).catch(() => false))) break
         await page.waitForTimeout(500)
       }
       // the first change row ON SCREEN (`:visible`): a hidden copy earlier in
       // the page must not take the click
-      const row = page.locator('[data-testid="morning-read-changed-row"]:visible').first()
+      const row = page.locator(CHANGE_ROW_VISIBLE).first()
       let why = null
       if (await row.click({ timeout: 8000 }).then(() => true).catch((e) => { why = String(e?.message ?? e).split('\n')[0]; return false })) return true
-      // roll 87: say WHY no row took the click, so a failure names its cause
+      // say WHY no row took the click, so a failure names its cause
       const seen = await page.evaluate(() => {
-        const rows = [...document.querySelectorAll('[data-testid="morning-read-changed-row"]')]
+        const rows = [...document.querySelectorAll('button[data-testid="board-row"], [data-testid="morning-read-changed-row"]')]
         const shown = rows.filter((r) => r.getClientRects().length > 0)
         return `${rows.length} change rows, ${shown.length} on screen; ${location.hash || 'no address'}`
       }).catch(() => 'not read')
@@ -1682,7 +1771,7 @@ async function main() {
       if (!(await page.click('[data-testid="consult-cited-toggle"]', { timeout: 8000 }).then(() => true).catch(() => false))) return false
       return page.locator('[data-testid="consult-cited-row-0"] [data-testid="record-link"]').first().click({ timeout: 8000 }).then(() => true).catch(() => false)
     }, 'W06c-record-sheet-consult')
-    // live, the owner's conversations may cite nothing: that is reported, not failed
+    // live, the signed-in account's conversations may cite nothing: that is reported, not failed
     const consultOk = fromConsult.opened || (MODE === 'live' && !fromConsult.clicked)
     step('the Record sheet opens from a Consult citation', consultOk, fromConsult.opened ? fromConsult.record ?? undefined : fromConsult.clicked ? 'the chain did not read from the citation' : 'no prior conversation with a cited record to open')
   }
@@ -1721,11 +1810,37 @@ async function main() {
     step('a subject opened from the switcher', opened, opened ? undefined : ok ? 'the subject page did not open' : 'no subject row in the switcher')
   }
 
+  // ONE POINT: the subject just opened is named alike by the top bar and
+  // Consult, and the Record sheet shows nothing else; Escape clears it everywhere
+  if (subjectId) {
+    const read = () => page.evaluate(() => ({
+      bar: document.querySelector('[data-testid="subject-switcher-label"]')?.textContent?.trim() ?? null,
+      consult: document.querySelector('[data-testid="consult-point-name"]')?.textContent?.trim() ?? null,
+      sheet: document.querySelector('[data-testid="record-sheet"]')?.getAttribute('data-record') ?? null,
+      page: document.querySelector('[data-testid="subject-page"]')?.getAttribute('data-subject') ?? null,
+      tab: document.querySelector('[data-testid="surface-bar"] [role="tab"][aria-selected="true"]')?.getAttribute('data-testid') ?? null,
+    })).catch(() => null)
+    const at = await read()
+    const agree = !!at && !!at.bar && at.bar === at.consult && (at.sheet === null || at.sheet === `target:${subjectId}`) && at.page === subjectId
+    step('one point: the top bar, the sheet and Consult name the same subject', agree,
+      at ? `bar "${at.bar}", Consult "${at.consult}", sheet ${at.sheet ?? 'closed'}, page ${at.page}` : 'not read')
+    step('a subject picked from the switcher opens on the subject tab', !!at && at.tab === 'surface-tab-subject', at?.tab ?? 'no tab selected')
+    // out of any box first (Escape typed in a box keeps the point)
+    await page.evaluate(() => (document.activeElement instanceof HTMLElement ? document.activeElement.blur() : null)).catch(() => {})
+    await page.keyboard.press('Escape').catch(() => {})
+    const cleared = await page.waitForFunction(() => /^Choose a /.test(document.querySelector('[data-testid="subject-switcher-label"]')?.textContent?.trim() ?? ''), null, { timeout: 5000 }).then(() => true).catch(() => false)
+    const after = await read()
+    const ok = cleared && !!after && after.consult === 'everything in view' && after.sheet === null
+    result.onePoint = { at, after }
+    step('one point: Escape clears it everywhere (the bar, Consult, the sheet)', ok,
+      after ? `bar "${after.bar}", Consult "${after.consult}", sheet ${after.sheet ?? 'closed'}` : 'not read')
+  }
+
   // the Consult composer: focus the box, type nothing, send nothing
   {
     const ta = page.locator('[data-testid="consult-dock"] textarea').first()
     const ok = await ta.focus({ timeout: 5000 }).then(() => true).catch(() => false)
-    result.consult.push({ width: 1680, where: 'with a subject open', boxWidth: await consultBox(page) })
+    result.consult.push({ width: 1680, where: 'with a subject open', boxWidth: await consultBox(page), ...(await consultComposer(page)) })
     step('the Consult composer takes focus', ok, ok ? undefined : 'no question box to focus')
     await shot(page, 'W06-consult-composer')
   }
@@ -1864,10 +1979,25 @@ async function main() {
     await stepLongTasks(p, `landing ${w}`, 0)
     await measure(p, `landing ${w}`, { reader: true, width: w })
     await layoutMetrics(p, `landing ${w}`, w)
-    result.consult.push({ width: w, where: 'landing', boxWidth: await consultBox(p) })
+    result.consult.push({ width: w, where: 'landing', boxWidth: await consultBox(p), ...(await consultComposer(p)) })
     await shot(p, `W10-landing-${w}`)
     // the map in the frame (U-7): as the lead panel column on the Board
-    await mapFit(p, `board panel ${w}`, w)
+    const fit = await mapFit(p, `board panel ${w}`, w)
+    // the Board at rest: the list on the stage, the map alone beside it with
+    // its cards folded and its coverage strip under it, and no Wall
+    {
+      const b = await withTimeout(p.evaluate(() => ({
+        list: !!document.querySelector('[data-testid="stage"] [data-testid="board-list"]'),
+        wall: !!document.querySelector('[data-testid="wall-kpi-band"]'),
+        strip: !!document.querySelector('[data-testid="panel-side"] [data-testid="coverage-strip"], [data-testid="coverage-strip"]'),
+        closeable: document.querySelectorAll('[data-testid="panel-side"] .dv-tab .dv-default-tab-action').length,
+        popout: document.querySelectorAll('[data-testid="region-popout"]').length,
+      })), 10000, 'board at rest').catch(() => null)
+      const folded = !!fit && fit.layers !== 'open' && fit.legend !== 'open'
+      const ok = !!b && b.list && !b.wall && b.strip && b.closeable === 0 && b.popout === 0 && (fit === null || folded)
+      step(`the Board at rest at ${w}: the list, the map with its cards folded and a coverage strip, nothing else`, ok,
+        b ? `list ${b.list ? 'on the stage' : 'missing'} · Wall ${b.wall ? 'SHOWN' : 'absent'} · coverage strip ${b.strip ? 'shown' : 'missing'} · ${b.closeable} closeable seeded tabs · ${b.popout} pop-outs · map cards ${fit ? `${fit.layers}/${fit.legend}` : 'not measured'}` : 'not read')
+    }
     const tabs = (await surfaceTabs(p)).filter((t) => !OPERATOR_SURFACES.has(t.id))
     for (const t of tabs) {
       await p.click(`[data-testid="${t.testid}"]`, { timeout: 8000 }).catch(() => {})
@@ -1875,7 +2005,7 @@ async function main() {
       await p.waitForTimeout(600)
       await measure(p, `surface ${t.id} ${w}`, { reader: true, width: w })
       await layoutMetrics(p, `${t.id} ${w}`, w)
-      result.consult.push({ width: w, where: t.id, boxWidth: await consultBox(p) })
+      result.consult.push({ width: w, where: t.id, boxWidth: await consultBox(p), ...(await consultComposer(p)) })
       await shot(p, `W10-surface-${t.id}-${w}`)
       // the Subject page's flat inset, when the page shows the map
       if (t.id === 'subject' && (await p.locator('.dv-tab', { hasText: /World Map|Map/ }).count().catch(() => 0))) await mapFit(p, `subject inset ${w}`, w)
@@ -1890,6 +2020,15 @@ async function main() {
       await mapFit(p, `stage ${w}`, w)
       await measure(p, `map on the stage ${w}`, { reader: true, width: w })
       await shot(p, `W10-map-stage-${w}`)
+      // Back puts the map back in its region
+      await p.click('[data-testid="stage-back"]', { timeout: 8000 }).catch(() => {})
+      const back = await p.waitForFunction(() => {
+        const side = document.querySelector('[data-testid="panel-side"]')
+        const stage = document.querySelector('[data-testid="stage"]')
+        return !!side?.querySelector('.dv-tab') && [...side.querySelectorAll('.dv-tab')].some((t) => /Map/.test(t.textContent ?? '')) &&
+          stage?.getAttribute('data-stage-view') !== 'v4.map'
+      }, null, { timeout: 15000, polling: 100 }).then(() => true).catch(() => false)
+      step(`the map comes back to its region after the stage and Back at ${w}`, back, back ? undefined : 'no map tab on the panel side after Back')
     } else (result.mapFits ??= []).push({ where: `stage ${w}`, width: w, ok: false, issues: ['the map did not reach the stage'] })
     await c.close()
   }
@@ -1965,8 +2104,23 @@ async function main() {
       const w2 = (await box(p, '[data-testid="centre"]'))?.width ?? null
       record('the centre edge', w0, w1, w2)
     }
-    // a panel splitter (Dockview's sash between two panel regions)
+    // a panel splitter (Dockview's sash between two panel regions). The
+    // Board's panel side is the map alone, with no splitter to drag: the
+    // drag is made on the first reader page that has two regions.
+    let splitPage = null
     {
+      const regions = () => p.locator('[data-testid="panel-side"] .dv-groupview').count().catch(() => 0)
+      if ((await regions()) < 2) {
+        for (const id of ['ledger', 'watch', 'subject']) {
+          await p.click(`[data-testid="surface-tab-${id}"]`, { timeout: 8000 }).catch(() => {})
+          await quiet(p, 20000)
+          await p.waitForTimeout(600)
+          if ((await regions()) >= 2) {
+            splitPage = id
+            break
+          }
+        }
+      }
       const sashes = await p.locator('[data-testid="panel-side"] .dv-sash').all()
       let done = false
       for (const s of sashes) {
@@ -1992,6 +2146,11 @@ async function main() {
       if (!done) record('a panel splitter', null, null, null)
     }
     await shot(p, 'W13-dragged-1920')
+    if (splitPage) {
+      await p.click('[data-testid="surface-tab-board"]', { timeout: 8000 }).catch(() => {})
+      await quiet(p, 20000)
+      await p.waitForTimeout(600)
+    }
     // Consult moves, collapses, pops out — and is usable in each state
     const usable = async () => {
       const ta = await box(p, '[data-testid="consult-dock"] textarea')
@@ -2044,6 +2203,83 @@ async function main() {
     endHold({ discard: !flag('forward-held') })
     await p.waitForTimeout(300)
     await c.close()
+  }
+
+  // 5c. THE READER PASS: the reader side seen AS A READER. The walk's bearer
+  // is an operator, and an admin may see the engine's readout on a reader
+  // page; a reader may not. So the identity answers an (invented) reader and
+  // the four pages, the Record sheet with its Details and its "How this was
+  // produced", a subject's page and the ⌘K list are measured again: every
+  // engine word there FAILS the walk (`budgets.mjs`). With an account signed
+  // in the whole walk is already that account's role, and this pass is not
+  // needed.
+  if (!SIGN_IN) {
+    net.override.set('/api/v1/auth/me', { status: 200, body: READER_IDENTITY })
+    roleOverride = 'reader'
+    const prevPhase = net.phase
+    net.phase = 'reader-pass'
+    const c = await context(browser, desk(1680, 1050))
+    const p = await c.newPage(); wire(p, 'reader pass')
+    p.setDefaultTimeout(20000)
+    await p.goto(BASE + '/', { timeout: 30000 }).catch(() => {})
+    const drawn = await p.waitForSelector(SHELL_READY, { timeout: 30000 }).then(() => true).catch(() => false)
+    await quiet(p, 40000)
+    await p.waitForTimeout(1000)
+    const seen = []
+    const look = async (name, within = null, shotName = null) => {
+      await quiet(p, 20000)
+      await p.waitForTimeout(600)
+      const m = await measure(p, `reader: ${name}`, { reader: true, width: 1680, within, role: 'reader' })
+      if (m) seen.push(name)
+      if (shotName) await shot(p, shotName)
+    }
+    const rTabs = drawn ? await surfaceTabs(p) : []
+    for (const t of rTabs) {
+      if (OPERATOR_SURFACES.has(t.id)) continue
+      const ok = await p.click(`[data-testid="${t.testid}"]`, { timeout: 8000 }).then(() => true).catch(() => false)
+      if (ok) await look(t.id, null, `W16-reader-${t.id}`)
+    }
+    // the Record sheet from the Board's first change, then its Details and
+    // its readout opened
+    await p.click('[data-testid="surface-tab-board"]').catch(() => {})
+    await quiet(p, 20000)
+    const row = p.locator(CHANGE_ROW_VISIBLE).first()
+    if (await row.click({ timeout: 8000 }).then(() => true).catch(() => false)) {
+      const sheet = await p.waitForSelector('[data-testid="record-sheet"]', { timeout: 15000 }).then(() => true).catch(() => false)
+      if (sheet) {
+        await look('record sheet', '[data-testid="record-sheet"]', 'W16-reader-record')
+        if (await p.click('[data-testid="record-sheet-details"]', { timeout: 5000 }).then(() => true).catch(() => false)) {
+          await look('record details', '[data-testid="record-sheet"]')
+          const how = p.locator('[data-testid="record-sheet"] [data-testid="how-produced"] > summary').first()
+          if (await how.click({ timeout: 5000 }).then(() => true).catch(() => false)) {
+            await look('how this was produced', '[data-testid="record-sheet"]', 'W16-reader-record-how')
+          }
+        }
+        await p.click('[data-testid="record-sheet-close"]').catch(() => p.keyboard.press('Escape'))
+        await p.waitForTimeout(300)
+      }
+    }
+    // a subject's page, from the top bar's switcher
+    await p.click('[data-testid="subject-switcher"]', { timeout: 5000 }).catch(() => {})
+    const subj = p.locator('[data-testid^="rail-subject-"]').first()
+    await subj.waitFor({ state: 'visible', timeout: 15000 }).catch(() => {})
+    if (await subj.click({ timeout: 8000 }).then(() => true).catch(() => false)) {
+      if (await p.waitForSelector('[data-testid="subject-page"]', { timeout: 25000 }).then(() => true).catch(() => false)) {
+        await look('subject page', null, 'W16-reader-subject')
+      }
+    }
+    // ⌘K with a query: subjects only, by the profile's nouns
+    if (await p.click('[data-testid="open-palette"]', { timeout: 5000 }).then(() => true).catch(() => false)) {
+      await p.fill('[data-testid="command-palette-input"]', 'a', { timeout: 5000 }).catch(() => {})
+      await p.waitForTimeout(500)
+      await look('command palette', '[data-testid="command-palette"]', 'W16-reader-palette')
+      await p.keyboard.press('Escape').catch(() => {})
+    }
+    step('the reader side walked as a reader', seen.length >= 6, `${seen.length} views: ${seen.join(', ')}`)
+    await c.close()
+    net.phase = prevPhase
+    roleOverride = null
+    net.override.delete('/api/v1/auth/me')
   }
 
   // 6. the phone reader at 390
@@ -2148,7 +2384,7 @@ async function main() {
   }
 
   const evaluation = evaluate(result, budgets, MODE)
-  // roll 89: the checks a signed-in account's role kept the walk from making, by name
+  // the checks a signed-in account's role kept the walk from making, by name
   const refused = Object.entries(result.roleRefused).sort((a, b) => b[1] - a[1])
   const skippedLines = (result.skipped.length
     ? `\nSKIPPED for the account's role (${session.role ?? 'unknown'}): ${result.skipped.length}\n` +

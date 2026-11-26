@@ -1,0 +1,49 @@
+# THE THIRD-FAMILY GRADER ON THE BOX — a Nemotron model, thinking OFF
+# (kind: llm_provider). It takes the slot the OpenRouter Mistral grader held
+# (`llm.judge.openrouter_mistral_large.openai_compat`: correctness_grader,
+# desk_reference, standing_auditor) and the Llama-3.3 audit rater — both dead
+# since 2026-10-17 00:22Z with the OpenRouter credits (402 on every call).
+# The grader fence needs a family distinct from the WRITER (the core model)
+# and the JUDGE (Gemma): `nvidia` is that family. Deployment-wide repoint via
+# LEGBA_EXTERNAL_GRADER_STACK_REF, so the three descriptor refs need no edit.
+# Thinking OFF: grading runs at width and wants a short structured verdict.
+# Id ends `.openai_compat` → the vLLM handler. $0 lane (our box).
+id: llm.grader.gateway_third_family.openai_compat
+name: Nemotron (think off) via the model gateway — third-family external grader
+schema_uri: legba/stack/llm_provider/1.0.0
+version: "0000000000000000"
+state: draft
+owner: owner@local
+config:
+  api_endpoint:
+    factory_kind: text
+    raw: "${env:LEGBA_GATEWAY_API_ENDPOINT}"
+  api_key:
+    factory_kind: secret
+    raw: llm.gateway.api_key
+  model_name:
+    factory_kind: text
+    raw: "${env:LEGBA_GATEWAY_GRADER_MODEL}"
+  # The alias's maximum output as the gateway states it (/v1/models
+  # `max_output_tokens`), sent as max_tokens on every call so the gateway's
+  # lower per-alias default never cuts an answer short. A number of the
+  # model's, never a limit of ours; per instance because the alias is.
+  max_output_tokens:
+    factory_kind: text
+    raw: "${env:LEGBA_GATEWAY_GRADER_MAX_OUTPUT_TOKENS}"
+  # The window, input plus output, the gateway states for this alias
+  # (its /v1/models `context_tokens`); it sizes the input budgets and keeps
+  # max_tokens inside the window when the input is large.
+  context_window_tokens:
+    factory_kind: text
+    raw: "${env:LEGBA_GATEWAY_CONTEXT_WINDOW_TOKENS}"
+  timeout_seconds:
+    factory_kind: number
+    raw: 120
+  tier:
+    factory_kind: dropdown_static
+    raw: cheap
+    options: [primary, fallback, cheap]
+  max_concurrent:
+    factory_kind: number
+    raw: 6

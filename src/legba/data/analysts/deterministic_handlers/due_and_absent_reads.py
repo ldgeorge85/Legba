@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The reads behind ``due_and_absent`` (lane E-1): every SQL statement the
+"""The reads behind ``due_and_absent``: every SQL statement the
 detector runs, and the async helpers that run them. Read-only, no model.
 
 Split from :mod:`.due_and_absent` so the rule (pure: classification, the

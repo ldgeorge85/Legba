@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W5 — strong activity OUTSIDE the roster, named in the world read's aperture.
+"""Strong activity OUTSIDE the roster, named in the world read's aperture.
 
 The world read could name only roster units, so Paraguay's week (an
 impeachment, an arrest, a new president) was invisible to it and a sentence

@@ -68,7 +68,7 @@ def test_brier_plane_declaration_reaches_the_readable_body():
 
 
 def test_brier_plane_never_carries_the_operator_correctness_axis():
-    """The standing never-pool rule at the Brier boundary (labels_api P2-5)."""
+    """The standing never-pool rule at the Brier boundary (labels_api)."""
     correctness_axis.assert_not_pooled(
         _calibration_payload().data, what="the calibration_tracking payload"
     )

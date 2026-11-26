@@ -1,5 +1,5 @@
 /**
- * Live sign-in as a named account (roll 89): the pure parts.
+ * Live sign-in as a named account: the pure parts.
  *
  * With sign-in on and the console's edge perimeter off, no bearer reaches a
  * browser, so a live walk signs in the way a person does: the real sign-in
@@ -8,7 +8,7 @@
  * never printed, logged, written down or drawn in a screenshot; the session
  * cookie the registry answers with is held in memory only.
  *
- * A walk account may hold a lower role than the owner. A check that needs a
+ * A walk account may hold a lower role than an admin. A check that needs a
  * higher role than the account holds is SKIPPED on live and named in the
  * report — never failed, and never weakened on fixtures (fixture mode has no
  * account and runs every check).
@@ -62,13 +62,13 @@ export function skipsForRole(held, needed) {
 /**
  * The checks that rest on a read (or an act) above the reader's role, with
  * the role they need and the routes that decide it (route_policy.py
- * ROUTE_MIN_ROLES). Measured on the roll 89 live walk as a reader: each of
+ * ROUTE_MIN_ROLES). Measured on a live walk as a reader: each of
  * these routes answered 403 and each check below failed for that reason
  * alone. A check matching an entry is SKIPPED (named, with its role) when the
  * signed-in account is below `needs`; it is never failed and never passed.
  *
- * RA-1 (the owner's pick: open the reader surfaces' reads; keep every change
- * with a contributor or an admin): the reader's map, Watch and phone checks
+ * The reader surfaces' reads are open and every change stays with a
+ * contributor or an admin: the reader's map, Watch and phone checks
  * now read the reader's own routes (`/v3/roster`, `/v3/watch/alerts`, the
  * lowered figures) and run for a reader. What stays: the change actions, the
  * operator side (a reader has no way across — the button says why), and the

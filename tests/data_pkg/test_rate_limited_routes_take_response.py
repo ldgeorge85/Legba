@@ -8,7 +8,7 @@ the rate-limit headers onto the ``response`` keyword argument — and raises
 when the endpoint has none, so every successful call 500s. The gate image
 does not ship slowapi (the no-op limiter runs), so only this static guard can
 catch it: POST /consult/runs/{id}/synthesize shipped without the parameter
-(found by the W11-F147 lane, 2026-11-04).
+(found in a review of the rate-limited routes).
 """
 from __future__ import annotations
 

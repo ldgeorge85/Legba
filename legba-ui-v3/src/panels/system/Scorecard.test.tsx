@@ -1,5 +1,5 @@
 /**
- * Component test for the Scorecard tab (ST1): a pre-resolution payload (0
+ * Component test for the Scorecard tab: a pre-resolution payload (0
  * resolved, n too small, single arm, no Brier) and a post-resolution one.
  */
 

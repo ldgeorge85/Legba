@@ -1,0 +1,52 @@
+# THE SECOND JUDGE FAMILY ON THE BOX — a Nemotron model, thinking ON
+# (kind: llm_provider). Rung 2 of the verify judge chain after
+# `llm.verify.gateway_judge.openai_compat` (LEGBA_JUDGE_CHAIN_DEFAULT): the
+# models team measured it at 83.8 on their calibration set and it
+# handles the long queued inputs Gemma stalls on (ledger 2026-10-08 21:1xZ);
+# "thinking ON" is their recommendation for the judge role. The interlock on
+# our adjudicated rows (SEAMS #70) may promote it to rung 1.
+#
+# THINK ALIAS — reasoning tokens count against the output, so the value sent
+# as max_tokens is the alias's own maximum output (below), never a smaller
+# number of ours.
+# FAMILY: `nvidia` (GRADER_FAMILY_BY_COMPONENT). Id ends `.openai_compat` →
+# the vLLM handler. $0 lane (our box).
+id: llm.judge.gateway_rung2_think.openai_compat
+name: Nemotron (think on) via the model gateway — verify judge rung 2
+schema_uri: legba/stack/llm_provider/1.0.0
+version: "0000000000000000"
+state: draft
+owner: owner@local
+config:
+  api_endpoint:
+    factory_kind: text
+    raw: "${env:LEGBA_GATEWAY_API_ENDPOINT}"
+  api_key:
+    factory_kind: secret
+    raw: llm.gateway.api_key
+  model_name:
+    factory_kind: text
+    raw: "${env:LEGBA_GATEWAY_JUDGE_THINK_MODEL}"
+  # The alias's maximum output as the gateway states it (/v1/models
+  # `max_output_tokens`), sent as max_tokens on every call so the gateway's
+  # lower per-alias default never cuts an answer short. A number of the
+  # model's, never a limit of ours; per instance because the alias is.
+  max_output_tokens:
+    factory_kind: text
+    raw: "${env:LEGBA_GATEWAY_JUDGE_THINK_MAX_OUTPUT_TOKENS}"
+  # The window, input plus output, the gateway states for this alias
+  # (its /v1/models `context_tokens`); it sizes the input budgets and keeps
+  # max_tokens inside the window when the input is large.
+  context_window_tokens:
+    factory_kind: text
+    raw: "${env:LEGBA_GATEWAY_CONTEXT_WINDOW_TOKENS}"
+  timeout_seconds:
+    factory_kind: number
+    raw: 240
+  tier:
+    factory_kind: dropdown_static
+    raw: cheap
+    options: [primary, fallback, cheap]
+  max_concurrent:
+    factory_kind: number
+    raw: 4

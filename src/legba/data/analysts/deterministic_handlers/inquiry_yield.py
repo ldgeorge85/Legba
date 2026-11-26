@@ -1,11 +1,10 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""``inquiry_yield`` sub-handler — the H12 weekly instrument over the ledger.
+"""``inquiry_yield`` sub-handler — the weekly instrument over the ledger.
 
-Program 5 lane 1 (planning/PROGRAM5_INQUIRY_DESIGN_2026-09-24.md §4): an
-inquiry is scored by YIELD, never by correctness. Weekly, per descriptor,
+An inquiry is scored by YIELD, never by correctness. Weekly, per descriptor,
 this handler counts — DETERMINISTICALLY, off ``inquiry_ledger``
-(migration 0215) alone plus the two mechanical cross-references §4 names —
+(migration 0215) alone plus the two mechanical cross-references names —
 
   * hypotheses opened / confirmed / refuted / expired;
   * questions dispatched / answered;
@@ -16,7 +15,7 @@ this handler counts — DETERMINISTICALLY, off ``inquiry_ledger``
   * blind spots — an open, dispatched question whose target had NO read this
     cycle.
 
-Published as a FINDING (never TRACE_ONLY — §4: "Published on the journal
+Published as a FINDING (never TRACE_ONLY —: "Published on the journal
 panel beside the entry"), and never a gate: nothing downstream is blocked or
 demoted by this number, it is read-only measurement. "An inquiry that opens
 hypotheses it never tests scores as an inquiry that opens nothing" — the
@@ -31,7 +30,7 @@ Two properties, engineered in from receipt_anchor's own precedent:
     ``deps.pg_pool`` and hands it to :func:`compute_yield` unchanged.
 
 SCOPE NOTE on blind spots (honest, not hidden): ``dispatched_to`` may name an
-``open_question`` id, a ``fact_contention`` id, or a desk ``analyst_id`` (§3).
+``open_question`` id, a ``fact_contention`` id, or a desk ``analyst_id``.
 This instrument's "had a read" check only recognizes the desk-analyst_id /
 target_id shape (an ``analyst_outputs`` row this cycle) — a question
 dispatched into an open_question or a contention id will read as a standing
@@ -76,7 +75,7 @@ _MAX_LEDGER_ROWS = 20_000
 #: The findings read PAGES (keyset on ``(produced_at, id)``) in chunks of this
 #: many rows. Until 2026-10 this was a single ``LIMIT 5000`` read — and a
 #: normal week carries ~12.6k in-window findings with a non-empty
-#: ``derived_from`` (live, 2026-10-03), so the 09-28 yield read 40% of its
+#: ``derived_from``, so the 09-28 yield read 40% of its
 #: week and warned ``inquiry_yield.findings_capped``. A page bounds ONE
 #: statement's result set, never the week.
 _FINDING_PAGE_ROWS = 5_000
@@ -155,7 +154,7 @@ def compute_yield(
 
     ``finding_refs`` — ``(produced_at, ref_set)`` for every substrate finding
     produced in (or overlapping) the window — the mechanical half of
-    "anticipated" (§4): an OBSERVATION closed inside the window counts once
+    "anticipated": an OBSERVATION closed inside the window counts once
     it it is closed AND some finding produced STRICTLY AFTER that close
     shares at least one ref with its (close-time-set) ``cited_refs``.
 
@@ -257,7 +256,7 @@ def build_finding(
     by_descriptor: Mapping[str, YieldCounts],
     warnings: list[str],
 ) -> FindingPayload:
-    """Per §4: a per-run receipt naming every scored descriptor's counters —
+    """Per: a per-run receipt naming every scored descriptor's counters —
     never a gate, so ``confidence`` is fixed at 1.0 (a count is not a claim
     graded for truth) and nothing here demotes or blocks anything downstream."""
     n = len(by_descriptor)

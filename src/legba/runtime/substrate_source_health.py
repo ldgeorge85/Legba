@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Source-poll HEALTH — the ``get_source_health`` read, in its own module.
 
-Split out of ``substrate_query_port.py`` on 2026-09-28 (wave Q) when that
+Split out of ``substrate_query_port.py`` when that
 module crossed its size ceiling; the port keeps a thin delegating method with
 the same signature, exactly as ``substrate_frame_reads`` carries
 ``list_situations`` / ``get_timeline`` / ``query_events``. Nothing here reaches
@@ -29,7 +29,7 @@ __all__ = ["get_source_health", "list_sources", "_FEED_EMPTY_SLACK"]
 #: import the port.
 _MAX_ROW_LIMIT = 200
 
-#: W11-F138 — the body-extraction counters cover archive rows touched in this
+#: The body-extraction counters cover archive rows touched in this
 #: many days (the rate is a current reading, and the window bounds the scan).
 BODY_EXTRACTION_WINDOW_DAYS = 30
 
@@ -52,7 +52,7 @@ async def get_source_health(
     limit: int = _MAX_ROW_LIMIT,
     include_body_extraction: bool = True,
 ) -> dict[str, Any]:
-    """Source-poll HEALTH — which feeds are quiet or erroring (plan §5).
+    """Source-poll HEALTH — which feeds are quiet or erroring.
 
     Joins each head source descriptor to its most-recent ``signals`` time and
     its most-recent ``source_poll_outcomes`` row (migration 0046 + 0114: one
@@ -99,7 +99,7 @@ async def get_source_health(
     watchdog's tripwire reads these same rows, so there is no parallel truth.
     ``summary.staleness`` is the whole-scan histogram by state.
 
-    BODY EXTRACTION (W11-F138): each row also carries ``body_extraction`` —
+    BODY EXTRACTION: each row also carries ``body_extraction`` —
     ``{fetched, challenge_blocked, boilerplate_rejected, body_stored,
     body_extraction_rate}`` aggregated from the ``evidence_archive`` sidecar
     for that feed's signals, the same four counters the archiver's per-run
@@ -118,7 +118,7 @@ async def get_source_health(
     """
     clamped_limit = max(1, min(int(limit), _MAX_ROW_LIMIT))
     if include_body_extraction:
-        # W11-F138 — the per-feed body-extraction counters, read off the SAME
+        # The per-feed body-extraction counters, read off the SAME
         # evidence_archive sidecar the archiver's run receipt tallies (one
         # vocabulary, one place to audit). 'failed' rows sit in the fetched
         # denominator because a fetch WAS attempted; an archive row whose
@@ -302,7 +302,7 @@ async def get_source_health(
             silent_count += 1
         if silent_only and not is_silent:
             continue
-        # W11-F138 — the per-feed body-extraction read (the evidence_archive
+        # The per-feed body-extraction read (the evidence_archive
         # sidecar aggregate joined above). ``body_extraction_rate`` is
         # body_stored / fetched with the house convention: None on an empty
         # denominator — never a 0 pretending to be a measurement.
@@ -403,7 +403,7 @@ async def get_source_health(
     }
 
 
-#: W11-F152 -- the one-line reading of ``last_poll_outcome`` the consult gets in
+#: The one-line reading of ``last_poll_outcome`` the consult gets in
 #: the ``summary`` and on every 'empty' row. The 2026-11-05 consult dig: 59 of
 #: 116 healthy sources show 'empty' at any instant (it is the LATEST poll only:
 #: HTTP fine, nothing new), and a consult that read it as "dead" reported a
@@ -440,7 +440,7 @@ async def list_sources(
     verdict ``get_source_health`` and the liveness watchdog use, so no parallel
     truth. ``silent_only`` keeps only sources silent over ``silent_hours``.
 
-    ORDER (W11-F152): freshest first by default. The old ``last_signal_at ASC
+    ORDER: freshest first by default. The old ``last_signal_at ASC
     NULLS FIRST`` put the stalest rows at the front, and the consult loop's
     bounded tool JSON sheds whole TRAILING rows, so a trimmed answer was by
     construction the 37 stalest of 116 and was read as the fleet. With

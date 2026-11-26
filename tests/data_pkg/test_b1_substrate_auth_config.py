@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""B-1 — stop publishing the substrate (review §5, CRITICAL).
+"""Stop publishing the substrate (critical).
 
 Three guarantees, all config-level (the coordinated cutover applies them):
 

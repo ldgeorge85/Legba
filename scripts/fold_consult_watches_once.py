@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Fold the consult watches minted before the semantic fold landed (W4-F1, one-off).
 
-WHY. Until W4-F1 a consult's watch candidate folded onto a standing watch only on
+WHY. Until the semantic fold, a consult's watch candidate folded onto a standing watch only on
 IDENTICAL normalised text, so a re-asked question re-phrased by the model minted
 a second row (live 2026-10-03 on country_watch_ir: e6227510 "major-arms-
 acquisition indicator observed" and 53d11647 "detection of a major arms

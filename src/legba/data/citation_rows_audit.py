@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Citations as rows (lane DM-A): the day's measurement, in SQL alone.
+"""Citations as rows: the day's measurement, in SQL alone.
 
 ONE number, two sources, the same unit, so before and after compare:
 

@@ -1,9 +1,8 @@
 """The composition tier's PROMPT TEXT — four variants, one set of generators.
 
-Extracted from :mod:`legba.data.analysts.meta_findings_synthesizer` (VOICE-4,
-2026-08-21) under the module-size gate. The seam is the one the synthesizer's
-own section banner already drew: everything here is prompt STRING construction
-and nothing here touches the runtime, the substrate, or a row — the synthesizer
+Extracted from :mod:`legba.data.analysts.meta_findings_synthesizer` under the module-size
+gate. The seam is the one the synthesizer's own section banner already drew:
+everything here is prompt STRING construction and nothing here touches the runtime, the substrate, or a row — the synthesizer
 imports the finished constants and re-exports them, so every existing importer
 (``synth._COMPOSITION_SYSTEM``, ``synth._continuity_rule``, the voice-contract
 pins) resolves unchanged.
@@ -75,8 +74,8 @@ Respond with strict JSON, nothing else: {"title": "...", "body": "...", "confide
 #: H4 — the as-of line used to ask the model to DERIVE its own date/time by
 #: scanning every rendered block for the newest ``produced_at``, and that
 #: arithmetic drifted: an IR read claimed "latest 01:40 UTC" against heads the
-#: render actually showed produced at 16-17 UTC
-#: (``planning/PROOF_ROUND_2026-08-25/VERDICT_DRAFT.md``). The rule now
+#: render actually showed produced at 16-17 UTC.
+#: The rule now
 #: prefers the deterministic ``EVIDENCE WINDOW`` block
 #: (``composition_window.render_evidence_window_directive``, computed from the
 #: SAME consumed rows) when it is shown — a COPY, never a re-derivation — and
@@ -223,10 +222,10 @@ def _continuity_rule(letter: str, *, read_noun: str) -> str:
 def _shape_rule(letter: str, *, block_noun: str, lead: str) -> str:
     """The (d)-slot SHAPE rule: judgment in the body, coverage in a footer.
 
-    TITLE-FRAME-FIX (2026-09-01) — ``lead`` went PLURAL at all four call sites.
+    ``lead`` went PLURAL at all four call sites.
 
-    D6 cured the roll call above by crowning a king, and the crown is what
-    ``VOICE_ORGANIC_REVIEW_2026-09-01`` measures: every ``lead=`` here said "the
+    An earlier rule cured the roll call above by crowning a king, and the crown is what
+    an organic-voice review measured: every ``lead=`` here said "the
     single most consequential X", the world one added "getting the ranking right
     is this read's whole job", and the sentence renders adjacent to
     ``COMPOSITION_BODY_SHAPE``'s TITLE rule. Together they specified a headline
@@ -308,8 +307,7 @@ def _coverage_rule(letter: str, *, block_noun: str, unit_noun: str) -> str:
     to have no read: the untiered gather DROPPED below-floor rows in SQL, so the
     model never learned they existed and this sentence then instructed it to
     call a verified-but-weak dimension unassessed. That is how the false "no
-    read this cycle" class was manufactured — 9 product-voice atoms in the
-    2026-08-20 round, and the C4 audit's atom-10 precedent. With the horizon +
+    read this cycle" class was manufactured — 9 product-voice atoms in one measured round. With the horizon +
     the tiered periphery the model now KNOWS the difference, so the rule states
     it: a floor-withheld dimension is "below verification floor"; only a
     dimension with no read at all inside the horizon is a gap.
@@ -411,8 +409,7 @@ def _numbers_rule(
         f"lead with it; 0.60-0.80 {solid} — state it with its source named; "
         "above 0.80 firm. Your OWN confidence may never exceed the "
         "effective_confidence of the weakest block a load-bearing clause rests "
-        f"on. And {agreeing} is not 'multiple independent vetted sources': the "
-        "calibration ladder's 0.85 rung describes independent SOURCES, and you "
+        f"on. And {agreeing} is not 'multiple independent vetted sources': you "
         f"are not being shown sources — you are shown {shown}. None of this "
         "licenses printing the numbers; they remain the ledger (see NUMBERS & "
         "SEVERITY below). "
@@ -488,16 +485,11 @@ def _absence_rule(*, collections: str, worked: str, world_fact: str, aggregate: 
         f"means {collections} did not contain it — NOT that it did not happen. "
         f"Carry that scope forward in your own words ({worked}), never as a "
         f"world fact ({world_fact}), and NEVER aggregate {aggregate} — a quiet "
-        "slice is a statement about our collection, not about the world. The "
-        "rule has now also been graded against the world itself: an external "
-        "correctness round checked desk negatives against independent reporting "
-        "and the unscoped ones were refuted — one desk wrote that no measures "
-        "of its kind were in force inside the very window a major one passed — "
-        "while desk-scoped negatives stood. And a scoped negative is a claim "
-        "about OUR collection: before you write one, confirm the blocks you are "
-        "shown — either tier — do not themselves carry the thing you are "
-        "denying; an absence claim refuted by its own citation set is the worst "
-        "graded outcome a negative can have. "
+        "slice is a statement about our collection, not about the world. A "
+        "scoped negative is a claim about OUR collection: before you write one, "
+        "confirm the blocks you are shown — either tier — do not themselves "
+        "carry the thing you are denying; an absence claim refuted by its own "
+        "citation set is the worst outcome a negative can have. "
     )
 
 
@@ -614,11 +606,9 @@ _PIPELINE_VOICE: str = (
     "as a statement about the world; a sentence about this platform's own "
     "machinery — what a desk's collection contained, what a check passed, what "
     "the verification floor did — is not a world fact and must never be dressed "
-    "as one. An external audit graded such sentences on what a READER takes "
-    "them to mean, and found the product sometimes wrong about itself in its "
-    "own channel — and the adjudicated instance is this tier's: a coverage line "
-    "that said a desk had no read this cycle, when its read existed below the "
-    "verification floor, is a FALSE statement of the floor's action. So: state "
+    "as one. A coverage line that says a desk had no read this cycle, when its "
+    "read existed below the verification floor, is a FALSE statement of what "
+    "the floor did. So: state "
     "pipeline facts only when you can see them in this run's rendered input; "
     "say them in plain reader's words as statements about coverage; when a "
     "shown block sits under the 'WEAKLY-SUPPORTED / UNVERIFIED SIGNALS' header, "
@@ -730,7 +720,7 @@ _COMPOSITION_SYSTEM = with_preamble(
     + _SELECTION_STAKES
     + """(f) HONEST EMPTY: if there are no verified sub-claims for this country, say so plainly with confidence 0.0 and NO fabricated evidence. (g) TRACEABILITY — a [[ref:N]] marker is a PROMISE that sub-claim block N literally states, in substance, the exact claim it tags; you may ONLY summarize, aggregate and reconcile what the shown sub-claim blocks actually say. NEVER introduce a fact, proper noun, place-name, or event specific (a magnitude, date, location, or count) that is not present in a cited block — do NOT add concrete details a unit did not state (e.g. an event's magnitude or location, or a named actor, commitment, or position no block mentions). If you cannot ground a clause in a shown block, DROP the clause; an in-range [[ref:N]] does NOT license a claim its block does not make. """
     + _SCOPE_WORDS
-    + """(h) NUMBERS & SEVERITY — state NO numeric confidence value other than an effective_confidence actually shown for a cited block, and invent NO per-unit confidence figure or a unit that is not present; do NOT silently change a unit's stated severity or which driver a unit called its lead — if you aggregate differing unit severities, say so explicitly (e.g. 'aggregating unit severities moderate+low -> moderate'). """
+    + """(h) NUMBERS & SEVERITY — Do not print confidence numbers, severity words in the form of tags, or desk identifiers. Say how well supported a read is in words. Invent NO per-unit confidence figure or a unit that is not present; do NOT silently change a unit's stated severity or which driver a unit called its lead — if you aggregate differing severities, say so in words. """
     + NO_INSTRUMENT_READINGS
     + " "
     + SEVERITY_STATE_READ_RULE
@@ -831,7 +821,7 @@ _REGION_COMPOSITION_SYSTEM = with_preamble(
     + _SELECTION_STAKES
     + """(f) CONTESTED FACTS: when a claim touches a listed contested group, NAME both surfaced sides and mark it [[contested:<contention_id>]] using EXACTLY a contention_id shown in the block; NEVER pick a side the arbiter did not surface and NEVER invent a contested id. (g) HONEST EMPTY: if there are no country reads, say so plainly with confidence 0.0 and NO fabricated evidence. (h) TRACEABILITY — a [[ref:N]] marker is a PROMISE that country-read block N literally states, in substance, the exact claim it tags; you may ONLY summarize, aggregate and reconcile what the shown country reads actually say. NEVER introduce a country, actor, event specific, or figure not present in a cited country-read block; if you cannot ground a clause in a shown block, DROP it (an in-range [[ref:N]] does NOT license a claim its block does not make). """
     + _SCOPE_WORDS
-    + """(i) NUMBERS & SEVERITY — state NO numeric confidence value other than an effective_confidence shown for a cited block, and do NOT silently alter a country read's severity or the driver it called its lead; make any aggregation explicit. """
+    + """(i) NUMBERS & SEVERITY — Do not print confidence numbers, severity words in the form of tags, or desk identifiers. Say how well supported a read is in words. Do NOT silently alter a country read's severity or the driver it called its lead; make any aggregation explicit, in words. """
     + NO_INSTRUMENT_READINGS
     + " "
     + SEVERITY_STATE_READ_RULE
@@ -934,8 +924,8 @@ _WORLD_OVER_REGIONS_SYSTEM = with_preamble(
         lead=(
             "the ONE TO THREE situations that most define this board and why "
             "they matter, weighed against each other. THIS IS THE WORLD READ: "
-            "it is read as the tower's answer to 'what matters most right "
-            "now', and that is a question about the WHOLE BOARD — where "
+            "it says what the reads together show about the state of the "
+            "board, and that is a question about the WHOLE BOARD — where "
             "several situations carry comparable stakes, saying so accurately "
             "IS the answer, and collapsing them into one crowned driver is the "
             "WRONG answer however confidently it is written"
@@ -946,7 +936,7 @@ _WORLD_OVER_REGIONS_SYSTEM = with_preamble(
     + _SELECTION_STAKES
     + """(f) CONTESTED FACTS: when a claim touches a listed contested group, NAME both surfaced sides and mark it [[contested:<contention_id>]] using EXACTLY a contention_id shown in the block; NEVER pick a side the arbiter did not surface and NEVER invent a contested id. (g) REGION GAPS: if the REGION COVERAGE block lists a region as having NO read, NAME that region plainly in the '## Coverage' line as carrying no verified read this cycle — do NOT infer, estimate, or invent its state, do NOT assert WHY the read is missing (not run, nothing found, or not cleared by verification — you cannot tell which from here), and NEVER attach a [[ref:N]] to a gap region. (h) HONEST EMPTY: if there are no reads at all, say so plainly with confidence 0.0 and NO fabricated evidence. (i) TRACEABILITY — a [[ref:N]] marker is a PROMISE that block N literally states, in substance, the exact claim it tags; you may ONLY summarize, aggregate and reconcile what the shown reads actually say. NEVER introduce a region, country, actor, event specific, or figure not present in a cited block; if you cannot ground a clause in a shown block, DROP it (an in-range [[ref:N]] does NOT license a claim its block does not make). """
     + _SCOPE_WORDS
-    + """(j) NUMBERS & SEVERITY — state NO numeric confidence value other than an effective_confidence shown for a cited block, and do NOT silently alter a read's severity or the driver it called its lead; make any aggregation explicit. """
+    + """(j) NUMBERS & SEVERITY — Do not print confidence numbers, severity words in the form of tags, or desk identifiers. Say how well supported a read is in words. Do NOT silently alter a read's severity or the driver it called its lead; make any aggregation explicit, in words. """
     + NO_INSTRUMENT_READINGS
     + " "
     + SEVERITY_STATE_READ_RULE
@@ -1055,7 +1045,7 @@ _THEMATIC_COMPOSITION_SYSTEM = with_preamble(
     + _SELECTION_STAKES
     + """(g) HONEST EMPTY: if there are no desk reads at all, say so plainly with confidence 0.0 and NO fabricated evidence. (h) TRACEABILITY — a [[ref:N]] marker is a PROMISE that desk-read block N literally states, in substance, the exact claim it tags; you may ONLY summarize, aggregate and reconcile what the shown desk reads actually say. NEVER introduce a country, actor, event specific, or figure not present in a cited block; if you cannot ground a clause in a shown block, DROP it (an in-range [[ref:N]] does NOT license a claim its block does not make). """
     + _SCOPE_WORDS
-    + """(i) NUMBERS & SEVERITY — state NO numeric confidence value other than an effective_confidence shown for a cited block, and do NOT silently alter a desk read's severity or the vector it called its lead; make any aggregation explicit. """
+    + """(i) NUMBERS & SEVERITY — Do not print confidence numbers, severity words in the form of tags, or desk identifiers. Say how well supported a read is in words. Do NOT silently alter a desk read's severity or the vector it called its lead; make any aggregation explicit, in words. """
     + NO_INSTRUMENT_READINGS
     + " "
     + SEVERITY_STATE_READ_RULE

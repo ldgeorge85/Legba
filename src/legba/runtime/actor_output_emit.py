@@ -325,7 +325,7 @@ async def _maybe_escalate_finding(
             confidence=confidence,
             severity_gate=escalation.severity_gate,
             confidence_gate=escalation.confidence_gate,
-            # P7-F4 — suppress a confident ABSENCE / 'nothing is happening' read
+            # Suppress a confident ABSENCE / 'nothing is happening' read
             # on the confidence×severity leg (an indicator flip still escalates
             # via _is_indicator_activation below).
             title=getattr(payload, "title", None),
@@ -383,7 +383,7 @@ async def _maybe_escalate_finding(
             "output_id": str(output_row_id) if output_row_id is not None else None,
             "target_id": target_id,
             "effective_confidence": confidence,
-            # P1-1: raw faithfulness verdict (pre-fold) — the outward alert
+            # Raw faithfulness verdict (pre-fold) — the outward alert
             # sink payload states "faithfulness=<score>" when the verify pass
             # ran, "unverified — <reason>" when it did not (None here).
             "faithfulness_score": faithfulness_score,
@@ -424,7 +424,7 @@ async def _gather_binding_for_target(
     there is no target row to read an allow-list from, so the binding SELF-ALLOWS
     its own pack under the GLOBAL scope (mirrors the consult META self-allow in
     dapr_host — a self-allow for THIS pack only, the grant leg stays real). The
-    journal (§4.9) reaches this branch every run; without the self-allow its
+    journal reaches this branch every run; without the self-allow its
     journal_read GATHER calls would deny at the allow leg and the agentic loop
     would silently run with no tools.
     """
@@ -450,7 +450,7 @@ async def _gather_binding_for_target(
             scope = scope_view_from_target(body or {})
     else:
         # META analyst (no target in context): self-allow this binding's own
-        # pack so the ALLOW leg passes under the global scope (§4.9).
+        # pack so the ALLOW leg passes under the global scope.
         from ..data.schemas.action_pack import ActionPackRef
 
         target_allows = [ActionPackRef(pack_id=base.pack.identity.id)]
@@ -530,7 +530,7 @@ async def _gather_write_bindings_for_target(
     base_bindings: dict[str, Any] = base.get("bindings") or {}
     # The pack ids whose tools NEED the per-run WritebackContext (a connection
     # source + the run identity). propose_facts writes live facts/hypotheses;
-    # journal_propose (plan §7 / Wave 4) writes a pending journal_proposals row.
+    # journal_propose writes a pending journal_proposals row.
     # Both reach ctx.writeback; web_access does not. NOTE: journal_propose's
     # writeback carries pg_pool + AnalystContext ONLY — it reaches NO provenance
     # writer (its handlers run a single INSERT into journal_proposals).
@@ -543,8 +543,8 @@ async def _gather_write_bindings_for_target(
     # auto-ground property are what make landing it safe. It needs the same two
     # things the propose packs need and for the same reason: the connection
     # source, and the per-run identity to stamp on what it writes.
-    # Program 5 adds `inquiry_state`: the ledger tools stamp the RUN that wrote
-    # each row (design §3 — `closed_by_entry`, and the per-descriptor scope the
+    # `inquiry_state` too: the ledger tools stamp the RUN that wrote
+    # each row (`closed_by_entry`, and the per-descriptor scope the
     # deps builder fences on), so they need the same two things every other pack
     # in this set needs — the connection source and the per-run identity. The
     # pack id is read off the KIND module rather than the pack module so this

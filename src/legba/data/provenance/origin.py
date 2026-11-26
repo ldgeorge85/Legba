@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The ORIGIN-CLASS axis — where a substrate row came from, in one closed
 vocabulary, and the reader firewall that keeps history out of "now"
-(DATA MODEL V3 / P7, migration 0209).
+(migration 0209).
 
 ``retrieval_origin`` (migration 0112, :mod:`legba.data.retrieval_origin`)
 already says *how a signal reached us*. ``origin_class`` is the coarser
@@ -25,7 +25,7 @@ THE VOCABULARY — closed, a CHECK constraint, not an enum type:
 ``seed``
     Stamped by the curated seed-batch machinery (``seed_batches``).
 ``backfill_native`` · ``backfill_reconstructed`` · ``archive``
-    The three HISTORY classes. Program 7g-1 finished the READER sweep
+    The three HISTORY classes. The READER sweep is finished
     (SEAMS #57 resolved): every open-row read and supersession site on
     ``facts``/``events``, and every reader on the eight surfaces a
     collection is fenced from, renders its predicate from this module,
@@ -77,8 +77,8 @@ ORIGIN_CLASSES: tuple[str, ...] = (
 #: now; a seed row is operator-vetted present-tense knowledge).
 LIVE_CLASSES: frozenset[str] = frozenset({"live", "web_retrieval", "seed"})
 
-#: The class an OPERATOR's own write takes (W11 C-2b-2/facts: a fact asserted
-#: through the consult write plane): ``live``. Decision D7 (design C-2a §11)
+#: The class an OPERATOR's own write takes (a fact asserted
+#: through the consult write plane): ``live``. The model
 #: puts "operator via consult" on the AUTHOR axis — ``facts.source_type =
 #: 'operator'``, the write id in ``data.write_id``, the audit actor
 #: ``consult_write:<id>`` with role ``operator_via_consult`` — and NOT here:
@@ -141,7 +141,7 @@ def live_gate_sql(alias: str) -> str:
 
     ``<a>.superseded_by IS NULL AND <a>.valid_until IS NULL AND
     <a>.origin_class IN ('live','web_retrieval','seed')`` — the migration-0032
-    open-row pair plus the origin-class leg (P7). Call it only on tables that
+    open-row pair plus the origin-class leg. Call it only on tables that
     carry the columns (``facts`` and ``events``; ``signals`` has no
     ``superseded_by``/``valid_until`` and takes the class leg alone if a read
     ever needs it).
@@ -158,9 +158,9 @@ def as_of_gate_sql(alias: str, param_index: int) -> str:
 
     ``COALESCE(<a>.valid_from, '-infinity'::timestamptz) <= $n AND
     (<a>.valid_until IS NULL OR <a>.valid_until > $n)`` — the ONE rendering;
-    P3 wrote it out inline six more times and every site now reads from here.
+    Every site reads it from here rather than writing it inline.
     ``superseded_by`` is deliberately absent: ``valid_until`` alone carries
-    the close (spec §3.2's second rule). The caller appends the parsed
+    the close (the second rule). The caller appends the parsed
     instant at exactly ``param_index``.
     """
     col = f"{alias}." if alias else ""

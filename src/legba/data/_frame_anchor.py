@@ -1,23 +1,21 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""R1-a — THE FRAME ANCHOR. What a frame is ABOUT, read off authored prose.
+"""THE FRAME ANCHOR. What a frame is ABOUT, read off authored prose.
 
-The module ``planning/R1_FRAME_REPAIR_DESIGN_2026-09-06.md`` row R1-a asks for,
-**as amended** by ``planning/R1_FRAME_REPAIR_AMENDMENT_2026-09-06.md`` §2. It began as a pure
+It began as a pure
 addition (built and measured before it was bound); it is LIVE now: the event
 signature (``events/signature.py``: ``anchor_token``), geo routing
 (``_geo_routing.py``: ``PolitySurfaceIndex``) and the journal clusters
 (``analysts/journal_clusters.py``) import it, and
 ``scripts/r1a_anchor_replay.py`` replays the bar.
 
-WHY THE AMENDMENT REBUILT THIS BAR, WHICH IS THE ONLY THING WORTH KNOWING.
-The design's anchor counted distinct SIGNALS in a frame's own evidence. That
+WHY THIS BAR READS FINDINGS, WHICH IS THE ONLY THING WORTH KNOWING.
+An earlier anchor counted distinct SIGNALS in a frame's own evidence. That
 predicate is not wrong so much as it is not *about the frame*: every open frame
 on a desk shares (almost exactly) one evidence pool, because one variable in
 ``runtime/actor_substrate_slice.py`` becomes both a finding's lineage and its
 receipt slice. Live, one IL frame's pool is **98.78%** of the entire desk union,
-and the whole spread across IL's eight frames is **four signals** (amendment
-§1.2, Q-B/Q-C). So a predicate over a frame's cited signals is a fact about the
+and the whole spread across IL's eight frames is **four signals**. So a predicate over a frame's cited signals is a fact about the
 DESK wearing a frame-level contract, and every frame-grain consequence drawn
 from it is arithmetic on that identity.
 
@@ -30,14 +28,14 @@ cited findings' bodies, and JP's seven name North Korea in 4 / 2 / 1 / 0 / 0 /
 
 WHY ``body`` AND NOT ``title`` ALONE — the result that settles it. At MINT
 grain on titles alone, IL/Palestine anchors on **nothing at every threshold**,
-K=2 included (amendment §1.4). That is not a tuning miss, it is R-1's founding
+K=2 included. That is not a tuning miss, it is the founding
 case: the repair exists *because* IL's desks do not write Palestine in their
 heads. A bar that mints an anchor only where the title already names the polity
 is the coverage floor's clause 6 read backwards, and can only ratify coverage
 that already exists. So the substrate is ``title`` + ``body``, bounded by
 :attr:`FrameAnchorConfig.max_body_chars`.
 
-THE FOUR CLAUSES (amendment §2.1), each of which earns its place:
+THE FOUR CLAUSES, each of which earns its place:
 
 ``class gate``
     ``canonicalize_entity(A, "country")[1] == "country"``. This is what cleanly
@@ -54,7 +52,7 @@ THE FOUR CLAUSES (amendment §2.1), each of which earns its place:
     The live cliff is **between 4 and 5 and it is the negative control's
     cliff**: at K=4 JP mints one North Korea key, at K=5 it mints none, while
     IL/Palestine holds 4 of 9 dimensions across K ∈ {2..5}.
-``ubiquity ceiling`` (D-t)
+``ubiquity ceiling``
     A polity named by ≥ ``max_anchor_ubiquity`` (0.75) of the DESK's own
     findings is refused. This clause is not optional and it is not a nicety:
     without it ``United States`` anchors **41 of 92** minted keys and takes the
@@ -63,20 +61,20 @@ THE FOUR CLAUSES (amendment §2.1), each of which earns its place:
     carries is not a missing second story.
 
 WHAT ``evidence_mass`` COUNTS, AND WHY IT HAD TO CHANGE. Findings, not signals
-— for the reason the amendment exists. The signal count is desk-uniform to
+— for the reason this bar reads findings. The signal count is desk-uniform to
 within four signals across a desk's eight frames, so it cannot ORDER a
 register; the finding count can (live over the 61 minted keys: p25 6 / p50 9 /
 p75 14, min 5, max 29). It is not comparable ACROSS desks — a desk's finding
-count is a cadence artifact of its descriptor — and amendment F-12 forbids
-pooling it or thresholding on it.
+count is a cadence artifact of its descriptor — and it must not be
+pooled or thresholding on it.
 
-WHY THE CLOCK IS NOT ``produced_at`` (D-k). ``newest_evidence_at`` is a world
+WHY THE CLOCK IS NOT ``produced_at``. ``newest_evidence_at`` is a world
 clock the product cannot wind. Dropping the signal walk from the *bar* does not
 license substituting the finding's own ``produced_at``, which is exactly the
-M-1 bookkeeping-for-evidence defect. So this module never reads a date as an
+bookkeeping-for-evidence defect. So this module never reads a date as an
 evidence clock: :func:`anchors_for` takes the clock as an INPUT and passes it
 through unchanged, and the cheap ``signals.fetched_at`` read that produces it is
-R1-b's to bind. ``produced_at`` is read here for one thing only —
+the binding step's job. ``produced_at`` is read here for one thing only —
 :attr:`Anchor.anchor_days`, a count of distinct authoring days, which is
 bookkeeping about bookkeeping and is labelled as such.
 
@@ -86,11 +84,11 @@ measures **13.26 s**, i.e. ≈823 s/run fleet-wide — 69% of a 20-minute tick, 
 a blocker. Folding each prose ONCE and precompiling the surfaces takes the same
 work to **0.89 s** (≈55 s/run, 15×) with 705 hits against 705 — exact
 agreement. :class:`PolitySurfaceIndex` is that entry point, and
-``test_batched_matcher_agrees_with_represented_by`` (amendment P-6) is the pin
+``test_batched_matcher_agrees_with_represented_by`` is the pin
 that keeps it honest. The equivalence is not merely measured, it is
 constructive: see the class's own docstring.
 
-NO LLM, NO PRODUCER SELF-DESCRIPTION (D-n, narrowed by amendment §2.4). This
+NO LLM, NO PRODUCER SELF-DESCRIPTION This
 module may not import an LLM handler and may not read ``data.key_entities`` or
 its four self-description siblings. A finding's ``title`` and ``body`` ARE
 allowed and are the substrate the bar reads: under the QUOTATION regime the
@@ -125,11 +123,11 @@ from .analysts.deterministic_handlers.finding_supersession import (
 logger = logging.getLogger(__name__)
 
 #: Descriptor-option prefix (the ``coverage_floor_`` / ``frame_content_gauge_``
-#: precedent). R1-b declares this family in ``handler_options.py`` when it binds
+#: precedent). The binding step declares this family in ``handler_options.py`` when it binds
 #: the bar to ``situation_clustering``; declaring it HERE, while nothing reads
 #: the knobs on a live path, would put seven knobs in the catalog that an
 #: operator can set and that cannot move anything — dead config, which is the
-#: exact defect the X-1 guard exists to prevent.
+#: exact defect the dead-config guard exists to prevent.
 OPTION_PREFIX: str = "register_anchor_"
 
 #: Env-var prefix. Env is the base default; a descriptor option, when set,
@@ -146,7 +144,7 @@ _ANCHOR_MAX_CHARS = 64
 #: entity-tail ``|`` into the key.
 _NON_SLUG = re.compile(r"[^a-z0-9]+")
 
-#: How ``title`` and ``body`` are joined before matching (amendment §2.1). A
+#: How ``title`` and ``body`` are joined before matching. A
 #: separator no analyst writes, so a surface cannot straddle the seam and match
 #: text that exists in neither field.
 PROSE_JOIN: str = " ‖ "
@@ -159,7 +157,7 @@ PROSE_JOIN: str = " ‖ "
 
 @dataclass(frozen=True)
 class FrameAnchorConfig:
-    """The anchor bar's seven knobs (amendment §2.3).
+    """The anchor bar's seven knobs.
 
     Three knobs from the design RETIRED with the signal walk and are absent by
     intent, not by oversight: ``min_anchor_signals`` and ``min_entity_confidence``
@@ -174,13 +172,13 @@ class FrameAnchorConfig:
     #: control's cliff is between 4 and 5 (JP mints one NK key at 4, none at 5).
     min_anchor_findings: int = 5
 
-    #: D-t. A polity named by AT LEAST this share of the desk's own findings is
+    #: A polity named by AT LEAST this share of the desk's own findings is
     #: refused as wire boilerplate. The comparison is ``share < ceiling`` to
-    #: PASS — strictly below — which is the reading amendment §2.1 writes and
-    #: the one ``_frame_content.mint_floor_twin`` already ships, so R1-d's
+    #: PASS — strictly below — which is also the reading
+    #: ``_frame_content.mint_floor_twin`` already ships, so the
     #: pre-flip twin and this bar cannot select different populations.
     #: The only knob that moves the answer, and it has ONE measurement behind
-    #: it (amendment F-10): 0.75 sits in the gap between boilerplate (the US at
+    #: it: 0.75 sits in the gap between boilerplate (the US at
     #: 94–97%) and a real second story (UA/Russia at 68%, the closest approach).
     max_anchor_ubiquity: float = 0.75
 
@@ -194,9 +192,9 @@ class FrameAnchorConfig:
     window_days: int = 14
 
     #: Distinct ``produced_at`` DAYS among the naming findings. Re-based from
-    #: the design's signal-day count; see :func:`anchors_for` for the note on
-    #: why this clause is applied here although amendment §2.1's predicate
-    #: line omits it.
+    #: a signal-day count; see :func:`anchors_for` for the note on
+    #: why this clause is applied here although the plain
+    #: predicate omits it.
     min_anchor_days: int = 5
 
     #: Bounds the prose projection. Live max finding body is 14,598 B and the
@@ -205,8 +203,8 @@ class FrameAnchorConfig:
 
     #: The canon class a candidate must canonicalize to: the instance
     #: profile's ``constants.anchor_class`` (SPLIT-3; ``None`` = the profile
-    #: declares none and the gate refuses every candidate, by name). Design
-    #: §3.2 refuses to widen it: an ORG-class anchor without a home-PLACE
+    #: declares none and the gate refuses every candidate, by name). Do
+    #: not widen it: an ORG-class anchor without a home-PLACE
     #: exclusion and an ORG fold would mint a "Reuters" frame on every desk.
     class_gate: str | None = _profile_constants.anchor_class()
 
@@ -233,12 +231,12 @@ def config_from_options(
 ) -> FrameAnchorConfig:
     """The PREFIX-FAMILY reader, in the ``_coverage_floor_scan`` idiom.
 
-    A module-level function rather than only the classmethod because the X-1
+    A module-level function rather than only the classmethod because the dead-config
     guard proves a prefixed knob REACHABLE by invoking its family's reader with
     a probe value — the stronger form of "no dead config", since no literal
     ``options.get("register_anchor_min_anchor_findings")`` exists to grep for.
     This module's own tests use it that way today; ``handler_options`` picks it
-    up when R1-b binds the bar.
+    up when the bar is bound.
     """
     return FrameAnchorConfig.from_options(options)
 
@@ -341,7 +339,7 @@ def with_anchor(sig: Any, polity: Any = None) -> str:
 
 
 # ---------------------------------------------------------------------------
-# THE BATCHED MATCHER — fold each prose ONCE (amendment §2.6)
+# THE BATCHED MATCHER — fold each prose ONCE
 # ---------------------------------------------------------------------------
 
 
@@ -461,7 +459,7 @@ class PolitySurfaceIndex:
 def finding_prose(row: Mapping[str, Any], *, max_body_chars: int) -> str:
     """The substrate the bar reads: ``title`` + ``body``, bounded.
 
-    The bound is applied HERE and not only in R1-b's SQL projection, so a
+    The bound is applied HERE and not only in the SQL projection, so a
     caller that hands over a full body gets the same answer as one that hands
     over ``left(body, max_body_chars)`` — otherwise the bar would quietly
     depend on which read produced its rows.
@@ -493,7 +491,7 @@ def naming_findings(
 ) -> dict[str, set[str]]:
     """polity -> the DISTINCT finding keys whose prose names it.
 
-    The batched entry point amendment §2.6 requires. One fold per row, not one
+    The batched entry point. One fold per row, not one
     per (row, candidate).
     """
     out: dict[str, set[str]] = {}
@@ -514,9 +512,8 @@ def naming_findings(
 #: Every canonical polity the shared canon knows, which is the default
 #: candidate set. 160 keys, 158 of which survive the class gate (the two
 #: casualties are ``European Union`` and ``United Nations``; ``NATO`` is not a
-#: canon key and is refused by the gate if a caller offers it). Amendment §2.6
-#: recommends a SECOND step that narrows this per desk to the ~10-20 polities
-#: the coverage floor already nominates — a caller passes them as
+#: canon key and is refused by the gate if a caller offers it). A caller can narrow this per desk to the ~10-20 polities
+#: the coverage floor already nominates by passing them as
 #: ``candidates`` and everything below is unchanged.
 DEFAULT_CANDIDATES: tuple[str, ...] = tuple(sorted(_CANON_POLITIES))
 
@@ -572,13 +569,13 @@ class Anchor:
     #: never has to re-derive it (and so cannot re-derive it differently).
     token: str
     #: DISTINCT cited findings in the SCOPE naming this polity. This is
-    #: ``data.evidence_mass``. Findings, not signals — amendment §2.5. Never
-    #: comparable across desks (F-12).
+    #: ``data.evidence_mass``. Findings, not signals. Never
+    #: comparable across desks.
     evidence_mass: int
     #: Distinct ``produced_at`` days among those findings. Bookkeeping about
     #: bookkeeping, and labelled as such: it is NOT an evidence clock.
     anchor_days: int
-    #: The share of the DESK's own findings naming this polity — the D-t
+    #: The share of the DESK's own findings naming this polity — the ubiquity
     #: measurement, carried so a receipt can show why a near-miss was kept.
     desk_ubiquity: float | None
     #: The D-k world clock, passed through from the caller's ``signals``
@@ -601,41 +598,41 @@ def anchors_for(
     ``scope_rows``
         The cited findings the anchor must be established over. At MINT that is
         the dimension's whole ``window_days`` pool; at KEEP it is the frame's
-        own ``situations.derived_from`` members. The design's mint/keep split
-        survives the amendment intact — both discriminate at frame grain.
+        own ``situations.derived_from`` members. The mint/keep split
+        holds — both discriminate at frame grain.
     ``desk_rows``
         THE UBIQUITY DENOMINATOR, and it is REQUIRED — there is deliberately no
-        default. A ceiling on the wrong denominator is amendment P-3's named
-        failure ("D-t mis-set, or ubiquity on the wrong denominator"), and both
+        default. A ceiling on the wrong denominator is a named
+        failure ("ceiling mis-set, or ubiquity on the wrong denominator"), and both
         available defaults fail silently: falling back to ``scope_rows`` makes
         the ceiling measure a dimension's share of itself (every anchor a scope
-        establishes reads as 100% ubiquitous, so the bar over-refuses and D-t
+        establishes reads as 100% ubiquitous, so the bar over-refuses and the ceiling
         looks like it is working), while skipping the clause when no pool is
-        given loses D-t altogether and lets ``United States`` take 41 of 92
+        given loses the ceiling altogether and lets ``United States`` take 41 of 92
         keys. Neither is visible in the output, so the caller states the desk
         or gets a ``TypeError``. It is the desk's own findings over the same
         window — every dimension's, not just this scope's — counted DISTINCT.
     ``newest_evidence_at``
-        D-k's clock, polity -> newest ``signals.fetched_at``. An INPUT. This
+        The clock, polity -> newest ``signals.fetched_at``. An INPUT. This
         function does not read it out of ``scope_rows`` and must not: a clock
-        derived from ``produced_at`` is the M-1 defect, and it would be
+        derived from ``produced_at`` is a known defect, and it would be
         invisible in the output.
 
     ORDER OF OPERATIONS, because it is load-bearing. Gate → count → recurrence
     → days → ubiquity → sort → cap. The ubiquity refusal happens BEFORE the
     cap, so a refused polity does not consume one of the scope's slots; that is
-    amendment §2.1's conjunction (every clause is a conjunct of ``anchor``,
-    with the cap applied to the survivors). The appendix's Q-A′ prose lists the
-    cap before the ceiling; taken literally, ``United States`` would occupy a
-    slot on nearly every dimension and then be dropped from it, so §2.2's
+    a conjunction (every clause is a conjunct of ``anchor``,
+    with the cap applied to the survivors). Applying the
+    cap before the ceiling would be wrong: taken literally, ``United States`` would occupy a
+    slot on nearly every dimension and then be dropped from it, so the
     reported "the five named gaps close exactly" could not be the number it
-    reports. §2.1 governs.
+    reports. The conjunction governs.
 
-    ``min_anchor_days`` IS APPLIED, and the amendment is ambiguous about it:
-    §2.3 keeps the knob at 5 and re-bases it onto authoring days, while §2.1's
-    predicate line and the Q-A′ fold both omit it. A declared knob that gates
-    nothing is dead config — the defect X-1 exists to catch — so it gates here,
-    and R1-a's replay reports the sweep at BOTH settings so the cost of the
+    ``min_anchor_days`` IS APPLIED, though a plain
+    predicate would omit it: the knob is 5 and counts authoring days. A declared
+    knob that gates
+    nothing is dead config, so it gates here,
+    and the replay reports the sweep at BOTH settings so the cost of the
     clause is visible rather than baked in.
 
     Ordering is WORST-FIRST by evidence mass (the coverage floor's own sense of

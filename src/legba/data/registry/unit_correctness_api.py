@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""THE PER-UNIT CORRECTNESS NUMBER, on the read surface (Program 2, track G2).
+"""THE PER-UNIT CORRECTNESS NUMBER, on the read surface.
 
 `GET /api/v1/units/{target_id}/correctness` — the latest `unit_correctness`
 row per `analyst_id` for one target, and, on demand (`?claims=1`), the
@@ -54,8 +54,7 @@ having written it inline — the seam is a file boundary, not an API boundary.
     convenient import fails in CI instead of in production.
 
 Reference: `docs/GRADING.md`, migration
-`0196_unit_correctness_grading.sql`, `LEDGER_RESET_2026-09-16` §3 Program 2
-row G2.
+`0196_unit_correctness_grading.sql`.
 """
 from __future__ import annotations
 

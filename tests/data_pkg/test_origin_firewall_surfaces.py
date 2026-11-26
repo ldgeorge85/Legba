@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Program 7g-1 — the firewall on the "now" surfaces, against real SQL.
+"""The firewall on the "now" surfaces, against real SQL.
 
 ``tests/data_pkg/test_origin_gate_inventory.py`` proves the eight fenced
 surfaces RENDER the origin-class leg. This file proves the leg does its job,

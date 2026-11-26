@@ -29,7 +29,7 @@ const SINCE = {
   },
 }
 
-/** roll 85: the badge polls the counts route; its `needs_you` is paged-only
+/** The badge polls the counts route; its `needs_you` is paged-only
  * (the list's own predicate), so it differs from the list's raw `total`. */
 const COUNTS = {
   cursor: '2026-11-13T00:00:00Z', server_now: '2026-11-14T00:00:00Z', counts: { needs_you: 3 }, needs_you: 3, changed: 1, forecasts_due: 0,
@@ -92,7 +92,7 @@ describe('PhoneShell', () => {
   it('keeps the seen cursor on the device when sign-in is off', async () => {
     mount()
     await waitFor(() => screen.getByTestId('phone-mark-seen'))
-    expect(screen.getByTestId('phone-since-line').textContent).toContain('kept on this phone (sign-in is off)')
+    expect(screen.getByTestId('phone-since-line').textContent).toContain('remembered on this phone only (sign-in is off)')
     fireEvent.click(screen.getByTestId('phone-mark-seen'))
     await waitFor(() => expect(JSON.parse(localStorage.getItem(DEVICE_SEEN_KEY) ?? '{}').changed).toBe('2026-11-14T00:00:00Z'))
   })

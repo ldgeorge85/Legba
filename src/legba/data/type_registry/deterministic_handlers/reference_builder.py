@@ -25,7 +25,7 @@ Dimensions left with fewer than two survivors are written to
 thin_dimensions, which the grader reads. Flag
 LEGBA_REFERENCE_BUILDER_ENABLED, default OFF: off, it does nothing at all.
 
-Verify exemption: R2 (LEDGER_RESET_2026-09-16 §3, Program 2): the reference
+Verify exemption: the reference
 builder is the correctness grader's other half and the same argument binds.
 Its receipt reports what the instrument did — which target it built, how
 many committed developments survived which fence, which dimensions came out

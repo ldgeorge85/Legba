@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane N-O — the geocoder must not override the country a source DECLARES.
+"""The geocoder must not override the country a source DECLARES.
 
 Live 11-13, five new official sources: 5 of 17 new signals mis-tagged —
 647b9356 / cc81c011 (BIS export-control notices) FR off the Federal Register
@@ -275,7 +275,7 @@ def test_geo_derivation_folds_the_baseline_fallback():
 
 @pytest.mark.asyncio
 async def test_ofac_general_license_letters_are_not_greenland_or_estonia():
-    """Roll 74 live: OFAC GL W -> {GL}, GLs EE and FF -> {EE}."""
+    """OFAC GL W -> {GL}, GLs EE and FF -> {EE}."""
     for title, body in (
         ("Publication of Iran-Related Web General License W",
          "OFAC is publishing an Iran-related general license (GL): GL W."),

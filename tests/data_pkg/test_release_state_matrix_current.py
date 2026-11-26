@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Drift guard (C5-4, 2026-07-28 registry-hygiene wave) — the generated panel
+"""Drift guard — the generated panel
 table in ``docs/RELEASE_STATE_MATRIX.md`` §2 must stay current with
 ``legba-ui-v3/src/panel-registry/registry.ts``.
 

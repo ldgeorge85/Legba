@@ -7,8 +7,8 @@ out, elapsed, cost or why it is not priced) and one receipt per model call
 (``consult_turn_stamps.call_receipts``), read off the R11 run account
 (``data/run_accounting``) that the chat path binds. The deep workflow bound no
 account: its stages run as Dapr activities on the worker, each its own
-``asyncio.run``, and every provider call recorded into nothing. Roll 86's live
-deep turn had ``call_receipts`` null and no route or token counts.
+``asyncio.run``, and every provider call recorded into nothing, so a deep turn had ``call_receipts`` null and no
+route or token counts.
 
 Here each LLM stage (plan, analyze) runs under its OWN account
 (:func:`accounted_stage`) and hands its calls on in its output, already cut to

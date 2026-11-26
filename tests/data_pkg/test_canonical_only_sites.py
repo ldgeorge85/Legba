@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W8-F3 - the canonical-only clause is spelled once (``CANONICAL_ONLY_SQL``).
+"""The canonical-only clause is spelled once (``CANONICAL_ONLY_SQL``).
 
 Eight modules carried the clause as an inline literal. Each now reads it from
 ``data/signal_slice_scope.py`` (the aliased ``s.`` form through
@@ -147,10 +147,10 @@ _PINNED: dict[str, str] = {
     # N-Z (2026-11-14): re-pinned for ONE added predicate, the catch-up
     # backfill's exclusive upper bound ``($5 IS NULL OR fetched_at < $5)``;
     # the canonical-only clause itself is unchanged.
-    # C-1 (2026-11-14): re-pinned for 'claim' added to the source_class
+    # Re-pinned for 'claim' added to the source_class
     # CASE list (a claim source's rows keep their class); the canonical-only
     # clause itself is unchanged. BEFORE dedf4927...
-    # C-2 (2026-11-14): re-pinned for the row's own claim stamp read first
+    # Re-pinned for the row's own claim stamp read first
     # (a Telegram claim channel's row is 'claim' on a 'reporting' descriptor);
     # the canonical-only clause itself is unchanged. BEFORE bec2216b...
     "_event_candidates._SIGNAL_SLICE_SQL":

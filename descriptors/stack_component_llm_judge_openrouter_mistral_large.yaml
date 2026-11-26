@@ -1,13 +1,13 @@
-# ⚠ RETIRED 2026-10-23 (cutover to the innoai gateway): the OpenRouter credits ran out
+# ⚠ RETIRED 2026-10-23 (cutover to the model gateway): the OpenRouter credits ran out
 # on 2026-10-17 (402 on every call) and the third-family grader slot moved to
-# `llm.grader.innoai_lightning.openai_compat` (descriptors/stack_component_llm_grader_innoai_lightning.yaml).
-# The registrar no longer loads this file; it stays as the history of the lane.
+# `llm.grader.gateway_third_family.openai_compat` (descriptors/stack_component_llm_grader_gateway_third_family.yaml).
+# The registrar no longer loads this file; it stays as an example of an external judge route.
 #
 # THE THIRD-FAMILY GRADER — Mistral Large 3 on OpenRouter (kind: llm_provider).
 #
 # It replaces the UNFUNDED Cerebras Gemma slot. `llm.judge.cerebras_gemma4_31b`
 # was the ruled third family for external grading at width, for the attention
-# plane's desk_reference, and it is R4's F2 lane. On 2026-09-05 the R4
+# plane's desk_reference, and it was the F2 lane. A
 # reachability probe found the Cerebras key returns **402 (unfunded)**: F2
 # completed **0 of 12** graded calls at rate. A grader that cannot complete a
 # call is not a cheaper grader, it is an UNMEASURED number, so the slot moves
@@ -15,7 +15,7 @@
 #
 # The same probe completed **12 of 12** against OpenRouter with the model id
 # below, at the round's intended rate, for **$0.000404** total
-# (`planning/PROOF_ROUND_2026-09-12/xfamily/probe_ledger.json`, key label
+# (probe ledger: key label
 # recorded, key never printed). That is the evidence this component exists on.
 #
 # ⚠ THIS FILE IS THE REVIEWABLE HOME OF THE COMPONENT BODY, and it is the ONLY
@@ -29,8 +29,8 @@
 # Family: **MISTRAL** (Mistral AI, France; Apache-2.0 lineage). It is DISTINCT
 # from all three planes the external-grader fence measures against:
 #
-#   * the WRITER   — `llm.primary.openai_compat`, the self-hosted core-plane model (gpt-oss-120b)
-#                    (gpt-oss-120b lineage), family `openai_oss`
+#   * the WRITER   — `llm.primary.openai_compat`, the self-hosted core-plane model
+#                    (the core model lineage), family `openai_oss`
 #   * the JUDGE    — `llm.judge.openrouter_nemotron120b.openai_compat` /
 #                    `nvidia/nemotron-3-super-120b-a12b:free`, family `nvidia`
 #   * ANTHROPIC    — consult-only, never scheduled (a HARD standing rule)
@@ -80,16 +80,14 @@
 #        POST {registry}/api/v1/registry/stack/
 #             llm.judge.openrouter_mistral_large.openai_compat/transition
 #             {"to_state": "configured"}   then   {"to_state": "active"}
-#   3. Repoint the three refs that name the Cerebras slot today. They are listed
-#      with their exact PUT bodies in
-#      `planning/PROOF_ROUND_2026-09-12/GRADER_REPOINT.md`:
+#   3. Repoint the three refs that name the Cerebras slot today. They are:
 #        (a) analyst_standing_auditor  method.llm.grader   (external grading at width)
 #        (b) analyst_desk_reference    method.llm.primary   (attention / desk_reference)
-#        (c) the R4 F3 lane            xfamily/validity_check.py FAMILIES["F3"]
+#        (c) the F3 lane               xfamily/validity_check.py FAMILIES["F3"]
 #      Until step 3 the component is registered and INERT: nothing points at it.
 #
-# ⚠ R4 FREEZE INTERACTION. Repointing this GRADER is NOT a judge-route change.
-# FZ-4 freezes `LEGBA_JUDGE_STACK_REF` / the resolved judge component; the
+# ⚠ FREEZE INTERACTION. Repointing this GRADER is NOT a judge-route change.
+# The measurement freeze covers `LEGBA_JUDGE_STACK_REF` / the resolved judge component; the
 # grader plane is deliberately a separate env
 # (`LEGBA_EXTERNAL_GRADER_STACK_REF`) precisely so the two are repointable
 # independently — *"or the fence at (c) is unenforceable."* Do the repoint
@@ -106,7 +104,7 @@ schema_uri: legba/stack/llm_provider/1.0.0
 # Placeholder — the registry stamps the content hash at register time.
 version: "0000000000000000"
 state: draft
-owner: lewis@local
+owner: owner@local
 
 config:
   # Base host. `_chat_endpoint_path()` prepends `/v1/...` and the base client
@@ -132,10 +130,9 @@ config:
     factory_kind: text
     raw: mistralai/mistral-medium-3.1   # 2026-09-20: mistral-large-2512 removed upstream 09-18; repointed live 09-20
 
-  # Grading output is a small structured verdict, not prose. Sized like the
-  # llama audit rater's 4096 rather than the judge lanes' 16384. Feeds the
-  # BudgetEnforcer estimate; the vllm handler does not put it on the wire
-  # unless the caller opts in.
+  # Read by nothing (kept so this stored row is unchanged). No
+  # max_output_tokens is declared, so no max_tokens is sent and the router's
+  # own default applies.
   max_tokens:
     factory_kind: number
     raw: 4096

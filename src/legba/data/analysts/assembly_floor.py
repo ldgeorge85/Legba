@@ -1,8 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """THE SUBJECT-GROUP FLOOR — one block per subject group on the world read,
-built to pass the strict-prefix arm (W4 F-3; design note
-``planning/v2/design/F-3_WORLD_FLOOR.md``).
+built to pass the strict-prefix arm.
 
 THE DEFECT. The world cut (``assembly_cap.select_carried``) is a strict
 ``WORLD_BLOCK_CAP`` prefix of ``assembly_payload.order_key``. On every measured

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Program 6 L2 — the ``layer_divergence`` divergence-baseline unit.
+"""The ``layer_divergence`` divergence-baseline unit.
 
 Covers, in order:
 

@@ -8,7 +8,7 @@ INSERT). A run that exhausted its transient retries — or raised anywhere else
 past the substrate read — returned ``TRANSIENT_FAIL`` to the caller and left
 NOTHING on disk. Every staleness / run-history read then showed the analyst's
 last SUCCESSFUL run, so a fleet failing on every tick was indistinguishable
-from a healthy fleet between cadences. Traceless death hid two incidents.
+from a healthy fleet between cadences. Traceless death hid real failures.
 
 The invariants pinned here:
 

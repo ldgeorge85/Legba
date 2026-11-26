@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane N-R — the observation sink follow-ups, against a real, freshly
+"""The observation sink follow-ups, against a real, freshly
 migrated Postgres (the data_pkg session DB):
 
 * batched inserts + batched receipt links keep the acceptance behaviour (an
@@ -246,7 +246,7 @@ async def test_pre_stamp_rows_resolve_licence_attribution_and_kind_at_read_time(
                "'PortWatch', $4::jsonb, $5)")
         t0 = datetime.now(tz=timezone.utc) - timedelta(hours=2)
         await c.execute(ins, SOURCE, "old", False, json.dumps(old_head), t0)
-        # A pre-lane row: no licence, no attribution, subject_kind global.
+        # A pre-change row: no licence, no attribution, subject_kind global.
         await c.execute(
             "INSERT INTO observations (collection_id, series_id, subject_kind, subject, valid_from, valid_to, "
             "record_time, value, unit, source_url, sha256, origin_class, provenance, source_id, "
@@ -341,7 +341,7 @@ async def test_eight_thousand_rows_batched_vs_row_by_row(pool, root, capsys) -> 
             t0 = time.perf_counter()
             if source_id.endswith("rowwise"):
                 written = []
-                for rec in records:   # the pre-lane loop, statement for statement
+                for rec in records:   # the pre-change loop, statement for statement
                     new_id = await c.fetchval(
                         _ROWWISE_INSERT_SQL, live_collection_id(source_id), rec.series_id, rec.subject_kind,
                         rec.subject, rec.valid_from, rec.valid_to, polled, rec.value, rec.unit, rec.value_text,

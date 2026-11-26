@@ -98,9 +98,9 @@ SHARED_NOTE = (
     "takes the alert out of \"needs you\" for everyone, not only for you."
 )
 PAGING_NOTE = (
-    "Paging is unchanged: the episode stays open, its raises are still "
-    "recorded, and the page rule still pushes it. It comes back into "
-    "\"needs you\" if it pages at a higher severity than when you acted."
+    "Notifications are unchanged: the alert stays open, each time it rises "
+    "is still recorded, and it still sends a notification. It comes back into "
+    "\"needs you\" if it rises above the severity it had when you acted."
 )
 
 _EPISODE_SQL = """

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""V3/P1 tests — event geo derivation + the event/situation bridge.
+"""Tests — event geo derivation + the event/situation bridge.
 
 Two reader surfaces shipped plumbed but dark (docs/DATA_MODEL_V3.md §2.7 geo,
 §2.4/§6.3 the situation bridge):

@@ -52,7 +52,7 @@ BAND_PRIO=(2 3 4 5)
 
 log() { echo "$(date -u +%FT%TZ) $*" >> "$DISK_LOG"; }
 
-# L-1 (single alert path): raise through scripts/lib/legba_alert.sh first; the
+# Single alert path: raise through scripts/lib/legba_alert.sh first; the
 # direct push below is the fallback (and the only path unless LEGBA_ALERT_RAISE=1).
 _legba_alert_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/legba_alert.sh"
 if [ -r "$_legba_alert_lib" ]; then . "$_legba_alert_lib"; else legba_raise() { return 1; }; fi

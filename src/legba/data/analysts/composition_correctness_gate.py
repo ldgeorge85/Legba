@@ -1,15 +1,14 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """THE COMPOSITION CORRECTNESS GATE — authority climbs only as far as the
-verification underneath it reaches (Program 2, track G2).
+verification underneath it reaches.
 
-The spine's rule, `PLATFORM_DIRECTION_SPINE_2026-06-30` §3: *"authority climbs
+The rule: *"authority climbs
 only as far as the verification underneath it reaches. A floor-3 read inherits
-exactly the confidence its cited floor-2 claims earned."* Until 2026-09-16 the
-platform had no way to obey it for CORRECTNESS, because nothing measured
+exactly the confidence its cited floor-2 claims earned."* Before correctness was
+measured the platform had no way to obey it, because nothing measured
 whether a desk read was TRUE — only whether it was faithful to its own
-citations. Program 1 built that instrument; track G1 made it a daily job
-writing `unit_correctness` rows. This module is the rule, applied.
+citations. A daily job now writes `unit_correctness` rows. This module is the rule, applied.
 
 WHAT IT DOES, in one sentence: with the flag ON, a desk unit whose latest
 `unit_correctness` row is missing, weak, or single-family is QUOTED by

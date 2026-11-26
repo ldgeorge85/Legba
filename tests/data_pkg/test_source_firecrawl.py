@@ -1,13 +1,12 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for :class:`legba.data.sources.firecrawl.FirecrawlSourceHandler`
-(L-139).
+"""Tests for :class:`legba.data.sources.firecrawl.FirecrawlSourceHandler`.
 
 Coverage:
 
   * Config schema validation (required api_key_secret, defaults, mode
     literals, seed-URL shape, rejection of unknown fields).
-  * L-102 source-kind class-var contract conformance (kind / family /
+  * Source-kind class-var contract conformance (kind / family /
     schema_version / config_schema / handler_version).
   * ``scrape`` mode happy path: each seed URL → one Signal, payload shape
     (external_id, url, raw_body == markdown, title, firecrawl_metadata),

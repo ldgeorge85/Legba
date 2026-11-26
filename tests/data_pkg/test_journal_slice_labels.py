@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""B1 (T1.2) / B2 (T1.4) — JOURNAL_CONNECTIVE_AUDIT_PROPOSAL_2026-09-09 §3
-P4/P6 — slice row provenance labelling (``'instrument'`` / ``'routine'``) and
+"""Slice row provenance labelling (``'instrument'`` / ``'routine'``) and
 the deterministic REFLECT honesty flags it feeds (``instrument_as_report`` /
 ``routine_as_signal``). No DB — the labelling + flag detectors are pure
 functions; the full-arc "flags reach a written entry's honesty_flags" proof

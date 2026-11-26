@@ -1,5 +1,5 @@
 /**
- * X4 READPATH (W11-F53) — the registry's pending|absent state, read never inferred.
+ * X4 READPATH — the registry's pending|absent state, read never inferred.
  */
 import { describe, expect, it } from 'vitest'
 import {
@@ -49,8 +49,8 @@ describe('unverifiedStateOf', () => {
 
   it('the two labels are the brief’s words, verbatim', () => {
     expect(UNVERIFIED_LABEL).toEqual({
-      pending: 'unverified · judge pending',
-      absent: 'unverified · not judged',
+      pending: 'not yet checked',
+      absent: 'not checked',
     })
   })
 

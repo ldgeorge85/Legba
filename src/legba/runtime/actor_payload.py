@@ -463,3 +463,40 @@ async def _write_critique_trace_record(
             else None
         ),
     )
+
+
+#: ``data`` key a published output carries when a model call of its run was
+#: cut at the output limit (finish reason ``length``), and the trace step kind.
+OUTPUT_TRUNCATED_KEY = "output_truncated"
+
+
+def mark_truncated_output(payload: Any, llm_calls: list[Mapping[str, Any]]) -> dict[str, Any] | None:
+    """Say so on the output when a model call of this run stopped at its
+    output limit rather than finishing.
+
+    Every call's receipt (``analyst_traces.llm_calls``) already records its
+    ``finish_reason``; this lifts a ``length`` onto the row a reader sees, so
+    a cut finding is never published looking complete. ``last_call_cut`` is
+    the call that wrote the output (the run's last successful call before the
+    write). Returns the trace step, or ``None`` when no call was cut (the
+    payload is then untouched).
+    """
+    done = [c for c in llm_calls if isinstance(c, Mapping) and c.get("status") == "success"]
+    cut = [c for c in done if c.get("finish_reason") == "length"]
+    if not cut:
+        return None
+    mark = {
+        "calls_cut": len(cut),
+        "last_call_cut": done[-1].get("finish_reason") == "length",
+        "models": sorted({str(c.get("model") or "") for c in cut}),
+        "completion_tokens": [int(c.get("completion_tokens") or 0) for c in cut],
+    }
+    data = getattr(payload, "data", None)
+    if isinstance(data, dict):
+        data[OUTPUT_TRUNCATED_KEY] = mark
+    logger.warning(
+        "actor_payload.output_truncated calls_cut=%d last_call_cut=%s models=%s — "
+        "a model call stopped at its output limit; the output is marked %s",
+        mark["calls_cut"], mark["last_call_cut"], mark["models"], OUTPUT_TRUNCATED_KEY,
+    )
+    return {"phase": "write", "kind": OUTPUT_TRUNCATED_KEY, **mark}

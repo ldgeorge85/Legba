@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Phase 5a vertical-slice integration test — DAPRD VARIANT (L-002a §6).
+"""Phase 5a vertical-slice integration test — DAPRD VARIANT.
 
-Test isolation (Wave B prereq #3)
----------------------------------
+Test isolation
+--------------
 This file routes every actor invocation through the SHARED production
 daprd sidecar (configured via ``dapr/components/statestore.yaml`` against
 the production ``legba`` DB).  To keep concurrent test sessions (and
@@ -19,8 +19,7 @@ The pre-test ``DELETE FROM dapr_state WHERE key LIKE '%' || $1 || '%'``
 guard then matches only this session's rows.
 
 Full per-session sidecar bring-up (separate daprd subprocess against a
-per-session legba_test_<uuid> DB) is the L-002a follow-up tracked in
-DESIGN §19 — the ``dapr_test_statestore_component`` fixture renders the
+per-session legba_test_<uuid> DB) is a planned follow-up — the ``dapr_test_statestore_component`` fixture renders the
 YAML for that path so it's ready to wire up.
 
 This is the acceptance test for gates 1-7 of the Phase 5a runtime
@@ -474,7 +473,7 @@ async def dapr_host_app():
     if os.environ.get("LEGBA_TEST_DAPR_APP_CHANNEL", "").strip() != "1":
         pytest.skip(
             "LEGBA_TEST_DAPR_APP_CHANNEL=1 not set; the in-process app-channel "
-            "flows are opt-in until their rot row closes (X1-A4)"
+            "flows are opt-in until their rot row closes"
         )
     # The LIVE runtime-dapr host already holds APP_PORT (6090) on the shared
     # ``--network host`` rig — binding it here errors with "address already
@@ -835,7 +834,7 @@ async def test_gates_2_through_7_end_to_end_through_daprd(
     )
 
     # ---- Populate the actor deps registry ----------------------------
-    # Wave B prereq #3: embed session prefix so dapr_state rows from
+    # Embed session prefix so dapr_state rows from
     # parallel / re-run sessions stay byte-disjoint.
     target_actor_id = (
         f"target::{dapr_actor_session_prefix}::"
@@ -1110,9 +1109,8 @@ def _build_predictor_analyst_descriptor(*, target_id: str) -> AnalystDescriptor:
         ),
         mapping=MappingBlock(),
         method=MethodBlock(
-            # Wave B prereq #1: ``stat_forecaster`` is the proper kind for the
-            # AutoARIMA + optional-LLM-narrative shape.  ``hybrid`` was the
-            # Wave A workaround when the Literal set didn't yet include it.
+            # ``stat_forecaster`` is the proper kind for the
+            # AutoARIMA + optional-LLM-narrative shape.
             kind="stat_forecaster",
             prompt_module="legba.prompts.predictor.v1",
             llm={
@@ -1166,10 +1164,8 @@ def _build_consult_analyst_descriptor() -> AnalystDescriptor:
         ),
         mapping=MappingBlock(),
         method=MethodBlock(
-            # Wave B prereq #1: ``react_loop`` is the proper kind for the
-            # consult_on_demand multi-round tool-using loop.  ``llm_planner``
-            # was the Wave A workaround when the Literal set didn't include
-            # the ReAct shape.
+            # ``react_loop`` is the proper kind for the
+            # consult_on_demand multi-round tool-using loop.
             kind="react_loop",
             prompt_module="legba.prompts.consult_on_demand.v1",
             llm={
@@ -1466,7 +1462,7 @@ async def test_gate8_consult_on_demand_through_daprd(
         secrets_resolve=vault.resolve,
     )
 
-    # Wave B prereq #3: session-prefixed actor_id keeps dapr_state
+    # Session-prefixed actor_id keeps dapr_state
     # disjoint across concurrent / re-run sessions.
     analyst_actor_id = (
         f"analyst::{dapr_actor_session_prefix}::"
@@ -1768,7 +1764,7 @@ async def test_gate9_predictor_writes_prediction_kind_through_daprd(
         secrets_resolve=vault.resolve,
     )
 
-    # Wave B prereq #3: session-prefixed actor_id keeps dapr_state
+    # Session-prefixed actor_id keeps dapr_state
     # disjoint across concurrent / re-run sessions.
     analyst_actor_id = (
         f"analyst::{dapr_actor_session_prefix}::"
@@ -1861,7 +1857,7 @@ async def test_gate9_predictor_writes_prediction_kind_through_daprd(
 def _build_optimizer_analyst_descriptor(
     *, analyzed_analyst_id: str,
 ) -> AnalystDescriptor:
-    """L-176 optimizer descriptor — kind ``dspy_compile``, OPTIMIZER analyst.
+    """optimizer descriptor — kind ``dspy_compile``, OPTIMIZER analyst.
 
     Carries an :class:`EvalBlock` with the ``optimizer.analyzed_analyst_id``
     pointer the kind's ``READ_SLICE`` adapter consults.  Per the L-176
@@ -1893,7 +1889,7 @@ def _build_optimizer_analyst_descriptor(
         mapping=MappingBlock(),
         method=MethodBlock(
             kind="dspy_compile",
-            # Wave B prereq: dspy_compile is exempt from prompt_module — the
+            # dspy_compile is exempt from prompt_module — the
             # optimizer COMPILES prompts, doesn't have a static one.
             prompt_module=None,
             llm={
@@ -1997,7 +1993,7 @@ async def _seed_traces_and_critiques(
 @pytest.mark.skipif(
     os.environ.get("LEGBA_TEST_TEMPORAL") != "1",
     reason=(
-        "L-176 optimizer gate requires Temporal — set LEGBA_TEST_TEMPORAL=1 "
+        "optimizer gate requires Temporal — set LEGBA_TEST_TEMPORAL=1 "
         "and bring up `docker compose --profile temporal up -d` first"
     ),
 )

@@ -26,7 +26,7 @@ None of these are model stupidity. They are what happens when a structured
 protocol is carried in an unstructured channel. The providers both planes run
 on have a STRUCTURED channel for exactly this, and Legba was not using it:
 of 1,552 core-plane calls in the 24 h to 2026-09-16, ZERO carried a tool call.
-The core plane (``gpt-oss-120b``, served with
+The core plane (the core model, served with
 ``--enable-auto-tool-choice --tool-call-parser openai``) was probed through the
 production gateway that day and answers correctly on all four modes: ``auto`` →
 ``finish_reason=tool_calls`` with correct args, ``required`` → tool_calls,
@@ -81,6 +81,8 @@ import os
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping, Sequence
+
+from ...outside_text import inert_frames
 
 logger = logging.getLogger(__name__)
 
@@ -443,7 +445,7 @@ TOOL_SCHEMAS: dict[str, ToolSpec] = {
         "dead; liveness is each row's `staleness`.",
         {"active_only": _BOOL, "silent_only": _BOOL, "silent_hours": _INT},
     ),
-    # W11-F162 — the forecast ledger's due-date reader.
+    # The forecast ledger's due-date reader.
     "list_due_resolvers": _s(
         "list_due_resolvers",
         "The sealed forecast ledger by due date: questions due (or overdue) "
@@ -453,7 +455,7 @@ TOOL_SCHEMAS: dict[str, ToolSpec] = {
         "outcome; only a resolution is.",
         {"horizon_days": _INT, "include_closed": _BOOL, "limit": _INT},
     ),
-    # W11-F141 — the scheduled-events calendar (migration 0240): the
+    # The scheduled-events calendar (migration 0240): the
     # operator-entered register of FUTURE dated things.
     "list_scheduled_events": _s(
         "list_scheduled_events",
@@ -912,7 +914,7 @@ def visible_text(response: Any) -> str:
 # with ``args.get()``, so an argument the schema does not declare was dropped
 # in silence and an argument it does declare was honoured whatever it said.
 #
-# 2026-09-28 00:58Z, consult session 96d7bfc2 on the core plane: the model's
+# A recorded consult session on the core plane: the model's
 # FIRST tool call was ``list_situations`` with
 # ``{"result": [six fabricated situation rows], "status": "ok",
 #   "metadata": {}}`` — it had written the reply it expected into the call it
@@ -1278,10 +1280,11 @@ def tool_result_messages(
             payload = results[idx]
         else:  # pragma: no cover — guarded by the caller, kept fail-loud
             payload = {"error": "tool_result_missing: no result for this call"}
-        bodies.append(
+        # Outside text cannot pose as a frame token once it is in the prompt.
+        bodies.append(inert_frames(
             payload if isinstance(payload, str)
             else json.dumps(payload, default=str)
-        )
+        ))
     if provider == PROVIDER_ANTHROPIC:
         return [{
             "role": "user",

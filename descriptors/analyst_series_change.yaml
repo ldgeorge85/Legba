@@ -24,7 +24,7 @@
 # The finding is always written (static FINDING dispatch); with no crossing it
 # says so and cites nothing.
 #
-# S-1 (2026-11-13) — rule-judged series (series_change/2026-11.2). A price or
+# Rule-judged series (series_change/2026-11.2). A price or
 # a policy rate is not a count: the band's Poisson floor is meaningless on it.
 # A series named by `level_rules` or `step_series` is judged ONLY by them:
 #   * level_rules "eia.pet_spot.rbrte>=100": an event when Brent spot enters
@@ -33,7 +33,7 @@
 #     decision is an event, not noise); step_min 0 = any change.
 # Each event cites the two observations it rests on. PortWatch keeps the band.
 #
-# I-5 (roll 84) — named rules by series family (series_change/2026-11.3).
+# Named rules by series family (series_change/2026-11.3).
 # `series_rules` gives a rate or exchange-rate family a rule by NAME from the
 # handler's closed table: `policy_rate` (every change is an event, step_min 0)
 # and `fx_move` (a move of 2% or more between the last value before the
@@ -55,7 +55,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: draft
-  owner: n_l_ingestion_sinks
+  owner: owner@local
 
 subscription:
   # No `targets` block -> META analyst: one global run per cadence tick over

@@ -1,4 +1,4 @@
-# world_assessment — THE ASSESSMENT CHANNEL (D-6; DEMOTION_D1_SPEC_2026-09-04 §2).
+# world_assessment — THE ASSESSMENT CHANNEL.
 #
 # The interpretive voice, after the demotion. The world_assessor row stops being
 # prose about its inputs and becomes an ASSEMBLY — its inputs' own sentences,
@@ -9,7 +9,7 @@
 #
 # ── why a NEW analyst_id under the SAME kind ────────────────────────────────
 # `identity.kind: meta_findings_synthesizer` is not a convenience — it is what
-# makes four integrations no-ops (spec §2.1b, each re-verified in the D-6 build):
+# makes four integrations no-ops (each verified when this channel was built):
 #   1. the verify dispatch's kind allowlist already admits this kind when the
 #      descriptor declares `method.llm.verify` — and that file is at its module
 #      ceiling with no seam, so a clause there would have blocked this train;
@@ -23,7 +23,7 @@
 # subtypes inside one OutputKind, and analyst_escalation_composition.yaml says it
 # outright — "It is the SAME meta_findings_synthesizer kind (no new Python kind)."
 #
-# ── STEP E (2026-09-20): WHAT THIS CHANNEL NOW READS ────────────────────────
+# ── WHAT THIS CHANNEL NOW READS ─────────────────────────────────────────────
 # NO FIELD ON THIS DESCRIPTOR CHANGES. The input restriction below is unchanged
 # and unwidened — `derived_from` is still EXACTLY the one assembly id, and the
 # prompt builder still has exactly one data argument. What changed is what that
@@ -61,7 +61,7 @@
 # ── the input restriction is MECHANICAL, not a prompt clause ────────────────
 # The channel's `derived_from` is EXACTLY ONE element: the assembly id. That
 # single-element array IS the enforcement of "input = the assembly payload only"
-# (§2.1). Three assertions carry it, all in `assessment_channel`:
+#. Three assertions carry it, all in `assessment_channel`:
 #   * len(derived_from) == 1 and derived_from[0] == spine_id, checked before the
 #     result leaves the run;
 #   * the prompt builder's ONLY data argument is the payload — a signature test
@@ -89,10 +89,10 @@
 #
 # ── state: draft, and what has to be true before it goes active ─────────────
 # The record it reads does not exist yet in production: every live composition row
-# is `regime: legacy` until the operator flips the flag at the D-3 cutover. An
+# is `regime: legacy` until the operator flips the composition-assembly flag. An
 # active analyst here would run twice a day and write "No assembled record to
 # assess" every time. Promote when: (a) LEGBA_COMPOSITION_ASSEMBLY includes
-# world_assessor, and (b) D-3's arms are live so the badge's fidelity number stops
+# world_assessor, and (b) the assembly's verification arms are live so the badge's fidelity number stops
 # reading "unmeasured". The newest OutputKind's descriptor
 # (analyst_situation_tracker.yaml) sits in the same state for the same class of
 # reason, and its comment names the activation checklist.
@@ -108,12 +108,12 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: draft
-  owner: world_assessment
+  owner: owner@local
 
 subscription:
   # No `targets` block → ONE global run per cadence tick (_cadence_targets → None),
   # the same global shape as world_assessor. Regime 1 is the WORLD tier only
-  # (spec §7 F-1): a country or thematic Assessment is one more descriptor plus
+  # (first regime): a country or thematic Assessment is one more descriptor plus
   # one id in `assessment_channel.ASSESSMENT_ANALYST_IDS`, deferred because the
   # judge spend is 33x and 32 country boards may not want a voice each.
   other_analysts:
@@ -154,7 +154,7 @@ method:
   # the same binding the four composition variants use, so a voice change is a
   # deploy and a diff rather than a descriptor PUT that no test can see.
   llm:
-    thinking: "on"   # T-2: low-volume synthesis seat thinks on every call
+    thinking: "on"   # low-volume synthesis seat thinks on every call
     # Fleet-wide 1.0 per the 2026-07-24 sampling audit.
     temperature: 1.0
     # MODEL POLICY (operator): the CORE plane via a stack_ref ($0). NEVER a
@@ -167,18 +167,17 @@ method:
     # the dispatch keys on. The faithfulness pass needs no new rubric here: the
     # channel mints one citation per cited spine ordinal whose `evidence_text` is
     # that block's QUOTED SPAN, so `supported/checkable` is measured against the
-    # words the record carried — which is fidelity-to-spine (§2.5/§3.5), the
+    # words the record carried — which is fidelity-to-spine, the
     # thing the composition tier never had (no source article anywhere in a
     # composition's evidence map).
     #
     # OWN POPULATION: this analyst_id is its own key. Its faithfulness must never
-    # pool with the assembly's 1.0-by-construction number, and the D-3 stamp's
+    # pool with the assembly's 1.0-by-construction number, and the assembly stamp's
     # lineage entry records a new graded population entering with no history.
     verify:
       factory_kind: stack_ref
       raw: llm.primary.openai_compat
       expected_family: llm_provider
-    max_tokens: 768            # the kind's DEFAULT_MAX_TOKENS
   budget_tokens_per_day: 0
   retry:
     budget:

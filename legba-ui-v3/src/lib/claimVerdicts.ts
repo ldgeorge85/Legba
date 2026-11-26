@@ -43,8 +43,12 @@
 export const CLAIM_REASON_LABELS: Record<string, string> = {
   no_citation: 'no citation',
   unresolved_citation: 'citation resolves to nothing',
-  judge_unsupported: 'unsupported by the verify judge',
-  judge_contradicted: 'contradicted by the verify judge',
+  judge_unsupported: 'not supported by its sources, by the check',
+  judge_contradicted: 'contradicted by its sources, by the check',
+  // The cited article was shown only in part and the claim's specifics were
+  // not in that part: the check could not confirm it, which is not a finding
+  // that it is false.
+  judge_unverifiable_excerpt: 'could not be checked: its source was shown only in part',
   double_counted: 'double-counted evidence (cited sub-claims share lineage)',
   hedge_laundering: 'asserts more confidence than the cited sub-claim',
   indicator_uncited_triggered: 'triggered indicator carries no citation',
@@ -313,7 +317,7 @@ export function claimVerdictForMarker(
       if (worst.verdict === 'supported') {
         return {
           kind: 'supported',
-          label: 'supported by the verify judge',
+          label: 'supported by its sources, by the check',
           spans: [],
           judgeStatus,
           checkable,
@@ -347,7 +351,7 @@ export function claimVerdictForMarker(
   if (judgeStatus === 'llm') {
     return {
       kind: 'not-flagged',
-      label: 'not flagged by the verify judge',
+      label: 'not flagged by the check',
       spans: [],
       judgeStatus,
       checkable,
@@ -357,7 +361,7 @@ export function claimVerdictForMarker(
 
   return {
     kind: 'not-checked',
-    label: 'claim-level verdict not recorded — LLM judge did not run',
+    label: 'not checked claim by claim — the check did not run',
     spans: [],
     judgeStatus,
     checkable,

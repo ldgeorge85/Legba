@@ -63,7 +63,7 @@ have structured backend state to read.
   * ``skipped`` sub-sinks (e.g. xmpp / matrix extras not installed) do
     not write a row — they did not attempt a delivery.
 
-Existing callers that don't pass ``pg_pool`` (Wave A — every caller in
+Existing callers that don't pass ``pg_pool`` (every caller in
 tree today) see pre-existing behaviour: the dispatcher logs delivery
 outcomes and returns the :class:`SurfaceResult` list as before. The new
 bootstrap path in :mod:`legba.runtime.analyst_deps` will thread the
@@ -638,7 +638,7 @@ async def emit(
     if isinstance(payload, AlertPayload):
         coerced: AlertPayload | None = payload
     elif isinstance(payload, Mapping):
-        # Back-compat: an explicit alert mapping (Wave A callers) validates
+        # Back-compat: an explicit alert mapping (callers without a pool) validates
         # directly — no severity gate, the caller already decided to alert.
         coerced = AlertPayload.model_validate(payload)
     else:
@@ -672,7 +672,7 @@ async def emit(
 
     # Audit-row write is opt-in: needs both a pg_pool and a parent
     # analyst_outputs row id. When either is absent we keep the historical
-    # Wave A behaviour (log-only, no INSERT). Computed BEFORE _parse_surfaces so
+    # behaviour (log-only, no INSERT). Computed BEFORE _parse_surfaces so
     # a malformed descriptor (e.g. the YAML-1.1 `mode: on`→bool trap that left
     # alert_sink_deliveries empty) is AUDITED as a delivery error rather than
     # swallowed — a silent parse crash that never writes a row is exactly how
@@ -785,7 +785,7 @@ async def _raise_on_alert_log(pg_pool: Any, payload: AlertPayload, ctx: OutputCo
     """L-1: this first-generation output kind is one more producer of the ONE
     alert path — recorded on the alert log (kind ``analyst_alert_output``);
     the page rule decides any push. Its own legacy surfaces below are
-    unchanged (dormant since 2026-07-01; retiring them is the owner's call)."""
+    unchanged (dormant since 2026-07-01; retiring them is a separate decision)."""
     try:
         from ..alerts.raise_alert import raise_alert
 

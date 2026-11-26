@@ -1,4 +1,4 @@
-# W1-E BIND — Signals Retention analyst descriptor (D4 / migration 0036 /
+# Signals Retention analyst descriptor (migration 0036 /
 # deterministic_handlers/signals_retention.py).
 #
 # The `signals_retention` SUB_HANDLER has been in SUB_HANDLERS and had a live
@@ -14,7 +14,7 @@
 #
 # DISABLED BY DEFAULT: ttl_days defaults to 0 (no-op) per the seeded
 # retention_policies row — this ships inert. An operator opts in later via
-# method.options.ttl_days (X-1 channel), LEGBA_SIGNALS_RETENTION_TTL_DAYS, or
+# method.options.ttl_days, LEGBA_SIGNALS_RETENTION_TTL_DAYS, or
 # a forced-run option. See deterministic_handlers/signals_retention.py and
 # _retention_sweep.py for the full precedence + keep-class semantics.
 #
@@ -33,7 +33,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: draft
-  owner: w1e_built_but_unbound
+  owner: owner@local
 
 subscription:
   # No `targets` block -> META analyst: one global sweep per cadence tick

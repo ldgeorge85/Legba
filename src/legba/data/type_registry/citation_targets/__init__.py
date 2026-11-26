@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The ``citation_target`` family: what a finding's sentence may rest on (lane DM-A).
+"""The ``citation_target`` family: what a finding's sentence may rest on.
 
 A citation row (``citation_support``, migration
 ``20261115T1828_citations_as_rows``) says "this sentence rests on that record".

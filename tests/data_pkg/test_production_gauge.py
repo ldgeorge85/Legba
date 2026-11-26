@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""S-1 — the expected-vs-actual production gauge.
+"""The expected-vs-actual production gauge.
 
 Two tiers.
 
@@ -873,7 +873,7 @@ async def test_acceptance_frozen_ap_feed_is_caught(pool, blank):
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_acceptance_pausing_the_frozen_feed_silences_it(pool, blank):
-    """The operator's remediation (B-0 ran ``ops_pause_apnews_frozen.py``) must
+    """The operator's remediation (ran ``ops_pause_apnews_frozen.py``) must
     STOP the paging, not keep it. Quiet-by-design is a real answer."""
     now = datetime.now(tz=timezone.utc)
     async with pool.acquire() as conn:

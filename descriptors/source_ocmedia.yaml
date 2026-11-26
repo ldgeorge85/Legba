@@ -1,11 +1,11 @@
-# X-1 source expansion (2026-11-14) — draft SourceDescriptor. Ships DRAFT;
+# Draft SourceDescriptor. Ships DRAFT;
 # the reference host walks it to CONFIGURED (descriptors/LIFECYCLE.md), never
-# active — activation is the owner's call per source.
+# active — activation is the operator's call per source.
 #
 # OC Media — independent newsroom in Tbilisi covering the South Caucasus
 # (Georgia, Armenia, Azerbaijan) and the North Caucasus. Fills the Caucasus
 # gap (no outlet for the region in the tree).
-# Checked 2026-11-14 by the source-expansion review (one GET, generic client
+# Checked (one GET, generic client
 # identity): HTTP 200, application/rss+xml, 16 items, newest 2026-11-14 09:07
 # UTC, oldest 2026-11-12 13:52 — about 8 items a day. Every three hours keeps
 # well inside a two-day window.
@@ -26,7 +26,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: x1_source_expansion
+  owner: owner@local
   created: "2026-11-14T00:00:00Z"
 
 scope:

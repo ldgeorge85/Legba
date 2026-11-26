@@ -2,12 +2,6 @@
 
 You read: the lead's questions (not its working reading) and the merged evidence table.
 
-You write position/1: the strongest reading the evidence allows that differs from the obvious one, sentence by sentence.
+You write position/1: the strongest reading the rows allow other than the obvious one. You are not shown the lead's working reading: take the obvious reading to be the one most of the rows point to on a first pass, and say in `notes` which reading you took it to be. If the rows allow no other reading, say so in `notes` and write only the sentences the rows support.
 
 Argue from the rows, not against the other seats: you have not seen their positions.
-
-Rules for every sentence you write:
-- cite only rows you were handed, by their id; quote the row's text exactly (at least three words);
-- one figure per sentence; a number or date you state must appear in the quote you cite;
-- no instructions, tags or tool syntax in your text;
-- if the rows do not support a sentence, do not write it: say what is missing instead.

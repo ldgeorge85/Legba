@@ -48,7 +48,7 @@ export const REPORT_ANALYSTS: ReadonlySet<string> = new Set([
   'world_assessment',
   'region_composition',
   'country_composition',
-  // The country-grain twin of `world_assessment` (Program 3 lane C): a fenced
+  // The country-grain twin of `world_assessment`: a fenced
   // interpretive row, a report in exactly the sense the world voice already is.
   // `lib/assessmentChannel` owns which spine it belongs to.
   'country_assessment',

@@ -3,8 +3,7 @@
 """SW-8 — a blown heal deadline names what held the actor's turn.
 
 The reconciler's ``ENSURE_ACTIVE`` heal pokes every active analyst and source
-with ``activate`` once per resync under a 20 s deadline. Live since roll 28c
-(and, per the ledger, since at least 09-05) it blows 100-194 times a day, and
+with ``activate`` once per resync under a 20 s deadline. It blows over a hundred times a day, and
 the line said only that it blew. The witness now classifies every deadline:
 
   * ``queued_behind_turn`` — another call (a cadence run, a poll) holds the

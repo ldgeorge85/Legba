@@ -84,7 +84,6 @@ from ..situations.trajectory import (
     read_corroboration,
     read_current_states,
 )
-from ._tradecraft import with_preamble
 
 logger = logging.getLogger(__name__)
 
@@ -172,7 +171,9 @@ EVIDENCE_TEXT_CHARS = 1200
 # The system prompt
 # ---------------------------------------------------------------------------
 
-_TRACKER_SYSTEM = with_preamble(
+#: No house analyst preamble here: this seat returns a bare JSON array, and the
+#: preamble's object-only reply rule and BLUF rule contradict that.
+_TRACKER_SYSTEM = (
     """TASK — SITUATION TRAJECTORY. You are given a set of situations the system is already watching. Each carries its current state, its dates, and the NEW verified items that attached to it since the last check, numbered with citation ordinals.
 
 For EACH situation, decide what the new items do to it:

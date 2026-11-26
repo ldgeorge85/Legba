@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""``layer_divergence`` sub-handler — Program 6 L2, the divergence-baseline unit.
+"""``layer_divergence`` sub-handler — the divergence-baseline unit.
 
 THE THESIS (docs/DATA_SOURCES.md, source layers).
 Per target country the platform ingests the same stack of source LAYERS, and
@@ -120,7 +120,7 @@ logger = logging.getLogger(__name__)
 
 SUB_HANDLER_NAME = "layer_divergence"
 
-#: H12 — the instrument revision (docs/ANALYSIS.md §10.9). Bumped when the
+#: The instrument revision (see docs/ANALYSIS.md). Bumped when the
 #: STATISTIC moves: the log-ratio's continuity constant, the median/MAD
 #: baseline, the MAD scale, the two-day rule, the severity ladder or the fold.
 #: A diff across a bump is an instrument change, never a world change.

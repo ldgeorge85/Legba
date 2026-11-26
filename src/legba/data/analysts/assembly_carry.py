@@ -206,8 +206,8 @@ def leading_negation(text: Any) -> bool:
     return head in LEADING_NEGATION_TOKENS
 
 
-#: W1 (2026-11-07) — where a lead span's FIRST ASSERTION ends. Lives in
-#: :mod:`legba.data.change_report` since roll 65 (the carry rule reads it and
+#: Where a lead span's FIRST ASSERTION ends. Lives in
+#: :mod:`legba.data.change_report` (the carry rule reads it and
 #: may not import this package); the same object, re-bound here.
 _LEAD_CLAUSE_END_RE = LEAD_CLAUSE_END_RE
 

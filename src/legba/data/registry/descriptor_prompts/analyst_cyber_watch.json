@@ -1,8 +1,8 @@
 {
   "prompts": {
     "cyber_watch": {
-      "chars": 24971,
-      "sha256": "937e4d31c32dfff9b2009b0b32904f689bc0feaf86298dc17ca1666dd4419844",
+      "chars": 27375,
+      "sha256": "da137ccf5c9b89541ea858c42dd54f6d5d21ba486124ae1fdaac4bc6915c98b3",
       "source": "analyst_cyber_watch.yaml"
     }
   },

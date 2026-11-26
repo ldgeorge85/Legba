@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Program 6 L0 — ``legba.data.layers.loader.load_layer_map``'s idempotence
+"""``legba.data.layers.loader.load_layer_map``'s idempotence
 and re-versioning contract, through a real Postgres (migration 0214).
 
   * loading a fresh map inserts one open row per entry/aperture;

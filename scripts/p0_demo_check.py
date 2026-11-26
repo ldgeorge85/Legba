@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""P0-T8 — the one-command operator run of the system 60-second demo.
+"""the one-command operator run of the system 60-second demo.
 
 Prints a four-stage GREEN/RED report for ONE demo G20 country against the
 RUNNING stack's read APIs. This is the human-facing companion to the pytest
@@ -72,7 +72,7 @@ def run_check(target: str) -> int:
         return 3
 
     base = _base_url()
-    print(f"P0 loop check  target={target!r}  registry={base}")
+    print(f"Loop check  target={target!r}  registry={base}")
 
     client = httpx.Client()
     results: dict[str, bool] = {}

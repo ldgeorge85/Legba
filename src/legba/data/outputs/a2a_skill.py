@@ -291,7 +291,7 @@ def json_safe(value: Any) -> Any:
 
     The A2A routes hand fetched rows to ``JSONResponse`` (and the display
     policy / signer before it); raw ``uuid.UUID`` and ``datetime`` values are
-    not serialisable (W11-F68a). UUID -> ``str``, datetime/date -> ISO-8601,
+    not serialisable. UUID -> ``str``, datetime/date -> ISO-8601,
     Decimal -> ``str`` (exact), bytes -> hex, mappings/sequences recursed.
     """
     import datetime as _dt

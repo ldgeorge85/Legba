@@ -1,11 +1,10 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The desk's SOURCE ROSTER state in its window, read ONCE per shadow run
-(lane D-2).
+"""The desk's SOURCE ROSTER state in its window, read ONCE per shadow run.
 
 WHY. A contract-v2 absence ("no row in this desk's collection reports X") is
 only as strong as the collection: if a third of the feeds the desk draws on
-were failing, the absence says less. D-1's computed block had to state the
+were failing, the absence says less. The computed block had to state the
 silent / failing feeds as unknown (``not_handed``) because the run made no
 roster read. This leaf is that read and the pure classification of it.
 

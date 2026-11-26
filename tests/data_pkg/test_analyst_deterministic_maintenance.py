@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""L-203 tests for the maintenance-migrated deterministic sub-handlers.
+"""Tests for the maintenance-migrated deterministic sub-handlers.
 
 Each migrated sub-handler runs over real substrate when ``deps`` carries a
 pg_pool, but for unit tests we exercise the no-deps path (``deps=None``) which
@@ -8,7 +8,7 @@ synthesizes from inputs or short-circuits to zero-counts. The shape contract
 (``AnalystMethodResult`` with a ``FindingPayload`` whose ``data.sub_handler``
 matches) is enforced for all of them.
 
-The original L-203 set included six sub-handlers (lifecycle_decay,
+The original set included six sub-handlers (lifecycle_decay,
 state_propagation, corroboration_scoring, cooccurrence_edges,
 situation_detection, integrity_verification) whose only backing tables were
 dropped by migration 0030. Those handlers swallowed the missing-relation error
@@ -41,7 +41,7 @@ from legba.runtime.analyst_method import AnalystMethodResult
 
 
 # ---------------------------------------------------------------------------
-# Registry — confirm the surviving L-203 sub-handlers are wired in
+# Registry — confirm the surviving sub-handlers are wired in
 # deterministic.py, and the 0030-orphaned ones are NOT dispatchable.
 # ---------------------------------------------------------------------------
 
@@ -68,7 +68,7 @@ DELETED_SUB_HANDLERS = (
 
 @pytest.mark.parametrize("name", L203_SUB_HANDLERS)
 def test_l203_sub_handler_in_dispatch_table(name):
-    """Every surviving L-203 sub-handler must be registered for dispatch."""
+    """Every surviving sub-handler must be registered for dispatch."""
     assert name in SUB_HANDLERS, f"missing {name!r} in SUB_HANDLERS"
     assert name in OUTPUT_KIND_BY_SUB_HANDLER, f"missing {name!r} in OUTPUT_KIND_BY_SUB_HANDLER"
 
@@ -83,7 +83,7 @@ def test_l203_deleted_sub_handler_not_dispatchable(name):
 
 
 # ---------------------------------------------------------------------------
-# Shape contract — every L-203 sub-handler returns the same envelope shape
+# Shape contract — every sub-handler returns the same envelope shape
 # ---------------------------------------------------------------------------
 
 

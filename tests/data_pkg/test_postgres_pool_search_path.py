@@ -89,8 +89,7 @@ async def test_actor_state_table_reachable_from_every_acquire(
     Restated as CONSISTENCY: on every acquire, the unqualified reference
     and the ``public.``-qualified reference must resolve to the SAME row
     count. This is STRICTLY AS DISCRIMINATING as the original for the
-    historical bug shape (verified live, see
-    planning/CAMPAIGN_2026-08-29/SHUFFLE_FIX_REPORT.md for the transcript):
+    historical bug shape (verified live):
     if search_path drifts on a later acquire while the table stays in
     `public` (the exact 2026-05-21 regression), the UNQUALIFIED read raises
     ``UndefinedTableError`` before any comparison runs — still a hard

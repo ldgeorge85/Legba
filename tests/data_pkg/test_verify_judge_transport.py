@@ -41,6 +41,7 @@ from legba.data.provenance.judge_transport import (
     resolve_partition_outcome,
     status_is_retryable,
 )
+import legba.data.provenance.verify as verify_mod
 from legba.data.provenance.verify import (
     _ABSENCE_JUDGE_SYSTEM,
     verify_finding_faithfulness,
@@ -121,7 +122,7 @@ class _ScriptedJudge:
     def _route(self, system: str) -> str:
         if system == _ABSENCE_JUDGE_SYSTEM:
             return "absence"
-        return "survey" if "NULL-RESULT" in system else "shared"
+        return "survey" if system == verify_mod._NULL_RESULT_JUDGE_SYSTEM else "shared"
 
     def count(self, route: str) -> int:
         return self.calls.count(route)

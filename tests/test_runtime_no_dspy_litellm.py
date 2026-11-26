@@ -2,8 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Guard: dspy / litellm must NEVER be on the production runtime hot path.
 
-Operator hard rule (see planning/OPTIMIZER_DSPY_GEPA_PLAN.md +
-the `feedback-never-litellm-dspy-production` constraint): dspy and its
+Hard rule: dspy and its
 litellm transitive dep ship ONLY in the opt-in GEPA worker image
 (docker/Dockerfile.worker). The base runtime image is built dspy-free, and
 the analyst inference path must degrade to direct ``chat_complete`` when dspy

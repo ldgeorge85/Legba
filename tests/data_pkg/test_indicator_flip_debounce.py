@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """indicator_tracker on the REAL driver — migration 0237, the stream watermark,
-the once-only flip record and the ``debounced_flips`` reader (W11-F55).
+the once-only flip record and the ``debounced_flips`` reader.
 
 Every assertion reads the persisted rows back through asyncpg:
 

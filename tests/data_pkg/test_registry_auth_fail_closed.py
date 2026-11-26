@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""B-2 — fail-closed bearer auth for the registry API.
+"""Fail-closed bearer auth for the registry API.
 
-Asserts the post-B-2 gate contract (`legba.data.registry.api`):
+Asserts the post-gate contract (`legba.data.registry.api`):
 
   * `LEGBA_REGISTRY_API_TOKEN` unset/empty AND no `LEGBA_DEV_MODE=1` →
-    HTTP 503 on every guarded request (the pre-B-2 behaviour was a silent
+    HTTP 503 on every guarded request (the pre-behaviour was a silent
     fail-open to an "anonymous" principal — one misconfigured deploy away
     from an open admin API).
   * `LEGBA_DEV_MODE=1` (explicit) → development mode permitted.
@@ -118,7 +118,7 @@ def test_token_comparison_goes_through_compare_digest(monkeypatch):
     monkeypatch.setattr(hmac_mod, "compare_digest", spy)
     principal = require_bearer(authorization="Bearer b2-ct-token")
     # The gate returns the operator principal + hashed LABEL, never the
-    # credential (W4; X2-B1).
+    # credential.
     assert principal == principal_actor("operator", "b2-ct-token")
     assert calls == [(b"b2-ct-token", b"b2-ct-token")]
 

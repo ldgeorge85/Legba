@@ -1,4 +1,4 @@
-# A-3c — escalate_finding action pack (decision D1: the example pack that
+# Escalate_finding action pack (the example pack that
 # demonstrates the FULL agency lifecycle end-to-end with no stub in its
 # path).
 #
@@ -8,16 +8,16 @@
 # emitter publishes the escalation onto NATS `channels.escalations`) →
 # settle → `action_pack_invocations` + `governor_events` audit rows.
 #
-# Gate semantics (read by the actor run path from this tool config — S3-T4):
+# Gate semantics (read by the actor run path from this tool config):
 # escalate fires when the finding's ALERT SCORE — its verify-FOLDED effective
 # confidence times a per-severity weight (`effective_confidence × severity`) —
 # crosses `confidence_gate`. `high`/`critical` (>= `severity_gate`) carry a >1
 # weight so a severe finding alerts on less confidence; a severity-less finding
 # reduces to the plain confidence gate. A verify-DEMOTED finding can no longer
-# alert on a high-severity tag alone (the raw-confidence gate is closed). A
-# S3-T2 indicator_tracker flip into `triggered` is a second trigger class.
+# alert on a high-severity tag alone (the raw-confidence gate is closed). An
+# indicator_tracker flip into `triggered` is a second trigger class.
 #
-# Action selection (X-1 Stage 1, read from this same tool config): the crossing
+# Action selection (read from this same tool config): the crossing
 # invokes the tool named by `action_tool`. UNSET → `escalate`, which is exactly
 # what the fire site used to hardcode — so this pack's behavior is unchanged
 # unless the key is set. To route crossings at a different action, add that
@@ -46,7 +46,7 @@ identity:
   version: "<content-hash stamped at register time>"
   abstraction_level: L1
   state: active
-  owner: a3_agency
+  owner: owner@local
   created: "2026-06-09T00:00:00Z"
 
 tools:

@@ -131,6 +131,14 @@ ROUTE_MIN_ROLES: dict[tuple[str, str], str] = {
     ("POST", f"{_V1}/auth/invite"): A,
     ("GET", f"{_V1}/auth/users"): A,
     ("PATCH", f"{_V1}/auth/users/{{user_id}}"): A,
+    # users_admin_api.py — the console's Users page
+    ("GET", f"{_V1}/auth/admin/users"): A,
+    ("POST", f"{_V1}/auth/admin/invites"): A,
+    ("DELETE", f"{_V1}/auth/admin/invites/{{user_id}}"): A,
+    ("POST", f"{_V1}/auth/admin/users/{{user_id}}/role"): A,
+    ("POST", f"{_V1}/auth/admin/users/{{user_id}}/disable"): A,
+    ("POST", f"{_V1}/auth/admin/users/{{user_id}}/enable"): A,
+    ("POST", f"{_V1}/auth/admin/users/{{user_id}}/end-sessions"): A,
     # -- consult: own sessions and runs (owner-checked in the handlers) --
     ("POST", f"{_V1}/consult"): R,  # an ARMED turn needs admin (session_auth)
     ("GET", f"{_V1}/consult/runs/{{request_id}}"): R,
@@ -199,7 +207,7 @@ ROUTE_MIN_ROLES: dict[tuple[str, str], str] = {
     ("GET", f"{_V3}/layers/divergence"): R,
     ("GET", f"{_V3}/ledger/forecasts"): R,
     ("GET", f"{_V3}/ledger/scorecard"): R,
-    # eval_runs_api.py (E-3) — the owner's published evaluation runs
+    # eval_runs_api.py — the owner's published evaluation runs
     # (aggregates only) on the reader Ledger; publishing is a host script.
     ("GET", f"{_V3}/eval/runs"): R,
     ("GET", f"{_V3}/ledger/seal-proof"): R,  # F-1: a seal's anchor inclusion proof
@@ -246,10 +254,10 @@ ROUTE_MIN_ROLES: dict[tuple[str, str], str] = {
     ("GET", f"{_V1}/situations"): R,
     ("GET", f"{_V1}/source_credibility"): R,
     ("GET", f"{_V1}/source_credibility/{{host}}"): R,
-    # -- RA-1: the reader surfaces' reads of engine figures ---------------
-    # The first signed-in walk as a reader (roll 89) found the reader
+    # -- the reader surfaces' reads of engine figures ---------------
+    # Reader sessions called these as admin: the reader
     # surfaces (the coverage footer, the Wall, the subject page, the Ledger,
-    # Watch) calling these as admin. Each answer is aggregate figures or ids
+    # Watch). Each answer is aggregate figures or ids
     # with states and times — no secret, credential, prompt, private note or
     # person — so the read itself is opened; every change stays where it was.
     ("GET", f"{_V3}/system/source-firing"): R,  # per-source counts, states, times
@@ -282,7 +290,7 @@ ROUTE_MIN_ROLES: dict[tuple[str, str], str] = {
     ("GET", f"{_V3}/collection-requirements"): A,
     ("GET", f"{_V3}/collection-requirements/{{requirement_id}}"): A,
     ("PATCH", f"{_V3}/collection-requirements/{{requirement_id}}"): A,
-    # origins_api.py (data-model lane 9): reading which group a source
+    # origins_api.py: reading which group a source
     # counts in is a reader's (like the credibility ledger); moving one is
     # the admin's.
     ("GET", f"{_REG}/origins"): R,

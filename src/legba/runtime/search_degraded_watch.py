@@ -8,7 +8,7 @@ SearXNG engine (reuters) failed on EVERY query in the 10-05 → 10-08 runtime lo
 (3,030 ``web_search.degraded`` lines over ~3,029 searches), which made every
 external-audit NOT_FOUND since 10-02 a degraded search — 70 of 70 sampled
 ``searched_found_nothing`` absences on three desks were really
-``search_failed`` (W11-F15). Nothing paged; a reviewer found it.
+``search_failed``. Nothing paged; a reviewer found it.
 
 THE MEASURE. Over the trailing :data:`WINDOW_HOURS`, per search provider: the
 share of the external audit's primary NOT_FOUND grades whose search the ONE
@@ -108,7 +108,7 @@ def alert_text(
         "'searched, found nothing' — the audit is not able to rule claims out "
         f"while this holds. Failing engines (error share over recorded "
         f"searches): {engine_line}. Read /v3/system/search-health; the fix is "
-        "the engine set (docs/TUNABLES.md §1, SW-3: drop or re-weight the "
+        "the engine set (docs/TUNABLES.md: drop or re-weight the "
         "failing engine in docker/searxng/settings.yml)."
     )
     return title, body

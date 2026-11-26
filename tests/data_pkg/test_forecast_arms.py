@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""ST0-D — ``scripts/forecast_arms.py``: one packet for every arm, the paid
+"""``scripts/forecast_arms.py``: one packet for every arm, the paid
 gate and the ceiling, the tower's honest absence, nothing spent on a dry run.
 
 Fakes only: a fake Messages call (usage + a JSON reply), a fake decide call,
@@ -98,7 +98,7 @@ def _frontier(calls: _Calls | None, refusal: str | None = None):
 def _wiring(conn, rows, calls=None, tower=None, frontier=None):
     return fa.Wiring(rows=rows, brief=_brief, write_conn=conn, read_conn=tower or _Tower(),
                      frontier=frontier, decide=calls.decide if calls else None,
-                     clef_model="clef-flash", clef_version="v1")
+                     decision_model="decision-model", decision_version="v1")
 
 
 async def test_dry_run_prints_the_packets_calls_nothing_writes_nothing(tmp_path):
@@ -171,7 +171,7 @@ async def test_every_arm_reads_the_same_packet_and_the_tower_is_an_honest_absenc
     recs = {arm: json.loads((tmp_path / f"FX1-a__{arm}.json").read_text()) for arm in fa.ARMS}
     shas = {r["packet"]["packet_sha256"] for r in recs.values()}
     assert len(shas) == 1
-    # Clef was handed the packet as its state; the frontier the same packet inside the prompt.
+    # The decision model was handed the packet as its state; the frontier the same packet inside the prompt.
     decide_state = next(b["state"] for b in calls.bodies if "state" in b)
     frontier_prompt = next(b["messages"][0]["content"] for b in calls.bodies if "messages" in b)
     assert decide_state in frontier_prompt
@@ -181,6 +181,26 @@ async def test_every_arm_reads_the_same_packet_and_the_tower_is_an_honest_absenc
     assert "no scheduled analyst emitted a probability for FX1-a" in by_kind["tower"]["absent_reason"]
     assert len(by_kind["frontier_arm"]["rationale"].split()) == fa.RATIONALE_WORDS
     assert "rationale cut" in recs["frontier_arm"]["problem"]
+
+
+async def test_a_number_stated_under_a_retired_component_name_is_restated_in_place(tmp_path, monkeypatch):
+    from legba.data.schemas import legacy_name_digests as L
+
+    retired = "llm.decide.retired_vendor_choice"
+    monkeypatch.setitem(L.LEGACY_COMPONENT_ID_DIGESTS, L.name_digest(retired), fa.DECISION_COMPONENT)
+    conn = FakeLedgerConn()
+    rows = await _rows(conn)
+    qid = next(r["id"] for r in rows if r["slug"] == "FX1-a")
+    await fl.state_number(conn, qid, fl.ForecastNumber("clef_arm", retired, 0.6, AS_OF))
+    await fa.run_arms(_wiring(conn, rows, _Calls()), arms=["clef_arm"], as_of=AS_OF, out=tmp_path,
+                      dry_run=False, ceiling=None, slugs=["FX1-a"])
+    (n,) = [n for n in conn.numbers.values() if n["issuer_kind"] == "clef_arm"]
+    assert n["issuer_ref"] == retired and float(n["p"]) == 0.3
+    # an unrelated ref is never adopted: a fresh question gets the current id
+    await fa.run_arms(_wiring(conn, rows, _Calls()), arms=["clef_arm"], as_of=AS_OF,
+                      out=tmp_path / "b", dry_run=False, ceiling=None, slugs=["FX2-b"])
+    refs = sorted(n["issuer_ref"] for n in conn.numbers.values() if n["issuer_kind"] == "clef_arm")
+    assert refs == sorted([retired, fa.DECISION_COMPONENT])
 
 
 async def test_a_tower_number_is_taken_when_an_analyst_emitted_one(tmp_path):
@@ -219,5 +239,5 @@ def test_reply_parsing():
     assert fa.parse_frontier_reply('{"probability": 0.2, "rationale": "x"}')[:2] == (0.2, "x")
     assert fa.parse_frontier_reply("no json")[0] is None
     assert fa.parse_frontier_reply('{"probability": 1.5}')[0] is None
-    assert fa.clef_p({"choice": "yes", "confidence": 0.8}) == 0.8
-    assert fa.clef_p({"choice": "no", "confidence": 0.8}) == pytest.approx(0.2)
+    assert fa.decision_p({"choice": "yes", "confidence": 0.8}) == 0.8
+    assert fa.decision_p({"choice": "no", "confidence": 0.8}) == pytest.approx(0.2)

@@ -1,11 +1,10 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""A-4 — THE REFERENCE GAP DISPATCH: an unread world story becomes work.
+"""THE REFERENCE GAP DISPATCH: an unread world story becomes work.
 
-``planning/ATTENTION_MEASUREMENT_DESIGN_2026-09-05.md`` §3.3 (row D-m). A-1
-writes an out-of-plane reference per (target × bounded unit × day) from a model
-that has never seen our corpus; A-2 diffs it against the desk's own slice on
-three collection arms (url / entity / prose). An item that clears NONE of them
+One step writes an out-of-plane reference per (target × bounded unit × day)
+from a model that has never seen our corpus; a second step diffs it against
+the desk's own slice on three collection arms (url / entity / prose). An item that clears NONE of them
 is a **reference gap**: the world had a development on this desk's bounded
 question and our collection does not carry it — the one direction in which our
 own internal detectors structurally cannot help, because they can only measure
@@ -234,7 +233,7 @@ def entity_name(candidate: Mapping[str, Any]) -> str:
 
 
 def natural_key_for(*, target_id: str, unit: str, fold: str) -> str:
-    """``reference_gap:<target>:<unit>:<item_fold>`` — design §3.3, verbatim."""
+    """``reference_gap:<target>:<unit>:<item_fold>``."""
     return f"{ORIGIN}:{target_id}:{unit}:{fold}"
 
 
@@ -396,8 +395,8 @@ def build_thesis(candidate: Mapping[str, Any]) -> str:
 def build_dispatch_entry(candidate: Mapping[str, Any]) -> dict[str, Any]:
     """One selected gap -> a ``dispatch_open_questions`` entry. Pure.
 
-    ``geo`` is the target polity's ISO codes and is load-bearing: §1.3 makes it
-    the ONLY reachability key, and the 2026-09-06 researcher ranking fix
+    ``geo`` is the target polity's ISO codes and is load-bearing: it is
+    the ONLY reachability key, and the researcher ranking
     depends on it being present on the winning row — a dispatched question
     without it dispatches research that reaches no desk.
 

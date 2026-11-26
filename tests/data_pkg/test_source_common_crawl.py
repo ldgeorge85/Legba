@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit + integration tests for :mod:`legba.data.sources.common_crawl` (L-138).
+"""Unit + integration tests for :mod:`legba.data.sources.common_crawl`.
 
 Strategy:
 
@@ -31,7 +31,7 @@ import pytest
 # Import the module directly rather than via ``legba.data.sources`` because
 # the package ``__init__`` re-exports a sibling handler (``acled``) that may
 # not be landed at the same time as this task. Direct-module import keeps
-# the tests resilient to parallel-wave Phase 3 work.
+# the tests resilient to parallel work.
 from legba.data.sources import common_crawl as cc
 from legba.data.sources._contract import (
     InMemoryStateStore,

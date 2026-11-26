@@ -28,12 +28,12 @@ to stored bytes. A record with no fetch receipt is refused (``no_fetch_receipt``
 Every row also carries the source's licence and attribution in ``provenance``
 (``license_class`` from ``scope.license_class``, ``attribution`` from
 ``scope.attribution``; a value the record already carries wins) — the same
-stamp the document sink puts on signal payloads (lane N-R). Rows written
+stamp the document sink puts on signal payloads. Rows written
 before the stamp existed are attributed at READ time
 (:mod:`legba.data.observation_attribution`), never rewritten: live rows are
 append-only by trigger.
 
-WRITES ARE BATCHED (lane N-R): the rows of one flush go in as
+WRITES ARE BATCHED: the rows of one flush go in as
 ``INSERT ... SELECT FROM unnest(...)``, at most :data:`INSERT_BATCH_ROWS` rows
 per statement (the first PortWatch poll's 8,036 row-by-row inserts held the
 actor for 2 min 12 s). ``ON CONFLICT DO NOTHING`` and the change test are

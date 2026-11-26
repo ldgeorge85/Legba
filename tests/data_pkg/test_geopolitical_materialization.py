@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Wave D — descriptor body-merge contract for the L-200 geopolitical chain.
+"""Descriptor body-merge contract for the L-200 geopolitical chain.
 
 C-1 NOTE: the two retired pre-pivot integration tests (full L2-template →
 L1-instance materialisation + the disappearance-ratio pause) were DELETED —
@@ -24,7 +24,7 @@ from legba.data.registry.discovered_materializer import merge_descriptor_bodies
 
 
 class TestParentBodyMergeContract:
-    """Wave D §5 lean: relabeled-replaces-template for scalars and lists,
+    """Relabeled-replaces-template for scalars and lists,
     deep-merge for dicts."""
 
     def test_scalar_relabeled_overrides_template(self):

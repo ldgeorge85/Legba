@@ -6,8 +6,8 @@ Re-exports the migrated_pg / substrate fixtures from tests/data_pkg/conftest.py
 so the runtime tests can hit a real Postgres without copying the bring-up
 code.
 
-Wave B prereq #3 — daprd test isolation
----------------------------------------
+daprd test isolation
+--------------------
 
 The integration tests in ``test_spike_integration.py`` route every actor
 invocation through the SHARED production daprd sidecar (its statestore
@@ -25,7 +25,7 @@ defend against cross-session collision:
      this component (full isolation); otherwise it just emits the YAML
      so an operator can hand-load it.  Spawning a per-session sidecar
      across CI / local-dev / branch-divergent daprd binary versions is
-     the follow-up — pinned in DESIGN §19.
+     a planned follow-up.
 
 Rail 1 ships today and is enforced by ``test_spike_integration.py``
 embedding the prefix in target/analyst_actor_id construction.
@@ -58,11 +58,11 @@ from tests._env_isolation_shared_flags import (  # noqa: E402
 )
 
 
-#: TEST-ENV ISOLATION, tests/runtime half (2026-09-06 follow-up).
+#: TEST-ENV ISOLATION, tests/runtime half.
 #:
 #: ``tests/data_pkg/conftest.py`` pins its ``_PROGRAM_FLAG_DEFAULTS`` to the
 #: shipped default for every LEGBA_* program flag the live
-#: ``/usr/local/deployments/active/legba/.env`` leaks into the test process
+#: ``.env`` leaks into the test process
 #: (see that module's docstring for the mechanism — the live file always
 #: wins on this host, worktree or main checkout). Four of those flags gate
 #: code ALSO exercised from tests/runtime
@@ -117,7 +117,7 @@ def dapr_test_statestore_component(
 
     To use full isolation, set ``LEGBA_TEST_SIDECAR=1`` and bring up a
     side daprd manually pointed at this file via ``--components-path``;
-    the wrapper auto-spawn is the L-002a follow-up tracked in DESIGN §19.
+    the wrapper auto-spawn is a planned follow-up.
 
     The actor-id prefix (``dapr_actor_session_prefix``) ships TODAY and
     is the primary isolation rail — see that fixture's docstring.

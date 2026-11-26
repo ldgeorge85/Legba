@@ -31,7 +31,7 @@ refused at every level.
 | `top_floor` | the producer id of the instance's top read, or `none` |
 | `subjects` | the subject ladder's data: `label` — how a subject's display name joins its tier and its name (`separator`, the `separator_aliases` a parser also accepts, `order`), read by `unit_names.unit_label` (see "The subject ladder"); undeclared = the platform default, `—` with tier first |
 | `projection` | the profile's read-time view: `view` (the view file, `projection/view.yaml`) and `plane` (the plane id its rows carry in `profile_projection`); absent when the profile declares none, and every reader of its plane then refuses `projection_disabled` (see "The projection" below) |
-| `constants` | the values the platform's mechanisms key on (see "Constants" below): `audit_tier_order`, `desk_tiers`, `subject_frame`, `anchor_class`, `auto_merge_class`, `translation_languages`, `adjacency`, `applicability_tags`, `reference_subject_tags`; a key left out is `none` / empty |
+| `constants` | the values the platform's mechanisms key on (see "Constants" below): `audit_tier_order`, `desk_tiers`, `subject_frame`, `anchor_class`, `auto_merge_class`, `translation_languages`, `adjacency`, `applicability_tags`, `reference_subject_tags`, `levels`; a key left out is `none` / empty |
 | `ui` | the workstation's labels: `subject` (the singular and plural noun, and `kinds` when there is more than one subject family), `unit_noun`, `frames` (each frame kind with its label, `parent` and `producer`), `landing`, `stances` and `missions` (label overrides keyed by the shell's ids), `map.geometry` (`iso2`, `declared` or `none`) and `map.title`, and `labels` (the read and overview titles, the unscoped-subject label, the roster labels) |
 
 Paths are relative to the profile directory and must stay inside the repo (the
@@ -205,6 +205,7 @@ one leaf, `src/legba/data/profile_constants.py`, never a literal.
 | `adjacency` | edge families: family id → undirected `[a, b]` pairs of subject codes | `desk_baseline` (`land_border`, the neighbour-spillover feature) | 20 land-border pairs | none |
 | `applicability_tags` | the closed tag vocabulary a subject's own target file carries to narrow unit fan-out | `scripts/bringup_tag_targets.py` | `nuclear_watch, conflict_active, sanctions_regime` | none |
 | `reference_subject_tags` | the non-scored `rosters.subject_tags` whose subjects the correctness roster also covers: the reference builder builds them a reference over the units scoped to the tag, and the grader grades them (each must be a `subject_tags` entry) | `_reference_roster.reference_roster_tags` / `reference_units` (the reference builder, the correctness grader, the keyed reference kind) | `supply_chain` — the lanes and flows are graded desks | none (the roster is the scored subjects alone) |
+| `levels` | the level words a desk's typed read may give its subject, lowest first; `none` is reserved for "nothing in this window bears on the question" and is not a level | `desk_rows_contract.severity_levels` (the desk-rows seat's prompt and parser) | `low`, `moderate`, `elevated`, `high`, `critical` | the desk-rows seat refuses by name (`desk_rows.levels_undeclared`) |
 
 `top_floor` stays a top-level key; `profile_constants.top_floor()` reads it.
 

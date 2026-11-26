@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""C-1b — case frames over the existing ``/consult/stream/{request_id}`` SSE.
+"""Case frames over the existing ``/consult/stream/{request_id}`` SSE.
 
 Design C-1a §4: one frame per action, riding the step stream as
 ``{"type": "step", "phase": "case", "kind": "case_action", ...}`` exactly as

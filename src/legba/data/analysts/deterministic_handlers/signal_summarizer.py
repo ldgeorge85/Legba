@@ -22,7 +22,7 @@ idempotency exactly, so the partial index drains and nothing is re-scanned):
     content:encoded / full-text article while ``summary`` is the RSS teaser, so a
     first-non-empty pick would distill the teaser and shadow the richer body.
   * If that body is SUBSTANTIAL (> :data:`MIN_BODY_LEN` chars), call the CORE
-    self-hosted LLM plane (``llm.primary.openai_compat`` / gpt-oss-120b — $0, NEVER
+    self-hosted LLM plane (``llm.primary.openai_compat`` / the core model — $0, NEVER
     Anthropic) for a hybrid brief + preserved-quotes summary and write it to
     ``payload.distilled_body``.
   * Every EXAMINED row (summarized, skipped-short, or LLM-failed) is stamped

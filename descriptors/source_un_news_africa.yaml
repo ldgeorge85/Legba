@@ -1,7 +1,6 @@
-# sources_wave_2 — draft SourceDescriptor. Ships DRAFT (operator activates).
+# Draft SourceDescriptor. Ships DRAFT (operator activates).
 #
-# UN News — Africa topic feed (news.un.org). Closes the audit-flagged gap
-# (planning/COVERAGE_VS_SELECTION_AUDIT_2026-09-07.md item #4/#5): the UN
+# UN News — Africa topic feed (news.un.org). Closes a coverage gap: the UN
 # Fact-Finding Mission's Sudan report and the Kalogi strikes were carried by
 # no subscribed outlet's Africa desk — OHCHR and UN News were both
 # unsubscribed. UN News syndicates OHCHR statements and Secretariat
@@ -33,7 +32,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: sources_wave_2
+  owner: owner@local
   created: "2026-09-07T00:00:00Z"
 
 scope:
@@ -42,7 +41,7 @@ scope:
   languages: [en]
   tags: [gov, diplomacy, humanitarian, africa, sources_wave_2]
   source_class: official
-  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
+  access_class: public          # free no-auth feed, no separate reuse agreement
 
 acquisition: poll
 
@@ -67,7 +66,7 @@ pipeline:
   enrichment:
     # language_detect FIRST so ner_multilingual uses the detected language.
     # No fact_extractor on the draft: the operator adds it after confirming the
-    # route yields full article text (mirrors the RSSHub-lane conservative default).
+    # route yields full article text (mirrors the other RSSHub routes' conservative default).
     - kind: language_detect
       config: {}
     - kind: ner_multilingual

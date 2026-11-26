@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W3-A step 2 — the two legacy merge-propagation defects in `proposed_edges`.
+"""Step 2 — the two legacy merge-propagation defects in `proposed_edges`.
 
 DEFECT 1 — the repoint gap. `_compact_merged_edges` has re-pointed `nexuses`
 and `facts` onto the merge keeper since it was written and has NEVER touched

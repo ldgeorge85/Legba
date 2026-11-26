@@ -1,5 +1,5 @@
 /**
- * The scorecard's read model (ST1) — `GET /api/v1/v3/ledger/scorecard`.
+ * The scorecard's read model — `GET /api/v1/v3/ledger/scorecard`.
  *
  * Reads only the sealed forecast ledger. Pure projections: the panel renders
  * these. Rules: an absent number is a dash with its reason, never blank; an
@@ -30,7 +30,7 @@ export interface ScorecardProposal {
   recorded_at?: string | null
   actor?: string | null
   record_kind?: string | null
-  /** F-1: the role that made an act through the console (owner | admin | contributor); null for the rule and the host script. */
+  /** The role that made an act through the console (owner | admin | contributor); null for the rule and the host script. */
   actor_role?: string | null
   /** How many evidence items the proposal cites (the items: `GET /v3/ledger/resolution-records`). */
   evidence_count?: number

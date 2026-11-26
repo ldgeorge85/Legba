@@ -32,7 +32,7 @@ plural or other inflection (``export controls``) — list both forms if both
 are wanted. HTML tags are stripped and entities unescaped before matching, so
 a term inside an ``href`` does not admit an item.
 
-PER-TERM PARTIAL MATCH (lane N-R; off unless a term asks for it). A ``*`` at
+PER-TERM PARTIAL MATCH (off unless a term asks for it). A ``*`` at
 either END of a term drops the word boundary on that side, so a compounding
 language can be gated: ``Beschaffung*`` (prefix) matches "Beschaffungsamt",
 ``*vertrag`` (suffix) matches "Rahmenvertrag", ``*rüstung*`` (substring)

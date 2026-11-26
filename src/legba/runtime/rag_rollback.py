@@ -2,8 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """rag_rollback — the opportunistic-RAG (``vector:world_context``) auto-rollback guard.
 
-**Generalized to any RAG source** (added alongside the ``exemplar`` corpus,
-EXEMPLAR_SHELF_DRAFT_2026-07-31.md §4 step 4): the kill-switch was
+**Generalized to any RAG source** (added alongside the ``exemplar`` corpus): the kill-switch was
 ``world_context``-only by construction (function names, env var, and the
 persisted state's ``disabled_units`` key all baked the one source in).
 :func:`disabled_units_for` / :func:`is_source_enabled` / :func:`record_rollback_for`
@@ -19,16 +18,15 @@ preserved). ``exemplar_disabled_units`` / ``is_exemplar_enabled`` are the new
 corpus's own named convenience wrappers, "like the others".
 
 The staggered flip that turns opportunistic RAG on for a bounded assessment unit
-is a MEASURED experiment (``scripts/rag_watch.py`` + the pre-registered rule in
-``planning/RAG_EXPANSION_WATCH_2026-07-03.md``). Before M22 the "rollback" was
-COMMENTS ONLY — ``rag_watch`` printed a verdict, but a triggered rule required a
-human to hand-edit a descriptor + PUT it live. This module is the REAL code guard:
+is a MEASURED experiment (``scripts/rag_watch.py`` + a pre-registered rule).
+The "rollback" used to be COMMENTS ONLY — ``rag_watch`` printed a verdict,
+but a triggered rule required a human to hand-edit a descriptor + PUT it live. This module is the REAL code guard:
 
   * :func:`evaluate_rollback` — the pure, unit-testable rule. Fires on any of
       (a) trailing-mean FAITHFULNESS drop >= ``faith_drop_trigger`` (0.08),
       (b) LOW-FAITH rate more than ``low_faith_ratio_trigger``× the baseline, OR
       (c) TOKEN cost rise >= ``token_rise_frac`` (0.35) — the cost trigger the
-          pre-M22 rule only PRINTED. Set to 0.35 so it CATCHES the motivating
+          earlier rule only PRINTED. Set to 0.35 so it CATCHES the motivating
           leadership_transition case (a +42% token rise alongside the faith drop);
           a 0.50 default would have missed it. (c) makes cost a first-class trigger,
           not just an annotation.
@@ -77,12 +75,12 @@ __all__ = [
 ]
 
 
-# Pre-registered thresholds (planning/RAG_EXPANSION_WATCH_2026-07-03.md + M22).
+# Pre-registered thresholds.
 DEFAULT_FAITH_DROP_TRIGGER = 0.08      # (a) absolute trailing-mean faithfulness drop
 DEFAULT_LOW_FAITH_RATIO_TRIGGER = 2.0  # (b) low-faith rate multiple over baseline
-DEFAULT_TOKEN_RISE_FRAC = 0.35         # (c) fractional avg-tokens/run rise (M22-new;
-#                                        0.35 CATCHES the motivating +42% leadership
-#                                        case that a 0.50 default would have missed)
+DEFAULT_TOKEN_RISE_FRAC = 0.35         # (c) fractional avg-tokens/run rise;
+#                                        0.35 CATCHES a +42% leadership
+#                                        case that a 0.50 default would miss
 
 _ENV_STATE_PATH = "LEGBA_RAG_ROLLBACK_STATE"
 

@@ -1,0 +1,114 @@
+# Draft SourceDescriptor. Ships DRAFT; the reference host walks it to
+# CONFIGURED (descriptors/LIFECYCLE.md), never active — activation is an
+# admin's call.
+#
+# NOAA Space Weather Prediction Center (SWPC) — its alerts, watches and
+# warnings: geomagnetic storm watches and warnings, radio blackout and solar
+# radiation alerts, K-index alerts. Kind: json_api (the document root is the
+# item array: `items_path` empty). OFFICIAL (a US national forecast centre).
+# Space weather reaches satellites, GNSS, HF radio and power grids, so it is
+# an input to infrastructure and communications questions, and has no other
+# feed in the platform.
+#
+# Checked 2026-11-25 (one GET, generic client identity):
+# https://services.swpc.noaa.gov/products/alerts.json -> HTTP 200,
+# application/json, ~38 KB, a top-level array of 61 items, newest first, the
+# newest issued 2026-11-25 08:33 UTC. Each item has exactly three fields:
+# `product_id` (a short product code such as "A20F", repeated across issues),
+# `issue_datetime` ("2026-11-25 08:33:12.430", UTC, to the millisecond) and
+# `message` (the bulletin text, several lines). `issue_datetime` is therefore
+# the id (unique per issue); the title is built from the product code, since
+# the bulletin's headline is a line inside `message`, not a field.
+#
+# Licence: the SWPC data-access page (https://www.swpc.noaa.gov/content/data-access)
+# lists the JSON, text and archive paths and carries no licence line, so the
+# terms are NOT STATED there. The conservative class for unreviewed terms
+# (`permissive_feed_unreviewed`) is set until the terms are read. robots.txt
+# was not read.
+#
+# Cadence: alerts are issued over minutes to hours; hourly.
+
+identity:
+  id: source.swpc.alerts
+  name: NOAA SWPC — space weather alerts, watches and warnings
+  kind: json_api
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: owner@local
+  created: "2026-11-25T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: [en]
+  tags: [hazard, space_weather, geomagnetic, structured, gov, global]
+  source_class: official
+  license_class: permissive_feed_unreviewed   # terms not stated on the page read
+  access_class: public          # free no-auth feed, no separate reuse agreement
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "29 * * * *"
+  cooldown_seconds: 300
+  jitter_seconds: 60
+  expect_quiet: true             # days without a new alert are normal
+
+config:
+  url_template:
+    factory_kind: text
+    raw: "https://services.swpc.noaa.gov/products/alerts.json"
+  items_path:
+    factory_kind: text
+    raw: ""                      # the document root is the array
+  id_path:
+    factory_kind: text
+    raw: "issue_datetime"
+  title_path:
+    factory_kind: text
+    raw: "product_id"
+  title_template:
+    factory_kind: text
+    raw: "NOAA SWPC space weather alert {product_id}"
+  timestamp_path:
+    factory_kind: text
+    raw: "issue_datetime"
+  body_path:
+    factory_kind: text
+    raw: "message"
+  language:
+    factory_kind: text
+    raw: "en"
+  static_tags:
+    factory_kind: list
+    raw: [space_weather, swpc]
+  lookback_minutes:
+    factory_kind: number
+    raw: 4320                    # first poll reaches back three days
+  max_items_per_pull:
+    factory_kind: number
+    raw: 100
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1
+      config: {}
+    - kind: dedupe_tier_2
+      config: {}
+  enrichment:
+    - kind: language_detect
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 604800
+  delivery: lossy
+
+subscription_policy: open

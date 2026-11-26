@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The forecast ledger's scorecard — Brier against resolutions (ST1-A/B).
+"""The forecast ledger's scorecard — Brier against resolutions.
 
 Reads ONLY the sealed ledger (questions, numbers, active resolutions) and the
 resolution records (0244). It is not the legacy calibration
@@ -16,7 +16,7 @@ module carries :data:`SEPARATION_NOTE` so the two are never read as one).
     scored and shown as single-arm, never compared.
   * NO Brier figure anywhere — per number, per arm, baseline, skill,
     single-arm — until :data:`SCORES_MIN_RESOLVED` questions have resolved
-    (the operator's rule, plan 10 ST1-B): the payload carries
+    (a fixed rule): the payload carries
     ``scores_withheld: true`` and the threshold, and the line "n resolved;
     scores appear at 5". Outcomes and evidence still show as they resolve.
     Reliability bins wait for their own larger minimum,
@@ -49,8 +49,7 @@ CLIMATOLOGY_P = 0.5
 #: the single home of that threshold is ``calibration_honesty``.
 CALIBRATION_BINS_MIN_SAMPLE = ACUTE_PILOT_MIN_SAMPLE
 #: No Brier figure is shown until this many ledger questions have resolved
-#: yes/no (operator decision 2026-11-13; plan 10 ST1-B "no Brier number is
-#: printed under 5 resolutions"). The ledger's own threshold — not the legacy
+#: yes/no (no Brier number is printed under 5 resolutions). The ledger's own threshold — not the legacy
 #: calibration's.
 SCORES_MIN_RESOLVED = 5
 

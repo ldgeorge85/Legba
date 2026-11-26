@@ -29,7 +29,7 @@ import re
 
 import pytest
 
-# C-1: deterministic predicate evals under full-suite load. The predicate
+# Deterministic predicate evals under full-suite load. The predicate
 # DSL's DEFAULT 5 ms wall-clock budget (spec §3) counts scheduler preemption
 # against the predicate — under a busy full-suite run the FIRST cold
 # ``starlark.eval`` (and occasionally a warm one) breached 5 ms and raised
@@ -42,7 +42,7 @@ import pytest
 # enforcement path itself stays fully exercised.
 os.environ.setdefault("LEGBA_PREDICATE_WALL_CLOCK_MS", "250")
 
-# B-2: the registry API gate is fail-closed — an unset/empty
+# The registry API gate is fail-closed — an unset/empty
 # LEGBA_REGISTRY_API_TOKEN now means HTTP 503 on every guarded request
 # unless LEGBA_DEV_MODE=1 is set explicitly. Many test modules build their
 # in-process apps by popping the token ("dev mode"); default the suite to
@@ -50,7 +50,7 @@ os.environ.setdefault("LEGBA_PREDICATE_WALL_CLOCK_MS", "250")
 # Tests that assert the fail-closed 503 path monkeypatch.delenv this key.
 os.environ.setdefault("LEGBA_DEV_MODE", "1")
 
-# X2-B1: the registry gate now has a SECOND principal
+# The registry gate now has a SECOND principal
 # (LEGBA_REGISTRY_SERVICE_TOKEN). ``legba.data.config._load_env`` loads the
 # repo — or the live — ``.env`` into this process; were the fleet's service
 # token loaded with it, every test that pops LEGBA_REGISTRY_API_TOKEN to get
@@ -60,7 +60,7 @@ os.environ.setdefault("LEGBA_DEV_MODE", "1")
 # monkeypatch it in.
 os.environ["LEGBA_REGISTRY_SERVICE_TOKEN"] = ""
 
-# Sign-in (A-1) and the per-service tokens (X2-B1): the same class. A host
+# Sign-in and the per-service tokens: the same class. A host
 # whose ``.env`` turns sign-in on (``LEGBA_AUTH_SIGNIN=1``) and carries the
 # named services' tokens would put every in-process app behind the session
 # gate (a 401 where the test expects its route's answer) and make each
@@ -185,10 +185,10 @@ def _preserve_analyst_kind_registry():
 
 
 # ---------------------------------------------------------------------------
-# C-1 strict mode — LEGBA_TEST_STRICT=1 turns INFRA-GATED skips into failures
+# Strict mode — LEGBA_TEST_STRICT=1 turns INFRA-GATED skips into failures
 # ---------------------------------------------------------------------------
 #
-# Review §3.4: two live bugs shipped through 2300+ green tests partly because
+# Two live bugs shipped through 2300+ green tests partly because
 # infra-gated tests degrade to silent skips when a rig dependency (Postgres /
 # NATS / the fixed pivot DB / daprd / Qdrant / Redis) is down or
 # a substrate table is missing. On the canonical rig NOTHING should skip for
@@ -203,7 +203,7 @@ def _preserve_analyst_kind_registry():
 # CLI capabilities) are NOT escalated — they are opt-in by design and not
 # part of the canonical rig contract.
 #
-# Strict mode is the library DEFAULT (review1 §4.4 cutover): it stays ON
+# Strict mode is the library DEFAULT: it stays ON
 # unless the caller explicitly opts OUT with ``LEGBA_TEST_STRICT=0`` (the
 # local no-infra escape hatch). The container runner / release gate are
 # unaffected — they already pass strict through.
@@ -262,7 +262,7 @@ _STRICT_INFRA_REASON_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
 def strict_mode_enabled() -> bool:
     """True when the suite runs in strict no-skip mode.
 
-    Strict is now the library DEFAULT (review1 §4.4 / item 2.8): infra-gated
+    Strict is now the library DEFAULT: infra-gated
     skips fail loud unless the caller explicitly opts OUT with
     ``LEGBA_TEST_STRICT=0``. Any other value (unset, ``1``, anything truthy)
     keeps strict mode ON. The explicit ``0`` is the documented escape hatch

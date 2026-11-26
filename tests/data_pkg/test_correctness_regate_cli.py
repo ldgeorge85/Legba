@@ -11,8 +11,8 @@ did is to hand it the SAME atoms the passing gate was measured on.
 
 NOTHING HERE SPENDS AND NOTHING HERE TOUCHES THE LIVE DATABASE. The families
 are fakes with no network, the store is the session test database, and the
-packet is built in the test rather than read from ``planning/`` (which is
-gitignored, exactly as the sibling file's recorded fixtures are inlined).
+packet is built in the test rather than read from disk (as the sibling
+file's recorded fixtures are inlined).
 """
 
 from __future__ import annotations

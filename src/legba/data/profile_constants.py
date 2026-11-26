@@ -59,6 +59,7 @@ __all__ = [
     "anchor_class",
     "applicability_tags",
     "audit_tier_rank",
+    "levels",
     "auto_merge_class",
     "constant_set",
     "current",
@@ -106,6 +107,8 @@ class ConstantSet:
     #: The non-scored subject-roster tags the correctness roster also covers
     #: (INST-1), in declared order.
     reference_subject_tags: tuple[str, ...] = ()
+    #: The level words a desk's typed read may give, lowest first.
+    levels: tuple[str, ...] = ()
 
 
 #: The literals the code spelled at the pin fcbafb2e — what an UNLOADED
@@ -152,6 +155,8 @@ FALLBACK = ConstantSet(
     # alone). The exemplar's declared value, so an unloaded profile reads what
     # the packaged export reads — the supply-chain lanes and flows are graded.
     reference_subject_tags=("supply_chain",),
+    # desk_rows_contract.SEVERITIES (the desk-rows seat's level words)
+    levels=("low", "moderate", "elevated", "high", "critical"),
 )
 
 
@@ -179,6 +184,7 @@ def constant_set(profile: Profile, *, origin: str | None = None) -> ConstantSet:
         ),
         applicability_tags=tuple(c.applicability_tags),
         reference_subject_tags=tuple(c.reference_subject_tags),
+        levels=tuple(c.levels),
     )
 
 
@@ -206,6 +212,7 @@ def export_constants(profile: Profile) -> str:
         "adjacency": [[family, [[a, b] for a, b in edges]] for family, edges in cs.adjacency],
         "applicability_tags": list(cs.applicability_tags),
         "reference_subject_tags": list(cs.reference_subject_tags),
+        "levels": list(cs.levels),
     }
     return json.dumps(doc, sort_keys=True, indent=2, ensure_ascii=True) + "\n"
 
@@ -256,6 +263,8 @@ def _from_export(path: Path) -> ConstantSet:
         reference_subject_tags=strs(
             doc.get("reference_subject_tags", []), "reference_subject_tags"
         ),
+        # an export written before the key existed declares none
+        levels=strs(doc.get("levels", []), "levels"),
     )
 
 
@@ -374,3 +383,10 @@ def reference_subject_tags() -> tuple[str, ...]:
     roster also covers (INST-1), in declared order; ``()`` when the profile
     declares none — the roster is then the scored subjects alone."""
     return current().reference_subject_tags
+
+
+def levels() -> tuple[str, ...]:
+    """The level words a desk's typed read may give its subject, lowest
+    first; ``()`` when the profile declares none (the reader then refuses by
+    name)."""
+    return current().levels

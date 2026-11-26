@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for the L-111 stack registry.
+"""Tests for the stack registry.
 
 Mix of unit tests (validation, credential indirection, secret-ref walks)
 and integration tests (against the live substrate per conftest.py).
@@ -92,7 +92,7 @@ def _llm_provider(component_id: str = "llm.anthropic.opus_4_7") -> LLMProvider:
         name="Anthropic Opus 4.7",
         schema_uri="legba/stack/llm_provider/1.0.0",
         version=_PLACEHOLDER_VERSION,
-        owner="lewis@local",
+        owner="owner@local",
         config=LLMProviderConfig(
             api_endpoint=Property.Text.of("https://api.anthropic.com"),
             api_key=Property.Secret.of(f"{component_id}.api_key"),
@@ -108,7 +108,7 @@ def _vector_store(component_id: str = "vector.qdrant.cluster_main") -> VectorSto
         name="Qdrant primary",
         schema_uri="legba/stack/vector_store/1.0.0",
         version=_PLACEHOLDER_VERSION,
-        owner="lewis@local",
+        owner="owner@local",
         config=VectorStoreConfig(
             endpoint=Property.Text.of("http://127.0.0.1:6333"),
             collection_prefix=Property.Text.of("legba"),
@@ -122,7 +122,7 @@ def _embedding(component_id: str = "embed.bge_m3") -> EmbeddingService:
         name="BGE-M3 local",
         schema_uri="legba/stack/embedding/1.0.0",
         version=_PLACEHOLDER_VERSION,
-        owner="lewis@local",
+        owner="owner@local",
         config=EmbeddingServiceConfig(
             endpoint=Property.Text.of("http://127.0.0.1:8080"),
         ),
@@ -135,7 +135,7 @@ def _postgres_cluster(component_id: str = "pg.cluster_main") -> PostgresCluster:
         name="Primary PG + AGE",
         schema_uri="legba/stack/postgres/1.0.0",
         version=_PLACEHOLDER_VERSION,
-        owner="lewis@local",
+        owner="owner@local",
         config=PostgresClusterConfig(
             host=Property.Text.of("127.0.0.1"),
             database=Property.Text.of("legba"),
@@ -151,7 +151,7 @@ def _redis_cluster(component_id: str = "kv.redis.cluster_main") -> RedisCluster:
         name="Redis primary",
         schema_uri="legba/stack/redis/1.0.0",
         version=_PLACEHOLDER_VERSION,
-        owner="lewis@local",
+        owner="owner@local",
         config=RedisClusterConfig(
             host=Property.Text.of("127.0.0.1"),
             port=Property.Number.of(6379, minimum=1, maximum=65535),
@@ -166,7 +166,7 @@ def _nats_cluster(component_id: str = "bus.nats.cluster_main") -> NATSCluster:
         name="NATS primary",
         schema_uri="legba/stack/nats/1.0.0",
         version=_PLACEHOLDER_VERSION,
-        owner="lewis@local",
+        owner="owner@local",
         config=NATSClusterConfig(
             servers=Property.List(raw=["nats://127.0.0.1:4222"], item_kind="text"),
         ),
@@ -179,7 +179,7 @@ def _proxy_pool(component_id: str = "proxy.local.none") -> ProxyPool:
         name="No-op proxy",
         schema_uri="legba/stack/proxy_pool/1.0.0",
         version=_PLACEHOLDER_VERSION,
-        owner="lewis@local",
+        owner="owner@local",
         config=ProxyPoolConfig(
             provider=Property.Dropdown.Static.of(
                 "none", ["none", "bright_data", "oxylabs", "self_managed"]
@@ -239,7 +239,7 @@ def test_enforce_secret_indirection_rejects_non_secret_in_credential_slot():
         name="Bad",
         schema_uri="legba/stack/llm_provider/1.0.0",
         version=_PLACEHOLDER_VERSION,
-        owner="lewis@local",
+        owner="owner@local",
         state=LifecycleState.DRAFT,
         config=cfg,
     )
@@ -547,7 +547,7 @@ def _resized(pool_size: int) -> PostgresCluster:
 async def test_update_to_an_earlier_versions_content_reheads(
     store: PostgresStore, registry: StackRegistry, seeded_secrets, audit: AuditLogger,
 ):
-    """W11-F105: the PUT that 500'd on stack_components_pkey re-heads the row."""
+    """The PUT that 500'd on stack_components_pkey re-heads the row."""
     a = await registry.register(_postgres_cluster(), actor="lewis")
     await registry.update(a.component_id, _resized(25), actor="lewis")
     c = await registry.update(a.component_id, _resized(30), actor="lewis")
@@ -635,7 +635,7 @@ async def test_register_dlq_on_bad_schema_uri(
         "name": "Bad",
         "schema_uri": "legba/stack/nonsense/1.0.0",
         "version": _PLACEHOLDER_VERSION,
-        "owner": "lewis@local",
+        "owner": "owner@local",
         "state": "draft",
         "config": {},
     }

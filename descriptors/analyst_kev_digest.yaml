@@ -1,9 +1,9 @@
-# KEV Digest analyst descriptor (lane K-2 — the cyber desk's register digest).
+# KEV Digest analyst descriptor (the cyber desk's register digest).
 #
 # A `deterministic`-kind META analyst, NO LLM, no paid route, no token budget.
 # It lists the CISA Known Exploited Vulnerabilities catalogue entries that
 # entered this collection SINCE THE LAST DIGEST, reading the signals the
-# register feed lands (source.cisa.kev, lane K-1: one signal per newly added
+# register feed lands (source.cisa.kev: one signal per newly added
 # entry, the whole record in payload.item). One line per entry, copying the
 # record's own fields: CVE id, vendor / product, vulnerability name, date
 # added, remediation due date, and the known-ransomware-use flag exactly as
@@ -26,8 +26,8 @@
 # (derived_from = the digested signal ids). No new table, route or panel.
 #
 # What it does NOT say: the catalogue's later EDITS to an entry (a ransomware
-# flag flipped to Known, a due date moved) never reach this collection (K-1's
-# absence contract), so the digest never reports a change to an old entry.
+# flag flipped to Known, a due date moved) never reach this collection (the
+# feed's absence contract), so the digest never reports a change to an old entry.
 #
 # Cadence: 02:45 / 14:45 UTC, twenty minutes after the feed's own polls
 # (source_cisa_kev.yaml: "23 2,14 * * *", 180 s poll budget, 120 s jitter).
@@ -47,7 +47,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: draft
-  owner: cyber_desk_k2
+  owner: owner@local
 
 subscription:
   # No `targets` block -> META analyst: one run per cadence tick. The handler

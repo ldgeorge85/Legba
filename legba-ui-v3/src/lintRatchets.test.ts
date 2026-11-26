@@ -146,6 +146,49 @@ describe('lint-tokens — fires on a seeded bad file', () => {
   })
 })
 
+describe('lint-engine-words — fires on a seeded reader file', () => {
+  const WORDS = readFileSync(join(UI_ROOT, 'src', 'lib', 'engineWords.json'), 'utf8')
+  const BAD = `
+    export function Bad({ n }: { n: number }) {
+      const rows = [{ label: 'Runtime' }, { id: 'units carried' }]
+      apiGet('/v3/absence?scope=x')
+      // a comment saying faithfulness is not text
+      return (
+        <div title="judge 0.97 mean">
+          faithfulness {n}
+          <span>{\`\${n} typed absences\`}</span>
+          <span>{n > 1 ? 'Checked' : 'UNCORROB'}</span>
+          <span>{rows.length}</span>
+        </div>
+      )
+    }
+  `
+  it('counts engine words in the text a reader component renders, and nothing else', () => {
+    const src = seedTree({ 'lib/engineWords.json': WORDS, 'v4/read/Bad.tsx': BAD })
+    const r = runLint('lint-engine-words.mjs', ['--src', src])
+    expect(r.status).toBe(0)
+    const rules = r.perFile[0].findings!.map((f) => f.rule).sort()
+    // the visible ones: the title, the JSX text, the template, the badge, the tab label;
+    // never the route given to a call, an id field or the comment
+    expect(rules).toEqual(['Runtime tab', 'caps abbreviation badge', 'faithfulness', 'judge', 'typed absence'].sort())
+  })
+
+  it('--max below the count fails, and a zero path fails on one word', () => {
+    const src = seedTree({ 'lib/engineWords.json': WORDS, 'v4/read/Bad.tsx': BAD })
+    expect(runLint('lint-engine-words.mjs', ['--src', src, '--max', '4']).status).toBe(1)
+    expect(runLint('lint-engine-words.mjs', ['--src', src, '--max', '5']).status).toBe(0)
+    const zero = seedTree({ 'lib/engineWords.json': WORDS, 'components/HowProduced.tsx': 'export const X = () => <b>faithfulness</b>\n' })
+    const z = runLint('lint-engine-words.mjs', ['--src', zero, '--max', '999'])
+    expect(z.status).toBe(1)
+    expect(z.zeroHits.map((h) => h.file)).toEqual(['src/components/HowProduced.tsx'])
+  })
+
+  it('operator-side trees are not reader text', () => {
+    const src = seedTree({ 'lib/engineWords.json': WORDS, 'panels/system/Judge.tsx': 'export const X = () => <b>judge 0.97 faithfulness</b>\n' })
+    expect(runLint('lint-engine-words.mjs', ['--src', src]).total).toBe(0)
+  })
+})
+
 describe('the ratchets on the real tree', () => {
   it('lint-tokens: under its ceiling, the ceiling ratcheted down from 1,440, zero paths clean', () => {
     const max = ceiling('lint:tokens')
@@ -172,6 +215,14 @@ describe('the ratchets on the real tree', () => {
     const measured = runLint('lint-tokens.mjs', ['--max', '9999'])
     expect(measured.status).toBe(0)
     expect(ceiling('lint:tokens')).toBe(measured.total)
+  })
+
+  it('lint-engine-words: under its ceiling, zero paths clean, and the ceiling equals the count (no slack)', () => {
+    const max = ceiling('lint:engine-words')
+    const r = runLint('lint-engine-words.mjs', ['--max', String(max)])
+    expect(r.zeroHits).toEqual([])
+    expect(r.status).toBe(0)
+    expect(runLint('lint-engine-words.mjs', ['--max', '9999']).total).toBe(max)
   })
 
   it('lint-absence: the package.json ceiling equals the measured count (no slack)', () => {

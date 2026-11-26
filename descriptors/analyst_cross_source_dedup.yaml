@@ -1,4 +1,4 @@
-# P-09 — Cross-Source Dedup analyst descriptor (PIVOT §4.3 / decision P-02).
+# Cross-Source Dedup analyst descriptor.
 #
 # A first-class `deterministic`-kind analyst over the SHARED raw signal pool.
 # It is target-agnostic: dedup is an observation-level property (same content
@@ -42,7 +42,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: active
-  owner: p09_cross_source_dedup
+  owner: owner@local
 
 subscription:
   # NO `targets` block → META analyst: ONE global sweep per cadence tick over the
@@ -80,7 +80,7 @@ mapping:
 method:
   kind: deterministic
   impl: legba.data.analysts.deterministic:run_method
-  sub_handler: cross_source_dedup   # W6 SPLIT-1 fold, 2026-10-04: the live head carries this; the tree now does too
+  sub_handler: cross_source_dedup
   # Deterministic kinds carry no LLM block and no per-day token budget — the
   # whole run is pure Python over the signals/signal_aliases substrate.
 

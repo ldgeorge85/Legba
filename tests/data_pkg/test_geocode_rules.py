@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane N-B — the geocoder's person-name guard and Congo disambiguation.
+"""The geocoder's person-name guard and Congo disambiguation.
 
 Live misses (11-10/11-11): 0bbbf4c0 "Republicans elect Jim Jordan ..." filed
 under JO; d3437c51 / 0bf738d4 / 757bedb3 / fe03b154 "Ebola cases in DR Congo

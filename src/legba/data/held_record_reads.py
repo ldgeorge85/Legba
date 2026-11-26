@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The held family's reads (data-model lane 10, DM-C): the two
+"""The held family's reads: the two
 ``GET /v3/record/assertions`` routes and the verify script.
 
 * :func:`list_assertions` — a LIGHT page by default: per assertion its class,

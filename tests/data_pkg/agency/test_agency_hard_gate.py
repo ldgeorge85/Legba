@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""P-11 HARD-GATE acceptance — action-pack agency mechanism.
+"""HARD-GATE acceptance — action-pack agency mechanism.
 
 Real migrated Postgres (a fresh ``legba_test_<uuid>`` DB carrying the full
 0001-0025 chain — including THIS task's 0025 governor migration) + real dev-rig
@@ -11,7 +11,7 @@ The three acceptance bullets, each a distinct test:
   1. A pack the domain doesn't ALLOW cannot run — resolution blocks before any
      tool dispatch, and the block is operator-visible in ``governor_events``.
   2. The ``process_media`` pack enqueues a REAL job — the agency dispatch puts a
-     ``process_media`` JobEnvelope on the W2 work-queue and the P-07 worker pool
+     ``process_media`` JobEnvelope on the work-queue and the worker pool
      drains it into a derived signal.
   3. An over-budget / over-rate call is demonstrably blocked WITH an operator-
      visible governor event (rate cap AND cost cap, plus the global-envelope
@@ -65,7 +65,7 @@ def _port_open(host: str, port: int, timeout: float = 1.5) -> bool:
 
 @pytest.fixture(autouse=True)
 def _media_endpoint_env(monkeypatch):
-    """A-2: process_media enqueue REFUSES without a configured media endpoint.
+    """process_media enqueue REFUSES without a configured media endpoint.
 
     These tests exercise the governor/agency gate, not the media edge — point
     the env at a placeholder so the enqueue-side refusal doesn't trip. The
@@ -177,7 +177,7 @@ async def test_not_granted_and_not_applicable_blocks(pool):
 
 
 # ---------------------------------------------------------------------------
-# 2) process_media pack enqueues a REAL job (W2 job plane).
+# 2) process_media pack enqueues a REAL job.
 # ---------------------------------------------------------------------------
 
 
@@ -258,7 +258,7 @@ async def test_process_media_pack_enqueues_real_job(pool, migrated_pg):
         assert inv["outcome"] == "completed"          # settled after enqueue
         assert Decimal(inv["cost_usd"]) == Decimal("0.02")
 
-        # The W2 worker pool drains the real job into a derived signal.
+        # The worker pool drains the real job into a derived signal.
         store = PostgresStore(migrated_pg)
         await store.connect()
         async with store.acquire() as conn:
@@ -645,8 +645,8 @@ async def test_a_budget_account_override_can_never_LOOSEN_a_cap(pool):
 # Step 2.5 — the ARGUMENTS the model wrote must match the grammar it was
 # shown. Before this the schemas were rendered outbound and never checked
 # inbound, so a call could carry anything and the dispatchers' ``args.get``
-# reads took what they recognized and dropped the rest in silence. Live,
-# 2026-09-28 00:58Z: ``list_situations`` arrived carrying six FABRICATED
+# reads took what they recognized and dropped the rest in silence. Observed live:
+# ``list_situations`` arrived carrying six FABRICATED
 # situation rows under ``result`` plus ``status: "ok"``; the fabrication went
 # on the floor, ``status`` ran as a SQL predicate no row can match, the read
 # came back count 0, and the answer cited the six invented ids.

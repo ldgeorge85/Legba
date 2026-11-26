@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""P1-3 — the ``alert_trigger_scan`` deterministic trigger set v1.
+"""The ``alert_trigger_scan`` deterministic trigger set v1.
 
 Pure tests (no DB): band-transition classification, the baseline exceedance
 test, and the per-desk cap / rollup fold. Ephemeral-DB tests (the
@@ -833,7 +833,7 @@ async def test_band_improvement_fires_medium(pg_pool, clean_slate):
 
 # ---------------------------------------------------------------------------
 # H3-GUARD — semantics-mismatch classification (band_crossing). The H3
-# banding train (damper retired + basis alignment) legitimately moves bands
+# banding change (damper retired + basis alignment) legitimately moves bands
 # fleet-wide on its first post-deploy sweep, and every one of those moves
 # straddles a banding_semantics/damping_semantics stamp change — this must
 # read as `semantics-migration`/`low`, never deterioration/evidence-gained.
@@ -878,7 +878,7 @@ async def test_semantics_mismatch_classifies_as_migration_not_deterioration(
         {"dimension": "escalation", "from_band": "watch", "to_band": "critical"}
     ]
     assert "re-derived under new semantics" in row["title"]
-    # L-1: the alert is raised at the same informational severity; ``low`` is
+    # The alert is raised at the same informational severity; ``low`` is
     # under the page rule's ``medium`` for band moves (as it was under the ntfy
     # floor), so it is logged on the alert log and never handed to delivery.
     assert dispatcher.payloads == []
@@ -1044,7 +1044,7 @@ async def test_verified_finding_bar_and_no_refire(pg_pool, clean_slate):
 
 
 async def test_verified_finding_that_earned_no_lead_does_not_page(pg_pool, clean_slate):
-    """Lane N-U: a high-severity verified ASSEMBLY that earned no lead (tag
+    """A high-severity verified ASSEMBLY that earned no lead (tag
     ``lead:none`` — "5 verified desk reads, 0 not carried") is a roll-up of
     reads already paged on their own, not news. It is never a candidate; a
     sibling with a real lead still fires. Real SQL path."""
@@ -1205,7 +1205,7 @@ async def test_steady_state_guard_delta_tag_rose_still_pages(pg_pool, clean_slat
 
 
 async def test_steady_state_guard_band_change_always_pages(pg_pool, clean_slate):
-    # W1 F-5 — this test owns its desk. It used to write to the shared
+    # This test owns its desk. It used to write to the shared
     # ``country_g20_us``, which the session-scoped test DB can carry as a
     # ``g20``-tagged desk head from another file, with high-severity findings
     # from earlier tests still inside the 24h window. With exactly one such
@@ -1407,7 +1407,7 @@ async def _insert_fact_from_signal(conn: Any, *, subject: str, value: str) -> tu
 async def test_contention_flip_fires_when_the_finding_cites_the_facts_EVIDENCE(
     pg_pool, clean_slate
 ):
-    """W1-C3 — the bridge, in the shape production actually produces.
+    """The bridge, in the shape production actually produces.
 
     Before this fix the verified-tie LATERAL matched `f.derived_from &&
     fact_ids` alone, so the class had NEVER fired an alert despite 1,606
@@ -1560,7 +1560,7 @@ async def test_baseline_deviation_rising_edge_once(pg_pool, clean_slate):
 
 
 # ---------------------------------------------------------------------------
-# E-1 (2026-07-27 sweep item 4) — the desk_baselines sidecar preference.
+# The desk_baselines sidecar preference.
 # Fresh row (< 48h) → the trigger reads its stored (expected, robust_sigma)
 # and computes only the live current count; stale/absent → inline compute,
 # byte-for-byte the prior behavior. The floors are shared constants (the
@@ -1749,7 +1749,7 @@ async def test_per_desk_cap_rolls_up_and_still_advances_watermarks(
 
 
 # ---------------------------------------------------------------------------
-# X-1 — a descriptor-declared option DEMONSTRABLY reaches this handler
+# A descriptor-declared option DEMONSTRABLY reaches this handler
 #
 # `per_desk_cap` was the headline dead knob: the handler read
 # `options.get("per_desk_cap", DEFAULT_PER_DESK_CAP)` and nothing could ever put
@@ -1784,8 +1784,8 @@ def _descriptor_with_options(options: dict[str, Any] | None):
     if options is not None:
         body["method"]["options"] = options
     if options is None:
-        # 2026-09-20: the shipped descriptor now CARRIES an options block
-        # (daily_page_budget 50 / budget_per_kind_cap 20, the operator's lift).
+        # The shipped descriptor now CARRIES an options block
+        # (daily_page_budget 50 / budget_per_kind_cap 20).
         # "No options" in this test means exactly that — strip the block so the
         # byte-identical-to-the-default proof still runs against production YAML.
         body["method"].pop("options", None)

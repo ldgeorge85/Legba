@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Program 7a — the ``contrary_evidence_pass`` deterministic sub-handler.
+"""The ``contrary_evidence_pass`` deterministic sub-handler.
 
 Three layers, deliberately.
 
 **Pure** — the properties that must hold with no database and no network, and
-they are the properties the whole lane rests on: the counter-query is the
+they are the properties the whole pass rests on: the counter-query is the
 OPPOSITE of the claim rather than a restatement of it; the paraphrase gate
 refuses a restatement BEFORE a search is spent; the stance derivation is a
 closed table over a calibrated vocabulary; and nothing anywhere on this path
@@ -1948,7 +1948,7 @@ async def test_end_to_end_two_independent_pages_contradict(
     different dispatches. That is what ``contradicts`` costs now, and this is
     the test that would fail if the fences were tightened into a pass that can
     only ever emit ``qualifies``. The composition finds it and renders the
-    hedged line, which is the behaviour the lane is protecting rather than
+    hedged line, which is the behaviour the pass is protecting rather than
     removing.
     """
     async with pool.acquire() as conn:

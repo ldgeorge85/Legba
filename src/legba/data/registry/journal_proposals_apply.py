@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The accept-apply worker for journal_proposals (plan §7.4 / §12 Wave 4).
+"""The accept-apply worker for journal_proposals.
 
 When an operator ACCEPTs a journal proposal, the journal SUGGESTED but the human
 CAUSED — so the change is applied HERE, through the EXISTING write/lifecycle
@@ -280,7 +280,7 @@ async def check_supersede_fact_grounding(
         )
     subject = str(diff.get("subject") or "").strip()
     predicate = str(diff.get("predicate") or "").strip()
-    # P7: the live gate (open row AND a live origin class) — a backfilled or
+    # The live gate (open row AND a live origin class) — a backfilled or
     # archive-class fact must never ground a journal correction.
     exists = await conn.fetchval(
         "SELECT EXISTS(SELECT 1 FROM facts f WHERE lower(f.subject) = lower($1) "

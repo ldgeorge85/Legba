@@ -2,11 +2,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """v3 telemetry API — runtime actor health + optimizer candidate queue.
 
-Designed per L-092 §3.5 S4 (Optimizer Candidates Queue) and §3.5 S6
-(Runtime Actor Health). Reads live state directly from the substrate;
-no fakes, no derived metrics that aren't tracked yet — fields the UI
-panel design called out but that aren't observable from substrate
-today (NATS queue depth, dapr eviction state) are intentionally not
+Serves the Optimizer Candidates Queue and Runtime Actor Health.
+Reads live state directly from the substrate; no fakes, no derived
+metrics that aren't tracked yet — fields that aren't observable from
+substrate today (NATS queue depth, dapr eviction state) are intentionally not
 exposed rather than synthesised.
 
 Mount alongside the v1 registry router under `/api/v1/v3`. Uses the
@@ -184,7 +183,7 @@ SELECT o.id::text AS id,
        COALESCE((x.d->>'overall_score')::float8, 0.0) AS overall_score,
        o.created_at AS produced_at,
        x.d->'data'->'verification'->>'score_state' AS score_state,
-       -- M-2: the population split key, so the UI's per-analyst
+       -- the population split key, so the UI's per-analyst
        -- means and trends never span a judge swap unlabelled.
        x.d->'data'->'verification'->>'judge_pipeline_version'
            AS judge_pipeline_version"""
@@ -310,7 +309,7 @@ class UnitCorrectnessBoard(BaseModel):
     scored_at: str | None = None
     labeling: dict[str, Any] = Field(default_factory=dict)
     honesty_note: str
-    # W-6 — the STANDING external-truth block (design §3.3). Additive, and on
+    # The STANDING external-truth block. Additive, and on
     # THIS route rather than its own because /eval/correctness is the only
     # surface in the tree that already puts a judge-independent number beside
     # faithfulness under a non-pooling contract. The model and every line of its
@@ -343,7 +342,7 @@ class CalibrationScoreboard(BaseModel):
     available: bool
     produced_at: str | None = None
     # Headline calibration (exogenous-only).
-    # Lane E: every Brier carries ITS OWN n. `brier` == `brier_exogenous`
+    # Every Brier carries ITS OWN n. `brier` == `brier_exogenous`
     # (paired with `exogenous_sample_size`); `brier_pooled` pairs with
     # `pooled_sample_size` (the old bare `sample_size`, renamed).
     brier: float | None = None
@@ -353,7 +352,7 @@ class CalibrationScoreboard(BaseModel):
     pooled_sample_size: int | None = None
     insufficient_exogenous: bool | None = None
     self_consistency_only: bool | None = None
-    # Lane E — these are LEGACY figures (never the sealed forecast ledger).
+    # These are LEGACY figures (never the sealed forecast ledger).
     label: str = ""
     ledger_note: str = ""
     legacy_finding_format: bool = False
@@ -440,14 +439,14 @@ class DeskBaselineBoard(BaseModel):
     note: str = (
         "Descriptive statistical baseline over our own substrate — NOT a "
         "forecast/prediction/skill claim. `deviation` is the current 24h window "
-        "vs the trailing band (absolute floors mirror the P1-3 trigger)."
+        "vs the trailing band (absolute floors mirror the engine trigger)."
     )
     counts: dict[str, int] = Field(default_factory=dict)
     rows: list[DeskBaselineRow] = Field(default_factory=list)
 
 
 class CountryScorecard(BaseModel):
-    """P4-T3 — the latest banded per-country scorecard (kind='scorecard').
+    """the latest banded per-country scorecard (kind='scorecard').
 
     DISTINCT from :class:`ScorecardRow` (the cross-analyst CRITIC rollup on
     ``/eval/scorecard``): this is the P4-T2 producer's per-country banded verdict,
@@ -1191,7 +1190,7 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
     register_optimizer_review_routes(router, deps)
     # X4 ALERTS — pushes per topic and kind (`/system/alerts/volume`).
     register_alert_volume_routes(router, deps)
-    # L-1 — the alert log (`/system/alerts/log`): the Watch surface's data.
+    # The alert log (`/system/alerts/log`): the Watch surface's data.
     register_alert_log_routes(router, deps)
 
     @router.get("/streams/consumer_lag", response_model=list[ConsumerLagRow])

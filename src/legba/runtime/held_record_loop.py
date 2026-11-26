@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The held-family feed on a loop (data-model lane 10, DM-C) — OFF by default.
+"""The held-family feed on a loop — OFF by default.
 
 With ``LEGBA_HELD_RECORD_SHADOW`` naming desks, every
 ``LEGBA_HELD_RECORD_INTERVAL_S`` (600) the loop writes at most

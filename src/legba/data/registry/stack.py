@@ -537,7 +537,7 @@ class StackRegistry:
         """Replace the head version. The old version row stays in the
         table (immutable history) but flips `is_head=false`.
 
-        W11-F105: the version is a CONTENT hash, so a body equal to an
+        The version is a CONTENT hash, so a body equal to an
         EARLIER (non-head) version ("put max_concurrent back to what it was
         two versions ago") names a row that already exists; inserting it
         again violated `stack_components_pkey` (a 500). That case RE-HEADS

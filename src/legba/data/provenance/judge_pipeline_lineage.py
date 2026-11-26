@@ -425,6 +425,13 @@ STAMP_EXPECTED_SHIFTS: dict[str, dict[str, str]] = {
         METRIC_SEVERITY_SPLIT: SHIFT_MOVES,
         METRIC_REASON_CENSUS: SHIFT_MOVES,
     },
+    # The judges stop leaning toward a pass; two verdict words added; unknown
+    # verdict words fail loudly. Every family moves.
+    "2026-11-25/1": {
+        METRIC_FAITHFULNESS_SCORE: SHIFT_MOVES,
+        METRIC_SEVERITY_SPLIT: SHIFT_MOVES,
+        METRIC_REASON_CENSUS: SHIFT_MOVES,
+    },
 }
 
 #: The stamps in lineage order, oldest first. ONE source of truth — derived from

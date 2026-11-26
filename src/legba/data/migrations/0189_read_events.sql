@@ -3,16 +3,14 @@
 --
 -- 0189_read_events.sql
 --
--- THE ORACLE WAGER'S INSTRUMENT (planning/CAMPAIGN_2026-08-29/
--- PREMISE_REASON_TO_EXIST.md §5, Option 1 — "instrument reading (opens,
--- drills)"). The premise review's central finding is a measurement gap, not
--- an opinion: this schema carries ~80 tables that receipt every WRITE the
+-- THE READ INSTRUMENT ("instrument reading (opens, drills)"). The gap it
+-- fills is a measurement gap, not an opinion: this schema carries ~80 tables that receipt every WRITE the
 -- platform performs — analyst_traces, output_consumption, review_flags,
 -- bearing_edges, situation_events, budget_ledger — and NOT ONE that records
 -- a READ. "Zero finding-level drills in 15 days" is an inference off Caddy
 -- access logs, which is the best evidence available and is not good enough to
 -- settle a 90-day wager. This table makes the reading half of "a self-driving
--- organ the operator reads" a first-class, queryable fact.
+-- organ people read" a first-class, queryable fact.
 --
 -- One row = "at <occurred_at>, in workspace <workspace>, session
 -- <session_nonce> performed <event_kind>, on <subject_kind>/<subject_id> if
@@ -159,8 +157,9 @@ CREATE INDEX IF NOT EXISTS idx_read_events_brief_read
 CREATE INDEX IF NOT EXISTS idx_read_events_session
     ON public.read_events (session_nonce, occurred_at);
 
--- "Which findings actually got drilled?" — the §2.2 question (59,771
--- preserved artifacts backing a trust operation nobody performs). Partial to
+-- "Which findings actually got drilled?" — the question of which findings
+-- get opened at all (many preserved artifacts back a trust operation nobody
+-- performs). Partial to
 -- the two kinds that constitute a drill.
 CREATE INDEX IF NOT EXISTS idx_read_events_subject
     ON public.read_events (subject_kind, subject_id, occurred_at DESC)

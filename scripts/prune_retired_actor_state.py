@@ -9,7 +9,7 @@ The actor id embeds the descriptor's content hash, so every descriptor edit
 mints a new actor and leaves the old row ``retired`` for good; nothing ever
 removed one (901 on live 2026-11-14: 454 analyst, 280 source, 167 target).
 They are not harmless: the reminder-GC sweep re-examines every retired row on
-every reconcile (``runtime/reminder_gc.py``, W11-F268), and the actor roster
+every reconcile (``runtime/reminder_gc.py``), and the actor roster
 reads past them.
 
 WHAT IS REMOVED — a row only when EVERY one of these holds

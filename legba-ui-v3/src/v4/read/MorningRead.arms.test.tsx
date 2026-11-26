@@ -54,7 +54,7 @@ afterEach(() => {
 
 describe('the record badge on a row carrying branch_scores.assembly', () => {
   it('prints "k of n spans fully checked" when some spans were checked for containment only', async () => {
-    // Lane N-D: the fixture's counters read ok 16 / checked 16 with
+    // The fixture's counters read ok 16 / checked 16 with
     // sha_unverifiable 10 — 1.00 over ten spans whose sha was never compared
     // is the claim the badge must not make.
     stubFetch([SPINE])

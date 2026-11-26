@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""P2-1/P2-2 — the ``evidence_archiver`` deterministic sub-handler.
+"""The ``evidence_archiver`` deterministic sub-handler.
 
 Pure tests (no DB): registration + TRACE_ONLY wiring, the CAS address format
-(roundtrip + never-fabricated parse), the P2-2 license-gate posture (unknown
+(roundtrip + never-fabricated parse), the license-gate posture (unknown
 ARCHIVES, forbidden classes skip), content-addressed store (atomic write +
 dedup hit), textual sniffing, and the corpus projection upgrade
 (``archived_text`` in the doc + ``best_body`` preference).
@@ -178,7 +178,7 @@ def test_store_bytes_atomic_and_dedup(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# P2-2 license-gate posture
+# License-gate posture
 # ---------------------------------------------------------------------------
 
 
@@ -266,13 +266,12 @@ def test_signal_to_doc_carries_archived_text_and_best_body_preference():
 
 
 # ---------------------------------------------------------------------------
-# V-E1 — JS-wall/bot-check/redirect deny-gate (planning/
-# VERIFY_PATH_STRUCTURAL_FIXES_SPEC_2026-07-31.md §V-E1; JUDGE_READOUT §5)
+# V-E1 — JS-wall/bot-check/redirect deny-gate
 # ---------------------------------------------------------------------------
 
 
 def test_match_wall_pattern_rejects_the_live_judge_readout_artifact():
-    """The EXACT artifact JUDGE_READOUT §5 named: a stored archived_text
+    """The EXACT live artifact: a stored archived_text
     reading "JavaScript is disabled in your browser" (Le Monde) grounded a
     judged claim. Reproduced verbatim from a live-DB row (2026-07-31 audit,
     lemonde.fr, 286 chars)."""
@@ -534,8 +533,7 @@ async def _drain_backlog(pool) -> None:
     immunized the ``examined`` line — a stray candidate is still a REAL
     candidate, so ``_run()`` still fetches/archives/fails it, corrupting
     ``archived`` / ``fetch_failed`` / ``skipped_*`` too (confirmed with a
-    synthetic cross-file polluter during this fix's own proof pass — see
-    planning/CAMPAIGN_2026-08-29/SHUFFLE_FIX_REPORT.md). DRAINING instead:
+    synthetic cross-file polluter). DRAINING instead:
     call ``_run()`` up to :data:`ea._DEFAULT_MAX_ATTEMPTS` times BEFORE the
     test's own insert. Bounded, not backlog-size-dependent: every candidate
     reaches a TERMINAL state (archived, a permanent ``skipped_*``, or a

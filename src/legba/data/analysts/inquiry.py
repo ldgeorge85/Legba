@@ -1,21 +1,21 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""inquiry — the STATEFUL journal voice (Program 5 archetype 2).
+"""inquiry — the STATEFUL journal voice (archetype 2).
 
-planning/PROGRAM5_INQUIRY_DESIGN_2026-09-24.md §1/§2/§5. A lens is STATELESS:
+A lens is STATELESS:
 the same declared prior over today's delta, no memory, no question it is
 carrying, no way to ask the platform anything. An INQUIRY is stateful. It owns
 
   * a PUT-able ``method.options.brief`` (free text <= 2,000 chars) and an
-    optional ``target_scope`` — the operator's mandate, live-editable through
+    optional ``target_scope`` — the mandate, live-editable through
     ``PUT /api/v1/descriptors/analyst/{id}`` with no code edit;
-  * a LEDGER (``inquiry_ledger``, migration 0215 — lane p5_state) read at PLAN
+  * a LEDGER (``inquiry_ledger``, migration 0215) read at PLAN
     and written at REFLECT, carried across cycles as THE inquiry's own state;
   * the same staged arc the journal family already proved:
     PLAN -> GATHER -> FIELD-NOTES -> NARRATE -> REFLECT -> HONESTY.
 
 Its output is one ``journal_entries`` row with ``entry_kind='inquiry'`` (the
-crossroads descriptor, lane p5_crossroads, rides the SAME kind and writes
+crossroads descriptor rides the SAME kind and writes
 ``entry_kind='crossroads'``) — OFF the fact/finding/nexus chain, ``derived_from``
 empty, exactly like every other journal-family tier.
 
@@ -38,7 +38,7 @@ byte-identical for every journal tier), ``_reflect_claims``,
 ``_forced_honesty_flags`` and ``journal_window``. The GATHER loop itself is
 ``inline_target._gather``, the same one the journal rides.
 
-THE READ SURFACE (§2 grants). ``substrate_read`` is the DEFAULT GATHER binding
+THE READ SURFACE. ``substrate_read`` is the DEFAULT GATHER binding
 — its 19 tool names are ``inline_target._GATHER_READ_TOOLS``, so they route
 through ``binding`` unchanged. ``journal_read``'s own instruments and the
 ``inquiry_state`` ledger tools are NOT in that set, so they ride the per-tool
@@ -138,7 +138,7 @@ CROSSROADS_ENTRY_KIND = "crossroads"
 CROSSROADS_ANALYST_ID = "crossroads"
 
 # ---------------------------------------------------------------------------
-# The inquiry_state pack contract (design §3) — NAMES ONLY.
+# The inquiry_state pack contract — NAMES ONLY.
 # ---------------------------------------------------------------------------
 # Lane p5_state owns the pack module, its handlers, its migration and the
 # deps-builder scope fence that keeps one inquiry out of another's ledger. This
@@ -158,7 +158,7 @@ INQUIRY_STATE_TOOLS: tuple[str, ...] = (
 #: tool -> a ``hypotheses`` row with ``status='open_question'`` -> the research
 #: ladder). The inquiry DISPATCHES a question through this shape when — and only
 #: when — a binding for it is wired; the pilot grants no write pack, so nothing
-#: new can spend. There is deliberately NO net-new dispatch tool (design §3).
+#: new can spend. There is deliberately NO net-new dispatch tool.
 OPEN_QUESTION_TOOL = "open_question"
 
 #: Tool names that must route to their OWN pack's binding rather than to the
@@ -174,7 +174,7 @@ ROUTED_PACK_TOOLS: tuple[str, ...] = tuple(
 # Bounds. Every one of these caps a cost or a blast radius, never a style.
 # ---------------------------------------------------------------------------
 
-#: Descriptor brief ceiling (design §2). Enforced at READ as well as in the
+#: Descriptor brief ceiling. Enforced at READ as well as in the
 #: option spec, so a legacy row that predates the spec is truncated, not obeyed.
 BRIEF_MAX_CHARS = 2_000
 
@@ -328,7 +328,7 @@ async def resolve_pre_pass_block(
     return f"{PRE_PASS_BLOCK_HEADER}\n{result.strip()}\n"
 
 
-#: N-T (2026-11-13) — ``data.instrument_numbers`` (the key is
+#: N-T — ``data.instrument_numbers`` (the key is
 #: ``journal_prepublish``'s, which reads it) holds the numbers the pre-pass
 #: COMPUTED, by row, when its module declares ``instrument_provenance(block)``
 #: beside the hook; the verify pass checks an entry number against the row it
@@ -401,7 +401,7 @@ async def read_ledger(tool_bindings: Mapping[str, Any]) -> tuple[list[dict[str, 
 def render_state_block(
     rows: list[dict[str, Any]], *, failure_reason: str = "",
 ) -> str:
-    """Render the carried ledger as THE inquiry's own state (design §1).
+    """Render the carried ledger as THE inquiry's own state.
 
     Grouped by ``kind`` in the persona's declared section order, each row shown
     with its id (so the model can CLOSE it by id), its status, its age in days
@@ -640,7 +640,7 @@ def gather_catalog(*, ledger_bound: bool) -> str:
 
 
 # ---------------------------------------------------------------------------
-# REFLECT coda — the LEDGER phase (design §3)
+# REFLECT coda — the LEDGER phase
 # ---------------------------------------------------------------------------
 
 _LEDGER_PHASE_PROMPT = (
@@ -706,7 +706,7 @@ def plan_ledger_writes(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, int]]:
     """Turn the LEDGER phase's reply into VALIDATED writes + closes.
 
-    Pure, and deliberately so: the whole sealed-ledger discipline (design §3) is
+    Pure, and deliberately so: the whole sealed-ledger discipline is
     testable without a database, an LLM or a pack.
 
       * a ``hypothesis`` with no non-empty ``resolution_test`` is REFUSED — the
@@ -832,7 +832,7 @@ def plan_ledger_writes(
 
 
 #: The close statuses the ledger's ``inquiry_ledger_status_vocab`` constraint
-#: admits (design §3), minus ``open`` — closing to ``open`` is not a close.
+#: admits, minus ``open`` — closing to ``open`` is not a close.
 _CLOSE_STATUSES = frozenset(
     {"confirmed", "refuted", "answered", "expired", "withdrawn"}
 )
@@ -850,7 +850,7 @@ async def _dispatch_question(
 ) -> str:
     """Raise one question through the platform's EXISTING open-question faucet.
 
-    Design §3, the money line: "Dispatch is NOT a tool of its own." When a
+    The money line: "Dispatch is NOT a tool of its own." When a
     binding for ``open_question`` is wired (i.e. the descriptor grants the write
     pack) the question goes through THAT tool — the same one every desk uses,
     into ``hypotheses(status='open_question')`` and onward to the research ladder
@@ -1131,7 +1131,7 @@ async def run_method(
     # Same two pre-REFLECT repairs the journal runs, for the same reasons: a
     # GATHER-corpus [N] dies at render unless it is rewritten to a durable
     # [[ref:uuid]] (V4/J4), and a hand-transcribed uuid one hex digit off its
-    # real row is repaired against the window the narrator actually saw (B5) —
+    # real row is repaired against the window the narrator actually saw —
     # uniquely, or left alone. Neither ever fabricates a ref.
     body, rewritten = _rewrite_gathered_citations(body, citation_extension)
     if rewritten:
@@ -1181,7 +1181,7 @@ async def run_method(
 
     # --- PERSIST ---------------------------------------------------------
     # ``data`` is the per-row metadata column every journal tier uses (lens_id /
-    # matrix one module over). The yield instrument (design §4) reads the LEDGER,
+    # matrix one module over). The yield instrument reads the LEDGER,
     # not this column — what rides here is what a READER of the entry needs to
     # see beside it: which brief produced it and what this cycle did to the state.
     row_data: dict[str, Any] = {

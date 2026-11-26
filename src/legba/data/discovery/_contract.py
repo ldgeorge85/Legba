@@ -3,8 +3,8 @@
 """Discovery-kind handler contract (L-106 / L-180) — minimal Protocol surface.
 
 The discovery family is the *fifth* leaf of the kind taxonomy alongside
-``sources`` (L-102 §2), ``filters`` (L-102 §3), ``outputs`` (L-197) and
-``analysts`` (L-102 §5). Where sources/filters/outputs handle the
+``sources``, ``filters``, ``outputs`` (L-197) and
+``analysts``. Where sources/filters/outputs handle the
 *watch-the-things* path of an already-materialized target, **discovery
 handlers emit candidate targets** — they are the *find-the-things*
 counterpart.
@@ -30,7 +30,7 @@ This module declares:
     came from, when, source version. Carried alongside the label_set so
     materialized targets can lineage back to the discovery cycle.
   * :class:`RelabelRule` — Prometheus-style rewrite rule with 9 actions
-    per L-106 §3. The handler emits raw labels; the *registry* (not the
+    The handler emits raw labels; the *registry* (not the
     handler) applies the rule chain at materialization time.
   * :class:`DiscoveryHealth` — health-probe return; mirrors the L-102 §3
     handler-health shape with discovery-specific fields.
@@ -65,7 +65,7 @@ from ..sources._contract import InMemoryStateStore, StateStore
 
 
 # ---------------------------------------------------------------------------
-# Relabel actions — closed set per L-106 §3
+# Relabel actions — closed set
 # ---------------------------------------------------------------------------
 
 
@@ -94,7 +94,7 @@ RELABEL_ACTIONS: frozenset[str] = frozenset(
         "hash_mod",
     ]
 )
-"""The closed action set per L-106 §3. Adding a new action is a registered
+"""The closed action set. Adding a new action is a registered
 handler class (see :mod:`legba.data.discovery.relabel`), not a schema
 change — the descriptor `action:` field is a free string validated
 against this set + the registered-extension set at materialization time.
@@ -109,7 +109,7 @@ against this set + the registered-extension set at materialization time.
 class DiscoveryEvidence(BaseModel):
     """Per-candidate provenance carried alongside the raw label set.
 
-    Recorded in the discovery_state table per L-106 §2 so materialized
+    Recorded in the discovery_state table so materialized
     targets can lineage back to the discovery cycle that produced them.
     A diff-loop comparing ``label_set_hash`` across cycles uses this to
     classify retention/update transitions.
@@ -174,7 +174,7 @@ class CandidateTarget(BaseModel):
 
     label_set: Mapping[str, Any] = Field(default_factory=dict, alias="labels")
     """Raw labels emitted by the discovery. Free-form. Relabel rules
-    consume + rewrite these per L-106 §3."""
+    consume + rewrite these."""
 
     source_metadata: Mapping[str, Any] = Field(default_factory=dict)
     """Arbitrary per-candidate extras (region, sub-region, list-source
@@ -306,7 +306,7 @@ class RelabelRule(BaseModel):
 
 
 DEFAULT_DISAPPEARANCE_RATIO_THRESHOLD: float = 0.30
-"""Default per-cycle disappearance threshold per L-106 §5. If more than
+"""Default per-cycle disappearance threshold. If more than
 30% of previously-active candidates vanish in a single cycle the discovery
 routes to ``resync_review`` and alerts rather than retiring N targets —
 prevents flaky list sources from cascading mass-retirements."""

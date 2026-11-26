@@ -1,5 +1,5 @@
 /**
- * claimFold — WHY a quoted claim is weaker than it looks (Program 7, 7b-i).
+ * claimFold — WHY a quoted claim is weaker than it looks.
  *
  * A composed read renders its sentences with `[[ref:N]]` ordinals. The record
  * already knows, per ordinal, what is actually behind the claim — how many

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for the L-113 registry HTTP router.
+"""Unit tests for the registry HTTP router.
 
 These exercise the FastAPI router with stand-in registry stubs so we don't
 need Postgres / NATS. The integration tests
@@ -286,7 +286,7 @@ def _build_app(
     return app, deps
 
 
-# Sample descriptor body matching the L-110 schemas.
+# Sample descriptor body matching the schemas.
 def _sample_target_body(descriptor_id: str) -> dict[str, Any]:
     return {
         "identity": {
@@ -296,7 +296,7 @@ def _sample_target_body(descriptor_id: str) -> dict[str, Any]:
             "version": "0" * 16,
             "abstraction_level": "L1",
             "state": "draft",
-            "owner": "lewis@local",
+            "owner": "owner@local",
             "created": _FIXED_TS.isoformat(),
         },
         "scope": {

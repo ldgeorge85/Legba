@@ -4,7 +4,7 @@
 
 The P1 prompt gallery measured 8 of the 9 bounded units fanning out over ONE
 byte-identical 120-row slice with nothing in the prompt telling them what the desk
-already knew. This wave mirrors the composition CONTINUITY idiom downward and
+already knew. This change mirrors the composition CONTINUITY idiom downward and
 widens it to four blocks — PRIOR READ, OPEN SITUATION REGISTER, DESK BASELINE,
 STANDING OPEN QUESTIONS — plus a per-unit RE-RANK of the shared slice.
 
@@ -422,12 +422,12 @@ def test_prior_read_body_is_bounded():
 
 
 # ---------------------------------------------------------------------------
-# V-2 — the embedded prior body's OWN [N] markers must never be inheritable
+# The embedded prior body's OWN [N] markers must never be inheritable
 # ---------------------------------------------------------------------------
 
 
 def test_prior_read_body_markers_are_defused_never_inheritable():
-    """V-2 (live capture 2026-08-05): the prior body's [N] markers point at the
+    """Live capture 2026-08-05: the prior body's [N] markers point at the
     PRIOR run's slice — rendered bare, the new prompt hands the model fourteen
     stale citations plus a recursive self-cite and then orders it to cite
     'exactly like a numbered signal'. The render must rewrite them to the dead
@@ -1281,7 +1281,7 @@ def test_grounding_rows_are_never_ranked_or_packed_as_evidence():
 
 
 # ---------------------------------------------------------------------------
-# X-1 catalog + drift guards for the KIND lane
+# Catalog + drift guards for the KIND lane
 # ---------------------------------------------------------------------------
 
 
@@ -1303,7 +1303,7 @@ _VERIFY_SEAM_KIND_KNOBS = frozenset({"judge_sample_rate", "judge_sample_always"}
 #: unit's render is byte-identical).
 _RUN_PHASE_KIND_KNOBS = frozenset({"spread_block"})
 
-#: Lane K-2 — the FEED ROSTER knob, read by its own leaf
+#: The FEED ROSTER knob, read by its own leaf
 #: (``feed_roster_block.feed_roster_from_options``) which run_method calls
 #: with the merged options. Proven BEHAVIOURALLY in
 #: ``tests/data_pkg/test_cyber_reader_k2.py`` (the descriptor's own options,
@@ -1318,7 +1318,7 @@ _ROSTER_LEAF_SRC = (
 #: the verify seam. The DESK GROUNDING gather fires inside
 #: ``actor_substrate_slice._read_substrate_slice``, which runs BEFORE the
 #: runtime merges descriptor options into the run options mapping — so these
-#: two resolve the descriptor's own block there, through the same X-1 kind
+#: two resolve the descriptor's own block there, through the same kind
 #: catalog. Reachability is proven against that module's source here and
 #: BEHAVIOURALLY in ``tests/runtime/test_actor_substrate_slice_scope.py`` (the
 #: granted descriptor fires the query and carries the block; the ungranted one
@@ -1330,7 +1330,7 @@ _SLICE_READER_KIND_KNOBS = frozenset({
     "offer_history", "history_series_limit",
 })
 
-#: W8 TAX-1 — the per-source diversity cap, read by BOTH slice readers through
+#: The per-source diversity cap, read by BOTH slice readers through
 #: the leaf ``data/signal_slice_scope.slice_per_source_cap`` (validated against
 #: this catalog's OptionSpec there). Reachability is proven against the leaf and
 #: the two readers' sources here and BEHAVIOURALLY in
@@ -1338,8 +1338,8 @@ _SLICE_READER_KIND_KNOBS = frozenset({
 #: on the real driver; its absence changes nothing).
 _SCOPE_LEAF_KIND_KNOBS = frozenset({"slice_per_source_cap"})
 
-#: Lane N-B — the WATERMARK window, read by the slice reader through the leaf
-#: ``data/slice_coverage.watermark_config`` (resolved via the X-1 kind catalog
+#: The WATERMARK window, read by the slice reader through the leaf
+#: ``data/slice_coverage.watermark_config`` (resolved via the kind catalog
 #: there). Proven BEHAVIOURALLY in ``tests/data_pkg/test_slice_coverage.py``.
 _WATERMARK_KIND_KNOBS = frozenset({
     "slice_since_watermark", "slice_watermark_min_hours",
@@ -1351,7 +1351,7 @@ _WATERMARK_LEAF_SRC = (
     / "src" / "legba" / "data" / "slice_coverage.py"
 ).read_text()
 
-#: X4 LEVEL (W11-F36) — the level-shaped indicator declaration, read by
+#: LEVEL — the level-shaped indicator declaration, read by
 #: run_method's REFLECT phase through the leaf ``data/indicator_shape.py``
 #: (``level_specs(options)``), not by the slice-focus resolver. Reachability is
 #: proven against both sources here and BEHAVIOURALLY in
@@ -1364,7 +1364,7 @@ _INDICATOR_SHAPE_SRC = (
     / "src" / "legba" / "data" / "indicator_shape.py"
 ).read_text()
 
-#: W11-F91 — the multi-round GATHER evidence cap, read by run_method through the
+#: The multi-round GATHER evidence cap, read by run_method through the
 #: leaf ``data/analysts/gather_context_budget.py``
 #: (``resolve_gather_context_budget(options, ...)``), not by the slice-focus
 #: resolver. Reachability is proven against both sources here and BEHAVIOURALLY
@@ -1463,7 +1463,7 @@ def test_every_declared_kind_knob_is_actually_read_by_its_kind():
                 "off the descriptor's resolved kind options"
             )
             assert "resolve_kind_options" in _SLICE_READER_SRC, (
-                "the slice reader must resolve through the X-1 catalog — a "
+                "the slice reader must resolve through the catalog — a "
                 "raw method.options read would take a bad value at face value"
             )
             continue
@@ -1537,8 +1537,8 @@ def test_kind_resolution_still_refuses_runtime_owned_keys():
 def test_kind_resolution_of_an_undeclared_kind_degrades_loudly():
     # (Was meta_findings_synthesizer — that kind gained the J2 sampling
     # catalog, so an undeclared KEY there is now 'unknown_key'; the
-    # no-catalog-at-all lane needs a kind that still has none; W8 TAX-1 gave
-    # cross_target_raw its slice_per_source_cap, so the example is predictor.)
+    # no-catalog-at-all case needs a kind that still has none; cross_target_raw later
+    # gained its slice_per_source_cap, so the example is predictor.)
     res = resolve_kind_options("predictor", {"slice_focus": ["x"]})
     assert res.accepted == {}
     assert res.rejected[0].cause == "unknown_kind"
@@ -1633,7 +1633,7 @@ def test_the_shipped_escalation_descriptor_carries_the_grant():
     )
 
     body = yaml.safe_load((desc_dir / "analyst_escalation.yaml").read_text())
-    # House rules ride along unchanged on any descriptor this lane touched.
+    # House rules ride along unchanged on any descriptor this change touched.
     assert body["method"]["budget_tokens_per_day"] == 0
     assert body["method"]["llm"]["temperature"] == 1.0
     assert "max_tokens" not in body["method"]
@@ -1656,12 +1656,12 @@ def test_the_grant_knobs_are_range_bound_at_the_catalog():
 
 
 def test_a_kind_with_no_catalog_still_cannot_carry_options():
-    """The X-1 rule survives: a block no code path reads is refused, because a
-    silent inert block is exactly the dead config X-1 exists to remove.
+    """The rule survives: a block no code path reads is refused, because a
+    silent inert block is exactly the dead config it exists to remove.
 
     (Was ``meta_findings_synthesizer`` — J2 gave every verify-bearing kind a
     catalog for the judge sampling knobs, so the no-catalog example moves to a
-    kind that still has none; W8 TAX-1 then gave ``cross_target_raw`` its
+    kind that still has none; ``cross_target_raw`` then gained its
     ``slice_per_source_cap``, so it moved again, to ``predictor``.)"""
     from legba.data.schemas.analyst import AnalystDescriptor
 
@@ -1817,7 +1817,7 @@ async def test_run_method_renders_the_section_after_the_signals_and_cites_it():
 async def test_run_method_offers_the_token_and_the_write_path_expands_it(
     monkeypatch,
 ):
-    """V3/P2 END TO END — the whole lane in one run.
+    """V3/P2 END TO END — the whole path in one run.
 
     The granted unit's prompt renders the OPEN EVENTS block; a model copies a
     token OUT of that prompt (the stub lifts it from the assembled text rather
@@ -1918,7 +1918,7 @@ async def test_run_method_offers_the_token_and_the_write_path_expands_it(
 
 @pytest.mark.asyncio
 async def test_run_method_never_shows_the_model_a_bare_foreign_marker():
-    """V-2 through the REAL binding path: a prior read whose body carries its
+    """Through the REAL binding path: a prior read whose body carries its
     own run's [N] markers reaches the assembled prompt defused, the header
     note names them, and the judge-facing evidence_text carries the same
     bytes. The live [N] handle the block itself gets stays fully citable."""
@@ -2074,7 +2074,7 @@ def test_the_surviving_copy_is_the_one_that_carries_the_h1_repairs():
     an intensity a desk would read as live — and asserts the asymmetry that
     decided it: only the unit block prints the evidence clock, the NEVER label,
     the STALE label and the self-corroboration rule. The grounding block prints
-    the intensity with none of them, which is the M-1 render H1 was built to
+    the intensity with none of them, which is the render that H1 was built to
     close.
     """
     from legba.data.analysts.window_ledger import (

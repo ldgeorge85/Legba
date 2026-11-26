@@ -52,7 +52,7 @@ from .journal_slice_v2 import journal_v2_sql_for
 
 logger = logging.getLogger(__name__)
 
-#: P7/7g-1 — the origin-class leg every UNIT slice carries (SEAMS #57 sweep).
+#: The origin-class leg every UNIT slice carries.
 #: Rendered once from the closed vocabulary in
 #: :mod:`legba.data.provenance.origin`, never spelled inline.
 _LIVE_SIGNALS = origin_class_clause("")
@@ -152,7 +152,7 @@ async def _apply_geo_routing_v2(
         clauses = list(base_clauses)
         params = list(base_params)
         params.append(target_geo)
-        # Lane N-X: the inverse of the WHOLE desk geo test (filed OR at sea
+        # The inverse of the WHOLE desk geo test (filed OR at sea
         # off a desk coast), so this leg still returns only rows the geo leg
         # did not — an at-sea row is never offered twice.
         clauses.append(f"NOT ({desk_geo_sql(len(params))})")
@@ -369,7 +369,7 @@ def _structure_dedup_key(item: Mapping[str, Any]) -> tuple[str, str]:
     Two shortlist items are DUPLICATE RENDERS when they share a structure kind
     AND a rationale — the rationale is the entire body of the rendered snippet,
     so same kind + same rationale means the two rows differ ONLY in their
-    label, which is exactly the run the P5 gallery caught.
+    label, which is exactly the run this collapse targets.
     """
     kind = item.get("kind")
     kind = kind.strip() if isinstance(kind, str) and kind.strip() else "structure"
@@ -383,7 +383,7 @@ def _collapse_structure_items(
 ) -> list[tuple[dict[str, Any], list[str]]]:
     """Collapse duplicate-render structure items into one row each, keeping counts.
 
-    P5 finding: a META slice's tail ran five CONSECUTIVE
+    A META slice's tail ran five CONSECUTIVE
     ``[ASSESSED STRUCTURE]`` pseudo-signals whose snippets were byte-identical
     ("unbalanced signed triad (sign product negative — 1 hostile edge(s));
     Heider-unstable, predicts realignment") and whose titles differed only in
@@ -495,7 +495,7 @@ async def _read_substrate_slice(
 
     window_hours = resolve_slice_window_hours(descriptor)
 
-    # Source-first (pivot §4): signals are TARGET-AGNOSTIC — there is no
+    # Source-first: signals are TARGET-AGNOSTIC — there is no
     # ``target_id`` column. A target's slice is the union of signals from its
     # subscribed sources. Narrow by the target's explicit ``source_id`` refs
     # when resolvable; otherwise read the recent tenant-wide pool. (The fine
@@ -547,7 +547,7 @@ async def _read_substrate_slice(
             scope_predicate = None
             target_tags = NO_FILTER
 
-    # Lane N-B — the WATERMARK window (``method.options.slice_since_watermark``,
+    # The WATERMARK window (``method.options.slice_since_watermark``,
     # data/slice_coverage.py): everything since this desk's last successful
     # run instead of the newest row_cap rows. Absent ⇒ None ⇒ the statement
     # below is byte-identical (the interval clause, no extra params).
@@ -575,9 +575,8 @@ async def _read_substrate_slice(
         # canonical_only) and the reads API (registry/substrate_reads_api.py).
         # Named once in data/signal_slice_scope.py (W8 TAX-1), same text.
         CANONICAL_ONLY_SQL,
-        # P7/7g-1 — THE ORIGIN-CLASS LEG (SEAMS #57 sweep, `cadence_analysts`
-        # in the collection firewall's `excluded_from`). The backfill clause
-        # above tests a PAYLOAD key a manual batch happens to set; this tests
+        # THE ORIGIN-CLASS LEG (`cadence_analysts` in the collection
+        # firewall's `excluded_from`). The backfill clause above tests a PAYLOAD key a manual batch happens to set; this tests
         # the row's own provenance class, which no writer can forget to
         # stamp. Both stay: they answer different questions, and a desk's
         # reactive window must contain nothing a collection loaded.
@@ -638,12 +637,11 @@ async def _read_substrate_slice(
     if target_geo:
         params.append(target_geo)
         # geo overlap — the signal mentions at least one of the target's
-        # scoped countries/regions — OR (lane N-X, operator-approved
-        # 2026-11-13) it is an unfiled incident at sea whose inferred
-        # nearest coasts name one of them. Country and lane desks alike; the
-        # rendered row says "at sea, about N km off X" (slice_render).
+        # scoped countries/regions — OR it is an unfiled incident at sea
+        # whose inferred nearest coasts name one of them. Country and lane
+        # desks alike; the rendered row says "at sea, about N km off X" (slice_render).
         clauses.append(f"({desk_geo_sql(len(params))})")
-        # B6 (W11-F13) — the HOMONYM exclusion: a row filed under a code of
+        # B6 — the HOMONYM exclusion: a row filed under a code of
         # this target off a homonym ("KP" = Khyber Pakhtunkhwa) never enters
         # the slice. Nothing is appended for a target with no ruled code. An
         # unfiled (at-sea) row has no filing for the rule to judge.
@@ -685,8 +683,8 @@ async def _read_substrate_slice(
     # default OFF, and only for ``identity.kind == 'journal_assessor'``.
     #
     # The recency leg below gives the journal ~3 h of its 24 h window (360 of
-    # ~3,570 rows), which is the dominant aperture bound measured in
-    # JOURNAL_CLUSTER_FIRST_SLICE_REPORT §0. ``journal_v2_sql_for`` returns a
+    # ~3,570 rows), which is the dominant aperture bound measured.
+    # ``journal_v2_sql_for`` returns a
     # STRATIFIED statement over the SAME ``where`` and the SAME ``$n`` params —
     # so it rides this one ``conn.fetch`` call, with the same row budget, and
     # there is no second round trip.
@@ -742,7 +740,7 @@ async def _read_substrate_slice(
             target_filter=target_filter,
         )
     if _wm is not None:
-        # Lane N-B — the whole window competes on salience + source diversity
+        # The whole window competes on salience + source diversity
         # (never recency alone) and the cut is DECLARED on the coverage stamp.
         rows, _wm_coverage = await _select_watermark_rows(
             conn, rows, window=_wm, where=where, params=params,
@@ -792,7 +790,7 @@ async def _read_substrate_slice(
         d["produced_at"] = d.get("fetched_at")
         out.append(d)
 
-    # Lane D-1 — mark rows whose source text changed after it was read.
+    # Mark rows whose source text changed after it was read.
     # LEGBA_SLICE_SOURCE_DRIFT_MARK, default OFF: off, this block does not
     # run, no row carries the key and the render is byte-identical. On, ONE
     # extra read over the rows already chosen (the slice SQL above is not
@@ -840,14 +838,14 @@ async def _read_substrate_slice(
             # discriminator — country desks AND thematic lane_/flow_ targets
             # (which carry geo sets too). Keying on the "country" name prefix
             # let thematic targets leak globally-ranked structure rows into
-            # their evidence (gallery P1 finding: Hormuz carrying Belgium/
+            # their evidence (e.g. Hormuz carrying Belgium/
             # Afghanistan noise). A META/no-target run (no geo) stays global.
             per_country = bool(
                 target_filter
                 and isinstance(target_filter, str)
                 and bool(target_geo)
             )
-            # Over-select, then collapse duplicate renders (P5: five identical
+            # Over-select, then collapse duplicate renders (e.g. five identical
             # Belgium-Egypt-IGO triads in a row), then cap — so the structure
             # budget buys ``struct_cap`` DISTINCT structural facts rather than
             # one fact repeated ``struct_cap`` times. The over-fetch multiplier
@@ -933,7 +931,7 @@ async def _read_substrate_slice(
     # this target, its WINDOW LEDGER (FRAME-2 — this unit's own dated, verified,
     # severity-tagged reads of the trailing fortnight, the carry that stops a
     # 72-hour read forgetting its own window), the desk's OPEN SITUATION
-    # REGISTER, its OPEN EVENTS (V3/P2 — GRANT-gated, see below), its DESK
+    # REGISTER, its OPEN EVENTS (GRANT-gated, see below), its DESK
     # BASELINE (what is normal here), and its STANDING OPEN
     # QUESTIONS. Each arrives as a MARKED row
     # (``UNIT_GROUNDING_ROW_KEY``) that ``inline_target.run_method`` lifts out of
@@ -966,7 +964,7 @@ async def _read_substrate_slice(
                 gather_unit_grounding_rows,
             )
 
-            # V3/P2 — THE OPEN EVENTS GRANT, resolved here rather than read off
+            # THE OPEN EVENTS GRANT, resolved here rather than read off
             # the merged run options, because the grounding gather fires in the
             # SLICE READER and the runtime's options merge happens later, at
             # fire time. Resolution goes through the X-1 KIND catalog — never a
@@ -1021,7 +1019,7 @@ async def _select_watermark_rows(
     declared_cap: int | None,
     scope_predicate: Any,
 ) -> tuple[list[Any], dict[str, Any]]:
-    """The watermark window's selection + its coverage stamp (lane N-B)."""
+    """The watermark window's selection + its coverage stamp."""
     candidates = list(rows)
     in_window = len(candidates)
     fetch_capped = in_window >= fetch_limit

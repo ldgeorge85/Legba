@@ -14,6 +14,9 @@
  */
 import { useIdentity } from '@/auth/SignInGate'
 import type { Identity, IdentityState } from '@/auth/session'
+import { IDENTITY_QUERY_KEY } from '@/auth/session'
+import { useContext, useEffect, useReducer } from 'react'
+import { QueryClientContext } from '@tanstack/react-query'
 
 export type RoleRank = 1 | 2 | 3
 export const RANK_READER: RoleRank = 1
@@ -67,3 +70,24 @@ export const NEEDS_CONTRIBUTOR = 'This needs a contributor or an admin. Your acc
 /** Why a reader has no way across to the operator side. */
 export const OPERATOR_SIDE_REASON =
   'The operator side (engine, evaluation internals, the gate, investigation) is for contributors and admins. Your account reads the Board, Subject, Ledger and Watch.'
+
+/**
+ * True when the caller is KNOWN to be below admin, read PASSIVELY: from the
+ * identity answer already in the query cache (the sign-in gate asks for it
+ * once per page), never asking for it, and false with no query client at all.
+ * For the words a role sees inside components that also render on their own
+ * (a badge in a test, a card outside the shell): an unknown role sees what it
+ * always saw.
+ */
+export function useBelowAdminPassive(): boolean {
+  const client = useContext(QueryClientContext)
+  const [, bump] = useReducer((n: number) => n + 1, 0)
+  useEffect(() => {
+    if (!client) return
+    return client.getQueryCache().subscribe((e) => {
+      if (e.query.queryKey[0] === IDENTITY_QUERY_KEY[0] && e.query.queryKey[1] === IDENTITY_QUERY_KEY[1]) bump()
+    })
+  }, [client])
+  const state = client?.getQueryData<IdentityState>(IDENTITY_QUERY_KEY)
+  return below(rankOfState(state), RANK_ADMIN)
+}

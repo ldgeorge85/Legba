@@ -1,4 +1,4 @@
-# P4-T6 — the SCOPED, MEASURED GEPA return: unit_optimizer.
+# The SCOPED, MEASURED GEPA return: unit_optimizer.
 #
 # The "honest top" (P4): GEPA returns NOT as the always-on,
 # unmeasured monolith it was (the country_optimizer over country_assessor —
@@ -12,30 +12,30 @@
 # promote. This descriptor is a CLONE of analyst_country_optimizer.yaml —
 # that monolith stays byte-frozen; this is the separate P4 return.
 #
-# kind: optimizer.  method.kind: dspy_compile (L-176; exempt from prompt_module).
+# kind: optimizer.  method.kind: dspy_compile (exempt from prompt_module).
 #
 # META analyst — NO subscription.targets, so the on-activate gate
 # (dapr_actors.py ~L1229 `if schedule:` → register_reminder) registers EXACTLY
 # ONE `run_cadence` reminder (a single global sweep per tick), NOT a per-target
 # fan-out. That is the flat-Dapr-job-count guarantee: the reminder-flood
-# incident class (777k err/12h from a >4 MB optimizer payload orphaning
+# failure class (777k err/12h from a >4 MB optimizer payload orphaning
 # per-activity reminders) cannot regress here because (a) one weekly reminder,
 # and (b) the training set is passed BY REFERENCE (TrainingSetRef, SEAMS #23) so
 # the serialized workflow input is always << 4 MB regardless of trainset size.
 #
-# ── RUST-4 MOTHBALL (decision 2026-08-21) ──────────────────────────────
+# ── OPTIMIZER MOTHBALLED ────────────────────────────────────────────────
 # state flipped active -> paused: the GEPA optimizer plane is mothballed
-# (docs/SEAMS.md #53, evidence planning/RUST4_EVIDENCE_2026-08-21.md). This IS
+# (docs/SEAMS.md #53). This IS
 # the descriptor that actually ran (6 lifetime runs): 4/6 fell back to
-# naive_best_of_n, 1/6 hit the #86 long-activity round-trip timeout
-# (2026-08-17), and the 1 completed real dspy_gepa compile (2026-08-10) missed
+# naive_best_of_n, 1/6 hit the long-activity round-trip timeout, and the 1
+# completed real dspy_gepa compile missed
 # the promotion bar by a wide margin (faithfulness delta -0.5354 vs +0.03).
 # `paused` is the schema's built-in, RESUMABLE halt (LifecycleState, ACTIVE <->
 # PAUSED both ways) — not `retired` (terminal); unlike country_optimizer this
 # descriptor is CADENCE-ONLY (no subscription.targets) so, once live, `paused`
 # mechanically stops the `run_cadence` reminder the same way SEAMS #30's null
 # cadence does for the frozen monolith. TREE ONLY: this edit has NOT been PUT
-# to the live registry (BUILD-ONLY per the RUST-4 spec); the live head stays
+# to the live registry (BUILD-ONLY); the live head stays
 # `active` and still ticks weekly until an operator deploys + PUTs this. The
 # code path also refuses loud regardless (src/legba/data/analysts/optimizer.py
 # ::run_method, OptimizerMothballedError) so every tick between now and that
@@ -53,7 +53,7 @@ identity:
     input_type: legba.runtime.TraceCritiqueJoin
     output_type: legba.runtime.PromptModuleCandidate
   state: paused
-  owner: p4_t6
+  owner: owner@local
 
 subscription:
   # META analyst: walks analyst_traces ⋈ analyst_critiques for the ANALYZED
@@ -112,7 +112,7 @@ eval:
     #     that has never existed, and only `parent_system_prompt_source:
     #     descriptor` below kept GEPA from optimizing the placeholder text that
     #     came back. The convention now derives from the analyzed analyst's
-    #     KIND, which is how prompt packages are named (K5_BLAST_RADIUS §3.2).
+    #     KIND, which is how prompt packages are named .
     #   * parent_system_prompt_source: descriptor — the worker loads the REAL
     #     baseline text (for the operator diff snapshot) from the ANALYZED unit's
     #     method.system_prompt, NOT by importing legba.prompts.*. This forks from
@@ -120,7 +120,7 @@ eval:
     parent_prompt_module_path: legba.prompts.inline_target.v1
     parent_system_prompt_source: descriptor
 
-    # NEW P4-T6 key — selects the MEASURE stage. Default everywhere else is
+    # NEW key — selects the MEASURE stage. Default everywhere else is
     # `critique_proxy` (the cheap deterministic SEARCH heuristic), so
     # country_optimizer is untouched. `faithfulness` turns on the paired
     # before/after faithfulness eval (parent arm = the EXISTING measured

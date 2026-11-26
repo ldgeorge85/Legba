@@ -378,10 +378,9 @@ export async function triggerBackfill(
 }
 
 // ---------------------------------------------------------------------------
-// Consult model picker (F1) — which registered LLM plane answers a consult /
+// Consult model picker — which registered LLM plane answers a consult /
 // deep_consult request. "core" = the self-hosted core plane, thinking (the
-// default for a new session and for any preference never explicitly chosen;
-// roll 84, the owner: "yes, agreed, but keep opus and fable available");
+// default for a new session and for any preference never explicitly chosen);
 // "opus" = the billed Anthropic Opus plane and "fable" = the billed Anthropic
 // Claude Fable 5.1 plane, both selectable, never default. The registry maps
 // this friendly value → a sanctioned component id server-side. Mirrors
@@ -406,8 +405,8 @@ const CONSULT_MODEL_STORAGE_KEY = 'legba_consult_model'
 const CONSULT_MODEL_CHOSEN_KEY = 'legba_consult_model_chosen'
 
 /** Last-chosen plane, persisted across panel opens; defaults to the core
- *  plane (2026-10-03, DEC-17a: an accidental press must never bill Anthropic;
- *  roll 84: a stored Opus/Fable counts only when it was explicitly picked;
+ *  plane (an accidental press must never bill Anthropic;
+ *  a stored Opus/Fable counts only when it was explicitly picked;
  *  the server's default matches). */
 export function loadConsultModel(): ConsultModel {
   try {
@@ -432,7 +431,7 @@ export function saveConsultModel(model: ConsultModel): void {
 }
 
 // ---------------------------------------------------------------------------
-// Deep consult (anchor §5 PIECE 4) — the DETACHED staged workflow. Submit
+// Deep consult — the DETACHED staged workflow. Submit
 // returns a task id; poll status until completed → a lineage-walkable finding.
 // Mirrors `src/legba/data/registry/deep_consult_api.py`.
 // ---------------------------------------------------------------------------
@@ -476,7 +475,7 @@ export async function submitDeepConsult(body: {
   scope_predicate?: string | null
   emit_facts?: boolean
   emit_hypotheses?: boolean
-  // F1 model picker — the LLM plane the deep workflow runs on (default: opus).
+  // Model picker — the LLM plane the deep workflow runs on (default: opus).
   model?: ConsultModel
   // Records pinned to the conversation. Same field, shape and caps the chat
   // consult takes, so a Chat→Deep handoff carries the operator's context.
@@ -539,7 +538,7 @@ export interface ConsultTurnOut {
   hold_reason?: string | null
   uncertainty_floor_applied?: ConsultUncertaintyFloor | null
   watch_candidates?: string[] | null
-  /** W3 / F-4 — see {@link ConsultWatchMint}; absent = no mint attempted. */
+  /** See {@link ConsultWatchMint}; absent = no mint attempted. */
   watch_minted?: ConsultWatchMint[] | null
   model?: string | null
   /**
@@ -669,7 +668,7 @@ export interface ConsultUncertaintyFloor {
 }
 
 /**
- * W3 / F-4 — what became of ONE watch candidate (`analysts.consult_watch_mint`):
+ * What became of ONE watch candidate (`analysts.consult_watch_mint`):
  * minted as a standing open question that `claim_watch` matches new reporting
  * against (`hypothesis_id`; `folded` when it re-used a watch already standing),
  * or refused by name (`unmintable_no_test`, `hypothesis_refused_no_resolves_by`,
@@ -684,11 +683,11 @@ export interface ConsultWatchMint {
   resolves_by?: string | null
   folded?: boolean
   detail?: string | null
-  /** W4-F1 — the standing watch this candidate folded onto (its id). */
+  /** The standing watch this candidate folded onto (its id). */
   folded_onto?: string | null
-  /** W4-F1 — cosine between the two claim cores (1.0 = identical cores). */
+  /** Cosine between the two claim cores (1.0 = identical cores). */
   similarity?: number | null
-  /** W4-F1 — how the fold was decided: key · core · semantic · no_peers · unavailable · over_cap. */
+  /** How the fold was decided: key · core · semantic · no_peers · unavailable · over_cap. */
   fold_check?: string | null
 }
 
@@ -719,7 +718,7 @@ export interface ConsultResponseBody {
   /** 7g-2 — what this answer rests on, counted server-side. */
   provenance_census?: ConsultProvenanceCensus | null
   /**
-   * 2026-09-28 §B.3 — set when the SERVER held this answer: not one cited
+   * Set when the SERVER held this answer: not one cited
    * reference resolved to live or held reporting and the prose still asserts.
    * A token, not prose — the answer already leads with the banner a reader
    * reads. `null`/absent is the normal case and means nothing was held; it
@@ -727,11 +726,11 @@ export interface ConsultResponseBody {
    * either took or did not.
    */
   hold_reason?: string | null
-  /** §B.4 — see {@link ConsultUncertaintyFloor}. Absent = no floor moved it. */
+  /** See {@link ConsultUncertaintyFloor}. Absent = no floor moved it. */
   uncertainty_floor_applied?: ConsultUncertaintyFloor | null
-  /** §B.4 — the answer's "what would change my mind" items; absent = none written. */
+  /** The answer's "what would change my mind" items; absent = none written. */
   watch_candidates?: string[] | null
-  /** W3 / F-4 — see {@link ConsultWatchMint}; absent = no mint attempted. */
+  /** See {@link ConsultWatchMint}; absent = no mint attempted. */
   watch_minted?: ConsultWatchMint[] | null
   /** X2 / C1 — the `consult_verification/1` stamp; see `lib/consultTurnStamp`. */
   verification?: unknown
@@ -823,8 +822,7 @@ export async function synthesizeConsultRun(
 }
 
 // ---------------------------------------------------------------------------
-// Journal / Voices (JOURNAL_ASSESSOR_PLAN §9 / Wave 3; Voices panel step 1,
-// planning/VOICES_PANEL_SPEC.md §3) — the reflective voice's read surface. The
+// Journal / Voices — the reflective voice's read surface. The
 // open consolidation + recent entries, each cited ref already resolved
 // server-side to its (kind, title) so a per-claim provenance chip can
 // deep-link via `selectRow(kind, id, label)` without a second round-trip.
@@ -833,8 +831,8 @@ export async function synthesizeConsultRun(
 
 /** A cited substrate UUID resolved to its kind + label (chip deep-link target).
  *  `kind='unknown'` when the id resolves in no substrate table (superseded /
- *  pruned ref) — the chip still renders; the citation is never hidden (§9).
- *  `source_id` (T1.3) is set ONLY when `kind==='signal'` — the originating
+ *  pruned ref) — the chip still renders; the citation is never hidden.
+ *  `source_id` is set ONLY when `kind==='signal'` — the originating
  *  `source.*` feed, so a raw-signal citation's chip can say WHICH feed it
  *  came from instead of falling back to a bare "unknown" label. `undefined`/
  *  `null` for every other kind, additive and back-compatible. */
@@ -845,21 +843,20 @@ export interface JournalRef {
   source_id?: string | null
 }
 
-/** One cited claim — a span of the entry bound to its resolved refs (§3.6).
+/** One cited claim — a span of the entry bound to its resolved refs.
  *  `kind` is the CLAIM kind ('fact' | 'perspective'), not a substrate kind. A
  *  `[needs_citation]`-prefixed `text_span` is an uncited factual assertion that
  *  slipped the REFLECT flag — rendered in the unverified-perspective style,
- *  NEVER hidden (§4.5). */
+ *  NEVER hidden. */
 export interface JournalClaim {
   text_span: string
   kind: 'fact' | 'perspective' | string
   refs: JournalRef[]
 }
 
-/** The `entry_kind` vocabulary the `kind` filter accepts (VOICES_PANEL_SPEC
- *  §3.1). `lens`/`lens_diff` are accepted by the API today (harmless — no such
- *  rows exist pre-LV-1) even though nothing in step 1 generates those chips.
- *  `inquiry`/`crossroads` are the Program 5 stateful tier, accepted on the same
+/** The `entry_kind` vocabulary the `kind` filter accepts (`lens`/`lens_diff` are accepted
+ *  by the API today (harmless — no such rows exist yet) even though nothing
+ *  generates those chips. `inquiry`/`crossroads` are the stateful tier, accepted on the same
  *  terms — a kind the API validates but the panel only ever chips when rows for
  *  it actually exist. */
 export type JournalEntryKind =
@@ -875,7 +872,7 @@ export type JournalEntryKind =
   | string
 
 /** One `journal_entries` row at `fields=full` weight (today's shape, plus
- *  §3.4's verify fields). Mirrors `JournalEntryOut`. */
+ *  the verify fields). Mirrors `JournalEntryOut`. */
 export interface JournalEntry {
   id: string
   entry_kind: JournalEntryKind
@@ -889,11 +886,11 @@ export interface JournalEntry {
   produced_at: string
   analyst_id: string | null
   analyst_version: string | null
-  /** §3.4 — the 'Faithfulness verify' critique's gate score. `null` when no
+  /** The 'Faithfulness verify' critique's gate score. `null` when no
    *  such critique exists yet (never fabricated — the honest-absence pill
    *  renders `—`). */
   verify_score: number | null
-  /** §3.4 — the critique body text (full-only), naming each unsupported /
+  /** The critique body text (full-only), naming each unsupported /
    *  contested span as a `  - [judge_contradicted] ...` /
    *  `  - [judge_unsupported] ...` / `  - [no_citation] ...` line. `null`
    *  when no critique exists. */
@@ -909,7 +906,7 @@ export interface JournalEntry {
   corrected_by?: string | null
 }
 
-/** One `journal_entries` row at `fields=summary` weight (§3.3) — the
+/** One `journal_entries` row at `fields=summary` weight — the
  *  grouped-list read. Mirrors `JournalEntrySummaryOut`: a DISTINCT shape (no
  *  `body`/`claims`/`cited_substrate_refs`/`verify_body`), not a partial
  *  `JournalEntry`, so a summary row can never be mistaken for a hydrated one. */
@@ -930,7 +927,7 @@ export interface JournalEntrySummary {
   corrected_by?: string | null
 }
 
-/** The substrate-derived calibration posture for the §10 honesty banner —
+/** The substrate-derived calibration posture for the honesty banner —
  *  keyed off the live calibration metric, NOT a self-reported payload field. */
 export interface JournalCalibration {
   available: boolean
@@ -941,7 +938,7 @@ export interface JournalCalibration {
   forecast_acute_sample_size: number | null
   forecast_acute_status: string | null
   produced_at: string | null
-  /** Lane E — legacy/untrusted label + the headline population's staleness */
+  /** Legacy/untrusted label + the headline population's staleness */
   label?: string
   stale?: boolean | null
   newest_member_at?: string | null
@@ -994,7 +991,7 @@ export async function fetchJournal(
   return apiGet<JournalResponse>(`/journal${journalQueryString({ ...opts, fields: 'full' })}`)
 }
 
-/** `fields=summary` variant — the grouped-list read (§2b/§3.3): list-cheap
+/** `fields=summary` variant — the grouped-list read: list-cheap
  *  rows, no body/claims, `_resolve_refs` never runs server-side. */
 export async function fetchJournalSummary(
   opts: { limit?: number; cursor?: string; kind?: JournalEntryKind[] } = {},
@@ -1005,14 +1002,14 @@ export async function fetchJournalSummary(
 }
 
 /** `GET /journal/{id}` — a single row at full weight, for the reader pane's
- *  on-select fetch (§3.3). */
+ *  on-select fetch. */
 export async function fetchJournalEntry(id: string): Promise<JournalEntry> {
   return apiGet<JournalEntry>(`/journal/${encodeURIComponent(id)}`)
 }
 
 // ---------------------------------------------------------------------------
 // System Status panel (#89-adjacent ops surface) — the at-a-glance health view
-// the operator asked for: per-analyst cadence + per-source firing. These two
+// per-analyst cadence + per-source firing. These two
 // routes read the TRUTH tables (analyst_traces / signals) rather than
 // actor_state (whose last_run_at is NULL), so they reflect what actually ran /
 // fired. Mirrors the v3 routes added in `src/legba/data/registry`.
@@ -1156,7 +1153,7 @@ export async function getSystemEscalations(
 }
 
 // ---------------------------------------------------------------------------
-// Validity-window timeline (P4-4) — the `system.timeline` panel's read.
+// Validity-window timeline — the `system.timeline` panel's read.
 //
 // `GET /api/v1/v3/timeline?target_id=&days=` returns facts / situations /
 // findings as RANGED items ([start, end|open) + supersession-chain edges) over
@@ -1177,7 +1174,7 @@ export async function fetchTimeline(
 }
 
 // ---------------------------------------------------------------------------
-// Journal proposals — THE HUMAN GATE (JOURNAL_ASSESSOR_PLAN §7.4 / §7.5).
+// Journal proposals — THE HUMAN GATE.
 //
 // The journal SUGGESTS into `journal_proposals`; a human DISPOSES. Until this
 // train the three routes had no UI at all, so the standing "journal writes are
@@ -1185,7 +1182,7 @@ export async function fetchTimeline(
 // `src/legba/data/registry/journal_proposals_api.py` 1:1.
 // ---------------------------------------------------------------------------
 
-/** §7.5(a) — the OBJECTIVE evidence attached to a `self_revision` proposal: the
+/** The OBJECTIVE evidence attached to a `self_revision` proposal: the
  *  journal's OWN recent calibration + critic track record, so a beautifully
  *  argued self-revision is judged against what it has actually earned rather
  *  than against its prose. Present ONLY on `proposal_kind === 'self_revision'`
@@ -1206,7 +1203,7 @@ export interface ProposalSelfRevisionEvidence {
 export type ProposalKind = 'correction' | 'change' | 'self_revision' | string
 
 /** `pending` is the only actionable state; `archived` is where an apply failure
- *  or a §7.5(b) auto-reject lands (NOT an operator verdict). */
+ *  or a protected-section auto-reject lands (NOT an operator verdict). */
 export type ProposalStatus =
   | 'pending'
   | 'accepted'
@@ -1263,7 +1260,7 @@ export async function fetchJournalProposals(
 
 /** Accept + APPLY. The journal proposed; this call is the human CAUSING it.
  *  Non-2xx throws an `ApiError` that must be surfaced verbatim — a 409 is the
- *  §7.5(b) protected-section auto-reject and a 422 is an apply failure; both
+ *  protected-section auto-reject and a 422 is an apply failure; both
  *  leave the row `archived`, and neither is a success. */
 export async function acceptJournalProposal(
   id: string,
@@ -1294,7 +1291,7 @@ export async function rejectJournalProposal(
 }
 
 // ---------------------------------------------------------------------------
-// Situation register + trajectory (Continuity P2) — the frames, and how each
+// Situation register + trajectory — the frames, and how each
 // one MOVED. Mirrors `situation_trajectory_api.py` + the `/situations` read.
 // ---------------------------------------------------------------------------
 
@@ -1371,7 +1368,7 @@ export async function fetchSituationTrajectory(
 }
 
 // ---------------------------------------------------------------------------
-// Reified narratives (P4-1 / P4-2; A11) — contested-claim families + the
+// Reified narratives — contested-claim families + the
 // directed source-echo graph. Mirrors `narratives_api.py`.
 // ---------------------------------------------------------------------------
 
@@ -1764,7 +1761,7 @@ export interface DeskBaselineRow {
   /** H12 — the instrument revision that computed this row. Null on a row
    *  written before migration 0219; never back-labelled. */
   method_version: string | null
-  /** K3 — the SCALE the counts above are read on: a count per 24h bucket and
+  /** The SCALE the counts above are read on: a count per 24h bucket and
    *  its distance from the trailing mean in robust sigmas. A sigma-distance is
    *  comparable ACROSS desks only within one scale era. */
   scale_version: string | null
@@ -1977,7 +1974,7 @@ export async function fetchReadRollup(
 }
 
 // ---------------------------------------------------------------------------
-// Layer divergence (Program 6 L2, 7b-v) — the divergence map.
+// Layer divergence — the divergence map.
 // ---------------------------------------------------------------------------
 
 /** One UTC day of one layer, as the wire fold counted it. */

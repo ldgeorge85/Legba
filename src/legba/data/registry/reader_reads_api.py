@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The reader's own reads of two admin lists (lane RA-1, the owner's pick:
-"open the read-only versions of what the reader surfaces need").
+"""The reader's own reads of two admin lists: read-only versions of what the
+reader surfaces need.
 
-The first signed-in walk as a reader (roll 89) found the reader surfaces
+The reader surfaces were
 calling routes whose minimum role is ``admin``. Most of those reads were
 already safe for a reader and were lowered in ``route_policy`` as they are.
 Two were NOT, because the admin answer carries more than a reader may see,

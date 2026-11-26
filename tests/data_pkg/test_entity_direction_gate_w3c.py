@@ -214,7 +214,7 @@ async def test_the_probe_still_folds_the_avi_case_and_binds_the_tokens() -> None
     }
     conn = _GateConn(keeper)
     got = await ER._probe_transliteration_variant(conn, "Avi Balut", "person")
-    assert got is keeper, "V-G6's own defect must still be caught"
+    assert got is keeper, "the original defect must still be caught"
     assert conn.calls[0][2] == ER._DIRECTION_TOKEN_ARRAY, "tokens bound to $2"
 
 

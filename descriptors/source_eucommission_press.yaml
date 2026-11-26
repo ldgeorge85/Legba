@@ -1,12 +1,12 @@
-# X-1 source expansion (2026-11-14) — draft SourceDescriptor. Ships DRAFT;
+# Draft SourceDescriptor. Ships DRAFT;
 # the reference host walks it to CONFIGURED (descriptors/LIFECYCLE.md), never
-# active — activation is the owner's call per source.
+# active — activation is the operator's call per source.
 #
 # European Commission — Press corner, English press releases. The
 # Commission's own announcements (proposals, decisions, sanctions packages,
 # statements): OFFICIAL, an EU institution's primary publication. Fills the
 # EU-institution gap.
-# Checked 2026-11-14 by the source-expansion review (one GET, generic client
+# Checked (one GET, generic client
 # identity): HTTP 200, application/rss+xml, 10 items, newest 2026-11-13 15:26
 # UTC, oldest 2026-11-12 13:46 — about 10 a day in a ten-item window, so the
 # feed holds roughly one day. Hourly polling keeps inside it.
@@ -26,7 +26,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: x1_source_expansion
+  owner: owner@local
   created: "2026-11-14T00:00:00Z"
 
 scope:

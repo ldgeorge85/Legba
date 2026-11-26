@@ -616,7 +616,7 @@ def _actor_run_source() -> str:
 def test_actor_run_body_calls_the_merge():
     assert "_merge_descriptor_options(" in _actor_run_source(), (
         "the actor run path must call the merge — an unwired channel is the "
-        "X-1 defect restored"
+        "the defect is restored"
     )
 
 

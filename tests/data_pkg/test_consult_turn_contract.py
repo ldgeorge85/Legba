@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Q-1 — the consult TURN CONTRACT, on the real ``run_method`` path.
+"""The consult TURN CONTRACT, on the real ``run_method`` path.
 
 Stubbed model (scripted replies), stubbed substrate port, and a read-only
 fake pool that answers the contract's own SQL (coverage by day, the cited
@@ -179,10 +179,12 @@ def test_bakeoff_arms_keep_their_frozen_hashes_and_the_live_prompt_one_vocabular
         assert sp.CONFIDENCE_FROZEN_BAKEOFF in arm and sp.CONFIDENCE_LIVE not in arm
     live = sp._SYSTEM_PROMPT
     assert sp.CONFIDENCE_LIVE in live and sp.CONFIDENCE_FROZEN_BAKEOFF not in live
-    assert "likely, probable" not in live
-    # Every band the contract block renders is named in the live paragraph.
+    assert "likely, probable" not in live and "ICD-203" not in live
+    # Every band the contract block renders is named once in the live prompt
+    # (in the shared standards the numbers rule points back to).
     for _cut, band in H._BANDS:
-        assert band in sp.CONFIDENCE_LIVE, band
+        assert f"{band} (" in live, band
+    assert live.count("roughly even chance (") == 1
 
 
 def test_narrowing_is_detected_from_the_citation_span_and_the_coverage():
@@ -357,6 +359,34 @@ async def test_one_bounded_repair_then_non_conforming(repair_fixes):
     assert ("**Non-conforming:**" in result.consult_response.answer) is (not repair_fixes)
 
 
+@pytest.mark.asyncio
+async def test_repair_of_an_unparseable_block_shows_the_block_and_today():
+    r1, r2 = str(uuid4()), str(uuid4())
+    pool = _Pool(rows={r1: "a", r2: "b"}, dates={r1: NOW, r2: NOW}, signal_days=_days(1))
+    # A trailing comma makes the block invalid JSON; its words must still
+    # reach the repair call.
+    broken = json.dumps(_hyp_block(r1, r2))[:-1] + ",}"
+    answer = (f"{FINAL_SENTINEL}\nuncertainty: 0.3\ncited_refs: {r1}, {r2}\n\n"
+              f"Answer [{r1[:8]}].\n\n```contract\n{broken}\n```\n")
+    repaired = "```contract\n" + json.dumps(_hyp_block(r1, r2)) + "\n```"
+    llm = _ScriptedLLMHandler([_TOOL, answer, repaired, "unused"])
+    deps = ConsultOnDemandDeps(llm=llm, substrate=_sub(r1, r2), turn_contract=True, contract_pool=pool)
+    await run_method([{"question": "why today?"}], {}, deps)
+    assert len(llm.calls) == 3
+    sent = llm.calls[2]["messages"][-1]["content"]
+    assert "(unparseable)" not in sent
+    assert "a configuration change at the operator caused the outage" in sent
+    assert f"Today (UTC): {datetime.now(timezone.utc).date().isoformat()}" in sent
+
+
+def test_repair_messages_show_the_raw_block_only_when_it_did_not_parse():
+    _, msgs = H.repair_messages(None, "contract block is not JSON", ["x"], raw_block="{'p': 1,}")
+    assert "{'p': 1,}" in msgs[0]["content"]
+    _, msgs = H.repair_messages({"p": 1}, None, ["x"], raw_block="ignored")
+    assert "ignored" not in msgs[0]["content"] and '"p": 1' in msgs[0]["content"]
+    assert H.contract_block_text("a\n```contract\n{x}\n```\n") == "{x}"
+
+
 # ---------------------------------------------------------------------------
 # C / D — the verifier's list, strong and weak
 # ---------------------------------------------------------------------------
@@ -453,7 +483,7 @@ async def test_ceiling_is_soft_stops_drilling_synthesises_and_reports_the_total(
 
         async def chat_complete(self, messages, **kw):  # noqa: ANN001
             self.calls.append({"messages": messages, **kw})
-            if "Round cap reached" in str(messages[-1].get("content", "")):
+            if "The tool budget is used up" in str(messages[-1].get("content", "")):
                 return _Resp(f"{FINAL_SENTINEL}\nuncertainty: 0.4\n\nSynthesised answer.",
                              1_000 + 15_000 * _Growing.n + 20_000, 20_000)
             _Growing.n += 1
@@ -506,7 +536,7 @@ def test_the_reviewed_turn_at_ten_dollars_stops_after_round_seven():
 
 
 # ---------------------------------------------------------------------------
-# U-6 — on_screen: declared, capped, context not evidence
+# on_screen: declared, capped, context not evidence
 # ---------------------------------------------------------------------------
 
 _SCREEN = {

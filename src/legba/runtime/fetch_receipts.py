@@ -439,7 +439,7 @@ class ReceiptRecorder:
     async def link_many(self, conn: Any, record_kind: str,
                         items: list[tuple[Any, RecordLink]]) -> None:
         """:meth:`link` for many records, ONE statement per
-        :data:`LINK_BATCH_ROWS` links (lane N-R: 8,036 per-row link inserts
+        :data:`LINK_BATCH_ROWS` links (8,036 per-row link inserts
         held the PortWatch actor ~1 min 50 s). Same rows, same ``ON CONFLICT
         DO NOTHING``; a batch the database refuses is retried row by row so
         one bad link costs one link, as before."""

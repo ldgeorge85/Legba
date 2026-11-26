@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""P-05 integration tests — `source` + `action_pack` registry REST + lifecycle.
+"""Integration tests — `source` + `action_pack` registry REST + lifecycle.
 
 Runs against the live substrate via the `migrated_pg` fixture from
 `conftest.py` (a fresh `legba_test_<uuid>` DB migrated through 0024). Builds a
 real FastAPI app wired to a real `DescriptorRegistry` and hits the HTTP
-surface added in P-05:
+surface added in :
 
   * generic `/descriptors/source/*` + `/descriptors/action_pack/*` lifecycle
     (register → get → list → typed → update → transition → retire);
@@ -65,7 +65,7 @@ def _source_body(descriptor_id: str, *, state: str = "draft") -> dict[str, Any]:
             "version": "0" * 16,
             "abstraction_level": "L1",
             "state": state,
-            "owner": "lewis@local",
+            "owner": "owner@local",
             "created": "2026-06-03T10:00:00+00:00",
         },
         "scope": {
@@ -90,7 +90,7 @@ def _action_pack_body(descriptor_id: str) -> dict[str, Any]:
             "version": "0" * 16,
             "abstraction_level": "L1",
             "state": "draft",
-            "owner": "lewis@local",
+            "owner": "owner@local",
             "created": "2026-06-03T10:00:00+00:00",
         },
         "tools": [{"name": "process_media", "async_job": True}],
@@ -161,7 +161,7 @@ async def api_app(migrated_pg: PostgresConfig):
     # wiping them: an unscoped delete THERE would only move the pollution).
     # This is the retire-where-it-is-written half of that contract.
     #
-    # Snapshot-and-diff rather than a `WHERE owner = 'lewis@local'` predicate:
+    # Snapshot-and-diff rather than a `WHERE owner = 'owner@local'` predicate:
     # a dozen other files share that owner string, so an owner-scoped delete
     # would itself be an unscoped wipe. This removes exactly the descriptor_ids
     # that appeared while this test ran, whatever they were named.
@@ -392,7 +392,7 @@ async def test_invalid_source_body_routes_to_dlq(api_app, client: AsyncClient):
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_claim_source_cannot_go_active_without_a_sign_off(client: AsyncClient):
-    """C-1: a `source_class: claim` source goes active only once a sign-off
+    """A `source_class: claim` source goes active only once a sign-off
     {by, at, note} is recorded on the descriptor; the route answers 409
     `claim_sign_off_required` before that, and a PUT of an `active` claim
     body without one is refused by the model (422)."""

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""P2-5 — correctness gold-set labeling loop (worksheet + label upsert + scoreboard n).
+"""Correctness gold-set labeling loop (worksheet + label upsert + scoreboard n).
 
 DB-backed against the ISOLATED ``legba_test_<uuid>`` database the data_pkg
 ``migrated_pg`` fixture creates (so migration 0096 applies via the real
@@ -349,7 +349,7 @@ async def test_scoreboard_operator_n_grows_as_labels_land(gs):
 
 
 # ---------------------------------------------------------------------------
-# Badge composer — the P2-5 segment is additive; legacy badges are unchanged
+# Badge composer — the gold-set segment is additive; legacy badges are unchanged
 # ---------------------------------------------------------------------------
 
 

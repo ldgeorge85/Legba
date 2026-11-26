@@ -57,22 +57,22 @@ _KNOWN_TOOLS = {
     "list_findings",
     "list_situations",
     # query_predictions is deliberately NOT offered to the consult: its feed has
-    # been frozen since 2026-07-01 (W11-F150). The tool stays on the port and in
+    # been frozen since 2026-07-01. The tool stays on the port and in
     # the desk packs; only this palette stopped listing it.
     "list_targets",
     "list_sources",
-    # W11-F141 — the scheduled-events calendar (migration 0240).
+    # The scheduled-events calendar (migration 0240).
     "list_scheduled_events",
-    # W11-F162 — the forecast ledger's due-date reader (what resolves next).
+    # The forecast ledger's due-date reader (what resolves next).
     "list_due_resolvers",
-    # W11-F152 — the honest liveness read: per-source `staleness`
+    # The honest liveness read: per-source `staleness`
     # (fresh|quiet|stale|dead against the feed's own cadence), last-poll
     # outcome and newest upstream entry. list_sources is the thin version; a
     # consult that had only it read "empty" polls as a dead fleet.
     "get_source_health",
-    # V3/P3 — the decision-time register (spec §3.4).
+    # The decision-time register.
     "belief_as_of",
-    # V3/P6 — the event surface (spec §6.1).
+    # The event surface.
     "query_events",
     "inspect_event",
     # 7g-2 — the COLLECTION series reads. Consult is the first reader the
@@ -136,7 +136,7 @@ def _normalize_calls(
 
 
 def _findings_paging_kw(args: Mapping[str, Any]) -> dict[str, Any]:
-    """W11-F150 — ``list_findings``' survey mode and paging kwargs, only when
+    """``list_findings``' survey mode and paging kwargs, only when
     set, so a plain read is unchanged. Mirrors
     ``agency.substrate_read._findings_paging_kw`` (inlined: this module is a
     leaf and never imports from ``agency``). A survey with no ``limit`` takes
@@ -187,7 +187,7 @@ async def _dispatch_tool(
     Unknown tool names are surfaced as a structured error so the planner
     sees the failure and can recover (rather than crashing the run).
 
-    ``known_at`` (lane E0 — the evaluation harness's record-time cut; no
+    ``known_at`` (the evaluation harness's record-time cut; no
     product caller passes it): a tool not classified in
     :mod:`legba.data.raw_reader_known_at` is REFUSED; a ``cut`` tool gets
     ``known_at`` forwarded; an ``exempt`` one runs as is. It is never read from
@@ -552,8 +552,7 @@ async def _run_one_call(
 
 
 # ---------------------------------------------------------------------------
-# One round's calls: reads concurrently, then PROVIDER tools serially (C-1b,
-# generalised by the C-2a §7 hook)
+# One round's calls: reads concurrently, then PROVIDER tools serially
 # ---------------------------------------------------------------------------
 
 

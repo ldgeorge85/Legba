@@ -178,7 +178,7 @@ export interface CalibrationScoreboard {
   /** the POOLED diagnostic count (was bare `sample_size`) — pairs only with `brier_pooled` */
   brier_pooled?: number | null
   pooled_sample_size: number | null
-  /** Lane E — these are legacy figures, never the sealed forecast ledger. */
+  /** These are legacy figures, never the sealed forecast ledger. */
   label?: string
   ledger_note?: string
   stale?: boolean | null
@@ -892,7 +892,7 @@ export function actorRollup(
 // ===========================================================================
 
 /**
- * The per-dimension eval fold (P4-T5). Each unit dimension carries the latest
+ * The per-dimension eval fold. Each unit dimension carries the latest
  * per-unit faithfulness + correctness from `unit_correctness_scorer`, honest-null
  * when the scorer never measured it. `faithfulness_flagged` is true when the
  * aggregate faithfulness sits below the banding `faith_floor` — a visible mark on

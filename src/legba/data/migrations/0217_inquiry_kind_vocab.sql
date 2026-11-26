@@ -3,11 +3,10 @@
 --
 -- 0217_inquiry_kind_vocab.sql
 --
--- PROGRAM 5 lane 2 (planning/PROGRAM5_INQUIRY_DESIGN_2026-09-24.md §7.2) — the
--- `inquiry` analyst kind's registry vocabulary row.
+-- The `inquiry` analyst kind's registry vocabulary row.
 --
 -- WHAT THIS IS NOT. It is NOT the ledger: `inquiry_ledger` and its three named
--- constraints are migration 0215 (lane p5_state). It is NOT an `entry_kind`
+-- constraints are migration 0215. It is NOT an `entry_kind`
 -- widening either — `journal_entries.entry_kind` is a free TEXT column with no
 -- CHECK constraint (the vocabulary is pinned in Python: JournalPayload's
 -- Literal, journal_api._VALID_KINDS, export_api.JOURNAL_TIER_LABELS, all three

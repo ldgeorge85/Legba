@@ -50,7 +50,7 @@ search:
   # Keep the language unset so multilingual desks (fr/ar/ru/es sources) are
   # not implicitly narrowed to English.
   autocomplete: ""
-  # Suspension backoff after an engine errors (S2 hygiene). Schema confirmed
+  # Suspension backoff after an engine errors. Schema confirmed
   # in the image's shipped settings.yml (`search.suspended_times`, keyed on
   # the same exception classes `SearxEngineAccessDenied` /
   # `SearxEngineCaptcha` / `SearxEngineTooManyRequests` that
@@ -79,11 +79,11 @@ server:
   image_proxy: false
 
 # Bound the outbound behavior: a self-hosted meta-search that hammers upstream
-# engines gets banned faster (R-3a risk 3 — bans surface as an HTTP 200 with an
+# engines gets banned faster (bans surface as an HTTP 200 with an
 # empty results[] plus entries in `unresponsive_engines`, which the provider
 # handler MUST read to distinguish "engines refused us" from "nothing exists").
 #
-# S2 hygiene (2026-09-16): `retries` and `max_redirects` confirmed as real
+# Hygiene: `retries` and `max_redirects` confirmed as real
 # `outgoing` schema keys in the image's `searx/settings_defaults.py` SCHEMA
 # dict (`'retries': SettingsValue(int, 0)`, `'max_redirects':
 # SettingsValue(int, 30)`) — NOT present in the commented settings.yml
@@ -136,9 +136,9 @@ outgoing:
 # Engines that need an operator API key (Brave Search API, Google Programmable
 # Search) are NOT configured here — those are your decision and, being
 # licensed rather than scraped, are the ToS-cleanest way to restore the banned
-# names. See planning/SEARCH_PROVIDER_REVIEW_2026-07-28.md.
+# names.
 #
-# S2 UPDATE (2026-09-16): the plan above did not survive contact with this
+# UPDATE (2026-09-16): the plan above did not survive contact with this
 # host's IP reputation. Measured post-upgrade (searxng/searxng:latest
 # 2026.9.16, curl_cffi impersonation): mojeek and mojeek news return "access
 # denied" (403) on every query, and qwant / qwant news are CAPTCHA'd — both
@@ -147,7 +147,7 @@ outgoing:
 # fields only pace an engine we still query, they do not un-block one).
 # Disabling them (not deleting — the config stays as a record of what was
 # tried and why it is off) stops the wasted request + the log noise on every
-# search. The answering set today is bing, duckduckgo web, yahoo,
+# search. The answering set today is bing, yahoo,
 # abcnyheter/tagesschau/ansa (the last two rarely relevant per the census).
 #
 # brave and google cse are added below, explicitly disabled, for the same
@@ -180,26 +180,19 @@ engines:
   # Independent indexes — the reliability backbone.
   - name: mojeek
     disabled: true
-    # S2 2026-09-16: measured 403 "access denied" on every query from this
+    # 2026-09-16: measured 403 "access denied" on every query from this
     # host, post-upgrade. Structural IP/fingerprint block, not a settings fix.
   - name: mojeek news
     disabled: true
-    # S2 2026-09-16: same engine module, same 403 block as `mojeek` above.
+    # 2026-09-16: same engine module, same 403 block as `mojeek` above.
   - name: mwmbl
     disabled: false
-  # DuckDuckGo's alternate implementation: the stock `duckduckgo` engine posts
-  # to the html.duckduckgo.com no-JS form and gets served the "not a robot"
-  # challenge from our IP. `duckduckgo web` takes a different door — it reads
-  # the links.duckduckgo.com/d.js API URL off a normal result page — so it is
-  # worth measuring rather than assuming. If it is challenged too, leave it:
-  # DuckDuckGo publishes NO official web-search API (their public API returns
-  # instant answers only), and DDG's web index is substantially Bing-derived,
-  # which we now query directly — so the coverage loss is small.
+  # Measured: with this engine enabled it failed on every query (the upstream answers HTTP 202 with a challenge).
+  # Disabled until it answers again.
   - name: duckduckgo web
-    disabled: false
-  # MEASURED: `duckduckgo web` returns results from this host; the stock
-  # `duckduckgo` stays CAPTCHA'd. Disable the stock one — it is now redundant
-  # coverage that only adds a failed request and per-query latency.
+    disabled: true
+  # The stock `duckduckgo` engine is CAPTCHA'd from this host; it only adds a
+  # failed request and per-query latency, so it stays disabled.
   - name: duckduckgo
     disabled: true
   # mwmbl times out consistently (a small volunteer index) — pure latency cost.
@@ -208,13 +201,13 @@ engines:
   # Broad-coverage keyless engines that generally answer datacenter traffic.
   - name: qwant
     disabled: true
-    # S2 2026-09-16: CAPTCHA'd on every query from this host, post-upgrade
+    # 2026-09-16: CAPTCHA'd on every query from this host, post-upgrade
     # (curl_cffi impersonation did not move it — this is a JS-challenge
     # CAPTCHA wall, not a TLS/UA fingerprint block). Structural, not fixable
     # by config; disabling stops the wasted request + log noise.
   - name: qwant news
     disabled: true
-    # S2 2026-09-16: same qwant CAPTCHA wall as `qwant` above.
+    # 2026-09-16: same qwant CAPTCHA wall as `qwant` above.
   - name: bing
     disabled: false
   # yahoo: answered until 2026-11-12, then every request failed ("Suspended:
@@ -223,10 +216,10 @@ engines:
   - name: yahoo
     disabled: true
   # Regional/native-language news — our desks are multilingual, and these are
-  # the outlets a Google-only view under-weights. S2 2026-09-16: these three
+  # the outlets a Google-only view under-weights. 2026-09-16: these three
   # are single-source site scrapers (not meta-indexes like bing/yahoo), so
-  # they carry more per-query latency for less yield — the census (FACTS,
-  # 2026-09-16) already calls them "rarely relevant". Per-engine `timeout:`
+  # they carry more per-query latency for less yield — the census (2026-09-16)
+  # already calls them "rarely relevant". Per-engine `timeout:`
   # is a real schema key used throughout the image's own template (e.g.
   # `360search: timeout: 20.0`, `apk mirror: timeout: 4.0`,
   # `artic: timeout: 4.0` in `searx/settings.yml`); bounding these three
@@ -261,14 +254,14 @@ engines:
   # public endpoint with no key input at all).
   - name: brave
     disabled: true
-    # S2 2026-09-16: measured 429 "too many requests" on every query from
+    # 2026-09-16: measured 429 "too many requests" on every query from
     # this host. OPERATOR ITEM: a Brave Search API subscription key would
     # fix this, but requires different engine wiring than what ships here
     # (this build's `brave` engine scrapes brave.com/search, `require_api_key:
     # False` — it does not read an api_key field to switch to the paid API).
   - name: google cse
     disabled: true
-    # S2 2026-09-16: measured 429/quota on every query from this host. This
+    # 2026-09-16: measured 429/quota on every query from this host. This
     # build's `google cse` calls a hardcoded PUBLIC partner CSE id (see
     # `searx/engines/google_cse.py`), not an operator-supplied Google
     # Programmable Search key — there is no api_key field to set here. The

@@ -39,8 +39,14 @@ import {
   type ExportItem,
   type NotPublishedLine,
   type ReadingLimit,
+  asOfLabel,
 } from '@/lib/deskBriefPage'
 import { noCompositionLines, subjectNoun } from '@/lib/subjectPage'
+import { HowProduced, type ProducedRow } from '@/components/HowProduced'
+import { useBelowAdminPassive as useBelowAdmin } from '@/auth/roles'
+import { humanizeId, subjectName, useSubjectIndex } from '@/lib/deskNames'
+import { READER_WORDS, countOf, subjectDayTitle } from '@/lib/readerVocabulary'
+import { isStampAbsent, scaleStampLabel } from '@/lib/scaleStamp'
 
 /** The profile's subject noun (the exemplar's "desk") — every word on the
  *  page that names the subject is the profile's, never the exemplar's. */
@@ -94,6 +100,16 @@ export function FigureCard({
   )
 }
 
+/** A read's check state in a reader's words (the engine string stays an admin's). */
+export function plainCheck(verifyState: string | null | undefined): string {
+  const v = verifyState?.trim() ?? ''
+  if (!v) return 'Not checked yet'
+  if (/^verified\b/i.test(v)) return 'Checked'
+  if (/flag|unsupported/i.test(v)) return 'Claims flagged'
+  if (/pending/i.test(v)) return 'Not yet checked'
+  return 'Not checked'
+}
+
 // ---------------------------------------------------------------------------
 // 1 · the index card
 // ---------------------------------------------------------------------------
@@ -133,22 +149,74 @@ export function IndexCard({
   absences: ExportAbsences | null
 }) {
   const verify = composition?.verify_state?.trim() || null
-  const flags = Object.entries(composition?.verify_flags ?? {})
+  const flagEntries = Object.entries(composition?.verify_flags ?? {})
+  const belowAdmin = useBelowAdmin()
+  const subjects = useSubjectIndex()
+  const name = subjectName(targetId, subjects) ?? humanizeId(targetId)
+  // The page is titled with the profile's name for the subject and a readable
+  // day, never the record's machine title (which names the producer id and
+  // counts reads in the engine's terms); that title stays in the readout.
+  const title = index.present ? subjectDayTitle(name, index.asOf) : index.headline
+  const coverage =
+    unitsCarried === null
+      ? null
+      : `Covers ${unitsCarried} of the ${unitsRoster} ${unitsRoster === 1 ? 'question' : 'questions'} this ${NOUN} tracks`
+  const flaggedTotal = flagEntries.reduce((n, [, v]) => n + (typeof v === 'number' ? v : 0), 0)
+  const produced: ProducedRow[] = [
+    { label: READER_WORDS.asOf, value: index.asOfLabel, testId: 'desk-brief-plain-asof' },
+    {
+      label: READER_WORDS.heldAgainstSources,
+      value: !verify
+        ? 'not checked yet'
+        : flaggedTotal > 0
+          ? `${countOf(flaggedTotal, 'claim')} flagged`
+          : /^verified\b/i.test(verify)
+            ? 'checked, nothing flagged'
+            : 'checked',
+      testId: 'desk-brief-plain-check',
+    },
+    {
+      label: 'Questions covered',
+      value: `${unitsCarried === null ? '–' : unitsCarried} of ${unitsRoster}, out of every question this ${NOUN} tracks`,
+      testId: 'desk-brief-plain-coverage',
+    },
+    {
+      label: 'Gaps recorded',
+      value: absences
+        ? `${absences.item_count}, read ${asOfLabel(absences.read_at) ?? absences.read_at}`
+        : 'not read for this brief',
+      testId: 'desk-brief-plain-gaps',
+    },
+    {
+      label: READER_WORDS.scale,
+      value: isStampAbsent(stamp.state) ? READER_WORDS.scaleMissing : scaleStampLabel(stamp),
+      testId: 'desk-brief-plain-scale',
+    },
+  ]
   return (
     <section className="mb-8" data-testid="desk-brief-index-card">
       <div className="text-label uppercase tracking-wider text-ink-3">
-        {NOUN} brief &middot; <span className="font-mono normal-case">{targetId}</span>
+        {NOUN} brief
+        {!belowAdmin && (
+          <>
+            {' '}&middot; <span className="font-mono normal-case">{targetId}</span>
+          </>
+        )}
       </div>
       <h2
         className="mt-1 text-lg leading-snug text-ink-1"
         data-testid="desk-brief-title"
         data-composition={index.present ? 'present' : 'absent'}
       >
-        {index.headline}
+        {title}
       </h2>
+      {index.present && coverage && (
+        <p className="mt-0.5 text-body text-ink-2" data-testid="desk-brief-coverage">
+          {coverage}
+        </p>
+      )}
 
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
-        <ScaleStamp stamp={stamp} testId="desk-brief-scale-stamp" />
         {composition?.severity && (
           <span className="rounded border border-line bg-surf-2 px-1.5 py-0.5 text-label text-ink-2">
             severity {composition.severity}
@@ -159,55 +227,65 @@ export function IndexCard({
             className="rounded border border-amber-700 bg-amber-900/40 px-1.5 py-0.5 text-label text-amber-200"
             data-testid="desk-brief-superseded"
           >
-            superseded run
-          </span>
-        )}
-        {composition?.analyst_version && (
-          <span className="rounded border border-line bg-surf-2 px-1.5 py-0.5 font-mono text-label text-ink-3">
-            {composition.analyst_id}@{composition.analyst_version}
+            replaced by a newer read
           </span>
         )}
       </div>
 
-      <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-        <FigureCard
-          label="composition as of"
-          value={index.asOfLabel}
-          testId="desk-brief-asof"
-        />
-        <FigureCard
-          label="faithfulness"
-          value={verify ?? 'unmeasured'}
-          note={flags.length > 0 ? flags.map(([k, n]) => `${k}: ${n}`).join(' · ') : null}
-          testId="desk-brief-faithfulness"
-        />
-        <FigureCard
-          label="units carried"
-          value={`${unitsCarried === null ? '–' : unitsCarried} of ${unitsRoster} on the roster`}
-          note="the roster is the denominator, not the carried set"
-          testId="desk-brief-units-carried"
-        />
-        <FigureCard
-          label="typed absences"
-          value={
-            absences
-              ? `${absences.item_count} recorded · read ${absences.read_at.slice(0, 19)}Z`
-              : 'not read for this document'
-          }
-          testId="desk-brief-absence-count"
-        />
-      </div>
-
-      <div className="mt-2 flex flex-wrap items-center gap-2">
-        <span className="text-label uppercase tracking-wide text-ink-3">correctness</span>
-        <UnitCorrectnessBadge
-          analystId={composition?.analyst_id ?? null}
-          targetId={targetId}
-        />
-        <InfoTip text={NEVER_POOLED} testId="desk-brief-never-pooled">
-          <span className="text-label italic text-ink-3">never pooled with faithfulness</span>
-        </InfoTip>
-      </div>
+      <HowProduced
+        rows={produced}
+        analystId={composition?.analyst_id ?? null}
+        targetId={targetId}
+        className="mt-2"
+        testId="desk-brief-how-produced"
+      >
+        {/* The engine readout, for an admin: the record's own title, its
+            stamps and the two unpooled measurements as the engine names them. */}
+        <div className="w-full space-y-2">
+          <div className="text-label text-ink-3" data-testid="desk-brief-record-title">
+            {READER_WORDS.recordTitle}: <span className="text-ink-2">{index.headline}</span>
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <ScaleStamp stamp={stamp} testId="desk-brief-scale-stamp" />
+            {composition?.analyst_version && (
+              <span className="rounded border border-line bg-surf-2 px-1.5 py-0.5 font-mono text-label text-ink-3">
+                {composition.analyst_id}@{composition.analyst_version}
+              </span>
+            )}
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+            <FigureCard label="composition as of" value={index.asOfLabel} testId="desk-brief-asof" />
+            <FigureCard
+              label="faithfulness"
+              value={verify ?? 'unmeasured'}
+              note={flagEntries.length > 0 ? flagEntries.map(([k, n]) => `${k}: ${n}`).join(' · ') : null}
+              testId="desk-brief-faithfulness"
+            />
+            <FigureCard
+              label="units carried"
+              value={`${unitsCarried === null ? '–' : unitsCarried} of ${unitsRoster} on the roster`}
+              note="the roster is the denominator, not the carried set"
+              testId="desk-brief-units-carried"
+            />
+            <FigureCard
+              label="typed absences"
+              value={
+                absences
+                  ? `${absences.item_count} recorded · read ${absences.read_at.slice(0, 19)}Z`
+                  : 'not read for this document'
+              }
+              testId="desk-brief-absence-count"
+            />
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-label uppercase tracking-wide text-ink-3">correctness</span>
+            <UnitCorrectnessBadge analystId={composition?.analyst_id ?? null} targetId={targetId} />
+            <InfoTip text={NEVER_POOLED} testId="desk-brief-never-pooled">
+              <span className="text-label italic text-ink-3">never pooled with faithfulness</span>
+            </InfoTip>
+          </div>
+        </div>
+      </HowProduced>
     </section>
   )
 }
@@ -286,6 +364,7 @@ export function UnitBlock({
   situations: { id: string; name: string; status: string; events: { id: string; title: string; lifecycleState: string }[] }[]
   onOpen: () => void
 }) {
+  const belowAdmin = useBelowAdmin()
   return (
     <section
       className="mb-6 border-t border-line pt-4"
@@ -307,10 +386,11 @@ export function UnitBlock({
         <span
           className="rounded bg-surf-1 px-1.5 py-0.5 text-label text-ink-2"
           data-testid="desk-brief-unit-faithfulness"
+          title={belowAdmin ? undefined : (item.verify_state ?? undefined)}
         >
-          {item.verify_state?.trim() || 'faithfulness unmeasured'}
+          {belowAdmin ? plainCheck(item.verify_state) : item.verify_state?.trim() || 'not checked yet'}
         </span>
-        <UnitCorrectnessBadge analystId={item.analyst_id ?? null} targetId={targetId} />
+        {!belowAdmin && <UnitCorrectnessBadge analystId={item.analyst_id ?? null} targetId={targetId} />}
         {item.produced_at && (
           <span className="text-label text-ink-3">read {item.produced_at.slice(0, 19)}Z</span>
         )}
@@ -407,12 +487,12 @@ export function EvidenceTable({
         <table className="w-full min-w-[46rem] border-collapse text-xs">
           <thead>
             <tr className="border-b border-line text-left text-label uppercase tracking-wide text-ink-3">
-              <th className="py-1 pr-3 font-normal">Unit</th>
+              <th className="py-1 pr-3 font-normal">Question</th>
               <th className="py-1 pr-3 font-normal">Last read</th>
-              <th className="py-1 pr-3 font-normal">Faithfulness</th>
-              <th className="py-1 pr-3 font-normal">Correctness coverage</th>
+              <th className="py-1 pr-3 font-normal">Held against its sources</th>
+              <th className="py-1 pr-3 font-normal">Covered by an outside reference</th>
               <th className="py-1 pr-3 font-normal">Evidence state</th>
-              <th className="py-1 font-normal">Typed absence</th>
+              <th className="py-1 font-normal">Gaps</th>
             </tr>
           </thead>
           <tbody>

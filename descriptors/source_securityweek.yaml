@@ -1,10 +1,10 @@
-# K-1 cyber desk (2026-11-14) — draft SourceDescriptor. Ships DRAFT (operator activates).
+# Draft SourceDescriptor. Ships DRAFT (operator activates).
 #
 # SecurityWeek — daily cybersecurity news: incidents and breaches, exploited
 # vulnerabilities, industrial-control-system security, outages with a stated
 # cause (it covered the November 2026 Microsoft outage and FAA ground stop
 # the day they happened), plus a weekly "In Other News" round-up. Chosen as
-# one of three trade outlets (lane report). Probed 2026-11-13 (one GET,
+# one of three trade outlets. Probed 2026-11-13 (one GET,
 # generic client identity): HTTP 200, application/rss+xml, 10 items over one
 # day, ~400-character summaries (a summary feed), rich categories.
 #
@@ -14,7 +14,7 @@
 # Credibility: securityweek.com 0.75 / wire. Hourly (ten-item window).
 #
 # Desk routing: scope.classifications `geopolitics.topic:cyber` is stamped on
-# every signal (W10 TAX-2) — the cyber desk's tag arm (target_cyber.yaml).
+# every signal — the cyber desk's tag arm (target_theme_cyber.yaml).
 
 identity:
   id: source.securityweek.news
@@ -24,7 +24,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: cyber_desk_k1
+  owner: owner@local
   created: "2026-11-14T00:00:00Z"
 
 scope:

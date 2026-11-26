@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""``verify_backfill`` sub-handler — the sweep over findings whose verify leg never ran (W11-F84).
+"""``verify_backfill`` sub-handler — the sweep over findings whose verify leg never ran.
 
 Every rolling deploy recreates the runtime actor host. An analyst run in flight
 at that moment has already WRITTEN its finding (``analyst_outputs``

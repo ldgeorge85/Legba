@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""legba.data.seed.manual_batch — the generic manual-ingest batch loader (S4-T2).
+"""legba.data.seed.manual_batch — the generic manual-ingest batch loader.
 
-A *manual batch* (a directory validated by :mod:`legba.data.seed.manual_schema`,
-S4-T1) is the operator's ground-state backfill / merge / force lane. This module
+A *manual batch* (a directory validated by :mod:`legba.data.seed.manual_schema`)
+is the operator's ground-state backfill / merge / force lane. This module
 is the ADAPTER + LOADER that turns a validated batch into knowledge-layer rows,
 riding the EXISTING seed plane — the same primitives ``_driver`` uses
 (``_resolve_entity`` entity-canon upsert, ``write_fact`` / ``write_nexus``
@@ -121,10 +121,10 @@ from .manual_schema import (
 
 logger = logging.getLogger(__name__)
 
-#: Who writes a manual batch's source row (lane 9): this loader.
+#: Who writes a manual batch's source row: this loader.
 _WRITTEN_BY = rule_handle("manual_batch")
 
-#: P7/7g-1 — the origin-class leg on the prior-fact read (SEAMS #57 sweep).
+#: The origin-class leg on the prior-fact read.
 #: A manual seed batch supersedes the LIVE open row for a triple; a loaded
 #: historical row is not a prior belief for it to close.
 _LIVE_FACTS = origin_class_clause("")
@@ -358,7 +358,7 @@ def _fact_confidence(record: ManualFactRecord, manifest: BatchManifest) -> float
     """
     conf = record.confidence if record.confidence is not None else manifest.default_confidence
     assert conf is not None, (
-        "confidence unresolved despite S4-T1 validation — refusing a silent 1.0"
+        "confidence unresolved despite validation — refusing a silent 1.0"
     )
     return float(conf)
 
@@ -858,7 +858,7 @@ async def _register_manual_source(
         manifest.operator,
         f"Manual backfill — {manifest.batch_id}",
         json.dumps(body),
-        # Lane 9: the manual-batch loader wrote the row; the manifest's
+        # The manual-batch loader wrote the row; the manifest's
         # ``operator`` (a free-text name the manifest carries) stays in owner.
         _WRITTEN_BY,
     )

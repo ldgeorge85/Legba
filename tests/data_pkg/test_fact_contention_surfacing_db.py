@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""P3-2 — contested-claims arbiter TAIL, real-Postgres integration (#101).
+"""Contested-claims arbiter TAIL, real-Postgres integration (#101).
 
 Drives ``_run_arbiter`` against a MIGRATED ephemeral DB (the ``migrated_pg``
 fixture applies migration 0097) to prove the coexistence + surfacing behavior

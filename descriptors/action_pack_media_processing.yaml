@@ -1,6 +1,6 @@
-# P-11 — media_processing action pack (PIVOT §4.8 seed pack).
+# Media_processing action pack (seed pack).
 #
-# Grants the on-demand media-extraction tool `process_media`, wired to the W2
+# Grants the on-demand media-extraction tool `process_media`, wired to the
 # job plane (legba.runtime.jobs). An analyst that GRANTS this pack — and whose
 # target ALLOWS it, where the pack is APPLICABLE (a `media` scope tag) — may
 # enqueue a process_media job: a worker transcribes/captions/OCRs the referenced
@@ -20,7 +20,7 @@ identity:
   version: "<content-hash stamped at register time>"
   abstraction_level: L1
   state: active
-  owner: p11_agency
+  owner: owner@local
   created: "2026-06-03T00:00:00Z"
 
 tools:

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W9 VIEW-1 — the per-profile projection, end to end on the real driver.
+"""The per-profile projection, end to end on the real driver.
 
 The four parts (Review A §2.2d, the ``graph_arcs`` precedent):
 
@@ -25,7 +25,7 @@ The four parts (Review A §2.2d, the ``graph_arcs`` precedent):
     plane equals flag OFF on today's data (byte-identical output), and the read
     is real (a different scope table changes the answer).
 
-Every row this module writes is deleted in its teardown (the W7-F5 / W9 rule).
+Every row this module writes is deleted in its teardown (the / rule).
 """
 from __future__ import annotations
 

@@ -13,7 +13,7 @@ Entry points:
     ``derived_from`` graph backward; detects cycles, dangling refs, missing
     ancestors; returns ``LineageReport``.
 
-  * ``verify_finding_faithfulness(...)`` — the P0-T2 MANDATORY faithfulness
+  * ``verify_finding_faithfulness(...)`` — the MANDATORY faithfulness
     pass.  A DETERMINISTIC FLOOR (always on) checks every fact-asserting claim
     in a cited finding's prose against the resolved ``data['citations']``
     bridge: a claim that asserts a fact with NO ``[N]`` marker, or whose marker
@@ -49,7 +49,7 @@ from ._core import is_valid_schema_uri
 # importing ``data.analysts.inline_target`` from here would close an import cycle
 # through ``runtime.analyst_method``.
 from .kinds import is_grounding_citation
-# K-1 (2026-08-05) — CITATION MARKERS are the judge subsystem's fifth brick: the
+# CITATION MARKERS are the judge subsystem's fifth brick: the
 # canonical marker regexes plus every drift VARIANT the core plane emits, which
 # is a list that grows one acceptance panel at a time. Imported ONE WAY and
 # RE-EXPORTED, so ``verify._CLAIM_MARKER_RE`` / ``verify._normalize_verify_markers``
@@ -76,7 +76,7 @@ from .citation_markers import (  # noqa: F401 — re-exported verify surface
     _pull_trailing_markers,
     _range_markers,
 )
-# K-1 (2026-08-03) — the V-B ABSENCE-SLICE subsystem lives in a sibling module
+# The V-B ABSENCE-SLICE subsystem lives in a sibling module
 # (the seam the module-size gate named by name). Imported ONE WAY and RE-EXPORTED
 # here, so every existing reference — ``verify._ABSENCE_MARKERS``,
 # ``verify.SliceRow``, ``verify.load_absence_slice_rows`` — resolves exactly as
@@ -124,26 +124,25 @@ from .absence_slice import (  # noqa: F401 — re-exported verify surface
 from ..claim_attribution import claim_as_fact_fail_class
 from ..claim_support import claim_of, claim_only_failure, claim_sentence_attributed, ordinal_claims
 from ..gazetteer import NotApplicable, applicable
-from . import composition_integrity  # H2 — the composition-integrity brick (§6)
-# D-3 (2026-09-03) — THE ASSEMBLY ARMS, the judge subsystem's seventh brick and
-# the verify seam this train names in its first commit (D-1 §5.1 requires one:
-# this module had ~130 lines of ceiling and the four arms are ~700). Four
-# deterministic auditors over the ``assembly.v1`` payload, INERT on every
+from . import composition_integrity  # the composition-integrity brick
+# THE ASSEMBLY ARMS, a judge subsystem brick kept outside this module
+# (which has little room under its size ceiling). Four deterministic auditors
+# over the ``assembly.v1`` payload, INERT on every
 # non-assembly caller by construction. Imported ONE WAY, module-qualified at the
 # single fold site; its reasons arrive through ``FAIL_CLASSES`` exactly as H2's do.
-from . import assembly_arms  # D-3 — the assembly arms brick (D-1 §3)
-# G3 (2026-09-06) — THE WEIGHTED-COMPARISON LICENCE, the judge subsystem's eighth
-# brick and this train's own seam (49 lines of ceiling here against a subsystem).
+from . import assembly_arms  # the assembly arms brick
+# THE WEIGHTED-COMPARISON LICENCE, a further judge subsystem brick kept
+# outside this module.
 # The Assessment's voice contract MANDATES a weighted cross-block comparison and
 # the composition rubric grades each claim against the ONE sub-claim its marker
 # names, so the judge could only ever answer "unsupported" to the sentence the
 # channel asked for. The assembly performs exactly one ranking and publishes it
-# (the ordinal order + the earned-lead verdict, both in the arithmetic block P1
-# put behind every citation), so a comparison that names the blocks it weighs is
+# (the ordinal order + the earned-lead verdict, both in the arithmetic block
+# behind every citation), so a comparison that names the blocks it weighs is
 # relaying it. INERT for every finding whose citations carry no arithmetic rule,
 # which is the whole fleet except an Assessment.
-from . import assessment_weighting  # G3 — the weighted-comparison licence
-# K-1 (2026-08-05) — the QUOTE RULES are the judge subsystem's fourth brick, and
+from . import assessment_weighting  # the weighted-comparison licence
+# The QUOTE RULES are the judge subsystem's fourth brick, and
 # the extraction seam the module-size gate named by name ("prompt registry +
 # ``_run_judge`` + the quote/severity rules"). Every deterministic test for
 # whether a contradiction EARNED the hard class — V-D resolves, W2 refutes, V-G1
@@ -184,14 +183,24 @@ from .judge_quote_rules import (  # noqa: F401 — re-exported verify surface
     _quote_refutes,
     _quote_resolves,
     _quote_restates_claim,
+    _unescape_judge_quote,
     claim_is_routed_out,
     quote_confirms_the_claim,
 )
-# RUST-2/RUST-3 (2026-08-21) — the ABSENCE RUBRIC + the FOURTH VERDICT, the
+# The ABSENCE RUBRIC + the FOURTH VERDICT, the
 # judge subsystem's sixth brick (see that module's header for the measurement
 # and the earn test). Imported ONE WAY and RE-EXPORTED, so
 # ``verify._ABSENCE_JUDGE_SYSTEM`` resolves exactly as before; the severity
 # DECISION stays here, beside the fail-class table it must agree with.
+from .judge_prompts import (
+    COMPOSITION_LEAD,
+    GENERIC_JUDGE_SYSTEM,
+    INDEPENDENT_JUDGE_SYSTEM,
+    SURVEY_JUDGE_SYSTEM,
+    SURVEY_PROMPT_PREFIX,
+    SURVEY_VERDICT_ALTERNATION,
+    UNIT_LEAD,
+)
 from .judge_absence_rubric import (  # noqa: F401 — re-exported verify surface
     ABSENCE_PROFILE_VERSION,
     JUDGE_VERDICT_TOKENS,
@@ -201,7 +210,7 @@ from .judge_absence_rubric import (  # noqa: F401 — re-exported verify surface
     _VERDICT_NONPROP_UNEARNED,
     nonproposition_is_earned,
 )
-# V-I (2026-08-27) — JUDGE VERDICT PARSING, the judge subsystem's next brick:
+# JUDGE VERDICT PARSING, the judge subsystem's next brick:
 # the JSON-object extractor and the raw-verdict -> reason/detail mapping the
 # module-size gate's own note named ("prompt registry + ``_run_judge`` + the
 # quote/severity rules" is taken; this is the parsing half left beside it).
@@ -219,9 +228,13 @@ from .judge_verdict_parsing import (  # noqa: F401 — re-exported verify surfac
     _is_uncited_world_baseline,
     _judge_detail,
     _judge_reason,
+    JUDGE_UNVERIFIABLE_EXCERPT,
+    PASSING_VERDICTS,
+    VERDICT_SUPPORTED_AS_INFERENCE,
+    VERDICT_UNVERIFIABLE_EXCERPT,
     alignment_audit_fields,
 )
-# V-G7 (2026-08-03) — the STRUCTURAL-CLAIMS verify profile is the SECOND,
+# The STRUCTURAL-CLAIMS verify profile is the SECOND,
 # deterministic critique path (see the sibling module's header for why it is a
 # different KIND rather than a gap in this one). Imported ONE WAY and RE-EXPORTED
 # so ``verify.verify_structural_claims`` and friends resolve exactly as before.
@@ -456,12 +469,12 @@ async def validate_lineage(
 
 
 # ---------------------------------------------------------------------------
-# P0-T2 — faithfulness verify (deterministic floor + optional LLM judge)
+# Faithfulness verify (deterministic floor + optional LLM judge)
 # ---------------------------------------------------------------------------
 #
 # The system's MANDATORY verify pass.  After an inline_target finding is
-# emitted with its prose ``[N]`` markers resolved into ``data['citations']``
-# (P0-T1), this pass scores how faithful the synthesis is to its cited evidence
+# emitted with its prose ``[N]`` markers resolved into ``data['citations']``,
+# this pass scores how faithful the synthesis is to its cited evidence
 # and persists the score as a ``critique`` the existing gate consumes.
 #
 # DESIGN (faithfulness_score):
@@ -469,7 +482,7 @@ async def validate_lineage(
 #   the FACT-ASSERTING ones (a heuristic that skips headings, the "indicators to
 #   watch" forward-looking section, and bullet scaffolding).  Each checkable
 #   claim is SUPPORTED iff it carries at least one ``[N]`` marker that resolves
-#   to a real signal_id present in ``citations`` (the P0-T1 bridge).  A claim
+#   to a real signal_id present in ``citations`` (the citation bridge).  A claim
 #   with NO marker, or whose every marker is unresolved/absent from the bridge,
 #   is an UNSUPPORTED span.
 #
@@ -503,7 +516,7 @@ _SENTENCE_SPLIT_RE = re.compile(r"(?<!\.[A-Z]\.)(?<=[.!?])\s+|\n+")
 # looking watch section under the bold heading style, not just ``#``.
 _BOLD_HEADING_RE = re.compile(r"^\s*(?:[-*>]\s+)*\*\*([^*\n]+)\*\*\s*:?\s*$")
 
-# P7 r2 — an independent FINITE verb (a copula / auxiliary, or a clearly-verbal
+# An independent FINITE verb (a copula / auxiliary, or a clearly-verbal
 # past tense) signals a present-fact MAIN clause. Two uses: (1) keep a bold FACTUAL
 # sentence (``**Tehran resumed enrichment**``) OUT of the heading exemption, and
 # (2) anchor :func:`_is_forward_looking` so a ``present-fact, which would …`` clause
@@ -517,7 +530,7 @@ _PRESENT_FACT_VERB_RE = re.compile(
     r"mobili[sz]ed|halted|suspended|restored|captured|invaded|shelled|"
     r"bombed|declared|imposed|signed|breached|assassinated|detained|"
     r"arrested|ousted|toppled|erupted|escalated|"
-    # P7 FU1 — common present-tense (3rd-person -s) EVENT verbs. A present fact
+    # Common present-tense (3rd-person -s) EVENT verbs. A present fact
     # with a conditional tail but NO comma and a verb OUTSIDE the past-tense list
     # above ("Beijing conducts drills that would confirm intent", "Iran enriches
     # uranium which would confirm breakout") was wrongly read as pure prediction
@@ -580,7 +593,7 @@ def _is_backtick_heading(line: str) -> bool:
     return not _PRESENT_FACT_VERB_RE.search(content.lower())
 
 
-# V-H2 (2026-08-04) — the FOURTH section-label style, and the one the assessors
+# The FOURTH section-label style, and the one the assessors
 # use most: an UNDECORATED line ending in a colon ("Key points:", "Assessment:",
 # "Indicators to watch:"). See :func:`_is_plain_heading`.
 _PLAIN_HEADING_RE = re.compile(r"^\s*([A-Za-z][^\n:]{0,63}):\s*$")
@@ -634,7 +647,7 @@ _CITATION_ONLY_RE = re.compile(
     r"^\s*(?:\[\d+\]|\[\[ref:\d+\]\])(?:\s*(?:\[\d+\]|\[\[ref:\d+\]\]))*\s*$"
 )
 
-# P7-F1(2) — a citation marker that sits AFTER a sentence terminator
+# A citation marker that sits AFTER a sentence terminator
 # (``…fighters. [[ref:1]]`` / ``…zones.\n[21]``) is severed from the claim it
 # supports by _SENTENCE_SPLIT_RE, orphaning the clause as ``no_citation`` even
 # though it IS cited. ``_pull_trailing_markers`` (citation_markers, W11-F86 —
@@ -650,7 +663,7 @@ _INLINE_HEADING_RE = re.compile(r"(?<=[^\n])(#{2,6}\s+\S)")
 # label style the assessors emit alongside ``#`` and ``**bold**``.
 _BACKTICK_HEADING_RE = re.compile(r"^\s*(?:[-*>]\s+)*`([^`\n]{1,64})`\s*:?\s*$")
 
-# Phase-V D1 (2026-08-04) — the AS-OF LINE. Every unit finding and every
+# The AS-OF LINE. Every unit finding and every
 # composition now opens with one, in the exact form the shared as-of clause
 # mandates: a whole line, wrapped in single asterisks, beginning "As of", giving
 # the run's own coordinates — ``*As of 3 August 2026; slice covers the trailing
@@ -753,7 +766,7 @@ _NON_FACTUAL_HEADINGS = (
     "indicators to monitor",
     "what would confirm",
     "what would break",
-    # Phase-V D4 (2026-08-04): the ONE unit body shape names this section
+    # The ONE unit body shape names this section
     # ``## What would change this read`` on every desk, so it goes from a
     # phrasing some models happened to pick to a section every unit finding
     # carries. It is forward-looking by construction — the prompt defines it as
@@ -786,7 +799,7 @@ _SYNTHESIS_PREFIXES = (
     "assessment:",
     "judgment:",
     "judgement:",
-    # P7-F1(3): the composition assessors emit bare ``JUDGMENT`` / ``ASSUMPTION``
+    # The composition assessors emit bare ``JUDGMENT`` / ``ASSUMPTION``
     # synthesis lines (no colon) as their derived-read scaffolding — a conclusion
     # over the cited sub-claims, not a new first-order citable fact. FLOOR-ONLY
     # (via _is_fact_asserting); the judge still grades them (_is_judgeable_claim).
@@ -808,7 +821,7 @@ _SYNTHESIS_PREFIXES = (
     "net:",
 )
 
-# Q-1 (2026-08-05): the labeled-scaffold rule and the score-state policy moved to
+# The labeled-scaffold rule and the score-state policy moved to
 # judge_assessability.py (judge-subsystem brick 2) — together, because the measured
 # defect ran through both halves. ``_LABELED_SCAFFOLD_RE`` is re-exported for the
 # callers that still name the SHAPE; every EXEMPTION decision now goes through
@@ -839,7 +852,7 @@ from .judge_assessability import (  # noqa: F401 — re-exported verify surface
 )
 
 
-# P7-F1(5) — FORWARD-LOOKING watch/indicator bullet markers. A bullet phrased as a
+# FORWARD-LOOKING watch/indicator bullet markers. A bullet phrased as a
 # future conditional ("Official announcements of fuel rationing WOULD CONFIRM a
 # supply crisis", "a border incident WOULD SIGNAL escalation") is a signpost the
 # read is watching FOR — it describes a non-occurrence that, by construction,
@@ -867,7 +880,7 @@ _FORWARD_LOOKING_MARKERS = (
 def _is_forward_looking(low: str) -> bool:
     """True when a clause is a PURE future-conditional watch/indicator bullet.
 
-    ANCHORED (P7 r2, H1): the conditional idiom must GOVERN THE WHOLE clause — the
+    ANCHORED: the conditional idiom must GOVERN THE WHOLE clause — the
     clause OPENS with the idiom, or is a bare ``X would/could Y`` whose subject (the
     text before the modal) carries NO independent present-fact assertion. A clause
     that leads with a present-fact main clause and only trails a conditional
@@ -918,13 +931,13 @@ _ADVISORY_REASONS = frozenset({"double_counted", "hedge_laundering"})
 # every pre-C-TIER composition — leave this rule inert, byte-for-byte.
 #
 # Scope note: the deterministic FLOOR rule above is always-on for tiered
-# compositions. The optional LLM judge is ALSO tier-aware (the former SEAMS
-# §45, resolved 2026-07): when the citation list carries periphery-tier stamps,
-# the composition judge prompt gains the ADDITIVE EVIDENCE-TIERS rubric block
+# compositions. The optional LLM judge is ALSO tier-aware: when the citation
+# list carries periphery-tier stamps, the composition judge prompt gains the
+# ADDITIVE EVIDENCE-TIERS rubric block
 # (:func:`_judge_periphery_rubric`) naming the periphery ordinals and requiring
 # hedged/attributed use — treating a periphery item as established fact is a
-# failure. Untiered citation lists (every pre-C-TIER composition) leave the
-# judge prompt byte-identical; the C1 no-co-veto decision is unchanged (the
+# failure. Untiered citation lists leave the
+# judge prompt byte-identical; there is no co-veto (the
 # judge stays authoritative over the prose it graded, and the floor rule still
 # counts an unhedged periphery claim regardless).
 # ---------------------------------------------------------------------------
@@ -1003,7 +1016,7 @@ def _periphery_ordinals(citations: Any) -> set[int]:
 
 
 def _judge_periphery_rubric(citations: Any) -> str:
-    """The ADDITIVE tier-aware judge rubric block (former SEAMS §45), or ``""``.
+    """The ADDITIVE tier-aware judge rubric block or ``""``.
 
     Rendered into the COMPOSITION judge prompt lead ONLY when the citation list
     carries periphery-tier stamps (a tiered C-TIER composition); every untiered
@@ -1021,17 +1034,16 @@ def _judge_periphery_rubric(citations: Any) -> str:
         "EVIDENCE TIERS: sub-claim(s) "
         f"[{ord_list}] are PERIPHERY tier — signals that scored BELOW the "
         "verification floor or were never verified. They are weak leads, NOT "
-        "established findings. A claim resting ONLY on periphery sub-claims is "
-        "SUPPORTED only when it is hedged AND attributed to weak reporting "
-        "(e.g. 'weakly-supported reporting suggests ...'); a claim that treats "
-        "a periphery sub-claim as ESTABLISHED FACT (asserted bald, with no "
-        "hedge/attribution) is UNSUPPORTED even when the periphery text "
-        "contains it. A claim citing at least one non-periphery (basis) "
-        "sub-claim is graded normally.\n\n"
+        "established findings. A claim resting only on periphery sub-claims is "
+        "supported only if its strength and attribution do not exceed the "
+        "sub-claim's; the wording is not the test, the strength is. A claim "
+        "that states a periphery sub-claim as established fact is UNSUPPORTED "
+        "even when the periphery text contains it. A claim citing at least one "
+        "non-periphery (basis) sub-claim is graded normally.\n\n"
     )
 
 # ---------------------------------------------------------------------------
-# P2-4 — hard/soft verdict labels (the Primer taxonomy). LABELS ONLY: nothing
+# Hard/soft verdict labels (the Primer taxonomy). LABELS ONLY: nothing
 # below changes a score, a floor exemption, or pass/fail semantics — each span
 # reason is additively classified so the report (and the UI hover) can say HOW
 # BAD a flag is, and so a future gate can weigh hard vs soft without re-deriving
@@ -1060,7 +1072,7 @@ _FAIL_CLASS_BY_REASON: dict[str, str] = {
     "judge_contradicted": FAIL_CLASS_HARD,
     # M13 — stale-cutoff current-officeholder reference (entity scramble)
     "stale_leader": FAIL_CLASS_HARD,
-    # E-1 (2026-07-27) — officeholder claim reconciled against the CURRENT
+    # Officeholder claim reconciled against the CURRENT
     # facts-table officeholder row and found mismatched. Same hard entity-
     # scramble class as the M13 heuristic, but a DISTINCT reason so calibration
     # can tell the facts-backed flag from the curated-regex one — and because
@@ -1077,6 +1089,10 @@ _FAIL_CLASS_BY_REASON: dict[str, str] = {
     # the judge could not ground the claim in the cited evidence — unsupported
     # inference (distinct from contradicted: the evidence is silent, not opposed)
     "judge_unsupported": FAIL_CLASS_SOFT,
+    # the claim cites an article shown only in part and its specifics are not in
+    # the part shown: it could not be checked, which is never a hard fail and
+    # never read as unsupported
+    JUDGE_UNVERIFIABLE_EXCERPT: FAIL_CLASS_SOFT,
     # a composed clause asserts more confidence than its cited sub-claim carries
     "hedge_laundering": FAIL_CLASS_SOFT,
     # C-TIER — a composed clause resting ONLY on periphery-tier (below-floor /
@@ -1111,13 +1127,13 @@ _FAIL_CLASS_BY_REASON: dict[str, str] = {
     # language ("no outages were reported" on a thin-collection desk). An
     # honesty-PHRASING defect (overclaim family), NOT fabrication — soft.
     "unscoped_absence_claim": FAIL_CLASS_SOFT,
-    # V-B (2026-07-31) — a SCOPED-ABSENCE claim ("no NEW / large-scale X") that a
+    # A SCOPED-ABSENCE claim ("no NEW / large-scale X") that a
     # row of the analyst's OWN retained input slice reports. HARD by the same
     # earned-severity rule as V-D: the verdict must NAME the violating slice
     # title, resolved against the candidate set — an unresolvable answer decides
     # nothing and leaves today's verdict.
     "absence_slice_contradicted": FAIL_CLASS_HARD,
-    # V-D (2026-07-31) — the judge called the claim CONTRADICTED but could not
+    # The judge called the claim CONTRADICTED but could not
     # point at the refutation: no ``quotes`` entry, or one that is not a verbatim
     # run of the evidence it was shown. The claim still FAILS; the unearned
     # hard-fail severity is what the demotion removes (readout finding #4 — half
@@ -1131,7 +1147,7 @@ _FAIL_CLASS_BY_REASON: dict[str, str] = {
     # ``judge_contradicted_unquoted`` — the defect is a bad refutation, not a
     # missing one, and calibration must be able to tell the two apart.
     "judge_contradicted_unrefuted": FAIL_CLASS_SOFT,
-    # V-G1 (2026-08-03) — the judge's refuting quote is verbatim and real, but it
+    # The judge's refuting quote is verbatim and real, but it
     # lives in an ANALYST FINDING the claim never cited: overwhelmingly this
     # desk's own superseded PRIOR READ (13 of 23 traced quotes on the 08-03
     # panel), sometimes a sibling desk's assessment. The desk did not misstate
@@ -1140,7 +1156,7 @@ _FAIL_CLASS_BY_REASON: dict[str, str] = {
     # disagreement is real information a calibration read should be able to
     # count, and it is emphatically not fabrication.
     "judge_prior_read_conflict": FAIL_CLASS_SOFT,
-    # V-H4 (2026-08-04) — the claim ENUMERATED what it denies ("FX-reserve
+    # The claim ENUMERATED what it denies ("FX-reserve
     # depletion, currency crises, SWIFT bans, or sovereign default pressures")
     # and the judge's real, verbatim, signal-backed quote names none of those
     # things in full ("business and mortgage defaults"). It evidences something
@@ -1149,26 +1165,26 @@ _FAIL_CLASS_BY_REASON: dict[str, str] = {
     # ``judge_contradicted_unrefuted`` so the two demotion mechanisms stay
     # separable in the counters (V-G8's fidelity rule).
     "judge_contradicted_off_scope": FAIL_CLASS_SOFT,
-    # V-I1 (2026-08-05) — the judge's "refuting" quote states the claim's OWN
+    # The judge's "refuting" quote states the claim's OWN
     # numbers back to it once numerals, units and word-numbers are normalized on
     # both sides: "16 people were killed, and another 36 were injured" was used
     # to hard-fail "sixteen lives and thirty-six injuries". Soft, and its own
     # class because it is the only demotion that says the judge got the
     # DIRECTION wrong rather than the evidence, the scope or the provenance.
     "judge_quote_confirms_claim": FAIL_CLASS_SOFT,
-    # V-I4 (2026-08-05) — the refuting quote resolves ONLY inside a GDELT/CAMEO
+    # The refuting quote resolves ONLY inside a GDELT/CAMEO
     # machine-coded event record ("STUDENT <-> PAPUA: protest in Jakarta"). A
     # coding is a machine's reading of an article, not the article; the V-B
     # route has excluded the class 2,109 times a day since W1(c) while the judge
     # path never had the filter. Soft: the quote is real, it just is not
     # testimony — and the article underneath H13's coding SUPPORTED the claim.
     "judge_contradicted_machine_row": FAIL_CLASS_SOFT,
-    # V-I5 (2026-08-05) — the V-B continuity router had already routed this claim
+    # The V-B continuity router had already routed this claim
     # OUT of slice checking, and the judge hard-failed it anyway. One claim, two
     # authorities. Soft: the routing decision is the platform's answer to what
     # KIND of claim this is, and the hard class is not available for it.
     "judge_contradicted_route_excluded": FAIL_CLASS_SOFT,
-    # V-J1 (2026-08-28) — the claim NAMED both poles and marked one WEAK ("a
+    # The claim NAMED both poles and marked one WEAK ("a
     # weakly-supported report indicates no new evidence ... which conflicts with
     # the VERIFIED finding of an advancing procurement pact"), and the refutation
     # is that same disclosed weak side. Hard-failing a sentence for not believing
@@ -1176,7 +1192,7 @@ _FAIL_CLASS_BY_REASON: dict[str, str] = {
     # own class: V-I5 is about what KIND of read the ROUTER said this is; this is
     # about what the SENTENCE says.
     "judge_contradicted_hedged_conflict": FAIL_CLASS_SOFT,
-    # V-G5 (2026-08-03) — a claim with NO citation marker resting on a
+    # A claim with NO citation marker resting on a
     # HISTORICAL / STRUCTURAL BASELINE about the world ("Argentina's historical
     # propensity for coups", "the base rate for the United States"). The judge is
     # instructed to pass markerless prose as synthesis, so this class rode
@@ -1184,7 +1200,7 @@ _FAIL_CLASS_BY_REASON: dict[str, str] = {
     # distinct from ``no_citation``: the defect is not a missing marker on a
     # reported fact, it is a premise whose truthmaker no cited row contains.
     "uncited_world_knowledge": FAIL_CLASS_SOFT,
-    # V-C (2026-07-31) — prose MISQUOTING the platform's own metadata: it states
+    # Prose MISQUOTING the platform's own metadata: it states
     # an effective_confidence / tier the cited output's captured column
     # contradicts. Newly VISIBLE (previously the judge could not check it at
     # all). Soft: an overclaim about provenance, not a fabricated world fact —
@@ -1201,7 +1217,7 @@ _FAIL_CLASS_BY_REASON: dict[str, str] = {
     # Soft by the same rule (no fabricated fact) and the most consequential soft
     # class in the table: it is how a chokepoint was simultaneously shut and open.
     "unsurfaced_input_contradiction": FAIL_CLASS_SOFT,
-    # RUST-3 (2026-08-21) — the judge answered ``not_a_proposition`` on a span
+    # The judge answered ``not_a_proposition`` on a span
     # that DOES assert a checkable particular, so "this asserts nothing" is false
     # and the claim stays graded. Soft, and its own class: it is the only entry
     # here recording the judge DECLINING to grade rather than grading wrongly,
@@ -1210,7 +1226,7 @@ _FAIL_CLASS_BY_REASON: dict[str, str] = {
     # ungraded, never a span and never a ledger row.
     _JUDGE_NONPROP_UNEARNED: FAIL_CLASS_SOFT,
     **composition_integrity.FAIL_CLASSES,  # H2 — see that module's banner
-    # D-3 (2026-09-03) — the SIXTEEN ASSEMBLY-ARM classes, all HARD. They grade a
+    # The SIXTEEN ASSEMBLY-ARM classes, all HARD. They grade a
     # GENERATED payload, so none of them can express "the model outran its
     # evidence"; each says "the record does not say what it says it says", which
     # is the house definition of hard. Rationale per class lives beside the class
@@ -1236,7 +1252,7 @@ def fail_class_for_reason(reason: str) -> str:
 # forward-looking 'not_observed' / 'expired' statuses are exempt (nothing exists
 # to cite for a non-occurrence — mirroring the prose watch-section exemption).
 _INDICATOR_UNCITED_TRIGGERED = "indicator_uncited_triggered"
-# X4 LEVEL (W11-F36) — a level-shaped indicator 'observed_at_level' asserts the
+# X4 LEVEL — a level-shaped indicator 'observed_at_level' asserts the
 # condition stands NOW, so it is held to a citation exactly like 'triggered'
 # (same reason, same class); only its ledger label differs.
 _INDICATOR_EVIDENCED_LABELS = {
@@ -1258,7 +1274,7 @@ def _llm_judge_enabled() -> bool:
 
 
 # ---------------------------------------------------------------------------
-# P2-4 — judge PROMPT PROFILE (independence posture), STAGED NOT LIVE.
+# Judge PROMPT PROFILE (independence posture), STAGED NOT LIVE.
 #
 # ``current`` (the DEFAULT, and the only live behavior) keeps the calibrated
 # generic judge system prompt byte-for-byte. ``independent`` swaps in the
@@ -1282,7 +1298,7 @@ def _llm_judge_enabled() -> bool:
 from .judge_pipeline_version import (  # noqa: E402,F401 — re-exported surface
     JUDGE_PIPELINE_VERSION,
 )
-# K-1 (2026-09-08) — judge TRANSPORT is the subsystem's sixth brick: the bounded
+# Judge TRANSPORT is the subsystem's sixth brick: the bounded
 # retry that tells "the router was overloaded" apart from "the judge said
 # nothing" (OpenRouter reports an upstream 502 as HTTP 200 + an error envelope,
 # which no status-code retry can see), the PARTITION-PRESERVE policy and its
@@ -1359,13 +1375,13 @@ class UnsupportedSpan:
             "reason": self.reason,
             "markers": list(self.markers),
             "detail": self.detail,
-            # P2-4 — ADDITIVE hard/soft label (the Primer taxonomy). Derived from
+            # ADDITIVE hard/soft label (the Primer taxonomy). Derived from
             # the ONE mapping table above; existing readers ignore the extra key.
             "fail_class": fail_class_for_reason(self.reason),
         }
 
 
-# P2-4 — per-claim ledger bounds. The ``claim_verdicts`` ledger persists EVERY
+# Per-claim ledger bounds. The ``claim_verdicts`` ledger persists EVERY
 # graded claim (supported included — previously recorded NOWHERE, the citation-
 # hover finding), so it is size-bounded at the persist boundary: at most
 # ``_CLAIM_VERDICTS_CAP`` entries, each text at most ``_CLAIM_VERDICT_TEXT_CHARS``
@@ -1388,7 +1404,7 @@ VERDICT_SUPPORTED = "supported"
 
 @dataclass
 class ClaimVerdict:
-    """One row of the per-claim verdict LEDGER (P2-4 deliverable 2b).
+    """One row of the per-claim verdict LEDGER.
 
     The verify pass previously persisted per-claim data ONLY for failures
     (``unsupported_spans``); a SUPPORTED claim's verdict was recorded nowhere —
@@ -1488,8 +1504,8 @@ class FaithfulnessReport:
     # composition can be at most as confident as its strongest INDEPENDENT
     # cited sub-claim.
     confidence_ceiling: float | None = None
-    # V3 (MP:DEC-E) — per-claim-KIND sub-scores from the LLM judge, recorded and
-    # never hidden (design §2.3). Maps each judged kind →
+    # Per-claim-KIND sub-scores from the LLM judge, recorded and
+    # never hidden. Maps each judged kind →
     # ``{"checkable", "supported", "score"}``. Empty ``{}`` on the deterministic
     # (judge-off / judge-unavailable) path, for the unit/composition floor, AND
     # on the M14 whole-finding survey path (ONE rubric grades the whole claim
@@ -1497,7 +1513,7 @@ class FaithfulnessReport:
     # ``faithfulness_score`` stays the POOLED ratio across ALL kinds, so no
     # per-branch weighting can launder a bad kind behind a good one.
     branch_scores: dict[str, dict[str, Any]] = field(default_factory=dict)
-    # P2-4 — the FULL per-claim verdict ledger (supported + hard_fail +
+    # The FULL per-claim verdict ledger (supported + hard_fail +
     # soft_fail rows; see :class:`ClaimVerdict`). ADDITIVE: default empty so
     # every existing constructor/reader is byte-identical; the ledger never
     # feeds a score. On the floor path it reconciles exactly (one row per
@@ -1523,7 +1539,7 @@ class FaithfulnessReport:
     # deterministic post-judge overrides (V-C/V-B) rescore against THIS number so
     # they can never silently re-base the score onto a different denominator.
     score_denominator: int | None = None
-    # Q-1 (2026-08-05) — the SCORE STATE. ``scored`` when the tallies are a real
+    # The SCORE STATE. ``scored`` when the tallies are a real
     # measurement over a real claim list; ``unassessable`` when they are not and
     # the number must therefore not be published as a faithfulness score at all
     # (see judge_assessability.resolve_score_state). Stamped ONCE, at the end of
@@ -1569,7 +1585,7 @@ class FaithfulnessReport:
             # measurement to publish under this key — its raw tally (1.0 over an
             # empty claim list) read as a perfect pass to every consumer that did
             # not also read ``score_state`` (the trajectory ledger admitted delta
-            # claims on it; round 5 §9b measured it). NULL says "never checked";
+            # claims on it; measured). NULL says "never checked";
             # the published gate number below stays a REAL float, because
             # ``overall_score`` is the key the gates and the thirteen laterals
             # fold on. The raw tally itself is untouched on the report object.
@@ -1589,7 +1605,7 @@ class FaithfulnessReport:
                 else None
             ),
             "branch_scores": self.branch_scores,
-            # P2-4 additive: the size-bounded per-claim ledger + honest cut flag.
+            # Additive: the size-bounded per-claim ledger + honest cut flag.
             "claim_verdicts": bounded,
             "claim_verdicts_truncated": truncated,
             **alignment_audit_fields(  # H3: the alignment audit
@@ -1629,7 +1645,7 @@ class FaithfulnessReport:
 def _resolved_citation_ids(citations: Any) -> set[str]:
     """The set of resolved signal_ids in a finding's ``data['citations']``.
 
-    Tolerates the P0-T1 shape (``[{"marker": "[N]", "signal_id": ...}, ...]``)
+    Tolerates the citation-bridge shape (``[{"marker": "[N]", "signal_id": ...}, ...]``)
     and skips any entry without a non-empty signal_id (never a fabricated id).
     """
     out: set[str] = set()
@@ -1998,7 +2014,7 @@ def _ordinal_derived_map(citations: Any) -> dict[int, set[str]]:
 
 def _ordinal_source_map(citations: Any) -> dict[int, str]:
     """Map each cited sub-claim's ORDINAL → its SOURCE producer (``source`` /
-    ``analyst_id``), the discriminator for P7-F1(6).
+    ``analyst_id``), the discriminator for group-aware lineage joins.
 
     A country_composition cites the SEVEN bounded UNITS of one desk: they share
     the desk's wire lineage by construction (all read the same signal slice) yet
@@ -2031,7 +2047,7 @@ def _correlated_components(
     generic over any hashable key), joined when their ``derived_from`` sets
     intersect. Each component = ONE independent evidence unit (T7).
 
-    P7-F1(6): when ``group_map`` is supplied, two ids are joined only when they
+    When ``group_map`` is supplied, two ids are joined only when they
     share lineage AND belong to the SAME group (same producing source). Two ids
     that share lineage but come from DIFFERENT sources are NOT double-counting —
     they are different bounded questions over a shared wire slice (the
@@ -2077,11 +2093,10 @@ def _correlated_components(
 
 
 # ---------------------------------------------------------------------------
-# LRF (2026-08-29) — THE LENGTH-RESPONSE FLATTENING. An exemption belongs to the
+# THE LENGTH-RESPONSE FLATTENING. An exemption belongs to the
 # CLAUSE that earns it, never to the SPAN that happens to contain it.
 #
-# THE MEASURED DEFECT (planning/CAMPAIGN_2026-08-29/PREMISE_GRADING_LOOP.md,
-# A-5b + Decision 6B): the gate score peaks at exactly four checkable claims and
+# THE MEASURED DEFECT: the gate score peaks at exactly four checkable claims and
 # declines monotonically thereafter, so a desk that says MORE checkable things
 # scores WORSE — while the external rounds independently measure the product
 # under-hedging 42 to 1 with zero over-reads in two rounds. Those are the same
@@ -2324,10 +2339,10 @@ def _is_fact_asserting(claim: str) -> bool:
     # A markdown heading line is structure, not an assertion.
     if s.lstrip().startswith("#"):
         return False
-    # P7-F1(1): a whole-line BOLD HEADING (``**Key points**``, ``- **Drivers**``)
+    # A whole-line BOLD HEADING (``**Key points**``, ``- **Drivers**``)
     # is a section label, not a fact — extend the ``#`` heading drop to the bold
     # style the composition assessors emit (the AU energy finding floored 0/4 with
-    # ``**Key points**`` itself counted as an uncited claim). P7 r2: only a
+    # ``**Key points**`` itself counted as an uncited claim). Only a
     # HEADING-SHAPED bold line drops — a bold FACTUAL sentence
     # (``**Tehran resumed enrichment**``) is a real claim, still counted. A
     # ``**Severity:** High`` scaffold line does NOT match (_BOLD_HEADING_RE requires
@@ -2339,7 +2354,7 @@ def _is_fact_asserting(claim: str) -> bool:
     # can ground it — floor-exempt as structure (see _AS_OF_LINE_RE).
     if _is_as_of_line(s):
         return False
-    # P7-F1(5): a forward-looking watch/indicator bullet ('… would confirm …') is
+    # A forward-looking watch/indicator bullet ('… would confirm …') is
     # a future non-occurrence the read is watching FOR — nothing exists to cite.
     if _is_forward_looking(low):
         return False
@@ -2419,8 +2434,7 @@ def _is_judgeable_claim(claim: str) -> bool:
     EXEMPTIONS. Those exemptions correctly stop the deterministic no-citation
     FLOOR from crushing an honest, un-citable synthesis or absence claim — but
     they must NOT hide the claim from the judge, or a FABRICATED zero-citation
-    BLUF body scores a vacuous 1.0 (every claim exempt → checkable=0; P4 pre-push
-    review H1). The judge, unlike the mechanical floor, CAN tell a faithful
+    BLUF body scores a vacuous 1.0 (every claim exempt → checkable=0). The judge, unlike the mechanical floor, CAN tell a faithful
     synthesis from an invented fact (its calibrated fabrication-vs-analysis
     prompt), so it grades EVERY prose span; only the floor exempts.
     """
@@ -2433,8 +2447,8 @@ def _is_judgeable_claim(claim: str) -> bool:
     low = stripped.lower()
     if s.lstrip().startswith("#"):
         return False
-    # P7-F1(1): a whole-line BOLD HEADING is structure for the JUDGE too — a bold
-    # section label carries no fact for the judge to grade. P7 r2: only a genuine
+    # A whole-line BOLD HEADING is structure for the JUDGE too — a bold
+    # section label carries no fact for the judge to grade. Only a genuine
     # HEADING-SHAPED bold line is exempt — a bold FACTUAL sentence
     # (``**Tehran resumed enrichment**``) is a real claim the judge MUST grade
     # (H1). (Unlike the floor's BLUF/synthesis/absence exemptions, a genuine bold
@@ -2454,10 +2468,10 @@ def _is_judgeable_claim(claim: str) -> bool:
     for head in _NON_FACTUAL_HEADINGS:
         if low.startswith(head):
             return False
-    # P7 r2 (H1): the JUDGE is exempt ONLY from a PURE forward-looking prediction —
+    # The JUDGE is exempt ONLY from a PURE forward-looking prediction —
     # one whose conditional idiom governs the WHOLE clause (a bare 'X would confirm
     # Y' signpost that leaked outside a recognized watch heading). _is_forward_looking
-    # is now ANCHORED, so a present-fact main clause carrying a conditional TAIL
+    # is ANCHORED, so a present-fact main clause carrying a conditional TAIL
     # ('Tehran resumed enrichment, which would confirm a breakout') is NOT forward-
     # looking and the judge STILL grades it — the round-1 unanchored substring match
     # wrongly hid such present facts. A present-tense absence read ('No evidence of
@@ -2470,11 +2484,11 @@ def _is_judgeable_claim(claim: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# V3 (2026-07-16, MP:DEC-E) — per-CLAIM-KIND classifier + versioned judge
+# Per-CLAIM-KIND classifier + versioned judge
 # profiles. The absence branch is the ONLY branch DEC-E approves building; the
 # scaffolding (classifier + profile registry + per-branch telemetry) is the
 # shared substrate every later branch (synthesis / forward_looking / stance /
-# V5 support-hardening) plugs into WITHOUT touching the core (design §2.4).
+# V5 support-hardening) plugs into WITHOUT touching the core.
 #
 # The classifier is DETERMINISTIC + pure-lexical (verify.py imports nothing from
 # the analysts package): it is the thing that STOPS the measured 0.0/0.2/1.0
@@ -2488,12 +2502,12 @@ def _is_judgeable_claim(claim: str) -> bool:
 # COEXISTENCE with M14 (the whole-finding null-result survey below): M14 is a
 # WHOLE-FINDING route (≤1 positive claim ⇒ the survey rubric grades the entire
 # claim list as one corpus survey); the V3 absence branch is the PER-CLAIM route
-# for the embedded-absence-in-a-fact-rich-finding case M14 misses (design §3.2
-# #4 / §3.5). ``_run_judge`` checks M14 FIRST and only partitions when the
+# for the embedded-absence-in-a-fact-rich-finding case M14 misses.
+# ``_run_judge`` checks M14 FIRST and only partitions when the
 # finding is NOT a whole-finding null — the two never compete.
 # ---------------------------------------------------------------------------
 
-# Claim-kind labels (design §2.1). ``citation_support`` is the residual — every
+# Claim-kind labels. ``citation_support`` is the residual — every
 # fact-asserting span that is none of the four structural/derived kinds.
 CLAIM_KIND_STRUCTURE = "structure"
 CLAIM_KIND_FORWARD_LOOKING = "forward_looking"
@@ -2501,7 +2515,7 @@ CLAIM_KIND_ABSENCE = "absence"
 CLAIM_KIND_SYNTHESIS = "synthesis"
 CLAIM_KIND_CITATION_SUPPORT = "citation_support"
 
-#: D-3 (2026-09-03) — the ASSEMBLY branch. NOT returned by :func:`_claim_kind`,
+#: The ASSEMBLY branch. NOT returned by :func:`_claim_kind`,
 #: and that is the design rather than an omission: an assembly violation is not a
 #: SEGMENTED PROSE SPAN at all, it is a structural fact about a payload (a span
 #: that does not resolve, a ledger that does not close). Routing it through the
@@ -2510,15 +2524,13 @@ CLAIM_KIND_CITATION_SUPPORT = "citation_support"
 #: ``_claim_kind`` is BYTE-IDENTICAL — which is also what keeps the fleet's
 #: existing ``branch_scores`` telemetry unmoved by this train.
 #:
-#: NOT the D3/#71 CLAIM-CLASS SPLIT, which does not exist and which D-3 does not
-#: build (D-1 §3.7 / F-11: zero code, zero tests, zero occurrences of
-#: ``claim_class`` in the tree; the ruling is design-first, own stamp, sequenced
-#: after #69). This is one new branch for one new deterministic instrument.
+#: NOT a CLAIM-CLASS SPLIT, which does not exist and which the assembly arms do
+#: not build. This is one new branch for one new deterministic instrument.
 CLAIM_KIND_ASSEMBLY = "assembly"
 
 
 def _claim_kind(claim: str) -> str:
-    """Assign a segmented span EXACTLY ONE claim kind (design §2.1).
+    """Assign a segmented span EXACTLY ONE claim kind.
 
     First-match-wins PRIORITY ORDER — structure > forward_looking > absence >
     synthesis > citation_support — so the function is TOTAL (always returns a
@@ -2562,7 +2574,7 @@ def _claim_kind(claim: str) -> str:
             return CLAIM_KIND_STRUCTURE
     # forward_looking — a future-conditional idiom governs the whole clause. Runs
     # BEFORE absence so a ``would confirm``/``to watch for`` signpost stays a
-    # prediction, never mis-routed to the absence prompt (design §3.6 test).
+    # prediction, never mis-routed to the absence prompt.
     if _is_forward_looking(low):
         return CLAIM_KIND_FORWARD_LOOKING
     # absence — the negative-finding class this branch owns.
@@ -2570,7 +2582,7 @@ def _claim_kind(claim: str) -> str:
         return CLAIM_KIND_ABSENCE
     # synthesis — a BLUF / Assessed / JUDGMENT derived-read opener, or a span the
     # assessor explicitly flagged ``[no citation]`` (M14: a deliberately
-    # un-citable synthesis / framing line — design §2.1 table). Ordered AFTER
+    # un-citable synthesis / framing line). Ordered AFTER
     # absence so a marked absence still routes to the absence rubric.
     if _NO_CITATION_MARKER in low:
         return CLAIM_KIND_SYNTHESIS
@@ -2589,7 +2601,7 @@ def _claim_kind(claim: str) -> str:
 
 @dataclass(frozen=True)
 class JudgeProfile:
-    """A versioned per-claim-kind judge profile (design §2.2).
+    """A versioned per-claim-kind judge profile.
 
     The profiles are CODE, versioned by a string stamp — NOT a descriptor, NOT a
     migration. A critique records ``data.verification.branch_versions = {kind:
@@ -2618,7 +2630,7 @@ class JudgeProfile:
 # what a slice-scoped negative IS, the evidence map's unlabelled analyst prose,
 # the four verdicts, this route's OWN adjudicated failure record, five fences.
 
-# The versioned profile registry (design §2.2 / §5.2 step 2). ``absence`` and
+# The versioned profile registry. ``absence`` and
 # ``citation_support`` carry a prompt this train; the other three kinds are
 # stubbed (judge_system=None → telemetry-only), stamped so a later train that
 # gives them a prompt is a visible per-kind version bump. Bump a ``version`` on
@@ -2640,10 +2652,14 @@ class JudgeProfile:
 # H3 (2026-09-24/1) bumps BOTH prompted kinds: the reply contract now asks every
 # verdict entry to name its claim (``claim_index``), and that text rides the
 # shared lead AND the absence rubric — two prompts changed, two version bumps.
+#
+# Both prompted kinds move again (citsupp.v7, absence.v6): the judges no longer
+# lean toward passing, the verdict set gains supported_as_inference and
+# unverifiable_excerpt, and every entry carries its span before its verdict.
 _JUDGE_PROFILES: dict[str, JudgeProfile] = {
     CLAIM_KIND_CITATION_SUPPORT: JudgeProfile(
         kind=CLAIM_KIND_CITATION_SUPPORT,
-        version="citsupp.v6",
+        version="citsupp.v7",
         judge_system=None,  # rides the existing unit/composition prompt in _run_judge
     ),
     CLAIM_KIND_ABSENCE: JudgeProfile(
@@ -2660,7 +2676,7 @@ _JUDGE_PROFILES: dict[str, JudgeProfile] = {
     CLAIM_KIND_STRUCTURE: JudgeProfile(
         kind=CLAIM_KIND_STRUCTURE, version="structure.v0", judge_system=None
     ),
-    # D-3 (2026-09-03) — the ASSEMBLY branch. ``judge_system=None`` for a reason
+    # The ASSEMBLY branch. ``judge_system=None`` for a reason
     # no other stubbed kind has: this branch has NO judge and never will. It is
     # graded by four deterministic arms over a generated payload, and a version
     # bump here means the ARMS changed, not that a rubric did. Stamped so
@@ -2721,31 +2737,14 @@ def _is_null_result_finding(body: str) -> bool:
 # M14 — the NULL-RESULT judge rubric. A survey-scoped grade for an honest
 # corpus-negative, so an un-citable NEGATIVE is not marked "unsupported" merely
 # for lacking a per-clause ``[N]``.
-_NULL_RESULT_JUDGE_SYSTEM = (
-    "You are a faithfulness judge grading a NULL-RESULT / corpus-survey finding. "
-    "Its core claim is a NEGATIVE ('no X observed / reported') together with a "
-    "survey of what the enumerated signals DO contain. Grade each claim as a "
-    "FAITHFUL SURVEY of the cited/enumerated evidence — NOT by whether each clause "
-    "carries its own citation. A stated ABSENCE is SUPPORTED unless the evidence "
-    "actually SHOWS the thing said to be absent; a survey characterization is "
-    "SUPPORTED unless it misdescribes the corpus; reasonable framing / severity / "
-    "risk judgement is SUPPORTED. Mark UNSUPPORTED only when the finding claims the "
-    "absence of something the evidence plainly contains, or asserts a SPECIFIC "
-    "event/number/name/place absent from all the evidence; mark CONTRADICTED only "
-    "when the evidence directly refutes it. Output only the JSON object."
-)
-_NULL_RESULT_PROMPT_PREFIX = (
-    "This is a NULL-RESULT / corpus-survey finding: judge whether it is a FAITHFUL "
-    "SURVEY of the evidence below (does the evidence set genuinely LACK what the "
-    "finding says is absent, and does it accurately characterize what the signals "
-    "contain?), rather than whether each clause is individually cited.\n\n"
-)
+_NULL_RESULT_JUDGE_SYSTEM = SURVEY_JUDGE_SYSTEM
+_NULL_RESULT_PROMPT_PREFIX = SURVEY_PROMPT_PREFIX
 
 
 # ---------------------------------------------------------------------------
-# V-F (2026-07-31) — CLAIM-SPLITTER HYGIENE: drop NON-PROPOSITIONAL spans.
+# CLAIM-SPLITTER HYGIENE: drop NON-PROPOSITIONAL spans.
 #
-# The live artifact (judge readout 2026-07-31 §6): a claim whose ENTIRE text was
+# The live artifact: a claim whose ENTIRE text was
 # the literal ``(not_observed)`` reached the verdict ledger as a ``no_citation``
 # soft-fail on a Mexico leadership_transition finding. It is a structured-status
 # TOKEN the assessor emitted inline, not a proposition — there is nothing for
@@ -2844,7 +2843,7 @@ def _segment_claims_raw(body: str) -> list[str]:
     # parenthesized (57, 87) lists) up front so BOTH the segmentation below and the
     # [N] matching that consumes these spans see ASCII markers.
     body = _normalize_verify_markers(body)
-    # P7-F1(2): pull a citation marker that trails a sentence terminator back
+    # Pull a citation marker that trails a sentence terminator back
     # inside the sentence (``…fighters. [[ref:1]]`` -> ``…fighters [[ref:1]].``)
     # so the split below keeps the marker on the claim it supports instead of
     # orphaning a ``no_citation`` fragment.
@@ -2919,7 +2918,7 @@ def _markers_in_claim(claim: str, *, subclaim: bool) -> list[int]:
     deduped (byte-identical to the unit floor's inline computation it replaces).
     ``subclaim=True`` — composition ``[[ref:N]]`` ordinals in first-seen order,
     deduped (byte-identical to the composition floor's loop it replaces).
-    Shared by the floors and the P2-4 claim-verdict ledger so the recorded
+    Shared by the floors and the claim-verdict ledger so the recorded
     markers can never drift from what the floor resolved.
     """
     if subclaim:
@@ -3353,7 +3352,7 @@ def _deterministic_floor_subclaim(
                 )
             continue
         supported += 1
-        # P2-4 ledger: the CLAIM is supported; a hedge-laundering hit below stays
+        # Ledger: the CLAIM is supported; a hedge-laundering hit below stays
         # an ADVISORY span annotating it, never a second ledger row.
         verdicts.append(ClaimVerdict.supported(claim, list(resolved_markers)))
         # HEDGE-LAUNDERING — the clause asserts more than its cited sub-claim(s).
@@ -3409,7 +3408,7 @@ def _indicator_citation_markers(entry: Mapping[str, Any]) -> list[int]:
 
     A citation is an int index; bool is rejected (a stray ``True`` is not a
     citation index) and non-list shapes contribute nothing — the SAME predicate
-    the S3-T1 tally uses, factored so the P2-4 ledger can never drift from it.
+    the existing tally uses, factored so the ledger can never drift from it.
     """
     cites = entry.get("citations")
     if not isinstance(cites, (list, tuple)):
@@ -3460,7 +3459,7 @@ def _indicator_spans(indicators: Any) -> tuple[int, int, list[UnsupportedSpan]]:
 
 
 def _indicator_claim_verdicts(indicators: Any) -> list[ClaimVerdict]:
-    """P2-4 ledger rows for the structured indicator block — one per ``triggered``
+    """Ledger rows for the structured indicator block — one per ``triggered``
     entry, mirroring :func:`_indicator_spans` exactly (same predicate helpers): a
     cited triggered indicator is a SUPPORTED ledger row (previously recorded
     nowhere), an uncited one a soft_fail row whose text matches its span.
@@ -3519,7 +3518,7 @@ def _fold_indicators(
         judge_attempts=floor.judge_attempts,  # 2026-09-08/1 transport receipts
         judge_http_statuses=list(floor.judge_http_statuses),
         confidence_ceiling=floor.confidence_ceiling,
-        # P2-4: the indicator rows join the per-claim ledger (supported entries
+        # The indicator rows join the per-claim ledger (supported entries
         # were previously recorded nowhere; failures mirror their spans).
         claim_verdicts=floor.claim_verdicts + _indicator_claim_verdicts(indicators),
         counters=dict(floor.counters),
@@ -3605,7 +3604,7 @@ def _fold_guard_spans(
         judge_attempts=floor.judge_attempts,  # 2026-09-08/1 transport receipts
         judge_http_statuses=list(floor.judge_http_statuses),
         confidence_ceiling=floor.confidence_ceiling,
-        # P2-4: each guard hit is a checkable-but-failed ledger row (class from
+        # Each guard hit is a checkable-but-failed ledger row (class from
         # the ONE _FAIL_CLASS_BY_REASON table), text mirroring its span.
         claim_verdicts=floor.claim_verdicts
         + [ClaimVerdict.failed(s.text, s.reason, list(s.markers)) for s in guard_spans],
@@ -3839,7 +3838,7 @@ def _apply_claim_overrides(
 
 
 # ---------------------------------------------------------------------------
-# V-C (2026-07-31) — METADATA CLAIMS: verify by LOOKUP, not exempt blind.
+# METADATA CLAIMS: verify by LOOKUP, not exempt blind.
 #
 # The readout's structural finding #3: a claim quoting the platform's OWN
 # metadata — "the unit's effective confidence of 0.68", "these indications are
@@ -4269,7 +4268,7 @@ def _fold_metadata_claims(
 
 
 # ---------------------------------------------------------------------------
-# V-G5 (2026-08-03) — the MARKERLESS-UNCITED guard: the recurring pass-side miss.
+# The MARKERLESS-UNCITED guard: the recurring pass-side miss.
 #
 # The one gate that is supposed to be ZERO has failed on both acceptance runs,
 # and both misses share a shape the judge is instructed to wave through. The
@@ -4417,9 +4416,9 @@ async def _maybe_llm_judge(
     soft ``judge_nonpropositional_unearned`` failure. ANY error, an absent
     handler, or the flag being off → return the deterministic floor LABELLED
     ``judge-unavailable`` (``judge_status`` stays ``'deterministic'``).  NEVER
-    fabricates a score. ``judge_prompt_profile`` (P2-4, default ``current`` via
+    fabricates a score. ``judge_prompt_profile`` (default ``current`` via
     env fallback) selects the generic judge system prompt's independence
-    posture; ``current`` is byte-identical to the pre-P2-4 prompt.
+    posture; ``current`` is byte-identical to the earlier prompt.
     """
     if not _llm_judge_enabled():
         floor.judge_unavailable_reason = "flag_off"
@@ -4433,7 +4432,7 @@ async def _maybe_llm_judge(
         # caller passes a resolved ``LLMHandlerLike`` — same shape the critic
         # uses).  We keep the prompt here but the score refinement is the
         # caller's contract surface; on any transport error we soft-fail to the
-        # floor.  (The judge component is whatever the P2-4 judge ROUTE
+        # floor.  (The judge component is whatever the judge ROUTE
         # resolved at the call site — a REGISTERED component, not hardcoded
         # here; today the core producer plane.)
         verdicts, branch_scores, floored_partitions = await _run_judge(
@@ -4536,7 +4535,7 @@ async def _maybe_llm_judge(
     judged_spans: list[UnsupportedSpan] = []
     judged_texts: set[str] = set()
     supported = 0
-    # V-I (2026-08-05): ONE table, one accumulator. The five demotion classes had
+    # ONE table, one accumulator. The five demotion classes had
     # five int locals and five conditional dict-merges at the bottom of this
     # function, which is how the sixth would have been forgotten. Emitted only
     # when non-zero, exactly as before — every pre-V-I counter map is unchanged.
@@ -4566,9 +4565,17 @@ async def _maybe_llm_judge(
             ungraded_nonpropositional += 1
             floor_counted_nonpropositional += _is_fact_asserting(claim_text)
             continue
-        if verdict == "supported":
+        if verdict in PASSING_VERDICTS:
             supported += 1
+            if verdict == VERDICT_SUPPORTED_AS_INFERENCE:
+                demotions["claims_supported_as_inference"] = (
+                    demotions.get("claims_supported_as_inference", 0) + 1
+                )
         else:
+            if verdict == VERDICT_UNVERIFIABLE_EXCERPT:
+                demotions["claims_unverifiable_excerpt"] = (
+                    demotions.get("claims_unverifiable_excerpt", 0) + 1
+                )
             reason = _judge_reason(verdict)
             counter = _DEMOTION_COUNTERS.get(verdict)
             if counter is not None:
@@ -4577,7 +4584,7 @@ async def _maybe_llm_judge(
                 UnsupportedSpan(
                     text=claim_text,
                     reason=reason,
-                    # W11-F86: the markers the claim carried, read exactly as the
+                    # The markers the claim carried, read exactly as the
                     # ledger row below reads them (they were [] on every judge
                     # span: 492 of 771 judge_unsupported spans, 7 d, two units).
                     markers=_markers_in_claim(claim_text, subclaim=subclaim),
@@ -4624,7 +4631,7 @@ async def _maybe_llm_judge(
     refined_score = (
         1.0 if effective_checkable == 0 else supported / effective_checkable
     )
-    # P2-4 — the per-claim LEDGER on the judge path: the judge's verdicts are
+    # The per-claim LEDGER on the judge path: the judge's verdicts are
     # authoritative for every prose span it graded (supported rows included —
     # previously recorded nowhere); floor ledger rows whose text the judge did
     # NOT grade carry over unchanged (structured-indicator rows, world-knowledge
@@ -4642,8 +4649,12 @@ async def _maybe_llm_judge(
         if verdict == VERDICT_NOT_A_PROPOSITION:
             continue
         markers = _markers_in_claim(claim_text, subclaim=subclaim)
-        if verdict == "supported":
+        if verdict in PASSING_VERDICTS:
             cv = ClaimVerdict.supported(claim_text, list(markers))
+            if verdict == VERDICT_SUPPORTED_AS_INFERENCE:
+                # Still a supported row (the ledger has three classes and every
+                # reader keys on them); the detail says it passed as an inference.
+                cv.detail = _INFERENCE_DETAIL
         else:
             # W2: the SAME ``_judge_reason`` the span above uses — this branch
             # previously collapsed both demotion classes to ``judge_unsupported``.
@@ -4690,7 +4701,7 @@ async def _maybe_llm_judge(
         # Carry the floor's T7 evidence ceiling through — the judge only refines
         # the faithfulness number, never the double-count-corrected cap.
         confidence_ceiling=floor.confidence_ceiling,
-        # V3: the per-claim-KIND sub-scores from this judge run (design §2.3),
+        # V3: the per-claim-KIND sub-scores from this judge run,
         # recorded on the report so the payload can surface branch_scores /
         # branch_versions. Empty on the deterministic path (never reached here)
         # and on the M14 whole-finding survey path (one rubric, no partition).
@@ -4704,47 +4715,18 @@ async def _maybe_llm_judge(
     )
 
 
-_GENERIC_JUDGE_SYSTEM = (
-    "You are a faithfulness judge distinguishing FABRICATION from analysis. "
-    "A claim is SUPPORTED when its factual content is consistent with and "
-    "grounded in the cited evidence — reasonable analytical interpretation, "
-    "framing, aggregation, severity/risk judgement, and negative reads (e.g. "
-    "'this is routine, not escalation') ARE permitted and count as supported. "
-    "Mark UNSUPPORTED only when the claim asserts a SPECIFIC fact the cited "
-    "evidence does not contain (an invented event, number, name, or place); "
-    "mark CONTRADICTED only when the evidence directly refutes it. Do NOT "
-    "penalize a claim merely for adding interpretation to a supported fact. "
-    "Output only the JSON object."
+# The generic and independent-reviewer system prompts live in
+# ``judge_prompts`` with the rest of the judge's text. The independent variant
+# is the generic prompt plus one sentence saying the claims were written by
+# someone else; it is selected only by the prompt-profile switch below.
+#: The ledger detail on a claim that passed as an inference.
+_INFERENCE_DETAIL = (
+    "supported as an inference: worded as a judgement, and the facts it rests "
+    "on are supported by the cited evidence"
 )
 
-# P2-4 — the INDEPENDENCE-POSTURE variant (profile ``independent``), STAGED NOT
-# LIVE (default profile is ``current``; flipping is a measured, operator-gated
-# step, first A/B'd via scripts/temp_ab_replay.py --judge-profile). Same
-# calibrated verdict rubric as _GENERIC_JUDGE_SYSTEM — supported/unsupported/
-# contradicted definitions are kept materially identical so an A/B isolates the
-# POSTURE variable — but the framing is an adversarial INDEPENDENT reviewer of
-# ANOTHER analyst's claims, never "check your own work": the judge is told it
-# did not write the claims, owes them no deference, and must ground every
-# verdict in the shown evidence rather than its own knowledge or charity.
-_INDEPENDENT_JUDGE_SYSTEM = (
-    "You are an INDEPENDENT faithfulness reviewer. The claims below were "
-    "written by ANOTHER analyst — you did not write them, you know nothing "
-    "about that analyst, and you owe their work no deference. You are the "
-    "adversarial second reader: your job is to find where the analyst's prose "
-    "outruns or misstates the cited evidence, and your ONLY ground truth is "
-    "the evidence shown to you — never your own background knowledge, and "
-    "never the assumption that the analyst 'must have had a reason'. "
-    "A claim is SUPPORTED when its factual content is consistent with and "
-    "grounded in the cited evidence — reasonable analytical interpretation, "
-    "framing, aggregation, severity/risk judgement, and negative reads (e.g. "
-    "'this is routine, not escalation') ARE permitted and count as supported. "
-    "Mark UNSUPPORTED only when the claim asserts a SPECIFIC fact the cited "
-    "evidence does not contain (an invented event, number, name, or place); "
-    "mark CONTRADICTED only when the evidence directly refutes it. Do NOT "
-    "penalize a claim merely for adding interpretation to a supported fact, "
-    "and do NOT rescue an unsupported claim with facts you happen to know. "
-    "Output only the JSON object."
-)
+_GENERIC_JUDGE_SYSTEM = GENERIC_JUDGE_SYSTEM
+_INDEPENDENT_JUDGE_SYSTEM = INDEPENDENT_JUDGE_SYSTEM
 
 
 def _generic_judge_system(profile: str | None = None) -> str:
@@ -4785,7 +4767,7 @@ async def _run_judge(
     contradicted_off_scope, quote_confirms, contradicted_machine_row,
     route_excluded, nonpropositional_unearned), in ORIGINAL claim order.
     ``branch_scores`` maps each claim-kind that was GRADED to ``{"checkable",
-    "supported", "score"}`` (design §2.3); a ``not_a_proposition`` is in no
+    "supported", "score"}``; a ``not_a_proposition`` is in no
     bucket.
 
     RUST-3 (2026-08-21): ``not_a_proposition`` is the judge saying the span
@@ -4821,23 +4803,23 @@ async def _run_judge(
       byte-for-byte: ONE call grading the WHOLE claim list under the survey
       rubric. ``branch_scores`` is ``{}`` there — one rubric graded everything,
       so per-branch attribution would be fabricated.
-    * **V3 per-claim partition (MP:DEC-E)** — otherwise the graded claims are
+    * **Per-claim partition** — otherwise the graded claims are
       PARTITIONED by claim kind: the ``absence`` partition goes to a dedicated
-      judge call with the negative-claim rubric (design §3.4) — a deterministic
+      judge call with the negative-claim rubric — a deterministic
       route to a constrained prompt removes the free-latitude that produced the
       0.0/0.2/1.0 variance on identical absence prose — and every OTHER kind
       rides the existing unit/composition prompt VERBATIM. Verdicts are re-zipped
       in the original span order. This is the embedded-absence-in-a-fact-rich-
-      finding case M14 misses (design §3.2 #4 / §3.5). When a finding carries NO
+      finding case M14 misses. When a finding carries NO
       absence claim, EXACTLY ONE judge call is made with the byte-identical
       existing prompt — the headline arithmetic and the judge-call count are
-      unchanged (the pooled-ratio invariant, design §2.3 point 3).
+      unchanged (the pooled-ratio invariant).
 
     Kept deliberately thin — a malformed / empty response yields ``[]`` (the
     caller then soft-fails to the floor). This is the ONLY place that talks to
     the judge model; tests mock ``judge_llm.chat_complete``.
 
-    P2-4: ``judge_prompt_profile`` selects the GENERIC system prompt's
+    ``judge_prompt_profile`` selects the GENERIC system prompt's
     independence posture (``current`` default = byte-identical live prompt;
     ``independent`` = the staged adversarial-reviewer variant). The M14 survey
     and V3 absence rubrics are profile-invariant by design.
@@ -4864,34 +4846,32 @@ async def _run_judge(
         # the M14 whole-finding call and the V3 citation_support partition; each
         # appends its own numbered claim list.
         evidence = _ordinal_evidence_map(citations)
-        # C-TIER (former SEAMS §45): the ADDITIVE tier-aware rubric — non-empty
+        # The ADDITIVE tier-aware rubric — non-empty
         # ONLY when the citation list carries periphery-tier stamps, so every
         # untiered composition's judge prompt stays byte-identical.
         tier_rubric = _judge_periphery_rubric(citations)
-        shared_lead = (
-            "For each numbered CLAIM, decide whether it is FAITHFUL to the cited "
-            "SUB-CLAIMS (the N -> sub-claim text map below). A claim that cites a "
-            "[[ref:N]] marker must FOLLOW FROM the sub-claim it names. A claim with "
-            "NO [[ref:N]] marker is a synthesis / BLUF / framing / severity / "
-            "absence statement — mark it SUPPORTED unless it asserts a SPECIFIC "
-            "fact (an event, number, name, or place) that is absent from, or "
-            "contradicted by, ALL of the sub-claims."
-            + _judge_reply_contract()
-            + _JUDGE_QUOTE_RULE
-            + _JUDGE_QUALIFIER_RULE
-            + "\n\n"
-            + composition_integrity.RUBRIC  # H2 §2 — the four cross-layer shapes
+        # The evidence block: the composition-integrity rubric, the tier note
+        # (non-empty only for tiered citations) and the sub-claim map, JSON
+        # encoded with ensure_ascii=False so what the judge sees is what
+        # quote_corpus scores. The survey route reuses it with its own head.
+        evidence_block = (
+            composition_integrity.RUBRIC
             + tier_rubric
-            # RUST-1: ensure_ascii=False — what the judge SEES is what
-            # quote_corpus SCORES (the default escaped every non-ASCII char,
-            # so a verbatim copy could never resolve; see judge_quote_rules).
             + "N -> sub-claim: "
             + json.dumps(
                 {str(k): v for k, v in evidence.items()}, ensure_ascii=False
             )
         )
+        shared_lead = (
+            COMPOSITION_LEAD
+            + _judge_reply_contract()
+            + _JUDGE_QUOTE_RULE
+            + _JUDGE_QUALIFIER_RULE
+            + "\n\n"
+            + evidence_block
+        )
         # The absence rubric is scoped to the SAME evidence map so the negative
-        # judge sees exactly what the analyst searched (design §3.4 per-claim lead).
+        # judge sees exactly what the analyst searched.
         absence_evidence_line = (
             "N -> sub-claim (the evidence the analyst searched): "
             + json.dumps(
@@ -4907,36 +4887,16 @@ async def _run_judge(
         # unsupported (the unit-score crusher). Mirrors the composition path's
         # _ordinal_evidence_map (sub-claim text).
         cited = _marker_to_evidence(citations)
+        # ensure_ascii=False: what the judge SEES is what quote_corpus SCORES
+        # (an escaped non-ASCII span copied verbatim could never resolve).
+        evidence_block = f"[N] -> evidence: {json.dumps(cited, ensure_ascii=False)}"
         shared_lead = (
-            "For each numbered CLAIM, decide whether it is FAITHFUL to the evidence "
-            "(the [N] -> evidence map below). A claim that cites [N] markers must "
-            "FOLLOW FROM the evidence those markers name. An evidence entry may carry "
-            "an 'OUTLET' line (the publisher ref of the cited signal — use it to check a "
-            "claim about WHO reported something), a 'SOURCE' line (the actual source "
-            "article) and an 'Analyst summary' line "
-            "(what the analyst worked from — it does NOT itself validate a claim). Two "
-            "modes, driven by the SOURCE label: (a) 'SOURCE (authoritative)' is the "
-            "COMPLETE article — a cited claim absent from it is UNSUPPORTED; (b) "
-            "'SOURCE (authoritative excerpt ...)' is only the START of a longer article "
-            "— do NOT mark a claim unsupported merely because it is absent from the "
-            "excerpt (the Analyst summary shows what the fuller article covered); mark "
-            "it unsupported ONLY if the SOURCE excerpt CONTRADICTS it. In BOTH modes, a "
-            "fact in the Analyst summary that the SOURCE CONTRADICTS is UNSUPPORTED. A "
-            "claim with NO [N] marker is a synthesis / framing / severity / absence "
-            "statement — mark it SUPPORTED unless it asserts a SPECIFIC fact (an event, "
-            "number, name, or place) that is absent from, or contradicted by, ALL of "
-            "the evidence."
+            UNIT_LEAD
             + _judge_reply_contract()
             + _JUDGE_QUOTE_RULE
             + _JUDGE_QUALIFIER_RULE
             + "\n\n"
-            # RUST-1: ensure_ascii=False — what the judge SEES is what
-            # quote_corpus SCORES. The default escaped every non-ASCII char
-            # (an e-acute shipped as the six chars backslash-u00e9), so the
-            # judge's most compliant behavior — copying a span VERBATIM from
-            # this map — was exactly the one that could never resolve (36%
-            # of contradiction attempts, measured; see judge_quote_rules).
-            f"[N] -> evidence: {json.dumps(cited, ensure_ascii=False)}"
+            + evidence_block
         )
         absence_evidence_line = (
             "[N] -> evidence (the evidence the analyst searched): "
@@ -5132,9 +5092,15 @@ async def _run_judge(
     # ONE call, the WHOLE claim list, the survey rubric on both the system role
     # and the prompt lead. No V3 partition, no branch telemetry (one rubric).
     if null_result:
+        # The survey grades the finding as a whole, so it skips the per-claim
+        # lead and carries only its own head, the reply shape and the evidence.
         survey_prompt = (
             _NULL_RESULT_PROMPT_PREFIX
-            + shared_lead
+            + _judge_reply_contract(SURVEY_VERDICT_ALTERNATION)
+            + _JUDGE_QUOTE_RULE
+            + _JUDGE_QUALIFIER_RULE
+            + "\n\n"
+            + evidence_block
             + "\n\nCLAIMS:\n"
             + _numbered(claims)
         )
@@ -5228,7 +5194,7 @@ async def _run_judge(
     if not verdicts_by_idx:
         return [], {}, []
 
-    # Re-zip in ORIGINAL span order + record per-branch sub-scores (design §2.3).
+    # Re-zip in ORIGINAL span order + record per-branch sub-scores.
     out: list[tuple[str, str, str, str]] = []
     branch_scores: dict[str, dict[str, int | float]] = {}
     for i, claim in enumerate(claims):
@@ -5247,7 +5213,7 @@ async def _run_judge(
             kind, {"checkable": 0, "supported": 0, "score": 0.0}
         )
         bucket["checkable"] += 1
-        if verdict == "supported":
+        if verdict in PASSING_VERDICTS:
             bucket["supported"] += 1
     for bucket in branch_scores.values():
         c = bucket["checkable"]
@@ -5501,16 +5467,17 @@ async def _absence_slice_stage2(
         if entry.qualifier and entry.qualifier.lower() in _SCALE_QUALIFIERS:
             block += (
                 f"\n   SCALE this claim denies: '{entry.qualifier}'. A row "
-                "reporting the same kind of event at a SMALLER scale (dozens, a "
-                "handful, one incident) SUPPORTS this claim — it does not "
-                "violate it."
+                "reporting the same kind of event at a smaller scale (dozens, a "
+                "handful, one incident) does not contradict this claim."
             )
         return block
 
+    # Each row is JSON-encoded so a quote mark or line break inside a headline
+    # cannot end the list it sits in.
     prompt = (
         "INPUT-SLICE ROWS (the rows the analyst actually read that share "
         "vocabulary with the claims below):\n"
-        + "\n".join(f"- {t}" for t in shown)
+        + "\n".join(f"- {json.dumps(t, ensure_ascii=False)}" for t in shown)
         + "\n\nSCOPED NEGATIVE CLAIMS:\n"
         + "\n".join(
             _claim_block(i, entry) for i, entry in enumerate(stage2, start=1)
@@ -5551,6 +5518,9 @@ async def _absence_slice_stage2(
         # A violation must NAME the violating row, resolved against the set we
         # showed — the same earned-severity rule V-D applies to evidence quotes.
         violating = _resolve_violating_row(quote, shown)
+        if violating is None and isinstance(quote, str):
+            # A span copied from the JSON-encoded row can carry its escapes.
+            violating = _resolve_violating_row(_unescape_judge_quote(quote), shown)
         if verdict == "contradicted" and violating:
             # V-G3: the named row reports the claim's own subject at a SMALLER
             # scale than the claim's qualifier denies. That row is the claim's
@@ -5623,7 +5593,7 @@ async def verify_finding_faithfulness(
     body:
         The finding's prose (markdown, with ``[N]`` citation markers).
     citations:
-        The P0-T1 ``data['citations']`` list (``[{"marker", "signal_id"}, ...]``).
+        The ``data['citations']`` list (``[{"marker", "signal_id"}, ...]``).
         A finding with NO citations scores every fact-asserting claim as
         unsupported — that is the honest result, not a defect of the pass.
     judge_llm:
@@ -5655,7 +5625,7 @@ async def verify_finding_faithfulness(
         ``country_*`` desk id is passed, a finding that names ONLY other countries
         is FLAGGED (demotes effective_confidence), never deleted.
     judge_prompt_profile:
-        OPTIONAL (P2-4) — the judge PROMPT PROFILE: ``'current'`` (default; the
+        OPTIONAL — the judge PROMPT PROFILE: ``'current'`` (default; the
         calibrated live prompt, byte-identical) or ``'independent'`` (the staged
         adversarial-reviewer posture — dormant until an operator flips it).
         ``None`` → the ``LEGBA_JUDGE_PROMPT_PROFILE`` env, then ``current``.
@@ -5689,8 +5659,8 @@ async def verify_finding_faithfulness(
         is off or down, because its population membership must not depend on
         judge health.
     assembly:
-        OPTIONAL (D-3) — the finding's ``data['assembly']`` block, the typed
-        ``assembly.v1`` document D-2 emits (D-1 §1.2). Default ``None`` → the
+        OPTIONAL — the finding's ``data['assembly']`` block, the typed
+        ``assembly.v1`` document. Default ``None`` → the
         four assembly arms are a no-op and every existing caller is
         BYTE-IDENTICAL. When an ``assembly.v1`` payload is present, its spans
         are audited against the origin bodies the citation bridge captured
@@ -5698,9 +5668,8 @@ async def verify_finding_faithfulness(
         preservation), against the captured origin records (attribution
         equality) and against the coverage + drop ledgers (selection honesty).
         A LEGACY-REGIME composition is inert for the same reason a unit finding
-        is, and it needs the regime to say so: §5.2 puts
-        ``assembly.regime = "legacy"`` on every composition row from D-2's merge
-        (flag on or off), so a flag-off row carries a real ``assembly.v1``
+        is, and it needs the regime to say so: every composition row carries
+        ``assembly.regime = "legacy"`` (flag on or off), so a flag-off row carries a real ``assembly.v1``
         ``schema`` key with no blocks behind it. The route gate is therefore
         ``schema == "assembly.v1" AND regime != "legacy"``.
     """

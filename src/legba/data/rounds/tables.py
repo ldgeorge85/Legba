@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Sentence and position tables, the consistency matrix and the origin count
-— the pure CODE seats a round spec may name (plan P4 §4, lane G-3).
+— the pure CODE seats a round spec may name.
 
 Every function takes the seat's handed inputs — a list of :class:`Handed`
 outputs, exactly what the store released to it — and returns a payload of
@@ -66,6 +66,11 @@ def as_table_position(h: Handed) -> dict[str, Any] | None:
         pos["item"] = h.item
     if h.payload.get("probability") is not None:
         pos["probability"] = h.payload["probability"]
+    # challenges to reasoning ride with the position (they carry no quote and
+    # are not sentences, so no judge checks them against rows)
+    challenges = [dict(c) for c in h.payload.get("challenges") or () if isinstance(c, Mapping)]
+    if challenges:
+        pos["challenges"] = challenges
     return pos
 
 
@@ -78,7 +83,7 @@ def sentence_table(inputs: Sequence[Handed]) -> dict[str, Any]:
             positions.extend(h.payload.get("positions") or ())
             continue
         pos = as_table_position(h)
-        if pos is not None and pos["sentences"]:
+        if pos is not None and (pos["sentences"] or pos.get("challenges")):
             positions.append(pos)
     return {"positions": positions}
 

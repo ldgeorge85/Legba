@@ -1,5 +1,5 @@
 /**
- * CountryUnitsAssessment — the bounded-unit reads for a selected country (P2-T8).
+ * CountryUnitsAssessment — the bounded-unit reads for a selected country.
  *
  * The PRODUCT surface for a country: the bounded reasoning units, each a single
  * cited + faithfulness-verified + measured read answering ONE bounded question.
@@ -11,13 +11,14 @@
  * desks will NEVER produce one; its empty state says why (the profile's
  * `scope_note`) instead of implying a read is merely pending.
  *
- * Each unit card carries its honest eval badge (P2-T6) and links its latest
+ * Each unit card carries its honest eval badge and links its latest
  * finding into the Inspector (the full cited card + evidence).
  */
 import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { formatDistanceToNow } from 'date-fns'
 import { apiGet } from '@/lib/api'
+import { humanizeId } from '@/lib/deskNames'
 import { selectRow } from '@/state/selection'
 import { UnitEvalBadge } from '@/components/inspector/UnitEvalBadge'
 import { UnitCorrectnessBadge } from '@/components/inspector/UnitCorrectnessBadge'
@@ -91,11 +92,11 @@ export function CountryUnitsAssessment({ targetId }: { targetId: string }) {
   return (
     <section data-testid="country-units-assessment">
       <div className="text-label uppercase tracking-wider text-slate-500" data-testid="country-units-scope">
-        {targetId} · bounded unit reads
+        {humanizeId(targetId)} · reads by question
       </div>
       <div className="mb-4 mt-1 text-xs leading-relaxed text-slate-500">
-        Each read answers ONE bounded question — cited, faithfulness-verified, and
-        measured per unit. The verified composition above is synthesized over these.
+        Each read answers one question, cites its sources and is checked against
+        them. The read above is drawn from these.
       </div>
 
       {error instanceof Error && (

@@ -4,7 +4,6 @@
 -- 0190_external_grades.sql
 --
 -- THE PLATFORM'S FIRST DB HOME FOR EXTERNAL TRUTH
--- (planning/EXTERNAL_GRADING_WIDTH_DESIGN_2026-09-05.md §3.1, decision 0.9).
 --
 -- ~84% of this fleet's LLM calls are the system grading itself: faithfulness
 -- judges scoring our prose against our own citations, calibration trackers
@@ -12,8 +11,8 @@
 -- is a CONSISTENCY check and not one can see a tower that is internally
 -- immaculate and factually WRONG about the world. The only thing that has ever
 -- produced TRUTH about the reads is an external, web-grounded round run four
--- times BY HAND — and those grades live in `planning/PROOF_ROUND_*/scoring/
--- *.jsonl`, outside the database entirely.
+-- times BY HAND — and those grades live in scoring files outside the
+-- database entirely.
 --
 -- The one table that looked like a home is not one: `correctness_labels` holds
 -- EIGHT ROWS ALL-TIME, every one written in a single backfill batch at

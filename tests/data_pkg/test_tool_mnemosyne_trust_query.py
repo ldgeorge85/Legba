@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for L-211 ``mnemosyne_trust_query`` analyst tool.
+"""Unit tests for ``mnemosyne_trust_query`` analyst tool.
 
 Uses ``httpx.MockTransport`` so no Mnemosyne instance is required. The
 test mock plays Mnemosyne's role at the A2A wire boundary:
@@ -317,7 +317,7 @@ async def test_default_scope_is_general():
 
 @pytest.mark.asyncio
 async def test_chain_unavailable_short_circuit():
-    """P-007 Q5 chain_unavailable fallback shape."""
+    """Q5 chain_unavailable fallback shape."""
     responder_sk, responder_did = _make_signing_key()
 
     async def handler(request: httpx.Request) -> httpx.Response:

@@ -98,15 +98,15 @@ describe('a geometry: none profile lands on a usable surface', () => {
     expect(LANDING_SURFACE).toBe('board')
     // The Board's map region holds the subject field's slot; the read is on the stage.
     expect(board.regions[0].views).toEqual(['slot:subject_field'])
-    expect(board.stage).toBe('v4.morning_read')
-    // The Subject surface keeps its forecasts slot where the map was.
-    expect(findSurface('subject')!.regions[1].views).toEqual(['slot:subject_forecasts'])
+    expect(board.stage).toBe('view:board_changed')
+    // The Subject surface's one region takes the subject field where the map was.
+    expect(findSurface('subject')!.regions.map((r) => r.views)).toEqual([['slot:subject_field']])
   })
 
   it('the shell boots on the Board with no map tile', async () => {
     render(wrap(<App />))
     await waitFor(() => expect(getShell()).not.toBeNull())
-    await waitFor(() => expect(panels()).toContain('v4.morning_read'))
+    await waitFor(() => expect(panels()).toContain('view:board_changed'))
     expect(getShell()!.currentStance()).toBe('board')
     expect(panels()).toContain('slot:subject_field')
     expect(panels()).not.toContain('v4.map')

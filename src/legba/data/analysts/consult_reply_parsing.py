@@ -216,12 +216,20 @@ def _sentinel_line_index(lines: list[str]) -> tuple[int, str] | None:
     return found
 
 
-def _parse_header_list(raw: str) -> list[str]:
+def _parse_header_list(raw: str, *, phrases: bool = False) -> list[str]:
     """Split a header list value into its items.
 
     Accepts the documented ``a, b`` / ``a; b`` forms AND a JSON array — a model
     that just spent the whole loop emitting JSON will sometimes reach for
     brackets out of habit, and that is not worth burning a round over.
+
+    ``phrases`` is for the lists of phrases (``unanswered_aspects``,
+    ``watch_candidates``), which the prompt defines as semicolon-separated.
+    A phrase may itself contain commas ("the regulator publishes the ruling,
+    naming the supplier, by 2026-12-01"), so those lists are split on ``;``
+    only: falling back to commas would cut one item into fragments and turn
+    the dated fragment into a watch with no subject. ``cited_refs`` is a
+    comma-separated list of ids and keeps the comma fallback.
     """
     text = (raw or "").strip()
     if not text:
@@ -233,11 +241,11 @@ def _parse_header_list(raw: str) -> list[str]:
             parsed = None
         if isinstance(parsed, list):
             return [str(x).strip() for x in parsed if str(x).strip()]
-    separator = ";" if ";" in text else ","
+    separator = ";" if (phrases or ";" in text) else ","
     return [part.strip() for part in text.split(separator) if part.strip()]
 
 
-#: The most ``cited_refs`` a FINAL header may carry (W11-F160). Turn
+#: The most ``cited_refs`` a FINAL header may carry. Turn
 #: ``91b6260c`` wrote ~101 distinct ids and then looped the same line until the
 #: 32,768-token output cap: 969 ids, 102 unique, cut mid-uuid, no answer under
 #: it. The prompt asks for at most this many; the parser enforces it.
@@ -250,7 +258,7 @@ _UUID_FRAGMENT_RE = re.compile(r"^[0-9a-fA-F]{1,8}(?:-[0-9a-fA-F]{0,12}){0,4}$")
 def _parse_cited_refs_header(raw: str) -> list[str]:
     """``cited_refs`` header tokens as an ordered, unique, bounded list.
 
-    The degenerate-repetition guard (W11-F160): stop at the FIRST repeated id
+    The degenerate-repetition guard: stop at the FIRST repeated id
     (a model that starts re-listing ids is looping, and nothing after the
     repeat is a new choice), drop a trailing cut-off uuid fragment, and keep
     at most :data:`CITED_REFS_MAX` ids. Tokens are returned exactly as written,
@@ -301,7 +309,7 @@ def _read_header(payload: dict[str, Any], key: str, value: str) -> None:
     elif key == "cited_refs":
         payload[key] = _parse_cited_refs_header(value)
     else:
-        payload[key] = _parse_header_list(value)
+        payload[key] = _parse_header_list(value, phrases=True)
 
 
 # ---------------------------------------------------------------------------
@@ -565,7 +573,7 @@ def final_payload_from_text(raw: str) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "final": True, "uncertainty": SALVAGE_UNCERTAINTY,
     }
-    # W11-F160: the answer is the BODY. A reply that was only a sentinel and
+    # The answer is the BODY. A reply that was only a sentinel and
     # header lines has no answer, and its header text must never be stored as
     # one (turn 91b6260c) — the caller reads the empty answer as "not
     # synthesized" and offers re-synthesis from the evidence.

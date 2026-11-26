@@ -1,17 +1,17 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Decision-model client (W11-F108) — ``POST {api_endpoint}/decide``.
+"""Decision-model client — ``POST {api_endpoint}/decide``.
 
 A DECISION model answers typed questions about a free-text state instead of
-generating text. The gateway serves one (``clef-flash``) beside its chat
+generating text. The gateway serves one beside its chat
 aliases, on its own route::
 
-    request   {"model": "clef-flash",
+    request   {"model": "<decision model>",
                "state": "<free text>",
                "questions": {"<id>": {"type": "choice",
                                       "instructions": "<question>",
                                       "criteria": {"<option>": "<meaning>", …}}}}
-    response  {"model": "clef-flash",
+    response  {"model": "<decision model>",
                "answers": {"<id>": {"type": "choice", "choice": "<option>",
                                     "confidence": 0.91,
                                     "probabilities": {"<option>": p, …}}},
@@ -39,8 +39,7 @@ What it shares with the chat clients, deliberately:
     ``status``, ``http_status``, ``duration_ms`` and the input tokens, plus a
     ``leg`` tag when the caller names one.
 
-``max_tokens`` is required by the component schema and is NEVER sent: a
-decision call generates no tokens.
+No output limit is declared or sent: a decision call generates no tokens.
 """
 
 from __future__ import annotations

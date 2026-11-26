@@ -1,8 +1,8 @@
 {
   "prompts": {
     "desk_rows_v2_seat": {
-      "chars": 5964,
-      "sha256": "4747309f62934b5413018fffaeb0e9312c39fd14be16b3b9a0bd70cb3e924ac1",
+      "chars": 7118,
+      "sha256": "c35820e6e048aa9c547c998b40c40d7358f1ce2fab78c4b7e8b2e8c504d17651",
       "source": "analyst_desk_rows_v2_seat.yaml"
     }
   },

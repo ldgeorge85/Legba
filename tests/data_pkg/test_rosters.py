@@ -146,7 +146,7 @@ def test_the_export_is_deterministic_and_carries_no_ui_keys():
 # ---------------------------------------------------------------------------
 
 
-#: Lane N-U — the catalog entries that declare ``cadence.expect_quiet``.
+#: The catalog entries that declare ``cadence.expect_quiet``.
 _EXPECT_QUIET = frozenset({"source.usgs.earthquakes_m45"})
 
 
@@ -176,9 +176,9 @@ def test_the_yaml_catalog_is_the_frozen_literal_entry_by_entry():
     for got, want in zip(loaded, frozen["entries"]):
         row = _as_json(got)
         assert row.pop("source_class") == ("state_media" if got.id in state_media else None), got.id
-        # W10 TAX-2: the field the literal never had; no entry declares one yet.
+        # The field the literal never had; no entry declares one yet.
         assert row.pop("classifications") == [], got.id
-        # Lane N-U: ``cadence.expect_quiet``, a field the literal never had —
+        # ``cadence.expect_quiet``, a field the literal never had —
         # declared on the USGS significant-quakes feed only.
         assert row.pop("expect_quiet") is (got.id in _EXPECT_QUIET), got.id
         assert row == want, got.id
@@ -198,7 +198,7 @@ def test_the_yaml_catalog_renders_the_same_rows():
         ).encode()).hexdigest()
 
     rendered = {e.id: _sha(e) for e in loaded}
-    # Lane N-U: an ``expect_quiet`` entry's body gains ``cadence.expect_quiet``
+    # An ``expect_quiet`` entry's body gains ``cadence.expect_quiet``
     # (a new head to register); with the flag off it renders the frozen bytes.
     for e in loaded:
         if e.id in _EXPECT_QUIET:
@@ -250,7 +250,7 @@ _PRESENT_DESK = "target_w8_roster_gate_present"
 async def gate_desks(migrated_pg):
     """Two target heads in the session DB: one tagged ONLY with a tag no
     profile declares, one with a geopolitics roster tag. Deleted at teardown
-    (W8 rule: nothing registered here survives into later files)."""
+    (rule: nothing registered here survives into later files)."""
     conn = await asyncpg.connect(migrated_pg.dsn)
     ids = [_GATE_DESK, _PRESENT_DESK]
     try:

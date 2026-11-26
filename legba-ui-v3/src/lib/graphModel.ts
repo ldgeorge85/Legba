@@ -62,7 +62,7 @@ export interface LineageNode {
   modality?: string | null
   mime_type?: string | null
   /** The receipt-chain receipt for the run that produced this row — present on
-   *  the ROOT *and* every walk node that maps to an analyst run (P1-T4). Signals
+   *  the ROOT *and* every walk node that maps to an analyst run. Signals
    *  / source-ingested rows carry `null` honestly (no producing trace to
    *  re-hash). See {@link ReceiptChainNode} for the honesty contract. */
   receipt?: ReceiptChainNode | null
@@ -713,7 +713,7 @@ export function buildLineageElements(
 }
 
 // ---------------------------------------------------------------------------
-// Progressive one-hop-at-a-time reveal (P1-T5 — The Why's signed-lineage walk).
+// Progressive one-hop-at-a-time reveal (The Why's signed-lineage walk).
 //
 // The drill-down must be *walkable a step at a time*: show the root, then reveal
 // the next hop on demand, each hop carrying its honest receipt badge, the trail

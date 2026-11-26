@@ -49,11 +49,10 @@ unchanged. ``cls`` = the stripped ``entity_class`` or None.
 Active row. ``COALESCE(data->>'gc_status', '') NOT IN ('merged', 'junk')``
 AND ``merged_into IS NULL``; ``dormant`` is active.
 
-Merged-away rows are FOLLOWED (roll 85). A profile with ``merged_into`` set
-was merged into another; until roll 85 only ``gc_status`` was read, and 1,451
-such tombstones (``gc_status`` 'dormant', 2026-11-15) stayed electable — 891 of
-the 74,565 ingestion links of the week before landed on 119 of them. Now a
-row MATCHES as before (any row but ``junk``), and is replaced by the end of
+Merged-away rows are FOLLOWED. A profile with ``merged_into`` set
+was merged into another; reading only ``gc_status`` would leave such
+tombstones (``gc_status`` 'dormant') electable, and ingestion links would land
+on them. A row MATCHES as before (any row but ``junk``), and is replaced by the end of
 its ``merged_into`` chain (at most :data:`FOLLOW_MAX_HOPS` hops; the live
 chains are at most 4 deep); that keeper is elected if it is active, ranked by
 the KEEPER's priority and age. A ``gc_status='merged'`` row with no pointer
@@ -197,10 +196,10 @@ def _fallback_class_ok(stored_cls: str, cls: str | None) -> bool:
         return True
     return frozenset({stored_cls, low}) in _FALLBACK_COMPATIBLE_PAIRS
 
-#: The deepest ``merged_into`` chain followed (live max 4, 2026-11-15).
+#: The deepest ``merged_into`` chain followed (live max 4).
 FOLLOW_MAX_HOPS = 8
 
-#: Roll 85 — a matched row ``p`` replaced by the end of its ``merged_into``
+#: A matched row ``p`` replaced by the end of its ``merged_into``
 #: chain ``k`` (``p`` itself when it was never merged away). Used verbatim by
 #: every election statement, here and in the ingestion resolver. The keeper's
 #: columns come out of the LATERAL itself (a primary-key read per MATCHED row):
@@ -586,7 +585,7 @@ async def resolve_keeper(
 
     In every probe ``gc_status`` ``'merged'`` / ``'junk'`` rows are excluded (a
     de-fragmentation LOSER must never be elected), a row merged away
-    (``merged_into`` set) is followed to its keeper (roll 85), and the highest
+    (``merged_into`` set) is followed to its keeper, and the highest
     class-priority ACTIVE keeper wins (tie → oldest ``created_at``).
 
     The E1.1 override (step 1b) closes the aliased-fragment leak: a bare fragment

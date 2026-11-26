@@ -201,7 +201,7 @@ async def test_a_failed_read_degrades_loud_never_as_a_silent_zero():
 
 
 # ---------------------------------------------------------------------------
-# Registration — the contract every S-1 loop family joins on
+# Registration — the contract every loop family joins on
 # ---------------------------------------------------------------------------
 
 

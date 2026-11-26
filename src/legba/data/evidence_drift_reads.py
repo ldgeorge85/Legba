@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Source drift READS (lane D-1) — the panel's data and the agents' version
+"""Source drift READS — the panel's data and the agents' version
 history.
 
 * :func:`drift_counts` — classifications over a window by class, by source and

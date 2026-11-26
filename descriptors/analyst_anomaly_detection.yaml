@@ -1,4 +1,4 @@
-# W1-E BIND — Anomaly Detection analyst descriptor (L-006 sub-split B;
+# Anomaly Detection analyst descriptor (sub-split B;
 # deterministic_handlers/anomaly_detection.py).
 #
 # Three deterministic detectors over bucketed signal-count/sentiment series:
@@ -32,7 +32,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: draft
-  owner: w1e_built_but_unbound
+  owner: owner@local
 
 subscription:
   # No `targets` block -> META analyst: one global sweep per cadence tick.

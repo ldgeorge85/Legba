@@ -538,7 +538,7 @@ async def test_sweep_with_sidecar_deleter_alerts_only_on_genuine_removal(
 
 
 # --------------------------------------------------------------------------
-# W11-F268 — a confirmed absence is not re-asked every sweep
+# A confirmed absence is not re-asked every sweep
 # --------------------------------------------------------------------------
 
 

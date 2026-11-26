@@ -91,7 +91,7 @@ async def search_corpus(
     a transport/search failure is logged and folded into an ``error`` field
     rather than raising into the consult loop.
 
-    ``known_at`` (lane E0, evaluation harness only): the query carries an index
+    ``known_at`` (evaluation harness only): the query carries an index
     range ``fetched_at < known_at``, and every hit is then confirmed in Postgres
     (``pool``) as a ``signals`` row created before ``known_at``; the rest are
     dropped and counted in ``known_at_cut``. A cut with no pool refuses rather
@@ -178,7 +178,7 @@ async def read_document(
 ) -> dict[str, Any]:
     """One document's body by id (see :func:`_read_document_any`).
 
-    ``known_at`` (lane E0, evaluation harness only): the id must name a
+    ``known_at`` (evaluation harness only): the id must name a
     ``signals`` or ``analyst_outputs`` row created before ``known_at``, and so
     must every ref the read resolves to (a canonical twin); otherwise no body is
     returned — the status says the document was not in the record at that

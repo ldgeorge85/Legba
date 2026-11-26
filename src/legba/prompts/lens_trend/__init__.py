@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """legba.prompts.lens_trend — the trend-continuation faculty's persona + prior.
 
-VOICES v1 faculty (planning/VOICES_FACULTY_PRIORS.md § lens_trend; DL-3). One of
+VOICES v1 faculty. One of
 four function-typed lenses on the journal_assessor kind. This faculty weights the
 established trajectory: the recent direction of travel is the default forecast
 unless the composition shows it materially broken.
@@ -10,8 +10,8 @@ unless the composition shows it materially broken.
 The prior below is the reconciled, falsifiable prior VERBATIM (RECONCILIATION
 STAMP 2026-07-21, blind-spot gate PASS) — it is the single source of truth the
 consistency judge reads its rubric from; the descriptor's content hash IS the
-prior version (DL-2). ``LENS_PRIOR_BLOCK`` is that block delimited; ``_VOICE``
-renders it into register (PRIOR_SPEC §5 — render, never re-declare). The
+prior version. ``LENS_PRIOR_BLOCK`` is that block delimited; ``_VOICE``
+renders it into register (render, never re-declare). The
 tower-only task + narrate contract + no-new-fact stance are shared
 (``legba.prompts.lens_common``).
 """

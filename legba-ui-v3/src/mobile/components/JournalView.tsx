@@ -10,9 +10,8 @@
  * It renders through the same `CitedProse` the reads use, so a `[[ref:N]]` in
  * the agent's own prose behaves exactly as one in a record does.
  *
- * A journal claim can also cite a raw signal directly as `[[ref:<uuid>]]`
- * (T1.3, planning/JOURNAL_CONNECTIVE_AUDIT_PROPOSAL_2026-09-09.md §6) — the
- * uuid form is disjoint from the ordinal `[[ref:N]]` `CitedProse` tokenizes
+ * A journal claim can also cite a raw signal directly as `[[ref:<uuid>]]`;
+ * the uuid form is disjoint from the ordinal `[[ref:N]]` `CitedProse` tokenizes
  * into chips, so left alone it would render as literal bracket noise (this
  * view passes no `citations`, so there is no chip binding for these refs on
  * the phone today — `stripJournalRefMarkers` at least keeps the noise out of

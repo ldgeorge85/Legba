@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane N-U — the nested citation group ``[[ref:a] [ref:b]]``.
+"""The nested citation group ``[[ref:a] [ref:b]]``.
 
 A consolidation on 11-13 wrote 7 of its 18 refs as one outer bracket pair
 around several single-bracket refs. REFLECT's ``[[ref:<uuid>]]`` regex matched

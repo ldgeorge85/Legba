@@ -20,7 +20,7 @@
 #     time. The sweep is idempotent + forward-progressing (stamps
 #     signals.summarized_at on EVERY examined row), so re-runs are safe.
 #   * method.llm.primary = the CORE self-hosted vLLM plane
-#     (llm.primary.openai_compat / gpt-oss-120b — $0, NEVER Anthropic/Opus). The
+#     (llm.primary.openai_compat / the core model — $0, NEVER Anthropic/Opus). The
 #     deps-builder resolves this into deps.extras["signal_summarizer_llm"] and
 #     HARD-REFUSES an Anthropic component, so the summarizer can never bill Opus.
 #     Bodies > 500 chars get an LLM summary; shorter rows are stamped-and-skipped
@@ -47,7 +47,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: active
-  owner: signal_summarizer
+  owner: owner@local
 
 subscription:
   # No `targets` block → META analyst: one global sweep per cadence tick over the
@@ -64,16 +64,15 @@ method:
   kind: deterministic
   impl: legba.data.analysts.deterministic:run_method
   sub_handler: signal_summarizer
-  # CORE plane ONLY — the self-hosted vLLM component (gpt-oss-120b, $0). The
+  # CORE plane ONLY — the self-hosted vLLM component (the core model, $0). The
   # deps-builder resolves this into deps.extras["signal_summarizer_llm"] and
   # HARD-REFUSES an Anthropic/Opus primary (consult/deep are the only sanctioned
-  # Anthropic users). max_tokens caps each per-call summary.
+  # Anthropic users). No max_tokens: the model's own maximum applies.
   llm:
     primary:
       factory_kind: stack_ref
       raw: llm.primary.openai_compat
       expected_family: llm_provider
-    max_tokens: 512
 
 cadence:
   # ── deterministic kind → token-budget-EXEMPT ──

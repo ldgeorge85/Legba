@@ -12,7 +12,7 @@ nothing and the row said nothing about it.
 This file holds two contracts:
 
   * **The table stays honest** — every ``SCALE_VERSION`` constant in ``src/``
-    has a row in ``docs/ANALYSIS.md`` §10.9.1 and vice versa, the format is
+    has a row in ``docs/ANALYSIS.md`` scale-table and vice versa, the format is
     pinned, and the naming rule (a scale is named for the QUANTITY, not the
     module) is enforced rather than merely documented. The
     ``test_method_versions`` precedent: a doc that can drift silently is a doc
@@ -54,7 +54,7 @@ ANALYSIS = REPO_ROOT / "docs" / "ANALYSIS.md"
 #: A module-level ``SCALE_VERSION = "quantity/era"`` assignment.
 _DECL_RE = re.compile(r'^SCALE_VERSION(?::\s*str)?\s*=\s*"([^"]+)"', re.MULTILINE)
 
-#: The §10.9.1 table's scale column + its "published by" column.
+#: The scale-table table's scale column + its "published by" column.
 _ROW_RE = re.compile(r"^\| `([^`]+)` \|[^|]*\| ([^|]+) \|", re.MULTILINE)
 
 
@@ -68,7 +68,7 @@ def _declared_scales() -> dict[str, str]:
 
 
 def _doc_table_scales() -> dict[str, str]:
-    """The §10.9.1 "Scale versions" table → {scale: publishing instrument}."""
+    """The scale-table "Scale versions" table → {scale: publishing instrument}."""
     text = ANALYSIS.read_text(encoding="utf-8")
     section = text.split("### 10.9.1 Scale versions", 1)[1].split("\n## ", 1)[0]
     return {
@@ -77,7 +77,7 @@ def _doc_table_scales() -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# The §10.9.1 table stays honest
+# The scale-table table stays honest
 # ---------------------------------------------------------------------------
 
 
@@ -92,12 +92,12 @@ def test_every_scale_version_constant_has_a_docs_row() -> None:
         f"{mod} ({ver})" for mod, ver in declared.items() if ver not in table
     }
     assert not missing, (
-        "SCALE_VERSION constants with no §10.9.1 table row: "
+        "SCALE_VERSION constants with no scale-table table row: "
         + ", ".join(sorted(missing))
     )
     orphans = set(table) - set(declared.values())
     assert not orphans, (
-        "§10.9.1 rows naming a scale nothing publishes: " + ", ".join(sorted(orphans))
+        "scale-table rows naming a scale nothing publishes: " + ", ".join(sorted(orphans))
     )
 
 
@@ -109,7 +109,7 @@ def test_the_table_names_the_publishing_module() -> None:
     for mod, ver in declared.items():
         stem = Path(mod).stem.lstrip("_")
         assert stem in table[ver], (
-            f"{mod}: §10.9.1 row for {ver!r} does not name this module"
+            f"{mod}: scale-table row for {ver!r} does not name this module"
         )
 
 
@@ -127,7 +127,7 @@ def test_a_scale_is_named_for_the_quantity_not_the_module() -> None:
     outlives the handler publishing onto it and two instruments may share one,
     so ``intensity/2026-08`` — never ``situation_clustering/2026-08``. Sharing
     the module's name would also make the scale indistinguishable from the
-    method version at a glance, which is the confusion this lane exists to
+    method version at a glance, which is the confusion this change exists to
     remove."""
     for mod, ver in _declared_scales().items():
         quantity = ver.split("/", 1)[0]

@@ -32,7 +32,7 @@ identity:
   version: "<content-hash stamped at register time>"
   abstraction_level: L1
   state: active
-  owner: s6_agency
+  owner: owner@local
   created: "2026-06-19T00:00:00Z"
 
 tools:

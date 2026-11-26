@@ -3,7 +3,7 @@
 --
 -- 0266_one_byte_path.sql
 --
--- ONE BYTE PATH (lane B-1). `fetch_versions` becomes the one register of
+-- ONE BYTE PATH. `fetch_versions` becomes the one register of
 -- fetched bytes: every new signal links to what its poll received, and the
 -- older `evidence_archive` objects are registered into it BY HASH (no byte is
 -- copied, moved or deleted — `scripts/register_evidence_archive.py`).

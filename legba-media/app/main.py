@@ -22,10 +22,10 @@ Response body (matches ``MediaClient._post`` parsing)::
      "ms": <latency>}
 
 
-D2 PREP-not-PROVISION posture — NO fabricated output
-----------------------------------------------------
+PREP-not-PROVISION posture — NO fabricated output
+-------------------------------------------------
 
-Per locked decision D2 (`planning/FEATURE_COMPLETE_PLAN.md`) this service is
+This service is
 built to be **deployed + tested easily**, but the live model endpoint is held
 as the stated seam (`docs/SEAMS.md` #1). That means: a media backend must be
 **registered** before the matching extraction endpoint will answer. With no

@@ -3,7 +3,7 @@
 """End-to-end integration test for the 7-stage acquisition filter chain.
 
 Builds the 7-stage pipeline that the live ``india_energy_infra`` target
-descriptor declares (Group F filter e2e validation, post Wave A):
+descriptor declares:
 
   1. ``language_detect``
   2. ``ner_multilingual``

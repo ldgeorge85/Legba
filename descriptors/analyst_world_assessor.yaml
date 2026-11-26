@@ -1,18 +1,23 @@
-# world_assessor — the GLOBAL COMPOSITION (P3-T5; S2-T3 repointed to REGIONS).
+# world_assessor — the GLOBAL COMPOSITION (repointed to REGIONS).
+# Two modes. By shipped default the world read composes the region reads, as
+# described below. With LEGBA_COMPOSITION_ASSEMBLY switched on, it is assembled
+# from the country records directly, plus the theme compositions as labelled
+# blocks.
+#
 #
 # The crown of the tower: ONE world-picture second-order Finding per cadence
 # tick that COMPOSES the per-REGION reads (region_composition) — NOT the ~24
-# per-country reads directly, and NOT a raw 24h signal one-pager. S2-T3 inserted
+# per-country reads directly, and NOT a raw 24h signal one-pager. The regional tier inserted
 # the region floor between the country reads and the world read
 # (unit sub-claim → country read → REGION read → world read), so the world read
 # now fuses the FIVE region heads (5-6 inputs) — structurally removing the
-# MAX_WORLD_INPUT_FINDINGS cap pressure (the P4-C2 "Global without the United
+# MAX_WORLD_INPUT_FINDINGS cap pressure (the "Global without the United
 # States" failure class). Every factual clause is cited [[ref:N]] to a CITED
 # region-read finding_id; the composition then gets the MANDATORY faithfulness
 # verify (the generalized pass recognizes the [[ref:N]]->read bridge) and the T7
 # hedge/double-count cap folds effective_confidence = min(confidence, overall_score).
 #
-# ── DEGRADE-NOT-DROP + absence-honest (S2-T3) ───────────────────────────────
+# ── DEGRADE-NOT-DROP + absence-honest ───────────────────────────────
 # READ_SLICE's world branch (_assemble_world_region_slice) reads the region
 # roster and, per region: feeds a present region head (mode 'region'); DEGRADES a
 # region with no region head to that region's member country_composition heads
@@ -22,7 +27,7 @@
 # so the provenance is honest about which floor grounded each region.
 #
 # ── why kind = meta_findings_synthesizer (repointed from inline_target) ──────
-# P0-T7 already DEMOTED this analyst's old role as a raw-signal executive
+# The earlier demotion already DEMOTED this analyst's old role as a raw-signal executive
 # one-pager (SEAMS #34): the world read is no longer a first-order LLM pass
 # over the tenant-wide signal slice. It is now a COMPOSITION — an
 # analysis-of-analysis over the verified country reads — so the correct
@@ -60,18 +65,18 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: active
-  owner: world_assessor
+  owner: owner@local
 
 subscription:
   # No `targets` block → META analyst: ONE global run per cadence tick over the
   # per-REGION reads (see _cadence_targets → None → single global run). The
   # composition reads the OUTPUTS of region_composition, not raw signals —
   # resolved by the kind's READ_SLICE from other_analysts[].id. Because the run
-  # is a verify-declaring GLOBAL meta, READ_SLICE takes the S2-T3 world branch:
+  # is a verify-declaring GLOBAL meta, READ_SLICE takes the world branch:
   # it reads the region_composition HEADS (meta=True, so include_meta) verify-
   # floored, DEGRADES a region with no head to that region's country reads, and
   # NAMES a region with no read at all as a gap.
-  # FRAME-1 (2026-08-20, ratified): the window on these SOURCES is an
+  # The window on these SOURCES is an
   # ADMISSIBILITY HORIZON, not a freshness cliff. 24h was a wall-clock gate over
   # an 11h-cooldown cadence that HOLDS on a quiet desk: on 2026-08-20 the BF
   # units had last fired 42h earlier, the trailing-24h slice was mechanically
@@ -83,7 +88,7 @@ subscription:
     - id: region_composition
       data_types: [finding]
       time_window: 336h
-    # B0-4 (MASTER_PLAN 2026-07-10): the cross-region THEMATIC composition —
+    # The cross-region THEMATIC composition —
     # the world's one LEGAL cited cross-region object. Its target-LESS head is
     # admitted by _assemble_world_region_slice as a labeled `thematic` block,
     # verify-floored like every other input (a weak head is floored out, never
@@ -92,7 +97,7 @@ subscription:
     - id: escalation_composition
       data_types: [finding]
       time_window: 336h
-    # W5 (2026-11-07): the THEME-filtered cross-border hybrid-activity
+    # The THEME-filtered cross-border hybrid-activity
     # composition, admitted the same way: a labelled `thematic` block, its own
     # subject group under the world floor, verify-floored. Ships with its
     # LIFECYCLE.md activation row, so the world never declares a draft lane.
@@ -102,19 +107,19 @@ subscription:
   substrate:
     direct_queries: false        # reads via the kind's READ_SLICE, not ad-hoc SQL
 
-# ── DQ P6 DECISION: situations as a grounding source (2026-07-03) ────────────
+# ── DECISION: situations as a grounding source ──────────────────────────────
 # world_assessor grounds ['substrate'] only — it does NOT declare 'situations',
-# so the P3 world composition never reads the situations frames. This omission is
-# now DELIBERATE, not accidental: the global situations surface was polluted (P6)
+# so the world composition never reads the situations frames. This omission is
+# now DELIBERATE, not accidental: the global situations surface was polluted
 # by ~35 NULL-target composition/snapshot report-receipts and status-quo
 # non-event frames that headed the intensity ranking. Wiring situations into the
 # world read BEFORE that surface is clean would inject those receipts into the
-# crown composition. DECISION: DEFER declaring 'situations' here until (a) the P6
+# crown composition. DECISION: DEFER declaring 'situations' here until (a) the
 # grounding-read regex + clustering steady-state tag are live and (b) the
 # migrations that CLOSE the NULL-target snapshot rows + retag steady-state frames
 # have run and the global top-8 situations read is verified clean — THEN add
 # 'situations' as a measured follow-up (A/B the world composition faithfulness).
-# The P6 dapr_actors fix (world_assessor target_id stays GLOBAL, not a stray
+# The dapr_actors fix (world_assessor target_id stays GLOBAL, not a stray
 # inputs[0] region) and the finding_supersession/clustering gate (world_assessor
 # findings no longer MINT situations) are the prerequisites landed now.
 mapping:
@@ -127,7 +132,7 @@ method:
   # chat_complete shape the kind uses (same as analyst_country_composition.yaml).
   kind: llm_planner
   prompt_module: "legba.prompts.meta_findings_synthesizer.v1"
-  # F-3 (DEMOTION_D1_SPEC §7) — no method.bounded_question here, deliberately.
+  # No method.bounded_question here, deliberately.
   # This tier fuses the region/thematic reads into one world picture; it does
   # not answer a single bounded question itself. The fallback per the spec's
   # ruling is the desk display name (identity.name above), stamping
@@ -143,9 +148,9 @@ method:
       factory_kind: stack_ref
       raw: llm.primary.openai_compat
       expected_family: llm_provider
-    # P3-T5: faithfulness VERIFY judge over the WORLD composition itself.
+    # Faithfulness VERIFY judge over the WORLD composition itself.
     # Currently the SAME core reasoning model (llm.primary.openai_compat,
-    # gpt-oss-120B) that writes the units + the per-country + world compositions —
+    # the core model) that writes the units + the per-country + world compositions —
     # NOT a cross-family judge. Temporary: the 8B Llama-3.1-8B judge proved too
     # weak (harsh + mis-aimed); a dedicated reasoning judge is planned. KNOWN
     # LIMITATION: same-model judging shares blind spots, so the faithfulness signal
@@ -163,9 +168,8 @@ method:
       factory_kind: stack_ref
       raw: llm.primary.openai_compat
       expected_family: llm_provider
-    max_tokens: 768            # the kind's DEFAULT_MAX_TOKENS (narrower context)
   budget_tokens_per_day: 0
-  # Composition budget: a global compose over ≤N country reads + 768 output. The
+  # Composition budget: a global compose over ≤N country reads + one synthesis. The
   # budget retry policy stays at the default `pause_until_next_window`: if the
   # cap is ever projected to be crossed, the actor pauses THIS analyst until the
   # next UTC bucket rather than demoting to a (non-wired) paid fallback.

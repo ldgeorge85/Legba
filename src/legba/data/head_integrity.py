@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""HEAD INTEGRITY (lane N-A, 2026-11-11) — one current head per desk × unit, and it is verified.
+"""HEAD INTEGRITY — one current head per desk × unit, and it is verified.
 
-THE DEFECTS, measured read-only 2026-11-11 (sweep_quality_1111b WR2):
+THE DEFECTS, measured read-only:
 
   * **A failed parse superseded a verified head.** ``inline_target`` lands a
     read whose JSON did not parse as a 0.30 ``unstructured`` row (so the run
@@ -16,9 +16,9 @@ THE DEFECTS, measured read-only 2026-11-11 (sweep_quality_1111b WR2):
     emitted no tags (no ``key_entities``) — 51 desk reads in 14 days. Such a row
     is never superseded by anything: CD escalation ``bb2ce5fc`` (11-03) stayed
     open while the chain went ``6a082ea8`` → ``e916d607`` past it. 80 desk ×
-    unit keys held more than one open row on 11-11.
+    unit keys held more than one open row.
   * Together: the composition basis gather (``superseded_by IS NULL``, coerce
-    rows dropped, floor, THEN newest-per-key) found the 11-03 orphan as the only
+    rows dropped, floor, THEN newest-per-key) found an old orphan as the only
     open passing row and quoted a 7.7-day-old read as the desk's current one.
 
 THE RULES (one module, so the write path, the read path and the one-off repair

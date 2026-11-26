@@ -1,4 +1,4 @@
-/* phone.css — the phone shell's own layer (M-2; plan §2.2).
+/* phone.css — the phone shell's own layer.
  *
  * Every colour is a token from `globals.css` (`--surf-*`, `--ink-*`,
  * `--line-*`, `--sev-*`, and `--point`, the ONE accent, used only for the
@@ -216,9 +216,12 @@ html[data-pwa-banner] .ph-top {
 }
 
 .ph-badge {
+  /* beside the icon's top-right corner, not over the glyph, with a ring in
+     the bar's colour so the two never merge */
   position: absolute;
-  top: -6px;
-  left: 14px;
+  top: -8px;
+  left: calc(100% - 4px);
+  box-shadow: 0 0 0 2px var(--surf-2);
   min-width: 18px;
   height: 18px;
   padding: 0 4px;
@@ -440,7 +443,7 @@ button.ph-row:active {
 }
 
 .ph-link {
-  /* the touch floor both ways: a short name ("Iran", roll 87 at 360 px) was
+  /* the touch floor both ways: a short name ("Iran" at 360 px) was
      44 px tall and 28 px wide */
   min-height: 44px;
   min-width: 44px;

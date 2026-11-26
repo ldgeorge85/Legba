@@ -1,8 +1,8 @@
 {
   "prompts": {
     "escalation": {
-      "chars": 21988,
-      "sha256": "9cd8be681fe128d4fdb5fefa0f6cdd979edba1264f3f898f25650837b81fca11",
+      "chars": 23404,
+      "sha256": "6d7ba5c93f773709cdc921a8530c56ffe19cb3cc519558cd9b3399432f862885",
       "source": "analyst_escalation.yaml"
     }
   },

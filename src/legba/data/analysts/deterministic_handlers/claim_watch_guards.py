@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""CW-4 / CW-5 — the two guards the ``fact_contention`` question class needs.
+"""The two guards the ``fact_contention`` question class needs.
 
 ``fact_contention`` questions are the one harvested class ``claim_watch``
 deliberately still scores: "which value of 'operates in' for 'israel defense
 forces' is correct?" is a question about the WORLD, and new reporting genuinely
-can settle it. K-4 round 3 labeled 40 of them and found the class is not one
+can settle it. A labeling of 40 of them and found the class is not one
 population but two, cleanly split::
 
     idf/operates in, israel defense forces/operates in,

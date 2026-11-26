@@ -18,12 +18,11 @@ machine ``reason`` — NEVER a fabricated band, never a hand-weighted number ove
 raw prose, never a synthesized basis id. Basis ids are ONLY ever real
 ``analyst_outputs.id`` rows returned by the gather query.
 
-FRAME-3 — SEVERITY AS STATE (``planning/FRAME_PROGRAM_2026-08-20.md`` §0.6, §7
-train 3). R4 has always mapped the severity tag; what changed is what that tag
+SEVERITY AS STATE. The banding has always mapped the severity tag; what changed is what that tag
 MEANS. A desk used to tag the severity of its SLICE DELTA, so a war in its
 fourth month tagged ``severity:low`` on a week that added nothing to it and
-this engine banded the dimension ``low`` off that tag — CORRECTNESS-R1 measured
-37/37 non-exact bands sitting BELOW the reference, and named it the C-B driver.
+this engine banded the dimension ``low`` off that tag — a correctness
+measurement found 37/37 non-exact bands sitting BELOW the reference.
 The unit contract now splits the tag: ``severity`` is the STANDING level of the
 dimension and the slice movement rides a separate
 ``severity_delta:<rose|fell|steady|new>``.
@@ -245,7 +244,7 @@ CONF_FLOOR: float = 0.35
 #: the retired subtraction stays measurable without being applied.
 CONF_CONFIDENT: float = 0.60
 
-#: P4-T5 — the DEDICATED faithfulness floor. A claim whose per-claim
+#: The DEDICATED faithfulness floor. A claim whose per-claim
 #: faithfulness-verify score (``critic_score``) is below this is EXCLUDED from
 #: the basis with a dedicated ``reason='low-faithfulness'`` (distinct from the
 #: ``below-floor`` effective-confidence guard). ``effective_confidence =
@@ -645,7 +644,7 @@ def _band_claim(
     if eff is None or claim.is_coerce_fallback:
         return _insufficient("verify-failed")
 
-    # R1b (P4-T5) — the per-claim faithfulness is present but below the dedicated
+    # R1b — the per-claim faithfulness is present but below the dedicated
     # faithfulness floor. Excluded from the basis with its OWN reason so the
     # demotion is legible + distinct from the effective-confidence below-floor.
     if claim.faithfulness_score is not None and claim.faithfulness_score < faith_floor:
@@ -704,7 +703,7 @@ def band_dimension(
         ``Faithfulness verify%`` critique was ever folded — verify never ran or
         failed) OR the finding carries a ``coerce_failed`` / ``unstructured``
         tag (a garbage body is vacuously faithful; drop by tag).
-      * **R1b ``low-faithfulness``** (P4-T5) — the per-claim faithfulness score
+      * **R1b ``low-faithfulness``** — the per-claim faithfulness score
         is present but ``< faith_floor``. EXCLUDES the claim from the basis with
         a DEDICATED reason so the operator literally sees the band basis exclude
         it — distinct from ``below-floor`` (a claim with conf .9 / faith .45 now
@@ -909,7 +908,7 @@ def band_target(
         "floors": {
             "conf_floor": conf_floor,
             "conf_confident": conf_confident,
-            # P4-T5 — the dedicated faithfulness floor surfaced so the operator
+            # The dedicated faithfulness floor surfaced so the operator
             # can see the threshold the low-faithfulness exclusion used.
             "faith_floor": faith_floor,
         },

@@ -54,7 +54,7 @@ from legba.data.registry.substrate_reads_api import (
 from legba.data.registry.vocabulary_cache import VocabularyCache
 
 
-# Mandatory env for vault + signing identity (mirrors the L-113 integ test).
+# Mandatory env for vault + signing identity (mirrors the integ test).
 _TEST_MASTER_KEY_HEX = (
     "0011223344556677889900112233445566778899001122334455667788990011"
 )
@@ -214,14 +214,14 @@ async def _insert_critique(
     data_extra: dict | None = None,
     title: str | None = None,
 ) -> UUID:
-    """Insert an L-175 critique row (kind='critique') graded against a finding.
+    """Insert an critique row (kind='critique') graded against a finding.
 
     Mirrors the production write path: the CritiquePayload model_dump lands in
     ``data`` (so ``data.overall_score`` + ``data.analyzed_output_id`` are the
     join keys S3's /findings LEFT JOIN reads), and the analyzed finding's id is
     the first ``derived_from`` edge.
 
-    ``data_extra`` (P0-T3) is merged into the critique's nested ``data`` key
+    ``data_extra`` is merged into the critique's nested ``data`` key
     (``data.data``) — mirrors how the faithfulness verify pass stores its
     ``verification`` block via ``CritiquePayload.data`` so the /findings lateral
     can surface ``data->'data'->'verification'``.
@@ -499,7 +499,7 @@ def test_hydrate_finding_stamps_structural_exemption():
 
 
 def test_hydrate_finding_below_floor_mark():
-    """E-1 (2026-07-27 sweep item 3) — the EXPLICIT below-floor annotation:
+    """(2026-07-27 sweep item 3) — the EXPLICIT below-floor annotation:
     ``True`` iff a GRADED finding's effective_confidence sits under the
     system-wide 0.50 floor; ``False`` when graded and clearing; honest ``None``
     when never graded (no fabricated verdict). ANNOTATE-not-exclude: the row
@@ -735,7 +735,7 @@ def test_hydrate_finding_judgment_shape():
 
 def test_hydrate_finding_judgment_legacy_row_has_state_block_empty_citations():
     """A pre-assembly / unverified / uncited row → `verification` is the
-    pending|absent STATE block (X4 READPATH, W11-F53: never null, never a
+    pending|absent STATE block (X4 READPATH, never null, never a
     fabricated score) and `citations` is `[]` (never guessed)."""
     from legba.data.registry.substrate_reads_api import _hydrate_finding_judgment
 
@@ -1146,7 +1146,7 @@ async def test_findings_unverified_has_no_verification_block(
 
 
 # ---------------------------------------------------------------------------
-# P1-T1 — reachability facets: orphan (target_id_null), full-text (q),
+# Reachability facets: orphan (target_id_null), full-text (q),
 # analyst-set (analyst_id_in). The ~1100 NULL-target "orphan" findings are
 # unreachable from any country view without these.
 # ---------------------------------------------------------------------------
@@ -1671,9 +1671,9 @@ async def test_signals_single_row_shape(
 async def test_signals_are_light_by_default(
     substrate_app, client: AsyncClient,
 ):
-    """W11 walk fix: an omitted ``fields`` answers ``SignalSummaryRow`` — the
+    """Walk fix: an omitted ``fields`` answers ``SignalSummaryRow`` — the
     columns a list draws and ``data`` cut to a title and its clock; the
-    payload is ``fields=full`` by name (roll 84 live: 2.21 MB at 500 rows)."""
+    payload is ``fields=full`` by name (live: 2.21 MB at 500 rows)."""
     from legba.data.registry.list_weights import LIST_ROUTES
     from legba.data.registry.signal_list_weight import LIGHT_DATA_KEYS, SignalSummaryRow
 
@@ -1782,7 +1782,7 @@ async def test_signals_filter_language(
 
 
 # ---------------------------------------------------------------------------
-# Wave-E — access_class_in (SEAMS #59). Opt-in only: absent is byte-identical
+# access_class_in (SEAMS #59). Opt-in only: absent is byte-identical
 # to today's behaviour, present narrows by the row's own access_class
 # (signals) or by a linked signal's access_class (findings, single-hop over
 # derived_from). Nothing here proves enforcement — there is none yet.
@@ -1808,7 +1808,7 @@ async def test_signals_access_class_in_filters_and_is_byte_identical_absent(
             restricted_id,
         )
 
-    # Absent — BOTH rows: the pre-Wave-E behaviour, unchanged.
+    # Absent — BOTH rows: the pre-filter behaviour, unchanged.
     r_absent = await client.get("/api/v1/signals", params={"source_id": src})
     assert r_absent.status_code == 200
     ids_absent = {row["id"] for row in r_absent.json()["data"]}
@@ -1879,7 +1879,7 @@ async def test_findings_access_class_in_filters_and_is_byte_identical_absent(
             other_id, tid,
         )
 
-    # Absent — both findings: the pre-Wave-E behaviour, unchanged.
+    # Absent — both findings: the pre-filter behaviour, unchanged.
     r_absent = await client.get("/api/v1/findings", params={"fields": "full", "target_id": tid})
     assert r_absent.status_code == 200
     ids_absent = {row["id"] for row in r_absent.json()["data"]}
@@ -1908,7 +1908,7 @@ async def test_findings_access_class_in_unknown_value_400(
 
 
 # ---------------------------------------------------------------------------
-# Contention read API (Holes-B Wave 5, #101) — hydration shape unit tests.
+# Contention read API — hydration shape unit tests.
 #
 # The end-to-end HTTP coverage needs the 0055 fact_contention sidecar in the
 # migrated test DB; these pure-unit tests pin the response SHAPE of the
@@ -2233,7 +2233,7 @@ async def test_findings_summary_faithfulness_object_fallback_not_per_key(
     """The SQL's `coalesce(c.verification, s.structural_verification)` must be
     OBJECT-level, matching `_hydrate_finding`'s Python fallback — not a
     per-key coalesce. A finding can carry a faithfulness block whose
-    `faithfulness_score` is legitimately `null` (Q-1's `unassessable` state)
+    `faithfulness_score` is legitimately `null` (the `unassessable` state)
     while ALSO carrying an (unrelated, contrived-for-this-test) structural
     critique with a real score. A per-key coalesce would leak the structural
     number into a row the faithfulness pass explicitly marked unassessable;
@@ -2280,7 +2280,7 @@ async def test_findings_fields_unknown_value_422(client: AsyncClient):
     routes deliberately disagree here."""
     r = await client.get("/api/v1/findings", params={"fields": "bogus"})
     assert r.status_code == 422
-    # P-8: "full" is asked for BY NAME; omitted is the light summary weight.
+    # "full" is asked for BY NAME; omitted is the light summary weight.
     for spelling in ("full", "summary", "judgment"):
         r = await client.get("/api/v1/findings", params={"fields": spelling})
         assert r.status_code == 200, spelling
@@ -2293,7 +2293,7 @@ async def test_findings_fields_unknown_value_422(client: AsyncClient):
 async def test_findings_default_is_the_summary_weight_and_full_is_by_name(
     substrate_app, client: AsyncClient,
 ):
-    """P-8 — lists are light by default: an omitted `fields` answers exactly
+    """Lists are light by default: an omitted `fields` answers exactly
     what `fields=summary` answers; `fields=full` is the whole row."""
     _, _, pg_store = substrate_app
     tid = _unique_target_id("p8default")
@@ -2313,7 +2313,7 @@ async def test_findings_default_is_the_summary_weight_and_full_is_by_name(
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_finding_by_id_is_the_full_row(substrate_app, client: AsyncClient):
-    """P-8 — `GET /findings/{id}` answers ONE finding at full weight, the
+    """`GET /findings/{id}` answers ONE finding at full weight, the
     same row a `fields=full` page carries; 404 for an unknown id or a row of
     another kind; 400 for a malformed id."""
     _, _, pg_store = substrate_app
@@ -2642,7 +2642,7 @@ async def test_findings_judgment_legacy_row_has_state_block_empty_citations(
 async def test_findings_judgment_score_state_pending_absent_on_real_rows(
     substrate_app, client: AsyncClient,
 ):
-    """X4 READPATH (W11-F53) — on REAL rows through the ASGI route: a finding
+    """X4 READPATH — on REAL rows through the ASGI route: a finding
     written a minute ago with no critique reads `pending`; one written an hour
     ago with no critique reads `absent`; a judged neighbour keeps its real
     block. `since` is the row's own `produced_at`. The full weight says the
@@ -2876,7 +2876,7 @@ async def test_findings_judgment_row_far_smaller_than_default(
 
 
 # ---------------------------------------------------------------------------
-# P-8 — the default page's byte budget (registry/list_weights.py).
+# The default page's byte budget (registry/list_weights.py).
 # ---------------------------------------------------------------------------
 
 
@@ -2926,3 +2926,74 @@ async def test_findings_default_page_stays_under_its_byte_budget(
     full = await client.get(route, params={"target_id": tid, "fields": "full"})
     assert len(full.content) > 10 * len(r.content), (
         "fixture not realistic: the full page should dwarf the light one")
+
+
+# ---------------------------------------------------------------------------
+# `/findings?at=` — the list as the system had recorded it at an instant.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fields", ["summary", "judgment", "full"])
+async def test_findings_at_ignores_rows_and_critiques_written_after(
+    substrate_app, client: AsyncClient, fields: str,
+):
+    _, _, pg_store = substrate_app
+    tid = _unique_target_id(f"as-of-{fields}")
+    early = await _insert_finding(pg_store, title="known then", confidence=0.9, target_id=tid)
+    await _insert_critique(
+        pg_store, analyzed_output_id=early, overall_score=0.4,
+        data_extra={"verification": {"faithfulness_score": 0.4, "score_state": "scored"}},
+    )
+    async with pg_store.acquire() as conn:
+        at = await conn.fetchval("SELECT clock_timestamp()")
+    # Written after the instant: a new finding, and a later verdict on the old one.
+    await _insert_finding(pg_store, title="learned later", confidence=0.9, target_id=tid)
+    await _insert_critique(
+        pg_store, analyzed_output_id=early, overall_score=0.95,
+        data_extra={"verification": {"faithfulness_score": 0.95, "score_state": "scored"}},
+    )
+
+    def score(row: dict) -> float:
+        if fields == "summary":
+            return row["verification_faithfulness_score"]
+        return row["verification"]["faithfulness_score"]
+
+    then = await client.get("/api/v1/findings", params={"target_id": tid, "fields": fields, "at": at.isoformat()})
+    assert then.status_code == 200, then.text
+    rows = then.json()["data"]
+    assert [r["title"] for r in rows] == ["known then"]
+    assert score(rows[0]) == pytest.approx(0.4, abs=1e-4)
+    if fields == "full":
+        assert rows[0]["effective_confidence"] == pytest.approx(0.4, abs=1e-4)
+
+    now = await client.get("/api/v1/findings", params={"target_id": tid, "fields": fields})
+    rows = now.json()["data"]
+    assert [r["title"] for r in rows] == ["learned later", "known then"]
+    assert score(rows[1]) == pytest.approx(0.95, abs=1e-4)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_findings_at_composes_with_the_verified_facet_and_its_cursor(
+    substrate_app, client: AsyncClient,
+):
+    """The facet reads the folds; under `at` the folds are the ones held then,
+    so a finding verified only after the instant was unverified at it."""
+    _, _, pg_store = substrate_app
+    tid = _unique_target_id("as-of-facet")
+    fid = await _insert_finding(pg_store, title="verified later", target_id=tid)
+    async with pg_store.acquire() as conn:
+        at = await conn.fetchval("SELECT clock_timestamp()")
+    await _insert_critique(
+        pg_store, analyzed_output_id=fid, overall_score=0.8,
+        data_extra={"verification": {"faithfulness_score": 0.8}},
+    )
+    params = {"target_id": tid, "fields": "summary", "verified": "true"}
+    assert [r["id"] for r in (await client.get("/api/v1/findings", params=params)).json()["data"]] == [str(fid)]
+    then = (await client.get("/api/v1/findings", params={**params, "at": at.isoformat()})).json()
+    assert then["data"] == []
+    params["verified"] = "false"
+    then = (await client.get("/api/v1/findings", params={**params, "at": at.isoformat()})).json()
+    assert [r["id"] for r in then["data"]] == [str(fid)]

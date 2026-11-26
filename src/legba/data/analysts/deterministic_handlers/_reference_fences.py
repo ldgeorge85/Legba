@@ -102,7 +102,7 @@ TIER1_SUFFIXES: frozenset[str] = frozenset({
     "gov", "gov.uk", "gov.il", "gov.ua", "gov.au", "gov.in", "gov.za",
     "go.jp", "gouv.fr", "bund.de", "gob.es", "gob.mx", "gov.br", "gc.ca",
     "gov.ie", "gov.pl", "gov.sg", "gov.tr", "government.se", "regjeringen.no",
-    # Wave O / o2: two official publishers the top-ups actually fetched and
+    # Two official publishers the top-ups actually fetched and
     # that no suffix above reaches. ``bundestag.de`` is the German federal
     # parliament and is NOT under ``bund.de``; ``gov.pk`` is Pakistan's
     # government second level (``radio.gov.pk``, the state broadcaster). Both
@@ -142,8 +142,8 @@ TIER2_SUFFIXES: frozenset[str] = frozenset({
     "cfr.org", "csis.org", "rand.org", "amnesty.org", "hrw.org",
 })
 
-#: Hosts that are genuinely Tier 1-2 and that this lane CANNOT READ. Measured,
-#: twice, in R1 and again in the first live R2 build: reuters.com serves 401 to
+#: Hosts that are genuinely Tier 1-2 and that this lane CANNOT READ. Measured
+#: repeatedly: reuters.com serves 401 to
 #: everything (robots.txt is ``Disallow: /`` for ``*`` — a permanent, deliberate
 #: closure), apnews.com and timesofisrael.com serve a Cloudflare JS challenge,
 #: haaretz.com is a subscription paywall. curl_cffi browser impersonation was

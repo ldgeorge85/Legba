@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Every optimizer's parent prompt module must actually import (K-5 prereq).
+"""Every optimizer's parent prompt module must actually import (prereq).
 
 K5_BLAST_RADIUS §3.2, verified from `analyst_traces`:
 
@@ -23,8 +23,8 @@ whose promoted candidate becomes a live analyst's system prompt.
 The pin below is tree-wide and runs the REAL resolution: the actor's own
 ``_inject_optimizer_prompt_options`` builds the options, the kind's own
 ``resolve_parent_prompt_module_path`` resolves them, and the result is
-IMPORTED. This is a K-5 prerequisite — those 17 ``legba.prompts.*`` strings are
-the whole load-bearing surface of the moves wave.
+IMPORTED. This is a prerequisite — those 17 ``legba.prompts.*`` strings are
+the whole load-bearing surface.
 """
 
 from __future__ import annotations
@@ -240,7 +240,7 @@ def _actor_run_source() -> str:
 def test_actor_run_body_injects_the_optimizer_prompt_options() -> None:
     assert "_inject_optimizer_prompt_options(" in _actor_run_source(), (
         "the actor run path must plumb eval.optimizer into options — an "
-        "unwired channel is the K5 §3.2 defect restored"
+        "unwired channel is the earlier defect restored"
     )
 
 

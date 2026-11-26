@@ -95,6 +95,7 @@ from legba.shared.sampling import HOUSE_TEMPERATURE
 
 import asyncio
 import logging
+import re
 import random
 import time
 from dataclasses import dataclass, field
@@ -601,6 +602,14 @@ def resolve_partition_outcome(
 # that patches it keeps working.
 
 
+def normalize_verdict_token(verdict: Any) -> str:
+    """A judge's verdict token in contract form: lower case, with spaces and
+    hyphens between words read as underscores (``"Supported as inference"`` ->
+    ``supported_as_inference``). Spelling only; it never maps one verdict to
+    another."""
+    return "_".join(re.split(r"[\s\-_]+", str(verdict).strip().lower()))
+
+
 def split_unchecked(
     claim_idx: list[int], verdicts: list[tuple[str, str, str]]
 ) -> tuple[list[tuple[int, tuple[str, str, str]]], list[int]]:
@@ -721,15 +730,18 @@ async def _judge_claim_partition(
             out.append((_VERDICT_UNCHECKED, "", aligned_by))
             continue
         verdict, quote = slot
-        v = str(verdict).strip().lower()
-        # RUST-3: the accepted vocabulary is the FOUR-token contract. Anything
-        # outside it still coerces to ``unsupported``, exactly as before — the
-        # only change is that ``not_a_proposition`` stopped being "anything
-        # outside it". A judge on ANY route may now say a span asserts nothing;
-        # whether it is honoured is the severity chain's decision, not the
-        # parser's (only the absence rubric currently ADVERTISES the token).
+        v = normalize_verdict_token(verdict)
+        # The accepted vocabulary is the contract's (JUDGE_VERDICT_TOKENS). A
+        # token outside it is NOT read as some verdict the judge did not give:
+        # coercing it to ``unsupported`` used to turn a malformed or new verdict
+        # into a silent soft fail. It raises instead, so the whole call fails
+        # to the deterministic floor labelled ``judge_error`` and the token is
+        # named in the log line.
         if v not in JUDGE_VERDICT_TOKENS:
-            v = "unsupported"
+            raise _JudgeVerdictError(
+                f"judge returned an unknown verdict {str(verdict)[:60]!r}; "
+                f"expected one of {sorted(JUDGE_VERDICT_TOKENS)}"
+            )
         out.append((v, quote, aligned_by))
     return out
 

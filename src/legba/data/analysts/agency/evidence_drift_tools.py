@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The ``evidence_drift`` pack — agents see what a source changed after it was
-read, and ask for a re-read or a re-derivation (lane D-1).
+read, and ask for a re-read or a re-derivation.
 
 Five tools:
 

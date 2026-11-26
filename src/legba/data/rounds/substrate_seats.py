@@ -1,8 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The substrate code seats: the five code functions a round spec may name
-that READ THE RECORD (plan P4 §2.2; catalog ``code_fns`` with ``pure: false``;
-lane G-5).
+that READ THE RECORD (catalog ``code_fns`` with ``pure: false``).
 
 Each reads through an injected READ-ONLY ``fetch(sql, *params)`` (the hosts
 open it on a read-only session with a statement timeout) and, for the source

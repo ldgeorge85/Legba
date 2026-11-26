@@ -1,5 +1,5 @@
 /**
- * unitCorrectnessModel — the per-unit CORRECTNESS number (Program 2, track G2).
+ * unitCorrectnessModel — the per-unit CORRECTNESS number.
  *
  * Reads `GET /api/v1/units/{target_id}/correctness`: the latest
  * `unit_correctness` row per bounded unit for one country, and, on demand, the

@@ -2,15 +2,14 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """legba.prompts.lens_intent — the signaling/intent-weigher faculty's persona + prior.
 
-VOICES v1 faculty (planning/VOICES_FACULTY_PRIORS.md § lens_intent; DL-3). One of
+VOICES v1 faculty. One of
 four function-typed lenses on the journal_assessor kind. This faculty weights
 signaling and constraint — stated commitments, audience costs, domestic political
 limits, patterns of signaling — over raw material counts; what an actor has bound
 itself to is load-bearing. It is the designed OPPOSITE of lens_capability.
 
-The prior below is the reconciled, falsifiable prior VERBATIM (RECONCILIATION
-STAMP 2026-07-21, blind-spot gate PASS). Single source of truth for the
-consistency judge; the descriptor's content hash IS the prior version (DL-2).
+The prior below is the reconciled, falsifiable prior VERBATIM. Single source of truth for the
+consistency judge; the descriptor's content hash IS the prior version.
 Shared tower-only task + narrate contract in ``legba.prompts.lens_common``.
 """
 

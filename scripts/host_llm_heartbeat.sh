@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# host_llm_heartbeat.sh — the LLM-plane silence alarm (§21 follow-up, 2026-07-29).
+# host_llm_heartbeat.sh — the LLM-plane silence alarm (2026-07-29).
 #
 # THE GAP THIS CLOSES: the pipeline watchdog watches SIGNALS, which keep
 # flowing when only the LLM endpoint dies — so a 9h core-model outage
@@ -26,7 +26,7 @@
 #                    or hang on a production-sized slice. Runs every Nth tick
 #                    (hourly by default) because it is the expensive one.
 #   4. DISK        — root-filesystem usage, df's Use% figure (added
-#                    2026-09-05; df figure since N-M 11-13). WARN at >=85%
+#                    2026-09-05; df figure since 11-13). WARN at >=85%
 #                    (log only), CRITICAL at >=92% (pages). OpenSearch's own
 #                    flood-stage watermark is 95% and SILENTLY blocks corpus
 #                    indexing once crossed — see check_disk_usage below for
@@ -143,7 +143,7 @@ check_silence() {
   # during an endpoint outage (status=success with all scores drained), so its
   # success is not evidence the LLM plane is alive — it masked the 2026-07-30
   # outage for 2.5h. indicator_tracker/thematic_proposal are deterministic
-  # handlers added after this list was first written. verify_backfill (W11-F84)
+  # handlers added after this list was first written. verify_backfill
   # is a deterministic sweep whose only LLM calls are the judge chain on the
   # (usually empty) backlog of critique-less findings — it succeeds with zero
   # judge calls, so its success says nothing about the core plane either.
@@ -169,7 +169,7 @@ check_silence() {
 # container's own env; the only inputs are the mode, the timeout and the
 # component id.
 #
-# §31.1 postmortem (2026-08-29): an EMPTY verdict here used to be reported as
+# Postmortem (2026-08-29): an EMPTY verdict here used to be reported as
 # "container unreachable?" unconditionally — which was WRONG every single
 # time it fired for 27 days: the container (legba-legba-registry-1, the
 # wrong target at the time) was `Up ... (healthy)` throughout; the probe
@@ -224,7 +224,7 @@ def _long_prompt() -> str:
 
 
 async def main() -> int:
-    # §31.1 postmortem (2026-08-29): these imports (and the store/vault/
+    # Postmortem (2026-08-29): these imports (and the store/vault/
     # registry setup below) USED TO sit outside this try/except. A missing
     # transitive dependency (feedparser, pulled in by
     # analyst_deps_builder -> legba.data.analysts -> evidence_archiver ->
@@ -424,7 +424,7 @@ check_longctx() {
 # rounded UP — measured with os.statvfs directly on the HOST (no docker exec)
 # because it is the host root filesystem — not a container's writable layer —
 # that actually fills up and that OpenSearch's bind-mounted data volume lives
-# on. N-M (11-13): it used shutil.disk_usage used/total, which counts the
+# on. Before 11-13 it used shutil.disk_usage used/total, which counts the
 # root-reserved blocks as capacity and read ~5 points BELOW df (89.4 % while df
 # said 95 % on 11-06 03:00Z), so this CRITICAL never fired. OpenSearch's own
 # figure, (total - available) / total, runs about one point ABOVE df near full.

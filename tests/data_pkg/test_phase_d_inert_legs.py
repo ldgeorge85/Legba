@@ -228,7 +228,7 @@ async def test_status_transition_resolution_and_self_consistency_brier(pg_pool):
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_signals_slice_inputs_do_not_suppress_the_resolved_pull(pg_pool):
-    """K-2 regression: the cadence actor feeds calibration_tracking the generic
+    """Regression: the cadence actor feeds calibration_tracking the generic
     SIGNALS slice as `inputs` (non-empty, no claimed_confidence). The handler
     must IGNORE that and still pull resolved hypotheses — the old `if not rows`
     guard saw the non-empty signals slice and skipped the pull, dropping all 50

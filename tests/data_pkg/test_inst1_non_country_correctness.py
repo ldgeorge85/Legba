@@ -643,7 +643,10 @@ async def test_a_profile_with_no_gazetteer_names_every_subject_by_its_descriptor
 # ---------------------------------------------------------------------------
 
 #: sha256 of the pin's (09be8bea) instruction / query block for this fixture.
-_PIN_INSTRUCTION_SHA = "65d1a36820f3be54a7d4f1c9528bbb87176b341a93c1062797a640c43b4d0c8f"
+#: The instruction was re-pinned when its developments target became a cap
+#: rather than a floor, an empty reference became allowed, and the shared
+#: pasted-text sentence was added after the output contract.
+_PIN_INSTRUCTION_SHA = "0ed7805ce093e7774bb0b4068de39d46640e43eb06db5936e8e181ebc244e55a"
 _PIN_QUERY_SHA = "eae26bf066906d8b229e40f8a40ea164eca18a583b861b4d4bd626cf981dffcb"
 
 

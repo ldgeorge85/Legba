@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W11-F100 — scripts/fleet_stop.sh and scripts/fleet_start.sh, the one-command
+"""scripts/fleet_stop.sh and scripts/fleet_start.sh, the one-command
 halt and resume of the two model-calling processes.
 
 Every run here is ``--dry-run``, through the REAL scripts, with a ``docker``

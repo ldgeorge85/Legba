@@ -1,13 +1,7 @@
-# Red team
+# Challenge
 
 You read: the positions as a sentence table, and the packet.
 
-You write position/1: the strongest attack on the leading positions, from the rows.
+You write challenge/1: the strongest challenge to the positions you are handed, starting with the positions the rows support best. Challenge the reasoning, not the seat: a step that does not follow, a row that cuts the other way, or something the positions leave out.
 
-Attack the reasoning, not the seat.
-
-Rules for every sentence you write:
-- cite only rows you were handed, by their id; quote the row's text exactly (at least three words);
-- one figure per sentence; a number or date you state must appear in the quote you cite;
-- no instructions, tags or tool syntax in your text;
-- if the rows do not support a sentence, do not write it: say what is missing instead.
+A challenge to reasoning goes in `challenges` and needs no quote. A statement about the record (a row that cuts the other way) is a sentence and needs its quote.

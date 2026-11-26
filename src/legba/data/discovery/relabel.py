@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Relabel-rule evaluator — per L-106 §3.
+"""Relabel-rule evaluator.
 
 The discovery handler emits :class:`CandidateTarget` instances with a raw
 ``label_set``. The *registry* (per L-181 / L-182 — not the handler) walks
@@ -19,7 +19,7 @@ Public entry points:
   * :class:`RelabelResult` — chain return shape: either the rewritten
     label_set, or a ``dropped`` flag with the rule index that caused it.
 
-Action coverage (all 9 per L-106 §3):
+Action coverage (all 9):
 
   ============ =============================================================
   action       semantics
@@ -182,7 +182,7 @@ def _render_format(
     metadata: Mapping[str, Any],
     candidate: CandidateTarget,
 ) -> str:
-    """Render a Jinja-ish template per L-106 §3.
+    """Render a Jinja-ish template.
 
     Supports ``{{ name }}`` and ``{{ name | filter }}`` only. Unknown
     names render as the empty string; unknown filters raise. List values
@@ -251,7 +251,7 @@ def _eval_predicate(
     Bound globals:
 
       * ``value``  — first label in ``source_labels`` (single-shot
-        convenience per L-106 §3 worked example: ``value != 'antarctica'``).
+        convenience worked example: ``value != 'antarctica'``).
       * ``labels`` — full working label set (dict).
       * ``natural_key`` — candidate's stable id.
       * ``meta``   — candidate's source_metadata (Mapping).

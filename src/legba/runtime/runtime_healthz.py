@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The runtime's ``GET /healthz`` (roll 86: split out of ``dapr_host``, which
+"""The runtime's ``GET /healthz`` (split out of ``dapr_host``, which
 re-exports it). Mounted BEFORE ``DaprActor(app)`` — see the function."""
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ def mount_runtime_healthz(app: FastAPI, handles_holder: Mapping[str, Any]) -> No
     WHY THE ORDER: ``dapr.ext.fastapi.DaprActor`` registers its own
     ``GET /healthz`` (answering ``{"status": "ok"}``), and Starlette answers a
     path from the FIRST route that matches. Mounted after it, this route was
-    dead code: roll 85 live, ``:6090/healthz`` answered ``{"status":"ok"}``
+    dead code: live, ``:6090/healthz`` answered ``{"status":"ok"}``
     with no ``actor_types`` and no T-1 ``llm_gates`` block. The answer keeps
     ``status: ok`` and 200, so daprd's app-health probe reads it as before.
     """

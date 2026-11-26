@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""THE GATING NO-LIVE-WRITE TEST (plan §7 / §12 Wave 4 — the safety precondition).
+"""THE GATING NO-LIVE-WRITE TEST (the safety precondition).
 
 This is the safety CLAIM the whole propose-and-gate design rests on, expressed as
 a TEST (not a comment): a ``propose_*`` call writes ONLY a ``journal_proposals``

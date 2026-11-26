@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Journal Wave 2 — the consolidation tier's supersession, end-to-end on the
-DISPOSABLE container (plan §8 / §12 Wave 2).
+"""The consolidation tier's supersession, end-to-end on the
+DISPOSABLE container.
 
-Wave 1 already proved ``supersede_prior_consolidation`` at the helper level
+The instrument-tool tests already proved ``supersede_prior_consolidation`` at the helper level
 (bootstrap NULL, single-open, idempotent). This module proves the SAME machinery
 fires when the row is shaped the way the consolidator's ``run_method`` shapes it —
 the tier discriminator (``_entry_kind_for_analyst('journal_consolidator')`` →

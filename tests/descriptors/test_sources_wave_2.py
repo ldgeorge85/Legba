@@ -3,8 +3,7 @@
 """sources_wave_2 — draft SourceDescriptors: schema + convention validation.
 
 Validates the ten committed ``descriptors/source_*.yaml`` feeds registered to
-close gaps named in ``planning/COVERAGE_VS_SELECTION_AUDIT_2026-09-07.md``
-(the "sources-wave-2" brief: OHCHR, UN News Africa/Middle East/Peace &
+close coverage gaps (OHCHR, UN News Africa/Middle East/Peace &
 Security, Kyiv Independent, Kyiv Post, GroundUp, TimesLive-or-Daily-Maverick,
 Sudan Tribune, Radio Dabanga, a China wire/business outlet, one India
 business/policy outlet).
@@ -72,8 +71,7 @@ WAVE_2_FILES: list[tuple[str, str, str, list[str], list[str]]] = [
     ("source_rbi_press.yaml", "source.rbi.press_releases", "official", ["IN"], ["en"]),
 ]
 
-# Each file mapped to the audit item(s) it closes
-# (planning/COVERAGE_VS_SELECTION_AUDIT_2026-09-07.md, §1 item table).
+# Each file mapped to the coverage-audit item(s) it closes.
 CLOSES_AUDIT_ITEM: dict[str, str] = {
     "source_un_news_africa.yaml": "#4/#5 — Sudan UN FFM report / Kalogi strikes (OHCHR substitute)",
     "source_un_news_middle_east.yaml": "UN News topic-feed set named in the brief",

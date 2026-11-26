@@ -7,8 +7,7 @@ registry. Idempotent: if a head row is already present we report it and exit 0
 without re-posting (use the PUT /descriptors/analyst/chronicle_assessor route to
 UPDATE an existing head — bringup POST is create-only).
 
-This wires the ``chronicle_assessor`` analyst (build spec
-planning/CHRONICLE_BUILD_2026-07-21.md): the THIRD id on the journal_assessor
+This wires the ``chronicle_assessor`` analyst: the THIRD id on the journal_assessor
 kind. On its weekly cadence (Mondays 06:00 UTC) it GATHERs over the verified
 tower top + the corpus, writes ONE detached third-person cited chronicle entry
 into ``journal_entries`` (entry_kind='chronicle'), and the V1 faithfulness

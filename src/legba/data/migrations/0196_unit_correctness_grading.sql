@@ -4,14 +4,13 @@
 -- 0196_unit_correctness_grading.sql
 --
 -- THE CORRECTNESS INSTRUMENT GETS A HOME IN THE DATABASE
--- (LEDGER_RESET_2026-09-16 §3, Program 2 tracks R2/G1/G3).
 --
--- Program 1 proved by hand, on 2026-09-16, that three grader families reading
+-- A hand-run trial showed that three grader families reading
 -- ANNEX C v4 agree with each other (pooled 0.8444 on a fresh 30-atom draw,
--- every pair above the 0.70 floor — VERDICT_P1v4.md) and then pointed that
+-- every pair above the 0.70 floor) and then pointed that
 -- instrument at ONE live country: Israel, 54 claims, 8 desks + the composition.
--- It found two false published claims. All of it lived in
--- `planning/PROGRAM1_2026-09-16/`, outside the database, run by hand.
+-- It found two false published claims. All of it lived outside the
+-- database, run by hand.
 --
 -- These four tables are where that stops being a hand-run.
 --

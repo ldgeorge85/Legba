@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The consult TURN CONTRACT — what an answer must do, enforced in code (lane Q-1).
+"""The consult TURN CONTRACT — what an answer must do, enforced in code.
 
-Written after the owner reviewed consult turn e749e301 (2026-11-14): a
+Written against a failure seen in review: a
 record-only question whose answer chose its own window, gave probabilities
 about proxy events instead of causes, and published sentences resting on no
 row while its judge's list of unsupported sentences changed nothing.
@@ -41,6 +41,7 @@ turn's response bag.
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -128,29 +129,35 @@ def _point_line(first: Mapping[str, Any]) -> str:
     return f"> **Point (from the console):** {name}({point['kind']} {point['id']})."
 
 
+def _quoted(text: Any) -> str:
+    """Words of the person asking as a JSON string, so a quote mark or a newline in
+    them cannot break the block's frame."""
+    return json.dumps(str(text or ""), ensure_ascii=False)
+
+
 def _prompt_block(c: TurnContract) -> str:
     w = c.window
     source = {
-        _win.SOURCE_USER_WORDS: f'taken from the operator\'s words: "{w.basis}"',
+        _win.SOURCE_USER_WORDS: f"taken from the words of the person asking: {_quoted(w.basis)}",
         _win.SOURCE_CONSOLE: f"the console's pinned window ({w.basis})",
-        _win.SOURCE_DEFAULT: f"the declared default ({w.basis}); the operator stated none"
+        _win.SOURCE_DEFAULT: f"the declared default ({w.basis}); the person asking stated none"
         + (" — the question says 'this window' but no console window arrived" if w.deictic else ""),
     }[w.source]
     grounding = (
-        "record_only — every sentence about the world must cite a row a tool returned; the "
-        "platform removes fact sentences without a resolving row after you answer, labels "
-        "judgments without one as your inference, and "
-        + ("moves general expectations (the operator asked for them) under a 'not from the record' heading."
+        "record_only — every sentence about the world must cite, in square brackets, a row a "
+        "tool returned; the platform removes fact sentences without a resolving row after you "
+        "answer, labels judgments without one as your inference, and "
+        + ("moves general expectations (the person asking asked for them) under a 'not from the record' heading."
            if c.expectations else "removes general-knowledge filler.")
         if c.grounding_mode == _gr.GROUNDING_RECORD_ONLY
-        else "default — cite rows for facts; uncited sentences are counted in the turn's accounting."
+        else "default — every sentence that states a fact cites the id of a row a tool returned."
     )
     extra = ""
     if w.reading:
-        extra += f"- The operator's window words were read as: {w.reading}.\n"
+        extra += f"- The window words of the person asking were read as: {w.reading}.\n"
     if w.anchor and not w.anchor.get("resolved"):
         extra += (
-            f"- The question asks for an event-anchored window (\"{w.anchor.get('words')}\"); "
+            f"- The question asks for an event-anchored window ({_quoted(w.anchor.get('words'))}); "
             "the platform did NOT resolve it to a date and you must not date the event yourself: "
             "use the window in force and say plainly that the anchored window was not resolved.\n"
         )
@@ -282,7 +289,7 @@ def _parse_repair(reply: str) -> tuple[dict[str, Any] | None, str | None]:
 
 async def _settle_hypotheses(
     block: dict[str, Any] | None, err: str | None, *, held: Sequence[str],
-    llm_call: LlmCall | None, spend: Any, record: Record,
+    llm_call: LlmCall | None, spend: Any, record: Record, raw_block: str | None = None,
 ) -> tuple[dict[str, Any] | None, list[str], dict[str, Any]]:
     problems = [err] if err else _hy.check_hypotheses(block, held_refs=held)
     status: dict[str, Any] = {"repair": "not_needed"}
@@ -292,7 +299,7 @@ async def _settle_hypotheses(
     if llm_call is None or not can_spend:
         status["repair"] = "skipped_no_route" if llm_call is None else "skipped_for_cost"
     else:
-        system, messages = _hy.repair_messages(block, err, problems)
+        system, messages = _hy.repair_messages(block, err, problems, raw_block=raw_block)
         try:
             reply = await llm_call(system, messages)
             repaired, rerr = _parse_repair(reply)
@@ -354,6 +361,7 @@ async def settle_answer(
         if has_hyp:
             block, problems, status = await _settle_hypotheses(
                 block, err, held=held, llm_call=llm_call, spend=spend, record=record,
+                raw_block=_hy.contract_block_text(answer) if block is None else None,
             )
             if block is not None and block.get("hypotheses"):
                 hyp_section = _hy.render_hypotheses(block, problems=problems)

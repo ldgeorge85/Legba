@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The first-poll entry-age cap (W11-F265), a leaf beside ``source_actor``.
+"""The first-poll entry-age cap, a leaf beside ``source_actor``.
 
 INCIDENT 2026-11-14: sources registered that morning loaded every entry their
 feed documents carried on the first poll, whatever its age. A status feed

@@ -350,7 +350,7 @@ async def test_register_webhook_persists_row_and_returns_active(
         to_uri="legba/target/7.0.0",
         impl="legba.data.conversions.target_v1_to_v2:convert",
     )
-    row = await webhook_registry.register_webhook(w, actor="lewis@local")
+    row = await webhook_registry.register_webhook(w, actor="owner@local")
     assert row.from_uri == "legba/target/6.0.0"
     assert row.to_uri == "legba/target/7.0.0"
     assert row.is_active is True
@@ -384,7 +384,7 @@ async def test_register_webhook_rejects_backward_versions(
         impl="legba.data.conversions.target_v1_to_v2:convert",
     )
     with pytest.raises(WebhookValidationError) as exc:
-        await webhook_registry.register_webhook(w, actor="lewis@local")
+        await webhook_registry.register_webhook(w, actor="owner@local")
     assert "forward-only" in str(exc.value)
 
 
@@ -399,7 +399,7 @@ async def test_register_webhook_rejects_unimportable_impl(
         impl="legba.no.such.module:convert",
     )
     with pytest.raises(WebhookValidationError):
-        await webhook_registry.register_webhook(w, actor="lewis@local")
+        await webhook_registry.register_webhook(w, actor="owner@local")
 
 
 @pytest.mark.integration
@@ -412,9 +412,9 @@ async def test_register_webhook_duplicate_active_rejected(
         to_uri="legba/target/5.0.0",
         impl="legba.data.conversions.target_v1_to_v2:convert",
     )
-    await webhook_registry.register_webhook(w, actor="lewis@local")
+    await webhook_registry.register_webhook(w, actor="owner@local")
     with pytest.raises(WebhookValidationError) as exc:
-        await webhook_registry.register_webhook(w, actor="lewis@local")
+        await webhook_registry.register_webhook(w, actor="owner@local")
     assert "active conversion webhook already exists" in str(exc.value)
 
 
@@ -435,8 +435,8 @@ async def test_list_webhooks_filters(
         to_uri="legba/target/12.0.0",
         impl="legba.data.conversions.target_v2_to_v3:convert",
     )
-    r1 = await webhook_registry.register_webhook(w1, actor="lewis@local")
-    r2 = await webhook_registry.register_webhook(w2, actor="lewis@local")
+    r1 = await webhook_registry.register_webhook(w1, actor="owner@local")
+    r2 = await webhook_registry.register_webhook(w2, actor="owner@local")
 
     by_from = await webhook_registry.list_webhooks(from_uri="legba/target/10.0.0")
     assert {r.id for r in by_from} == {r1.id}
@@ -456,7 +456,7 @@ async def test_retire_webhook_soft_retires_and_skips_in_find_path(
         to_uri="legba/target/21.0.0",
         impl="legba.data.conversions.target_v1_to_v2:convert",
     )
-    row = await webhook_registry.register_webhook(w, actor="lewis@local")
+    row = await webhook_registry.register_webhook(w, actor="owner@local")
     # Path exists.
     path = await webhook_registry.find_path(
         "legba/target", "legba/target/20.0.0", "legba/target/21.0.0"
@@ -465,7 +465,7 @@ async def test_retire_webhook_soft_retires_and_skips_in_find_path(
 
     # Retire.
     retired = await webhook_registry.retire_webhook(
-        row.id, actor="lewis@local", reason="superseded"
+        row.id, actor="owner@local", reason="superseded"
     )
     assert retired.is_active is False
     assert retired.retired_at is not None
@@ -489,7 +489,7 @@ async def test_retire_unknown_webhook_raises(
     webhook_registry: ConversionWebhookRegistry,
 ):
     with pytest.raises(WebhookNotFound):
-        await webhook_registry.retire_webhook(uuid4(), actor="lewis@local")
+        await webhook_registry.retire_webhook(uuid4(), actor="owner@local")
 
 
 @pytest.mark.integration
@@ -502,9 +502,9 @@ async def test_retire_webhook_idempotent(
         to_uri="legba/target/23.0.0",
         impl="legba.data.conversions.target_v1_to_v2:convert",
     )
-    row = await webhook_registry.register_webhook(w, actor="lewis@local")
-    once = await webhook_registry.retire_webhook(row.id, actor="lewis@local")
-    twice = await webhook_registry.retire_webhook(row.id, actor="lewis@local")
+    row = await webhook_registry.register_webhook(w, actor="owner@local")
+    once = await webhook_registry.retire_webhook(row.id, actor="owner@local")
+    twice = await webhook_registry.retire_webhook(row.id, actor="owner@local")
     assert once.id == twice.id
     assert twice.retired_at is not None
 
@@ -524,7 +524,7 @@ async def test_find_path_single_step(
         to_uri="legba/target/31.0.0",
         impl="legba.data.conversions.target_v1_to_v2:convert",
     )
-    row = await webhook_registry.register_webhook(w, actor="lewis@local")
+    row = await webhook_registry.register_webhook(w, actor="owner@local")
     path = await webhook_registry.find_path(
         "legba/target", "legba/target/30.0.0", "legba/target/31.0.0"
     )
@@ -546,8 +546,8 @@ async def test_find_path_multi_step(
         to_uri="legba/target/42.0.0",
         impl="legba.data.conversions.target_v2_to_v3:convert",
     )
-    r1 = await webhook_registry.register_webhook(w1, actor="lewis@local")
-    r2 = await webhook_registry.register_webhook(w2, actor="lewis@local")
+    r1 = await webhook_registry.register_webhook(w1, actor="owner@local")
+    r2 = await webhook_registry.register_webhook(w2, actor="owner@local")
     path = await webhook_registry.find_path(
         "legba/target", "legba/target/40.0.0", "legba/target/42.0.0"
     )
@@ -930,16 +930,16 @@ async def test_audit_log_entries_for_register_retire_convert(
         to_uri="legba/target/181.0.0",
         impl="legba.data.conversions.target_v1_to_v2:convert",
     )
-    row = await webhook_registry.register_webhook(w, actor="lewis@local")
+    row = await webhook_registry.register_webhook(w, actor="owner@local")
     await executor.convert(
         {"identity": {"schema_uri": "legba/target/180.0.0"}},
         family="legba/target",
         from_uri="legba/target/180.0.0",
         to_uri="legba/target/181.0.0",
         descriptor_id="audited",
-        actor="lewis@local",
+        actor="owner@local",
     )
-    await webhook_registry.retire_webhook(row.id, actor="lewis@local", reason="done")
+    await webhook_registry.retire_webhook(row.id, actor="owner@local", reason="done")
 
     async with pg_store.acquire() as conn:
         # Webhook lifecycle entries (namespace prefix legba/target → 'target').
@@ -1054,7 +1054,7 @@ def _v2_target_body(descriptor_id: str) -> dict[str, Any]:
             "version": "0" * 16,
             "abstraction_level": "L1",
             "state": "draft",
-            "owner": "lewis@local",
+            "owner": "owner@local",
             "created": _FIXED_CREATED.isoformat(),
             "inherits": [],
         },
@@ -1083,7 +1083,7 @@ def _v1_style_target_body(descriptor_id: str) -> dict[str, Any]:
             "version": "0" * 16,
             "abstraction_level": "L1",
             "state": "draft",
-            "owner": "lewis@local",
+            "owner": "owner@local",
             "created": _FIXED_CREATED.isoformat(),
             "inherits": [],
         },
@@ -1240,7 +1240,7 @@ async def test_get_typed_auto_upgrade_on_read(
             "legba/target/1.0.0",
             "L1",
             "draft",
-            "lewis@local",
+            "owner@local",
             "Demo old target",
             json.dumps(legacy_body),
             [],

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Program 7g-1 — ``scripts/load_collection.py``: the loader, and the firewall.
+"""``scripts/load_collection.py``: the loader, and the firewall.
 
 NO NETWORK. Every fetch here is served from the RECORDED provider fixtures
 ``tests/data_pkg/fixtures/collection_manifest_pilot/`` (two real World Bank v2

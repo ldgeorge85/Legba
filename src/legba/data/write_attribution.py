@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Who writes each table — the ONE declared place (data-model lane 9).
+"""Who writes each table — the ONE declared place.
 
 Every table a migration (or a declared runtime DDL) creates is classified here
 into exactly one of three classes; ``tests/data_pkg/test_write_attribution.py``
@@ -152,6 +152,7 @@ _TABLES: dict[str, Attribution] = {
     "entity_edge_events": A(_SEAT),
     "entity_edges_unresolved": C("rule:entity_edge_writes", "derived"),
     "proposed_edges": A(_SEAT),
+    "proposed_edge_markers": C("rule:proposed_edge_marker_sync", "one row per finally refused candidate pair, written by a trigger on proposed_edges and by the one-off copy script"),
     "nexuses": A(_SEAT),
     "signal_entity_links": A(_SEAT),
     "event_entity_links": C("rule:event_writes", "derived links; high volume"),
@@ -175,6 +176,7 @@ _TABLES: dict[str, Attribution] = {
     "analyst_outputs": A(_SEAT, "every finding names the seat that wrote it"),
     "finding_supersessions": A("produced_by"),
     "analyst_traces": A(_SEAT, "one row per run"),
+    "analyst_trace_bundles": C("rule:trace_bulk_compaction", "compressed bodies of old run traces, written only by the daily compaction job"),
     "analyst_critiques": A("judge_analyst_id, judge_analyst_version"),
     "output_consumption": C("rule:output_consumption", "derived; high volume"),
     "output_dead_letter": A(_SEAT),
@@ -185,7 +187,7 @@ _TABLES: dict[str, Attribution] = {
     "inquiry_ledger": B("the inquiry seat that wrote or closed the entry (descriptor_id alone has no version)"),
     "desk_baselines": C("rule:desk_baseline"),
     "desk_rows_shadow": A("analyst_id, contract_version"),
-    # citations as rows (lane DM-A, migration 20261115T1828): written with
+    # citations as rows (migration 20261115T1828): written with
     # the finding, insert-only; the finding's seat or rule, or the backfill rule
     "finding_sentences": B("the finding's writer (seat or rule); a backfill row names rule:citation_rows_backfill"),
     "citation_support": B("the finding's writer (seat or rule); a backfill row names rule:citation_rows_backfill"),
@@ -266,8 +268,8 @@ _TABLES: dict[str, Attribution] = {
     "origin_groups": B("derived groups name the derivation rule; an admin's new group names the admin"),
     "origins": B("derived origins name the derivation rule; a correction names the admin"),
     "origin_assignment_log": B("every assignment, derived or corrected, with its principal (NOT NULL)"),
-    # --- the held family (lane DM-C, migration 20261115T1940_held_record) ----
-    "assertions": B("rule:held_record_writer (written_by NOT NULL); a declared entry will name its person (lane 11)"),
+    # --- the held family (migration 20261115T1940_held_record) ----
+    "assertions": B("rule:held_record_writer (written_by NOT NULL); a declared entry will name its person"),
     "assertion_versions": B("rule:held_record_writer; proposed_by names the desk seat when the run's version is known"),
     "assertion_status_log": A("caused_by", "the principal that caused each status change (NOT NULL), chained by the database"),
     "assertion_status": C("rule:held_record_writer", "a cache the log's trigger maintains; rebuildable from the log"),

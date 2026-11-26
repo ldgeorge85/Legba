@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Write the OPERATOR-TRIGGERED top-up packet for one country reference.
 
-R1 measured what the free core-plane lane cannot do. Under the fences it builds
+Measurement showed what the free core-plane lane cannot do. Under the fences it builds
 a reference that VERIFIES — 78.9% of spans exact against the archived page, 8 of
 8 dimensions carrying two — and still carries only ~33% of a knowledgeable
 reader's major developments, with per-dimension counts FLATTER than the record
@@ -33,7 +33,7 @@ gets no easier ride than the free one.
   PYTHONPATH=src python3 scripts/reference_topup_packet.py \\
       --reference-id 0b7db7fb-… -o /tmp/topup_il.md
 
-  # WHICH COUNTRIES THE FREE LANE CANNOT BUILD AT ALL (R2-FIX(2))
+  # WHICH COUNTRIES THE FREE LANE CANNOT BUILD AT ALL
   PYTHONPATH=src python3 scripts/reference_topup_packet.py --candidates
 
 THE CANDIDATES LIST is the other half of the retry fence. A target whose builds

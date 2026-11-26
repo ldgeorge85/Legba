@@ -1,13 +1,12 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane N-U — idle deactivation of an actor this process never activated.
+"""Idle deactivation of an actor this process never activated.
 
-Live 11-13: the daprd sidecar outlives each runtime roll, so ~an hour after
-the 13:21 roll it sent ``DELETE /actors/AnalystActor/<id>`` for 44 actors the
+The daprd sidecar outlives each runtime roll, so some time after
+a roll it sent ``DELETE /actors/AnalystActor/<id>`` for 44 actors the
 PRE-roll process had activated; the dapr SDK raised ``ValueError('<id> is not
 activated')`` and ``dapr.ext.fastapi`` answered a bare 500 (sidecar: "Failed
-to halt actor ... is not activated"; 4,859 of them in the collected sidecar log
-since 08-01). Reproduced here on the SDK's own route; the mounted route answers
+to halt actor ... is not activated"). Reproduced here on the SDK's own route; the mounted route answers
 200 for that case, still deactivates a live actor, and logs a real failure.
 """
 from __future__ import annotations
@@ -127,7 +126,7 @@ def test_the_host_app_matches_the_idempotent_route_first():
     for chunk in src.split("mount_idempotent_deactivation(app)")[1:]:
         nxt = [ln.strip() for ln in chunk.splitlines()[1:] if ln.strip()
                and not ln.strip().startswith("#")]
-        # roll 86: the runtime's /healthz may sit between them — it too must
+        # the runtime's /healthz may sit between them — it too must
         # precede DaprActor (whose own /healthz would answer first)
         lead = [ln for ln in nxt if not ln.startswith("mount_runtime_healthz(")]
         assert lead[0] == "DaprActor(app)"

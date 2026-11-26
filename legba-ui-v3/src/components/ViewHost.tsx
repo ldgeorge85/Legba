@@ -22,6 +22,8 @@ import { boundRegistration } from '@/lib/boundRegistration'
 import { boundPinFor, usePinScope } from '@/lib/consultContext'
 import { emitRead } from '@/lib/readTelemetry'
 import { isMountedViewId, isSlotId } from '@/lib/surfaces'
+import { RegionAsOf } from '@/components/AsOfStrip'
+import { RegionPoint } from '@/components/PointFilter'
 
 type Mode = ReturnType<typeof currentMode>
 
@@ -65,7 +67,21 @@ function BoundView({
   )
 }
 
-export function ViewHost({
+type ViewHostProps = Parameters<typeof ViewHostBody>[0]
+
+/** Every view the frame shows carries the "as recorded" strip while one is set. */
+export function ViewHost(props: ViewHostProps) {
+  const id = props.instanceId ?? (props.recordId ? `${props.view}:${props.recordId}` : props.view)
+  return (
+    <RegionAsOf viewId={id}>
+      <RegionPoint viewId={id}>
+        <ViewHostBody {...props} />
+      </RegionPoint>
+    </RegionAsOf>
+  )
+}
+
+function ViewHostBody({
   view,
   recordId,
   axis = 'target',

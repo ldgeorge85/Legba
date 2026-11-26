@@ -3,16 +3,16 @@
  *
  * ── THE READING DECISION THIS FILE ENCODES ────────────────────────────────────
  * Under the demotion every world-claim on the page is a VERBATIM span of a desk
- * head (`DEMOTION_D1_SPEC_2026-09-04.md` §1.2/§1.8). The obvious rendering — one
+ * head. The obvious rendering — one
  * boxed quote per span, with its role tag, offsets and verify chips above it —
  * is what the rejected mock did, and it turns a page of real sentences into a
- * table of records. The operator's ruling was that it could not be read.
+ * table of records that cannot be read.
  *
  * So the block is arranged the way a paragraph is arranged, not the way a row is:
  *
- *   1. The BOUNDED QUESTION is the header (§B.4 Correction 3). It is a real
+ *   1. The BOUNDED QUESTION is the header. It is a real
  *      sentence in the reading face, and after the composed prose is gone it is
- *      the surface that carries the product's register (VOICE §4.2 rank 2).
+ *      the surface that carries the product's register.
  *   2. The LEAD SPAN is the lede — one sentence, at reading size, in primary
  *      ink. Every remaining span flows beneath it as ONE paragraph. Both are
  *      verbatim; joining them adds no word, and every span in a block shares one
@@ -31,7 +31,7 @@
  *      per-block disclosure, and a citation chip opens it and scrolls to its own
  *      row — the drill lands on the thing that was clicked.
  *
- * Drilling must reward the reader with BETTER prose, not worse (VOICE §4.6.3):
+ * Drilling must reward the reader with BETTER prose, not worse:
  * the expand also mounts `CountryUnitsAssessment`, so the eight bounded desk
  * reads behind the block are one click from the sentence they produced.
  */
@@ -52,7 +52,7 @@ import { age, asSeverity, plural, score, scrollToAnchor, shortId, utcStamp } fro
  * The block's signals, as the citation dialect `CitedProse` already speaks.
  *
  * `blocks[].signals[]` is a pass-through of the ORIGIN head's own
- * `data.data.citations[]` (spec §1.2b), so the `[N]` markers inside a quoted
+ * `data.data.citations[]`, so the `[N]` markers inside a quoted
  * span are the desk's own markers and they resolve here — the same chips, the
  * same hover cards and the same `citation_drill` telemetry the rest of the
  * workstation already emits. Nothing new is invented for this surface.
@@ -70,7 +70,7 @@ export function blockCitations(block: AssemblyBlock): Citation[] {
     }))
 }
 
-/** The lead span (§1.4d) — the head's BLUF, or the stamped fallback. */
+/** The lead span — the head's BLUF, or the stamped fallback. */
 export function leadSpan(block: AssemblyBlock): AssemblySpan | null {
   return (
     block.spans.find((s) => s.role === 'bluf') ??
@@ -81,7 +81,7 @@ export function leadSpan(block: AssemblyBlock): AssemblySpan | null {
 }
 
 /**
- * Lane N-D — what the quotation's OWN citations do not bear out. Quote fidelity
+ * What the quotation's OWN citations do not bear out. Quote fidelity
  * says the desk was quoted faithfully; this line says where the desk's
  * sentence and its cited signals disagree (a number no cited signal states, a
  * citation about other actors). Visible, never a drop: the quotation stays.
@@ -113,7 +113,7 @@ export function SpanCheckNote({ block }: { block: AssemblyBlock }) {
 }
 
 /**
- * §3.6 READ time: a row whose arms failed refuses the affected blocks.
+ * READ time: a row whose arms failed refuses the affected blocks.
  *
  * The refusal is deliberately not a degraded render of the block. A span that
  * cannot be resolved against its origin body is a CONSTRUCTION failure, not a
@@ -185,7 +185,7 @@ function BlockEvidence({ block }: { block: AssemblyBlock }) {
         )}
       </ul>
 
-      {/* The desk sentence is the organic one (VOICE §4.6.2/3): drilling lands on
+      {/* The desk sentence is the organic one: drilling lands on
           the eight bounded reads behind this block, not on a thinner summary. */}
       {block.target_id && (
         <div className="mt-3.5 border-t border-line pt-3" data-testid="read-block-units">

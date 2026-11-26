@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for the ``reenrich_pending`` deterministic sub-handler (W11-F118).
+"""Tests for the ``reenrich_pending`` deterministic sub-handler.
 
-The sweep over rows the source actor wrote UNENRICHED (``payload.enrichment_pending``,
-W11-F103). DETERMINISTIC — a recording fake pg_pool (the reenrich_ner idiom), a fake
+The sweep over rows the source actor wrote UNENRICHED (``payload.enrichment_pending``).
+DETERMINISTIC — a recording fake pg_pool (the reenrich_ner idiom), a fake
 registry serving a real source descriptor, and a fake host enrichment factory /
 fake NLP client. Covered:
 

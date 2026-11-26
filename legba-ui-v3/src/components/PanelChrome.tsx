@@ -111,8 +111,8 @@ export function PanelChrome({
             <span className="truncate">{headerTitle}</span>
             {effectiveTier === 'preview' && <PreviewBadge />}
           </h2>
-          <div className="text-label text-ink-2 truncate flex items-center gap-2">
-            {subtitle && <span>{subtitle}</span>}
+          <div className="text-label text-ink-2 flex flex-wrap items-center gap-x-2">
+            {subtitle && <span className="min-w-0 break-words">{subtitle}</span>}
             {debug && (
               <span className="text-ink-3">
                 from <code className="font-mono">{registration.descriptor_id}</code>

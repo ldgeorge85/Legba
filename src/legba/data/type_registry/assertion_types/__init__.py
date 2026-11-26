@@ -1,15 +1,15 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The ``assertion_type`` family: what kinds of held record exist (data-model
-lane 10, "the held family").
+"""The ``assertion_type`` family: what kinds of held record exist (the held
+family).
 
 An assertion (``assertions``, migration ``20261115T1940_held_record``) is
 something said about a subject, for a period, with versions, a hash-chained
 status log and links to what it rests on. On screen the checked kind is a
 "statement"; ``assertion`` is the database name of the family, which will also
-hold entered knowledge (lane 11).
+hold entered knowledge.
 
-Two levels, on purpose (merged recommendation §4.1, item 3):
+Two levels, on purpose:
 
 * a CLOSED list of behaviour classes, in code (:data:`ASSERTION_CLASSES`): a
   class fixes what may establish a record and what it may be used for, so a
@@ -32,8 +32,8 @@ A declaration carries:
 ``bases``
     How a record of this type may come to exist: ``derived`` (worked out by a
     run and passed through the gates), ``declared`` (entered by a person or a
-    loader, lane 11). ``extracted`` is reserved for the machine-read triples
-    and refused by the writer (lane DM-E keeps them in ``facts``).
+    loader). ``extracted`` is reserved for the machine-read triples
+    and refused by the writer (they stay in ``facts``).
 ``desk_row_kinds``
     The contract-v2 desk row kinds that map to this type (the writer's map is
     DERIVED from these; two types may not claim one row kind).

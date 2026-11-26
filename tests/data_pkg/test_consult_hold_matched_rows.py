@@ -3,7 +3,7 @@
 """Roll-28 proof regression (2026-09-28): an answer cited entirely to REAL
 platform rows that carry no origin class (situations, findings, hypotheses,
 events, nexuses) is grounded, not held — and the evidence floor counts those
-rows too. The first live core-plane run after wave Q cited twelve real active
+rows too. A live core-plane run once cited twelve real active
 situations and was bannered "nothing resolved" with uncertainty floored to
 0.85, because only signal-class rows were counted as resolved.
 """

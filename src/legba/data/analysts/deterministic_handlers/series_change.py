@@ -26,7 +26,7 @@ THE RULE (``METHOD_VERSION`` ``series_change/2026-11.1``, stamped in every findi
 * a pair with fewer than ``min_baseline_points`` baseline values or fewer
   than ``current_days`` current values is ``insufficient`` and never cited.
 
-THE RULE-JUDGED SERIES (``series_change/2026-11.2``, lane S-1). A count's
+THE RULE-JUDGED SERIES (``series_change/2026-11.2``). A count's
 baseline band is the wrong lens for a price or a policy rate: a Poisson floor
 of ``sqrt(mean)`` on a $90 price is a +/-$19 band, and a rate that moves once
 a quarter is "within" forever. So a series can be named by one of two
@@ -47,7 +47,7 @@ falls in the current window (the newest ``current_days`` held days); each
 event cites the two observations it rests on. A pair not named by a rule
 keeps the band rule exactly as before (an empty rule set changes nothing).
 
-NAMED RULES BY SERIES FAMILY (``series_change/2026-11.3``, lane I-5). A rate
+NAMED RULES BY SERIES FAMILY (``series_change/2026-11.3``). A rate
 or exchange-rate FAMILY is given a rule by NAME through ``series_rules``
 (``"<series glob>=<rule name>"``, e.g. ``ecb.fm.*=policy_rate``); the names
 are a closed table here (:data:`NAMED_RULES`), so a family's judgement is
@@ -130,7 +130,7 @@ PROPOSED_SERIES_RULES: tuple[str, ...] = (
     "boe.iadb.*=policy_rate",
     "bcb.sgs.*=policy_rate",
     "nbu.exchange.*=fx_move",
-    "nbu.key.*=policy_rate",     # roll 84: the NBU key rates (source.nbu.key_rates)
+    "nbu.key.*=policy_rate",     # the NBU key rates (source.nbu.key_rates)
 )
 
 #: ``<series glob><op><level>`` -- the option catalog pins the same shape.

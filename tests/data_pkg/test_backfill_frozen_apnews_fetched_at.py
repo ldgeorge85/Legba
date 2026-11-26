@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""B-1 backfill — migration 0141 repairs the 5 frozen AP feeds and NOTHING else.
+"""Backfill — migration 0141 repairs the 5 frozen AP feeds and NOTHING else.
 
-The 08-03 incident (MASTER_PLAN §32.7) left 201 signals from five rsshub AP-topic
+The 2026-08-03 frozen-feed incident left 201 signals from five rsshub AP-topic
 feeds carrying an advanced ``fetched_at``: content fetched once on 07-28, re-served
 unchanged on every poll for six days, and bumped forward each time by the S-4
 collapse. The code fix stops the bump going forward; migration 0141 repairs the

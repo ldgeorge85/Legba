@@ -1,4 +1,4 @@
-# R-A — the `research` action pack (the OUTBOUND RESEARCH write path).
+# The `research` action pack (the OUTBOUND RESEARCH write path).
 #
 # ONE tool, `web_evidence`: search the open web and LAND what comes back as
 # ordinary `signals` rows — tagged `retrieval_origin='web_search:<component>'`,
@@ -42,8 +42,8 @@
 # result is NEVER a completed count-0 success; a degraded-empty lands ZERO
 # signals and fails with a deferral.
 #
-# TWO FETCH DEPTHS, and the split is the licensing ledger's own rule
-# (SOURCE_LICENSING_LEDGER §E.2), resolved PER HOST from the operator-owned
+# TWO FETCH DEPTHS, and the split is the licensing ledger's own rule,
+# resolved PER HOST from the operator-owned
 # ledger (`source_credibility.license_class`, migration 0190):
 #   cleared host      -> full text + content-addressed bytes + a citable row
 #   unreviewed host   -> TEASER depth: title/url/snippet, NO bytes, named to
@@ -68,7 +68,7 @@ identity:
   version: "<content-hash stamped at register time>"
   abstraction_level: L1
   state: active
-  owner: research_program
+  owner: owner@local
   created: "2026-09-05T00:00:00Z"
 
 tools:

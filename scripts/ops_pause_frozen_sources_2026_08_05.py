@@ -29,7 +29,7 @@ how FEW of them were our fault:
   which is exactly the input that produced the historical poison. We are no
   longer fooled by it — the handler derives `newest_entry_ts` from real entry
   dates and ignores the noisy channel headers, and it reads 2026-06-23 through
-  the noise. The Fix B / Fix C / B0-11 hardening is holding. NO CURSOR RESET IS
+  the noise. The earlier hardening is holding. NO CURSOR RESET IS
   WARRANTED FOR ANY OF THE SEVEN; all seven cursors track real upstream state.
 
   TWO ARE BROKEN UPSTREAM, and are the two below.

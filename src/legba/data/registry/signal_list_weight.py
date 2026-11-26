@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""``GET /signals`` answers its light weight by default (the P-8 rule).
+"""``GET /signals`` answers its light weight by default (the list-weight rule).
 
 A signal's ``data`` is the stored payload — the item as received: raw and
-archived bodies, extracted entities and relations, GeoJSON. Roll 84's live walk
+archived bodies, extracted entities and relations, GeoJSON. A live walk
 measured ``/signals?limit=500`` at 2.21 MB, 48% of the Watch page's 4.57 MB,
 read by the time band, which draws only a title, a category and two clocks per
 row. Cutting ``data`` alone left ~1 KB of columns per row (0.54 MB at 500), so
@@ -44,8 +44,8 @@ SIGNALS_DEFAULT_FIELDS: SignalsFields = "summary"
 
 #: The payload keys a light row keeps: what a list draws besides the columns.
 #: ``geo`` is kept cut to :data:`LIGHT_GEO_KEYS` — the world map places a
-#: signal at ``data.geo.lat/lon`` (roll 86: the light default dropped it, so
-#: every point fell back to a country centroid, or off the map).
+#: signal at ``data.geo.lat/lon`` (without it every point fell back to a
+#: country centroid, or off the map).
 LIGHT_DATA_KEYS: tuple[str, ...] = ("title", "title_en", "published_at", "geo")
 #: What a light row's ``data.geo`` keeps: the point, nothing else (~40 B of
 #: the ~250 B gazetteer object).

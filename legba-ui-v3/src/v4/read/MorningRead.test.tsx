@@ -1,20 +1,19 @@
 /**
  * MorningRead — the reading surface, rendered against the LIVE fixtures.
  *
- * These assertions are the design brief written as tests. Each one names the
- * ruling or the review finding it holds:
+ * Each assertion holds one design property of the reading surface:
  *
- *   * Layout B default, one attribute, persisted            — ruling 3
- *   * three grains, each present and contexted               — ruling 5
- *   * the bounded question is the block header               — §B.4 Correction 3
- *   * attribution AFTER the prose, quiet                     — the design brief
- *   * tensions inline, and the checked negative deterministic — §1.6
- *   * the drop ledger honest but folded                      — §C.3.4 / §1.7
- *   * the Assessment a different voice, badged not shouting  — ruling 1 / §2.3
- *   * the voice a FUNCTION of the tier, never a constant      — Program 3 lane C
- *   * the evidence grain one drill-click down                — D-4 handoff
- *   * `brief_read` on mount; citation drills counted         — D2e / §5.3 G5
- *   * the history row names the read, not a truncated title  — VOICE §4.6.1
+ *   * Layout B default, one attribute, persisted
+ *   * three grains, each present and contexted
+ *   * the bounded question is the block header
+ *   * attribution AFTER the prose, quiet
+ *   * tensions inline, and the checked negative deterministic
+ *   * the drop ledger honest but folded
+ *   * the Assessment a different voice, badged not shouting
+ *   * the voice a FUNCTION of the tier, never a constant
+ *   * the evidence grain one drill-click down
+ *   * `brief_read` on mount; citation drills counted
+ *   * the history row names the read, not a truncated title
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor, cleanup, within } from '@testing-library/react'
@@ -186,7 +185,7 @@ describe('the record band', () => {
     const badge = screen.getByTestId('read-record-badge').textContent ?? ''
     expect(badge).toMatch(/Quote fidelity/)
     expect(badge).toMatch(/dropped/)
-    expect(badge).toMatch(/is not a badge/)
+    expect(badge).toMatch(/no single score/)
   })
 })
 
@@ -257,7 +256,7 @@ describe('the evidence grain', () => {
     expect(kinds()).toContain('lineage_walk')
   })
 
-  it('mounts the bounded unit reads beneath the drill (VOICE §4.6.2)', async () => {
+  it('mounts the bounded unit reads beneath the drill', async () => {
     await renderWorld()
     const block = screen.getAllByTestId('read-block')[0]
     fireEvent.click(within(block).getByTestId('read-evidence-toggle'))
@@ -323,7 +322,7 @@ describe('the Assessment band', () => {
     expect(badge).not.toMatch(/0\.00/)
   })
 
-  it('speaks reader words in the badge — no engine vocabulary or programme codes (U-1)', async () => {
+  it('speaks reader words in the badge — no engine vocabulary or programme codes', async () => {
     await renderWithChannel()
     const band = screen.getByTestId('read-assessment')
     const badge = within(band).getByTestId('read-assessment-badge').textContent ?? ''
@@ -336,7 +335,7 @@ describe('the Assessment band', () => {
     expect(within(band).getByTitle(/0\.4805/)).toBeTruthy()
   })
 
-  it('renders the voice through the markdown renderer — no raw **BLUF:** or [[ref:N]] on the page (W11-F37)', async () => {
+  it('renders the voice through the markdown renderer — no raw **BLUF:** or [[ref:N]] on the page', async () => {
     // The live world_assessment 6644b208 (10-08) carried `**`, `## ` and
     // `[[ref:` in its body; the band showed them as text.
     const md = JSON.parse(JSON.stringify(ASSESSMENT)) as Record<string, unknown>
@@ -358,7 +357,7 @@ describe('the Assessment band', () => {
 
   it('marks the unsupported-by-spine spans inline, with their notes', async () => {
     await renderWithChannel()
-    // Through the markdown renderer (W11-F37) each mark is a glyph right after
+    // Through the markdown renderer each mark is a glyph right after
     // its span — ᵃ, ᵇ — never a span element of its own; the notes list still
     // carries one entry per mark, lettered the same way.
     const bodyText = screen.getByTestId('read-assessment-body').textContent ?? ''
@@ -415,7 +414,7 @@ describe('the Assessment band', () => {
 })
 
 // ---------------------------------------------------------------------------
-// The country channel: the same band, fenced to the country record (lane C)
+// The country channel: the same band, fenced to the country record
 // ---------------------------------------------------------------------------
 
 describe('the country Assessment band', () => {
@@ -530,7 +529,7 @@ describe('the country Assessment band', () => {
     )
     // The spine query is narrowed to the scoped desk: `country_composition`
     // publishes one row per desk per cycle and RUN_LIMIT is 12, so an unnarrowed
-    // query need not contain the desk the operator asked for.
+    // query need not contain the desk that was asked for.
     expect(
       urls(fetchMock).some((u) =>
         /analyst_id=country_composition&target_id=country_watch_tw/.test(u),
@@ -538,7 +537,7 @@ describe('the country Assessment band', () => {
     ).toBe(true)
   })
 
-  it('X3/D3 — a SUBJECT scope (a rail click) puts that subject’s own read on the page', async () => {
+  it('a SUBJECT scope (a rail click) puts that subject’s own read on the page', async () => {
     const fetchMock = stubFetch({ world_assessor: [WORLD], country_composition: [COUNTRY] })
     useScope.getState().setScope(scopeFromTarget('country_watch_tw', 'Taiwan', 'operator'))
     render(wrap(<MorningRead />)) // mounted on the WORLD spine; the subject scope wins
@@ -549,7 +548,7 @@ describe('the country Assessment band', () => {
     ).toBe(true)
   })
 
-  it('X3/D3 — a subject with no read on record says so, in the profile’s noun', async () => {
+  it('a subject with no read on record says so, in the profile’s noun', async () => {
     stubFetch({ world_assessor: [WORLD] })
     useScope.getState().setScope(scopeFromTarget('lane_hormuz', 'Strait of Hormuz', 'operator'))
     render(wrap(<MorningRead />))
@@ -587,7 +586,7 @@ describe('the country Assessment band', () => {
 // The gate, the legacy path, the history list, and telemetry
 // ---------------------------------------------------------------------------
 
-describe('the verify gate at READ time (§3.6)', () => {
+describe('the verify gate at READ time', () => {
   it('withholds the failed block instead of showing it with a caveat', async () => {
     const failed = JSON.parse(JSON.stringify(WORLD)) as Record<string, unknown>
     const verification = failed.verification as Record<string, unknown>
@@ -629,7 +628,7 @@ describe('a run that predates the assembly', () => {
   })
 })
 
-describe('the history list (VOICE §4.6.1)', () => {
+describe('the history list', () => {
   it('labels a prior run by lead, block count and drop count', async () => {
     const older = JSON.parse(JSON.stringify(WORLD)) as Record<string, unknown>
     older.id = 'older-run'
@@ -678,7 +677,7 @@ describe('read telemetry (D2e)', () => {
 })
 
 // ---------------------------------------------------------------------------
-// X4 READPATH (W11-F53) — a read with no verify verdict says which kind
+// X4 READPATH — a read with no verify verdict says which kind
 // ---------------------------------------------------------------------------
 
 describe('the unverified state', () => {
@@ -701,7 +700,7 @@ describe('the unverified state', () => {
     stubFetch({ world_assessor: [fresh] })
     render(wrap(<MorningRead />))
     const mark = within(await screen.findByTestId('read-unverified')).getByTestId('unverified-state')
-    expect(mark.textContent).toBe('unverified · judge pending')
+    expect(mark.textContent).toBe('not yet checked')
     expect(mark.getAttribute('data-basis')).toBe('registry')
   })
 
@@ -719,13 +718,13 @@ describe('the unverified state', () => {
     stubFetch({ world_assessor: [lost] })
     render(wrap(<MorningRead />))
     const mark = within(await screen.findByTestId('read-unverified')).getByTestId('unverified-state')
-    expect(mark.textContent).toBe('unverified · not judged')
+    expect(mark.textContent).toBe('not checked')
     // The title is still the read's own — the mark is beside it, not instead of it.
     expect(screen.getByTestId('read-title').textContent).toBe(String(WORLD.title))
   })
 })
 
-describe('U-5 — the read asks for the weight it renders', () => {
+describe('The read asks for the weight it renders', () => {
   /** A stub that honours `limit` and answers `fields=summary` with summary-weight rows. */
   function stubWeighted(byAnalyst: Record<string, Row[]>) {
     const fetchMock = vi.fn(async (url: string) => {

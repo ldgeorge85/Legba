@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W11-F141 — the scheduled-events calendar, with fakes only.
+"""The scheduled-events calendar, with fakes only.
 
 The lane's defect: a consult asserted "nothing else scheduled in the
 window" from MODEL MEMORY when ``search_signals`` failed, because the
@@ -234,7 +234,7 @@ async def test_the_port_refuses_a_malformed_bound_and_an_inverted_window():
 
 def test_the_tool_is_on_every_surface_it_must_agree_across():
     """_KNOWN_TOOLS, the pack tuple, the descriptor YAML and the native
-    grammar — a miss in any one is the wave-Q zero-invocation defect."""
+    grammar — a miss in any one is the zero-invocation defect."""
     assert "list_scheduled_events" in _KNOWN_TOOLS
     assert "list_scheduled_events" in SUBSTRATE_READ_TOOLS
     body = yaml.safe_load(
@@ -391,7 +391,8 @@ async def test_no_reader_leaves_the_prompt_untouched():
     """A hand-built embedder without the calendar reader gets the prompt it
     always had — the block is byte-identical."""
     block = await pctx.render_run_context(substrate=object(), agency_binding=None)
-    assert block == ""
+    assert "Scheduled events" not in block
+    assert block.strip().startswith(pctx.RUN_CONTEXT_HEADER + " Today is ")
 
 
 # ---------------------------------------------------------------------------

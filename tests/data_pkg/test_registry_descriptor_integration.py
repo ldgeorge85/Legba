@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Integration tests for the L-110 descriptor registry.
+"""Integration tests for the descriptor registry.
 
 Runs against the live legba-* containers via the `migrated_pg` fixture from
 conftest.py (separate test database per session, migrations applied).
@@ -9,7 +9,7 @@ These exercise the full round-trip: register -> query -> update -> retire,
 vocabulary-validator end-to-end (DLQ routing on unknown values), audit-log
 verification on every mutation, and NATS event firing.
 
-Per the L-001 / L-110 brief: no mocks for substrate boundaries. NATS events
+Per the / brief: no mocks for substrate boundaries. NATS events
 are published over core NATS (observability signals, not durable work
 items); the SubjectCollector subscribes and drains the messages into a
 list, then tests assert what fired.
@@ -85,7 +85,7 @@ def _draft_target(
 
     Vocabulary terms default to seeded values so the descriptor registers
     cleanly. Override `entity_classes` to force a DLQ event. `analyst` is
-    the X-1 inline-analyst-block dead-config case (defect C) — None by
+    the inline-analyst-block dead-config case (defect C) — None by
     default (every other test in this file exercises the clean path).
     """
     identity = TargetIdentity(
@@ -96,7 +96,7 @@ def _draft_target(
         version="0" * 16,
         abstraction_level=AbstractionLevel.L1,
         state=state,
-        owner="lewis@local",
+        owner="owner@local",
         created=_FIXED_CREATED,
     )
     # Source-first pivot: targets reference shared sources via SourceRef
@@ -135,7 +135,7 @@ def _draft_analyst(
             input_type="legba.x.In",
             output_type="legba.x.Out",
         ),
-        owner="lewis@local",
+        owner="owner@local",
     )
     return AnalystDescriptor(
         identity=identity,
@@ -309,7 +309,7 @@ async def test_target_register_returns_row_with_content_hash(
     registry_no_nats: DescriptorRegistry,
 ):
     desc = _draft_target(descriptor_id=f"t_register_{uuid4().hex[:8]}")
-    row = await registry_no_nats.register(desc, actor="lewis@local")
+    row = await registry_no_nats.register(desc, actor="owner@local")
     assert row.descriptor_id == desc.identity.id
     assert row.is_head is True
     assert len(row.version) == 64  # SHA-256 hex
@@ -328,7 +328,7 @@ async def test_target_register_with_inline_analyst_block_warns(
     """Defect C — a target body carrying an inline ``analyst`` block is dead
     config (the runtime never builds a running analyst from it; only
     ``analyst_ref`` is ever consulted, and this block doesn't set one). The
-    registry does NOT refuse the write (X-1 refuse-vs-degrade: registry rows
+    registry does NOT refuse the write (refuse-vs-degrade: registry rows
     outlive code) but it MUST warn loudly — in the log and in the returned
     row — so this doesn't silently sit inert forever the way the live
     ``target_situation_iran_war`` did from registration onward.
@@ -342,7 +342,7 @@ async def test_target_register_with_inline_analyst_block_warns(
         ),
     )
     with caplog.at_level("WARNING", logger="legba.data.registry.descriptor"):
-        row = await registry_no_nats.register(desc, actor="lewis@local")
+        row = await registry_no_nats.register(desc, actor="owner@local")
 
     assert len(row.warnings) == 1
     assert desc.identity.id in row.warnings[0]
@@ -368,7 +368,7 @@ async def test_target_register_without_inline_analyst_block_is_silent(
     assert desc.analyst is None
 
     with caplog.at_level("WARNING", logger="legba.data.registry.descriptor"):
-        row = await registry_no_nats.register(desc, actor="lewis@local")
+        row = await registry_no_nats.register(desc, actor="owner@local")
 
     assert row.warnings == []
     assert not any(
@@ -382,9 +382,9 @@ async def test_target_register_double_register_conflict(
     registry_no_nats: DescriptorRegistry,
 ):
     desc = _draft_target(descriptor_id=f"t_dup_{uuid4().hex[:8]}")
-    await registry_no_nats.register(desc, actor="lewis@local")
+    await registry_no_nats.register(desc, actor="owner@local")
     with pytest.raises(VersionConflict):
-        await registry_no_nats.register(desc, actor="lewis@local")
+        await registry_no_nats.register(desc, actor="owner@local")
 
 
 @pytest.mark.integration
@@ -394,14 +394,14 @@ async def test_target_update_preserves_history(
 ):
     desc_id = f"t_upd_{uuid4().hex[:8]}"
     initial = _draft_target(descriptor_id=desc_id)
-    head_v1 = await registry_no_nats.register(initial, actor="lewis@local")
+    head_v1 = await registry_no_nats.register(initial, actor="owner@local")
 
     # Mutate the descriptor body — add a relationship type, then update.
     mutated = _draft_target(
         descriptor_id=desc_id,
         relationship_types=("LocatedIn", "PartOf"),
     )
-    head_v2 = await registry_no_nats.update(desc_id, mutated, actor="lewis@local")
+    head_v2 = await registry_no_nats.update(desc_id, mutated, actor="owner@local")
     assert head_v2.version != head_v1.version
 
     # History has both, newest first.
@@ -419,8 +419,8 @@ async def test_target_update_idempotent_on_identical_body(
 ):
     desc_id = f"t_noop_{uuid4().hex[:8]}"
     desc = _draft_target(descriptor_id=desc_id)
-    await registry_no_nats.register(desc, actor="lewis@local")
-    again = await registry_no_nats.update(desc_id, _draft_target(descriptor_id=desc_id), actor="lewis@local")
+    await registry_no_nats.register(desc, actor="owner@local")
+    again = await registry_no_nats.update(desc_id, _draft_target(descriptor_id=desc_id), actor="owner@local")
     history = await registry_no_nats.query_history(desc_id, family=Family.TARGET)
     # Only one row exists — second update was a no-op.
     assert len(history) == 1
@@ -433,17 +433,17 @@ async def test_target_retire_state_transition(
 ):
     desc_id = f"t_ret_{uuid4().hex[:8]}"
     await registry_no_nats.register(
-        _draft_target(descriptor_id=desc_id), actor="lewis@local"
+        _draft_target(descriptor_id=desc_id), actor="owner@local"
     )
     retired = await registry_no_nats.retire(
-        desc_id, actor="lewis@local", family=Family.TARGET, reason="end of life"
+        desc_id, actor="owner@local", family=Family.TARGET, reason="end of life"
     )
     assert retired.state == "retired"
 
     # Retired is terminal — can't transition out.
     with pytest.raises(IllegalLifecycleTransition):
         await registry_no_nats.retire(
-            desc_id, actor="lewis@local", family=Family.TARGET
+            desc_id, actor="owner@local", family=Family.TARGET
         )
 
 
@@ -454,23 +454,23 @@ async def test_target_promote_and_rollback(
 ):
     desc_id = f"t_prom_{uuid4().hex[:8]}"
     v1 = await registry_no_nats.register(
-        _draft_target(descriptor_id=desc_id), actor="lewis@local"
+        _draft_target(descriptor_id=desc_id), actor="owner@local"
     )
     v2 = await registry_no_nats.update(
         desc_id,
         _draft_target(descriptor_id=desc_id, relationship_types=("LocatedIn", "PartOf")),
-        actor="lewis@local",
+        actor="owner@local",
     )
     # Rollback to v1: rollback shifts head back.
     rolled = await registry_no_nats.rollback(
-        desc_id, v1.version, actor="lewis@local", family=Family.TARGET, reason="ramp-back"
+        desc_id, v1.version, actor="owner@local", family=Family.TARGET, reason="ramp-back"
     )
     assert rolled.version == v1.version
     assert rolled.is_head is True
 
     # Promote v2 back forward.
     promoted = await registry_no_nats.promote(
-        desc_id, v2.version, actor="lewis@local", family=Family.TARGET
+        desc_id, v2.version, actor="owner@local", family=Family.TARGET
     )
     assert promoted.version == v2.version
     assert promoted.is_head is True
@@ -478,13 +478,13 @@ async def test_target_promote_and_rollback(
     # Promoting the current head is a conflict.
     with pytest.raises(VersionConflict):
         await registry_no_nats.promote(
-            desc_id, v2.version, actor="lewis@local", family=Family.TARGET
+            desc_id, v2.version, actor="owner@local", family=Family.TARGET
         )
 
     # Promoting a non-existent version is a conflict.
     with pytest.raises(VersionConflict):
         await registry_no_nats.promote(
-            desc_id, "f" * 64, actor="lewis@local", family=Family.TARGET
+            desc_id, "f" * 64, actor="owner@local", family=Family.TARGET
         )
 
 
@@ -505,7 +505,7 @@ async def test_transition_round_trip_is_idempotent(
     desc_id = f"t_rt_{uuid4().hex[:8]}"
     active_v = await reg.register(
         _draft_target(descriptor_id=desc_id, state=LifecycleState.ACTIVE),
-        actor="lewis@local",
+        actor="owner@local",
     )
     assert active_v.state == "active"
 
@@ -517,7 +517,7 @@ async def test_transition_round_trip_is_idempotent(
 
     # active → paused (mints/inserts a NEW paused version, head shifts).
     paused = await reg.update(
-        desc_id, _restamp(LifecycleState.PAUSED), actor="lewis@local",
+        desc_id, _restamp(LifecycleState.PAUSED), actor="owner@local",
     )
     assert paused.state == "paused"
     assert paused.version != active_v.version
@@ -525,7 +525,7 @@ async def test_transition_round_trip_is_idempotent(
     # paused → active: recomputes the ORIGINAL active hash, which already
     # exists. Pre-fix this raised UniqueViolationError (asyncpg) → 500.
     re_active = await reg.update(
-        desc_id, _restamp(LifecycleState.ACTIVE), actor="lewis@local",
+        desc_id, _restamp(LifecycleState.ACTIVE), actor="owner@local",
     )
     assert re_active.state == "active"
     # Head is back on the ORIGINAL active version — no new row minted.
@@ -547,7 +547,7 @@ async def test_target_get_typed_returns_pydantic_model(
     registry_no_nats: DescriptorRegistry,
 ):
     desc_id = f"t_typed_{uuid4().hex[:8]}"
-    await registry_no_nats.register(_draft_target(descriptor_id=desc_id), actor="lewis@local")
+    await registry_no_nats.register(_draft_target(descriptor_id=desc_id), actor="owner@local")
     typed = await registry_no_nats.get_typed(desc_id, family=Family.TARGET)
     assert isinstance(typed, TargetDescriptor)
     assert typed.identity.id == desc_id
@@ -560,8 +560,8 @@ async def test_target_list_with_predicate_filters(
 ):
     a = f"t_list_a_{uuid4().hex[:8]}"
     b = f"t_list_b_{uuid4().hex[:8]}"
-    await registry_no_nats.register(_draft_target(descriptor_id=a), actor="lewis@local")
-    await registry_no_nats.register(_draft_target(descriptor_id=b), actor="lewis@local")
+    await registry_no_nats.register(_draft_target(descriptor_id=a), actor="owner@local")
+    await registry_no_nats.register(_draft_target(descriptor_id=b), actor="owner@local")
 
     rows = await registry_no_nats.list(
         DescriptorPredicate(family=Family.TARGET, descriptor_id=a)
@@ -569,7 +569,7 @@ async def test_target_list_with_predicate_filters(
     assert {r.descriptor_id for r in rows} == {a}
 
     rows = await registry_no_nats.list(
-        DescriptorPredicate(family=Family.TARGET, state="draft", owner="lewis@local")
+        DescriptorPredicate(family=Family.TARGET, state="draft", owner="owner@local")
     )
     assert a in {r.descriptor_id for r in rows}
     assert b in {r.descriptor_id for r in rows}
@@ -599,7 +599,7 @@ async def test_register_with_unknown_entity_class_routes_to_dlq(
     )
 
     with pytest.raises(DescriptorValidationError) as exc:
-        await registry_no_nats.register(bad, actor="lewis@local")
+        await registry_no_nats.register(bad, actor="owner@local")
     assert exc.value.dead_letter_id is not None
     assert "definitely_not_a_real_entity_class" in str(exc.value)
 
@@ -611,7 +611,7 @@ async def test_register_with_unknown_entity_class_routes_to_dlq(
             exc.value.dead_letter_id,
         )
     assert row is not None
-    assert row["actor"] == "lewis@local"
+    assert row["actor"] == "owner@local"
     assert row["namespace"] == "target"
     assert row["declared_schema_uri"] == "legba/target/2.0.0"
     err = row["validation_error"]
@@ -632,7 +632,7 @@ async def test_register_with_unknown_relationship_type_routes_to_dlq(
         relationship_types=("LocatedIn", "FakedRelationship"),
     )
     with pytest.raises(DescriptorValidationError) as exc:
-        await registry_no_nats.register(bad, actor="lewis@local")
+        await registry_no_nats.register(bad, actor="owner@local")
     assert exc.value.dead_letter_id is not None
 
 
@@ -666,7 +666,7 @@ async def test_analyst_register_update_retire(
 ):
     desc_id = f"a_{uuid4().hex[:8]}"
     initial = _draft_analyst(descriptor_id=desc_id)
-    head = await registry_no_nats.register(initial, actor="lewis@local")
+    head = await registry_no_nats.register(initial, actor="owner@local")
     assert head.kind == "inline_target"
     assert head.type_signature == {
         "input_type": "legba.x.In",
@@ -685,11 +685,11 @@ async def test_analyst_register_update_retire(
             )
         }
     )
-    updated = await registry_no_nats.update(desc_id, new, actor="lewis@local")
+    updated = await registry_no_nats.update(desc_id, new, actor="owner@local")
     assert updated.version != head.version
 
     retired = await registry_no_nats.retire(
-        desc_id, actor="lewis@local", family=Family.ANALYST
+        desc_id, actor="owner@local", family=Family.ANALYST
     )
     assert retired.state == "retired"
 
@@ -707,20 +707,20 @@ async def test_every_mutation_writes_audit_row_with_valid_signature(
 ):
     desc_id = f"t_audit_{uuid4().hex[:8]}"
     initial = _draft_target(descriptor_id=desc_id)
-    head_v1 = await registry_no_nats.register(initial, actor="lewis@local")
+    head_v1 = await registry_no_nats.register(initial, actor="owner@local")
     head_v2 = await registry_no_nats.update(
         desc_id,
         _draft_target(descriptor_id=desc_id, relationship_types=("LocatedIn", "PartOf")),
-        actor="lewis@local",
+        actor="owner@local",
     )
     await registry_no_nats.rollback(
-        desc_id, head_v1.version, actor="lewis@local", family=Family.TARGET
+        desc_id, head_v1.version, actor="owner@local", family=Family.TARGET
     )
     await registry_no_nats.promote(
-        desc_id, head_v2.version, actor="lewis@local", family=Family.TARGET
+        desc_id, head_v2.version, actor="owner@local", family=Family.TARGET
     )
     await registry_no_nats.retire(
-        desc_id, actor="lewis@local", family=Family.TARGET, reason="done"
+        desc_id, actor="owner@local", family=Family.TARGET, reason="done"
     )
 
     # 5 mutations → 5 audit rows.
@@ -776,13 +776,13 @@ async def test_register_fires_nats_event(
 ):
     desc_id = f"t_evt_{uuid4().hex[:8]}"
     async with _SubjectCollector(nats_store, f"{DESCRIPTOR_TOPIC_PREFIX}.registered.target.{desc_id}") as col:
-        await registry.register(_draft_target(descriptor_id=desc_id), actor="lewis@local")
+        await registry.register(_draft_target(descriptor_id=desc_id), actor="owner@local")
         await col.wait_for(n=1, timeout=5.0)
     assert len(col.messages) == 1
     subject, payload = col.messages[0]
     assert subject == f"descriptor.registered.target.{desc_id}"
     assert payload["descriptor_id"] == desc_id
-    assert payload["actor"] == "lewis@local"
+    assert payload["actor"] == "owner@local"
     assert payload["schema_uri"] == "legba/target/2.0.0"
     assert "version" in payload
 
@@ -802,7 +802,7 @@ async def test_dlq_event_fires_on_validation_failure(
             entity_classes=("organization", "totally_not_real"),
         )
         with pytest.raises(DescriptorValidationError):
-            await registry.register(bad, actor="lewis@local")
+            await registry.register(bad, actor="owner@local")
         await col.wait_for(n=1, timeout=5.0)
     assert len(col.messages) == 1
     subject, payload = col.messages[0]
@@ -870,7 +870,7 @@ async def test_vocabulary_cache_reload_after_runtime_insert(
         descriptor_id=f"t_voc_{uuid4().hex[:8]}",
         entity_classes=("organization", new_value),
     )
-    row = await registry.register(desc, actor="lewis@local")
+    row = await registry.register(desc, actor="owner@local")
     assert row.is_head is True
 
 
@@ -886,11 +886,11 @@ async def test_update_with_mismatched_id_raises(
 ):
     desc_id = f"t_mm_{uuid4().hex[:8]}"
     await registry_no_nats.register(
-        _draft_target(descriptor_id=desc_id), actor="lewis@local"
+        _draft_target(descriptor_id=desc_id), actor="owner@local"
     )
     other = _draft_target(descriptor_id="different_id")
     with pytest.raises(DescriptorValidationError):
-        await registry_no_nats.update(desc_id, other, actor="lewis@local")
+        await registry_no_nats.update(desc_id, other, actor="owner@local")
 
 
 # ---------------------------------------------------------------------------
@@ -904,8 +904,8 @@ async def test_audit_log_for_returns_history(
     registry_no_nats: DescriptorRegistry,
 ):
     desc_id = f"t_auditq_{uuid4().hex[:8]}"
-    await registry_no_nats.register(_draft_target(descriptor_id=desc_id), actor="lewis@local")
-    await registry_no_nats.retire(desc_id, actor="lewis@local", family=Family.TARGET)
+    await registry_no_nats.register(_draft_target(descriptor_id=desc_id), actor="owner@local")
+    await registry_no_nats.retire(desc_id, actor="owner@local", family=Family.TARGET)
     entries = await registry_no_nats.audit_log_for(desc_id, family=Family.TARGET)
     actions = [e["action"] for e in entries]
     # newest first per the SQL ORDER BY
@@ -924,13 +924,13 @@ async def test_dead_letter_for_lists_open_entries(
         entity_classes=("organization", f"ufo_{uuid4().hex[:6]}"),
     )
     with pytest.raises(DescriptorValidationError):
-        await registry_no_nats.register(bad, actor="lewis@local")
+        await registry_no_nats.register(bad, actor="owner@local")
     entries = await registry_no_nats.dead_letter_for(family=Family.TARGET)
     assert any(e["namespace"] == "target" for e in entries)
 
 
 # ---------------------------------------------------------------------------
-# L-244: public `pg` accessor
+# Public `pg` accessor
 # ---------------------------------------------------------------------------
 
 
@@ -954,7 +954,7 @@ async def test_registry_exposes_public_pg_accessor(
 
 
 # ---------------------------------------------------------------------------
-# L-241: AnalystKind open-extension end-to-end
+# AnalystKind open-extension end-to-end
 # ---------------------------------------------------------------------------
 
 
@@ -1002,7 +1002,7 @@ async def test_analyst_kind_registry_seeded_from_vocab_on_start(
                 type_signature=TypeSignature(
                     input_type="legba.x.In", output_type="legba.x.Out",
                 ),
-                owner="lewis@local",
+                owner="owner@local",
             ),
             subscription=SubscriptionBlock(),
             method=MethodBlock(
@@ -1010,7 +1010,7 @@ async def test_analyst_kind_registry_seeded_from_vocab_on_start(
             ),
             cadence=CadenceBlock(),
         )
-        row = await registry_no_nats.register(ext_descriptor, actor="lewis@local")
+        row = await registry_no_nats.register(ext_descriptor, actor="owner@local")
         assert row.is_head is True
         assert row.kind == extension_value
 
@@ -1066,18 +1066,18 @@ async def test_analyst_kind_extension_survives_via_nats_refresh(
 async def test_consult_on_demand_now_registrable(
     registry_no_nats: DescriptorRegistry,
 ):
-    """L-241: `consult_on_demand` is one of the 9 built-ins; an analyst
+    """`consult_on_demand` is one of the 9 built-ins; an analyst
     descriptor with that kind registers cleanly."""
     from legba.data.schemas import AnalystKind
 
     desc_id = f"a_cod_{uuid4().hex[:8]}"
     desc = _draft_analyst(descriptor_id=desc_id, kind=AnalystKind.CONSULT_ON_DEMAND)
-    row = await registry_no_nats.register(desc, actor="lewis@local")
+    row = await registry_no_nats.register(desc, actor="owner@local")
     assert row.kind == "consult_on_demand"
 
 
 # ---------------------------------------------------------------------------
-# K-3 — descriptor string references are resolved at registration
+# Descriptor string references are resolved at registration
 # ---------------------------------------------------------------------------
 
 
@@ -1099,7 +1099,7 @@ def _analyst_with_prompt_module(
             input_type="legba.x.In",
             output_type="legba.x.Out",
         ),
-        owner="lewis@local",
+        owner="owner@local",
     )
     return AnalystDescriptor(
         identity=identity,
@@ -1114,7 +1114,7 @@ def _analyst_with_prompt_module(
 async def test_active_analyst_naming_a_dead_prompt_module_is_refused(
     registry_no_nats: DescriptorRegistry,
 ):
-    """K-3 — the registry now resolves what a descriptor names.
+    """The registry now resolves what a descriptor names.
 
     Nothing checked these strings before: pydantic asserts `prompt_module` is
     a non-empty string and never resolves it, so a descriptor naming a renamed
@@ -1129,7 +1129,7 @@ async def test_active_analyst_naming_a_dead_prompt_module_is_refused(
         state=LifecycleState.ACTIVE,
     )
     with pytest.raises(DescriptorValidationError) as exc_info:
-        await registry_no_nats.register(bad, actor="lewis@local")
+        await registry_no_nats.register(bad, actor="owner@local")
 
     assert "renamed_away_by_a_moves_wave" in str(exc_info.value)
     assert exc_info.value.dead_letter_id is not None
@@ -1149,7 +1149,7 @@ async def test_active_analyst_naming_a_live_prompt_module_registers(
         prompt_module="legba.prompts.inline_target.v1",
         state=LifecycleState.ACTIVE,
     )
-    row = await registry_no_nats.register(good, actor="lewis@local")
+    row = await registry_no_nats.register(good, actor="owner@local")
     assert row.descriptor_id == desc_id
     assert row.state == "active"
 
@@ -1171,7 +1171,7 @@ async def test_dead_reference_on_a_non_binding_state_warns_but_stores(
         prompt_module="legba.prompts.not_written_yet.v1",
         state=LifecycleState.DRAFT,
     )
-    row = await registry_no_nats.register(draft, actor="lewis@local")
+    row = await registry_no_nats.register(draft, actor="owner@local")
     assert row.descriptor_id == desc_id
 
 
@@ -1197,14 +1197,14 @@ async def test_activating_a_descriptor_with_a_dead_reference_is_refused(
 
     # draft -> configured is legal and both are non-binding, so the dead
     # reference rides along as a warning.
-    await registry_no_nats.register(_at(LifecycleState.DRAFT), actor="lewis@local")
+    await registry_no_nats.register(_at(LifecycleState.DRAFT), actor="owner@local")
     await registry_no_nats.update(
-        desc_id, _at(LifecycleState.CONFIGURED), actor="lewis@local",
+        desc_id, _at(LifecycleState.CONFIGURED), actor="owner@local",
     )
 
     # configured -> active is where the runtime starts following the string.
     with pytest.raises(DescriptorValidationError) as exc_info:
         await registry_no_nats.update(
-            desc_id, _at(LifecycleState.ACTIVE), actor="lewis@local",
+            desc_id, _at(LifecycleState.ACTIVE), actor="owner@local",
         )
     assert "not_written_yet" in str(exc_info.value)

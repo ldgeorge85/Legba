@@ -2,8 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The registry-API KERNEL — bearer auth, the deprecation stamp, the deps bundle.
 
-Extracted from ``api.py`` (K-2, 2026-08-03), the phase-2A split in
-``planning/CODE_CLEANUP_ANALYSIS_2026-08-02.md``. The measurement that motivated
+Extracted from ``api.py``. The measurement that motivated
 it: **26 of the 50 modules in this package import ``api.py``**, and the *entire*
 cross-module surface they reach for is five names — ``RegistryAPIDeps``,
 ``require_bearer``, ``sunset_headers``, ``_authorize_ws_token`` and
@@ -22,27 +21,27 @@ edge is what the extraction exists to remove.
 
 WHAT LIVES HERE
 
-  * the B-2 FAIL-CLOSED BEARER GATE — ``API_TOKEN_ENV`` / ``DEV_MODE_ENV``, the
+  * the FAIL-CLOSED BEARER GATE — ``API_TOKEN_ENV`` / ``DEV_MODE_ENV``, the
     constant-time compare, ``require_bearer`` (HTTP) and ``_authorize_ws_token``
     (the WebSocket ``?token=`` + proxied-header path, ITEM 2.5). The two share
     ``_current_token`` / ``_dev_mode`` / ``_token_matches``, which is precisely
     why they must move as one unit: a half-move would leave two different
     answers to "is the gate configured?" in the process. Both return
     ``principal_actor(principal, token)`` — ``service:`` or ``operator:``
-    before a hashed, NON-SECRET label — never the credential (W4 TOKEN-FIX;
-    before it, every audit actor was the live token; X2-B1 split the one
-    bearer into the fleet's SERVICE token and the operator's own).
+    before a hashed, NON-SECRET label — never the credential (an audit actor
+    is never the live token; the one bearer is split into the fleet's SERVICE
+    token and the operator's own).
   * the two RESOLVERS both gates are built on, ``resolve_bearer_header`` and
-    ``resolve_ws_credential``, and the STAMP (``stamp_bearer``) — X4 GATE: the
+    ``resolve_ws_credential``, and the STAMP (``stamp_bearer``) — the
     bearer middleware (``bearer_auth.BearerPrincipalMiddleware``) resolves
     every request through them BEFORE the route-role gate and stamps the
     state, so ``require_bearer`` / ``_authorize_ws_token`` read that stamp
     and only resolve the credential themselves on an app without the
     middleware (the unit-test stubs). One implementation, so the middleware's
     refusals are byte-for-byte the gates' own.
-  * the HUMAN-ONLY ROUTE LIST (X2-B1) — ``HUMAN_ONLY_ROUTES``, the one place
+  * the HUMAN-ONLY ROUTE LIST — ``HUMAN_ONLY_ROUTES``, the one place
     that says which routes refuse the service principal.
-  * the C3 DEPRECATION STAMP — ``sunset_headers`` and its sunset date.
+  * the DEPRECATION STAMP — ``sunset_headers`` and its sunset date.
   * the DEPS BUNDLE — ``RegistryAPIDeps`` and the ``_get_deps`` request
     resolver every route depends on.
 
@@ -103,7 +102,7 @@ logger = logging.getLogger("legba.data.registry.api")
 API_TOKEN_ENV = OPERATOR_TOKEN_ENV  # "LEGBA_REGISTRY_API_TOKEN" — the operator's
 DEV_MODE_ENV = "LEGBA_DEV_MODE"
 
-# Returned on every guarded request when the gate is misconfigured (B-2).
+# Returned on every guarded request when the gate is misconfigured.
 MISCONFIGURED_AUTH_DETAIL = (
     f"registry API misconfigured: {API_TOKEN_ENV} and {SERVICE_TOKEN_ENV} are "
     f"unset/empty and {DEV_MODE_ENV}=1 is not set; refusing all guarded "
@@ -119,7 +118,7 @@ def _current_token() -> str | None:
 
 
 def _current_service_token() -> str | None:
-    """The FLEET token (``LEGBA_REGISTRY_SERVICE_TOKEN``), or ``None`` (X2-B1)."""
+    """The FLEET token (``LEGBA_REGISTRY_SERVICE_TOKEN``), or ``None``."""
     raw = os.getenv(SERVICE_TOKEN_ENV, "").strip()
     return raw or None
 
@@ -207,7 +206,7 @@ def _dev_mode() -> bool:
 
 
 def _token_matches(presented: str, configured: str) -> bool:
-    """Constant-time bearer comparison (B-2)."""
+    """Constant-time bearer comparison."""
     return hmac.compare_digest(
         presented.encode("utf-8"), configured.encode("utf-8"),
     )
@@ -226,7 +225,7 @@ def _match_principal(presented: str, configured: list[tuple[str, str]]) -> str |
     return matched
 
 
-#: Prefix of the NON-SECRET principal label the gates return (W4 TOKEN-FIX).
+#: Prefix of the NON-SECRET principal label the gates return.
 PRINCIPAL_LABEL_PREFIX = "bearer:"
 
 #: Hex characters of ``sha256(token)`` the label keeps. 12 hex = 48 bits: a
@@ -245,14 +244,14 @@ def principal_label(token: str) -> str:
     restarts and the historical re-stamp (``scripts/scrub_audit_actor_tokens.py``
     computes this same label for rows written before the two principals
     existed). The gates stamp :func:`principal_actor` — this label behind the
-    principal kind — never the credential (W4 TOKEN-FIX).
+    principal kind — never the credential.
     """
     digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
     return f"{PRINCIPAL_LABEL_PREFIX}{digest[:PRINCIPAL_LABEL_HEX]}"
 
 
 def principal_actor(principal: str, token: str) -> str:
-    """The AUDIT ACTOR the gates return: ``<principal>:bearer:<sha12>`` (X2-B1).
+    """The AUDIT ACTOR the gates return: ``<principal>:bearer:<sha12>``.
 
     ``service:bearer:…`` for the fleet token, ``operator:bearer:…`` for the
     operator's. A-1 (switch on): a named service is ``service:<name>`` — its
@@ -269,7 +268,7 @@ def principal_actor(principal: str, token: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Human-only routes (X2-B1) — declared HERE, in one place
+# Human-only routes — declared HERE, in one place
 # ---------------------------------------------------------------------------
 
 #: Routes the SERVICE principal is refused on: ``(method, route template,
@@ -304,6 +303,9 @@ HUMAN_ONLY_ROUTES: tuple[tuple[str, str, str], ...] = (
      "acknowledging an alert"),
     ("*", "/api/v1/v3/system/alerts/{episode_id}/snooze",
      "snoozing an alert"),
+    # Managing people's accounts (invites, roles, disabling, sessions) is a
+    # person's act; no service lists or changes accounts.
+    ("*", "/api/v1/auth/admin/", "managing accounts"),
 )
 
 
@@ -364,7 +366,7 @@ def resolve_bearer_header(
 ) -> tuple[str | None, str]:
     """``(principal kind, audit actor)`` for an HTTP ``Authorization`` header.
 
-    The HTTP gate's whole decision (B-2 / X2-B1), minus the session path —
+    The HTTP gate's whole decision, minus the session path —
     the principal kind is ``None`` in dev mode, where no principal is
     configured. Raises exactly what :func:`require_bearer` answers: 503
     misconfigured, 401 missing / malformed, 403 invalid, 403
@@ -426,9 +428,9 @@ def _read(state: Any, key: str) -> Any:
 
 def stamp_bearer(state: Any, principal: str | None, actor: str) -> None:
     """Stamp a resolved bearer caller on ``state`` (a Starlette ``State`` or
-    the raw ``scope["state"]`` dict) — X4 GATE.
+    the raw ``scope["state"]`` dict).
 
-    ``principal`` / ``principal_actor`` (B1's names), and the route gate's
+    ``principal`` / ``principal_actor`` (its names), and the route gate's
     ``legba_role`` = ``operator`` for BOTH bearer principals with
     ``legba_subject`` = the principal kind. Dev mode (``principal`` None) is
     the operator class too, subject ``operator``, and stamps no ``principal``
@@ -472,7 +474,7 @@ def require_bearer(
     authorization: str | None = Header(default=None),
     request: Request = None,  # type: ignore[assignment] — FastAPI injects it
 ) -> str:
-    """Bearer-token gate for the HTTP endpoints (B-2 fail-closed; X2-B1 two principals).
+    """Bearer-token gate for the HTTP endpoints (fail-closed; two principals).
 
       * EITHER token set → require `Authorization: Bearer <token>`; missing
         header → 401, a credential matching neither → 403 (constant-time
@@ -485,7 +487,7 @@ def require_bearer(
       * NEITHER set otherwise → 503 "service misconfigured" on EVERY
         guarded request. A deploy that forgot the token must not expose
         an open admin API.
-      * a SESSION request (X3-B3: the cookie middleware stamped a signed-in
+      * a SESSION request (the cookie middleware stamped a signed-in
         user and no Bearer was presented) → that user's `user:<id>`; the
         middleware already stamped the state.
 
@@ -495,7 +497,7 @@ def require_bearer(
     to stamp as `actor`; `"anonymous"` / the bare :func:`principal_label` in
     dev mode, where no principal is configured.
 
-    X4 GATE: on the real app the bearer MIDDLEWARE has already resolved the
+    On the real app the bearer MIDDLEWARE has already resolved the
     credential through :func:`resolve_bearer_header` and stamped the state
     before the route-role gate ran; this gate then READS that stamp (and
     re-checks the human-only rule). It resolves the header itself only when
@@ -512,7 +514,7 @@ def require_bearer(
     if stamped is not None:
         _refuse_service_on_human_only(_read(state, "principal"), method, path)
         return stamped
-    # X3-B3: a SESSION request (``session_auth.SessionCookieMiddleware``
+    # A SESSION request (``session_auth.SessionCookieMiddleware``
     # resolved the cookie and stamped the state; no Bearer was presented) is
     # the signed-in user — ``user:<id>``. A Bearer always takes the path below.
     user_actor = session_actor(
@@ -526,12 +528,12 @@ def require_bearer(
     return actor
 
 
-#: End of the C3 deprecation window for the routes the source-quality ledger
+#: End of the deprecation window for the routes the source-quality ledger
 #: merges (``/source_credibility`` reads + ``/sources/{id}/assurance``). They
 #: KEEP SERVING their original wire shape until then — a 3xx would silently
 #: hand callers a DIFFERENT response body, which is worse than a header they
 #: can see. Removal is a later, deliberate commit, not a side effect of this
-#: one (`docs/SEAMS.md`, the C3 entry).
+#: one (`docs/SEAMS.md`).
 DEPRECATION_SUNSET_HTTP_DATE = "Tue, 27 Oct 2026 00:00:00 GMT"
 
 
@@ -656,17 +658,17 @@ def _authorize_ws_token(
     handler logs it on connect/close) or raises HTTPException for the
     connection handler to convert to a WebSocket close frame.
 
-    Mirrors `require_bearer` (B-2): fail-closed 503 when neither token is
+    Mirrors `require_bearer`: fail-closed 503 when neither token is
     configured and `LEGBA_DEV_MODE=1` is not set; constant-time comparison
-    against BOTH principals when configured (X2-B1). No WS/SSE route is
+    against BOTH principals when configured. No WS/SSE route is
     human-only, so the service principal is never refused here.
 
-    `state` (X3-B3) is the connection's state: when NO credential is
+    `state` is the connection's state: when NO credential is
     presented and the session-cookie middleware stamped a signed-in user,
     that user's `user:<id>` is returned (the browser's cookie rides the WS
     upgrade and the SSE GET; caddy strips the perimeter header for it).
 
-    X4 GATE: a connection the bearer middleware already stamped (the same
+    A connection the bearer middleware already stamped (the same
     resolution, :func:`resolve_ws_credential`) returns that stamp; the 503
     check stays first."""
     configured = _configured_principals()
@@ -680,7 +682,7 @@ def _authorize_ws_token(
     )
     if resolved is not None:
         return resolved[1]
-    # X3-B3: no credential presented at all, but the cookie middleware
+    # No credential presented at all, but the cookie middleware
     # stamped a signed-in user on the connection's ``state`` → that user.
     user_actor = session_actor(state)
     if user_actor is not None:

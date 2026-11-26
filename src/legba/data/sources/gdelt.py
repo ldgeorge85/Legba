@@ -314,7 +314,7 @@ CredentialResolver = Callable[[str], "Awaitable[bytes]"]
 
 Provided by the runtime. The handler never decrypts credentials itself.
 Resolution happens per-pull (not cached) so credential rotation is
-immediate, per L-102 §7.
+immediate,.
 """
 
 ClientFactory = Callable[[dict[str, Any], str | None, str], Any]
@@ -813,7 +813,7 @@ class GDELTBigQuerySourceHandler:
     ) -> AsyncIterator[Signal]:
         """Yield Signals for events newer than the stored cursor.
 
-        ``since`` is a hint per L-102 §2; the handler's own cursor in
+        ``since`` is a hint; the handler's own cursor in
         ``state_store`` is the authoritative lower bound. Overlapping
         re-emission of rows is allowed — downstream dedupe (L-151) will
         suppress duplicates.

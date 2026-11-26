@@ -1,10 +1,10 @@
-# scorecard_producer — P4-T2 banded-scorecard producer (deterministic META).
+# scorecard_producer — banded-scorecard producer (deterministic META).
 #
 # A `deterministic`-kind META analyst (sub_handler=scorecard_producer) — the
 # MATERIALIZER of the honest top of the system. Each tick it runs the T1
 # scorecard_banding.gather_and_band over EVERY active G20 country and side-writes
 # ONE persisted `kind=scorecard` row per country (target_id=<country>,
-# data.bands = the per-dimension banded verdict, P4-T5 per-unit eval folded).
+# data.bands = the per-dimension banded verdict, per-unit eval folded).
 #
 # HONESTY: a country with NO qualifying verified claim STILL emits an
 # all-insufficient scorecard row (never omit, never fabricate) so the read route
@@ -29,7 +29,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: active
-  owner: p4_honest_top
+  owner: owner@local
 
 subscription:
   # META analyst: one global sweep per tick over every active G20 country. Reads

@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Cited refs typed by the table their id is in (roll 84 live walk, W11-F310).
+"""Cited refs typed by the table their id is in.
 
-The live walk opened a Consult citation whose ref said ``signal`` for a
+A Consult citation once had a ref that said ``signal`` for a
 situation id; the Record sheet asked ``/lineage/signal/<id>`` and got a 404.
 These tests run without a database: the pool is a fake that answers the one
 batched ``id = ANY`` lookup per table.

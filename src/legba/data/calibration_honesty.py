@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Calibration honesty — one definition, shared by every reader (lane E, 11-11).
+"""Calibration honesty — one definition, shared by every reader.
 
 The legacy calibration figures (``calibration_tracking``'s Brier over the
 country_predictor / competing_hypotheses lines) were read by four surfaces that
@@ -143,7 +143,7 @@ def reduce_calibration(
     Every Brier is returned with ITS OWN n. ``brier_exogenous`` pairs with
     ``exogenous_sample_size``; ``brier_pooled`` with ``pooled_sample_size``
     (the pooled count — never paired with another Brier). The acute-pilot keys
-    are untouched. A finding written before lane E (no ``populations`` block)
+    are untouched. A finding written before scoping existed (no ``populations`` block)
     cannot be scoped, so its mixed headline is WITHHELD and kept under
     ``legacy_unscoped`` until the next calibration run replaces it.
     """
@@ -191,7 +191,7 @@ def reduce_calibration(
             "stale": None,
             "newest_member_at": None,
             "withheld_reason": (
-                "finding predates lane E: its Brier mixes the collection-volume "
+                "finding predates the collection-volume fix: its Brier mixes the collection-volume "
                 "predictor with other lines and cannot be scoped; withheld until "
                 "the next calibration run"
             ),

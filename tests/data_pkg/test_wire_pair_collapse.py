@@ -8,8 +8,7 @@ text: ONE syndicated wire story reaching a desk as TWO numbered signals, which
 
 The load-bearing fixture is :func:`_aawsat_row` / :func:`_cna_row` — the real
 ``[80]``/``[91]`` pair from the ``nar_au_0815`` window, reconstructed from the
-replay record (``planning/VOICE_REPLAY_2026-08-20/runs/REVISION_RESULT_2026-08-21.md``
-§13) with the titles, hosts and dates the desk actually read.
+replay record with the titles, hosts and dates the desk actually read.
 
 The GDACS test is the counterweight and matters just as much: measured over that
 same window, a headline-only rule would have collapsed nine wildfire alerts

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The light projections W11 added (roll 84 live walk): a signal's summary
+"""The light projections: a signal's summary
 row and a descriptor's summary body. Pure functions; no database."""
 from __future__ import annotations
 
@@ -61,7 +61,7 @@ def test_light_data_never_invents_a_key() -> None:
 
 
 def test_a_light_row_keeps_the_point_the_world_map_places_it_at() -> None:
-    """Roll 86 audit: the world map (v4/world/mapData) reads the default weight
+    """The world map (v4/world/mapData) reads the default weight
     and places a signal at ``data.geo.lat/lon``; the light default dropped it,
     so every point fell back to a country centroid (or off the map)."""
     geo = {"lat": 48.85, "lon": 2.35, "full_name": "Paris, FR", "country_iso2": "FR",
@@ -101,7 +101,7 @@ def test_a_summary_descriptor_body_keeps_the_roster_fields_only() -> None:
 
 
 def test_a_summary_keeps_whether_the_subject_declares_a_source() -> None:
-    """Roll 86 live walk: the map hatches a subject that declares no source as
+    """The map hatches a subject that declares no source as
     "not covered"; the summary cut dropped ``sources`` whole, so every subject
     read as declaring none. The count survives; an empty list says 0; a body
     without the key says nothing."""
@@ -117,7 +117,7 @@ def test_a_summary_of_a_body_without_scope_is_empty_not_invented() -> None:
 
 
 #: The cases the walk's fixture mirror (legba-ui-v3/tools/walk/weights.mjs) is
-#: held to as well — roll 86: the fixture walk answered a summary read with the
+#: held to as well: the fixture walk answered a summary read with the
 #: full recording, so it could not see what the light roster dropped.
 GOLDEN = Path(__file__).resolve().parents[2] / "legba-ui-v3" / "tools" / "walk" / "fixtures" / "weights_golden.json"
 
@@ -135,7 +135,7 @@ def test_the_projections_answer_the_cases_the_walk_mirror_is_held_to() -> None:
 
 
 def test_a_light_event_keeps_what_the_map_and_the_time_band_draw() -> None:
-    """Roll 87: the Watch page 2.01 MB against 2.00, its largest read
+    """The Watch page 2.01 MB against 2.00, its largest read
     ``/v3/events?limit=500`` (0.42 MB). Both readers of that read ask the
     light row; every field either one reads survives it."""
     # v4/world/mapData.ts fetchWorldEvents + lib/temporalLayers.ts eventRow

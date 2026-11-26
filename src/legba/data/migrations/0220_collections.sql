@@ -3,11 +3,10 @@
 --
 -- 0220_collections.sql
 --
--- Program 7g-1 — the COLLECTIONS core: the `collection` descriptor family's
+-- The COLLECTIONS core: the `collection` descriptor family's
 -- table, the `observations` series store, `entity_aliases`, the
 -- `collection_loads` ledger, and the end of the origin-class reader sweep
--- (planning/PROGRAM_7G_COLLECTIONS_DESIGN_2026-09-25.md §2, §3, §4, §5;
--- SEAMS #57 → resolved, SEAMS #62 → opened).
+-- (SEAMS #57 → resolved, SEAMS #62 → opened).
 --
 -- A COLLECTION IS NOT A SOURCE. A source is a live feed: polled on a
 -- cadence, its silence a health signal, its arrival able to wake a reactive
@@ -50,7 +49,7 @@
 -- when, and no amount of reading can recover it afterwards.
 --
 -- NATIVE RANGE PARTITIONING BY `valid_from`, one partition per year plus a
--- DEFAULT (§D.4 — no TimescaleDB). Ten years of annual series for four
+-- DEFAULT (no TimescaleDB). Ten years of annual series for four
 -- desks is a small table; the partitioning is not for size, it is so an era
 -- read ("what did we hold for 2016–2018") touches three partitions and a
 -- decade-wide collection cannot be loaded into one undifferentiated heap.
@@ -241,7 +240,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS observations_identity_unique
     ON public.observations USING btree
     (collection_id, series_id, subject, valid_from, valid_to, record_time);
 
--- The two reads 7g-2 will make (§6), indexed now so they are proven before
+-- The two reads the series readers will make, indexed now so they are proven before
 -- the readers exist:
 --   (a) a series window for one subject — collection + series + subject,
 --       ordered by valid_from;

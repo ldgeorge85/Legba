@@ -63,7 +63,7 @@ from legba.runtime.source_actor import (
 from legba.runtime.state import SCHEMA as STATE_SCHEMA
 
 # The database name honours LEGBA_PIVOT_PG_DB (as tests/data_pkg's pivot tests
-# and the session bootstrap already do), so a lane can run this file against
+# and the session bootstrap already do), so a contributor can run this file against
 # its own migrated copy instead of the shared ``legba_pivot_test``.
 PG = dict(host="127.0.0.1", port=5432, user="legba", password="legba",
           database=os.environ.get("LEGBA_PIVOT_PG_DB", "legba_pivot_test"))
@@ -181,7 +181,7 @@ def _rss_descriptor(source_id: str, url: str, *, media: str = "reference") -> So
         ),
         scope=SourceScope(owner_tenant="acme", geo=["BR"], languages=["en"]),
         acquisition="poll",
-        # The fixture feed is dated 2025: no first-poll age cap (W11-F265).
+        # The fixture feed is dated 2025: no first-poll age cap.
         config={"url": url, "first_poll_max_entry_age_days": 0},
         cadence=CadenceBlock(schedule=Cron(raw="*/5 * * * *")),
         pipeline=SourcePipeline(media=media),
@@ -724,7 +724,7 @@ async def test_baseline_reference_vs_eager_seam_refusal(pool):
     # S-2: the descriptor scope (BR) is the PUBLISHER origin, not the story's
     # subject. With no country named in the body it is parked, NOT stamped into
     # geo — so a world story from a BR wire no longer floods Brazil's desk.
-    # Lane N-B: content naming NO country takes it as the MARKED fallback.
+    # Content naming NO country takes it as the MARKED fallback.
     assert e.geo == ["BR"]
     assert e.payload["geo_fallback"]["basis"] == "publisher_origin"
     assert e.payload["publisher_origin"] == ["BR"]

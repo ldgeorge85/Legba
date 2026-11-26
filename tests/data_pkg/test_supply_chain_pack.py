@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Supply-chain pack — the 10 lane/flow desks + the disruption_status unit.
 
-planning/SUPPLY_CHAIN_PACK_PLAN_2026-07-29.md. The pack is the platform's SECOND
+The pack is the platform's SECOND
 exemplar domain and its whole point is that it adds no infrastructure: 10 target
 descriptors, 1 inline_target unit descriptor, and exactly ONE line of Python (the
 desk-roster tag literal). This suite locks the properties that make that true —
@@ -151,11 +151,11 @@ def test_desk_validates_thematic_and_draft(fname: str, desk_id: str):
     assert desc.scope.domain == "thematic"
     assert desc.identity.abstraction_level.value == "L1"
     # ALL TEN ship draft: bulk registration must create no live actor and no
-    # fan-out. Activation is a deliberate FSM step after the lane preflight.
+    # fan-out. Activation is a deliberate FSM step after the preflight.
     assert desc.identity.state.value == "draft", (
         f"{fname} must ship state: draft — activation is the operator's FSM step"
     )
-    assert desc.identity.owner == "supply_chain_pack"
+    assert desc.identity.owner == "owner@local"
 
 
 @pytest.mark.parametrize(("fname", "desk_id"), _ALL_DESKS)
@@ -187,7 +187,7 @@ def test_desk_carries_a_real_sql_pushdown(fname: str, desk_id: str):
         assert len(pinned) == 3
     else:
         # A geo-anchored desk must NOT pin ids: the reader ANDs `source_id = ANY()`
-        # with the geo overlap, which would shrink the lane to the pinned feeds.
+        # with the geo overlap, which would shrink the desk to the pinned feeds.
         assert geo
         assert not pinned, f"{desk_id} pins source ids, which ANDs away its geo lane"
     assert desc.scope.predicate, f"{desk_id} must carry the refiner predicate"
@@ -238,7 +238,7 @@ def test_the_pack_is_exactly_six_plus_four_desks():
     on_disk = sorted(
         p.name
         for p in _DESCRIPTORS_DIR.glob("target_*.yaml")
-        if _raw(p.name).get("identity", {}).get("owner") == "supply_chain_pack"
+        if p.name.startswith(("target_flow_", "target_lane_"))
     )
     assert on_disk == sorted(f for f, _ in _ALL_DESKS)
     assert len(_TIER_A) == 6 and len(_TIER_B) == 4
@@ -258,7 +258,7 @@ def test_tier_b_header_states_its_activation_gate(fname: str, desk_id: str):
     assert "ACTIVATION GATE" in header
     assert "ACTIVATE AT:" in header
     assert re.search(r"§5\.2 slot [A-Z]-\d|slot [A-Z]-\d", header), (
-        f"{fname} header must name the §5.2 source slot it waits on"
+        f"{fname} header must name the source slot it waits on"
     )
 
 
@@ -370,7 +370,7 @@ def test_unit_prompt_scopes_absence_to_the_collection():
     flat = _prompt_flat()
     assert "SCOPE ABSENCE TO THE COLLECTION" in flat
     assert "not observed in collected reporting" in flat
-    assert "ABSENCE-HONEST" in flat
+    assert "QUIET WINDOW: a quiet lane is the normal state and still gets a short finding" in flat
 
 
 def test_unit_prompt_guards_quantitative_claims():

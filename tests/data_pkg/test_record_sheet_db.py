@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane U-10 — the Record sheet's reads on the real path (migrated Postgres,
+"""The Record sheet's reads on the real path (migrated Postgres,
 the isolated test stack only).
 
 Covered, through the router mounted on a FastAPI app:
@@ -16,7 +16,7 @@ Covered, through the router mounted on a FastAPI app:
   ``DisplayPolicyMiddleware`` rule would withhold ``full_text`` from one even
   if the route did not; a refusing licence withholds the text from everyone;
   a feed response says it kept no text;
-* roll 85 (B-1 wired): every signal record carries ``byte_path``'s evidence
+* every signal record carries ``byte_path``'s evidence
   label (``received bytes`` / ``archived later`` / ``no bytes kept``), the
   no-receipt reason is given only for a ``no bytes kept`` record with no link,
   and ``/v3/record/signal/{id}/item`` returns the item AS RECEIVED from the
@@ -54,7 +54,7 @@ pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
 NEWS = "source.test.u10_news"
 TG = "source.test.u10_tg"
 WALLED = "source.test.u10_walled"
-CLAIMS = "source.test.u10_claims"  # roll 84: a claim source (C-2)
+CLAIMS = "source.test.u10_claims"  # a claim source
 UNIT = "an_u10_record"
 NOW = datetime.now(timezone.utc)
 T0 = NOW - timedelta(days=3)
@@ -288,7 +288,7 @@ async def test_a_refusing_licence_withholds_the_text_from_everyone(world) -> Non
 
 
 async def test_a_claim_sources_stored_text_is_admin_only(world) -> None:
-    """Roll 84 (C-2's SEAMS #90, closed): the version-text route applies
+    """SEAMS #90, closed: the version-text route applies
     ``claim_support.claim_text_withheld`` — a claim source's stored text goes
     to the operator class only, and the reason named is the claim rule."""
     client, _pg, ids = world
@@ -366,7 +366,7 @@ async def test_integrity_states(world) -> None:
 
 
 async def test_every_signal_record_carries_the_byte_path_label(world) -> None:
-    """Roll 85: the sheet's label is ``byte_path.evidence_states`` (B-1), not
+    """The sheet's label is ``byte_path.evidence_states``, not
     a rule of its own; the no-receipt reason is only for an unlinked
     ``no bytes kept`` record."""
     client, _pg, ids = world
@@ -387,7 +387,7 @@ async def test_every_signal_record_carries_the_byte_path_label(world) -> None:
 
 
 async def test_the_item_as_received_is_read_from_the_held_bytes(world, tmp_path, monkeypatch) -> None:
-    """Roll 85 (B-1 wired): a feed response keeps no text of its own, so the
+    """A feed response keeps no text of its own, so the
     sheet reads the ITEM from its stored bytes — re-verified, cut at the
     item's locator — to an operator; a reader gets the display policy; a
     record with no bytes says so; an unknown id is not found."""

@@ -186,7 +186,7 @@ def world_order_key(row: Mapping[str, Any]) -> tuple[float, int, str, str]:
 # 3. WHAT COUNTS AS A REPORTED CHANGE
 # ---------------------------------------------------------------------------
 
-#: THE ONE CHANGE TEST lives in :mod:`legba.data.change_report` (roll 65): the
+#: THE ONE CHANGE TEST lives in :mod:`legba.data.change_report`: the
 #: carry rule (``legba.data.carried_state``) asks the same question of a desk
 #: read and may not import this package. The names below are that module's
 #: objects, kept for the callers and tests that read them here.

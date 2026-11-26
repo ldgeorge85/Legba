@@ -1,7 +1,6 @@
-# Program 7g-3 — THE FIRST COLLECTION. Drafted 2026-09-24 by lane g0 against
-# planning/PROGRAM_7G_COLLECTIONS_DESIGN_2026-09-25.md §2 (the descriptor
-# family and manifest shape), §3 (the observations table these rows must fit)
-# and §7 (7g-3).
+# THE FIRST COLLECTION: a pilot series collection, drafted against the
+# collection descriptor family and manifest shape and the observations table
+# these rows must fit.
 #
 # A COLLECTION IS NOT A SOURCE. A source is a live feed: it is polled, it has
 # a cadence, its silence is a health signal, its arrival can wake a trigger. A
@@ -11,12 +10,11 @@
 # `collection_`-prefixed and not `source_`: nothing in the source machinery
 # should ever pick it up.
 #
-# STATE: draft. Lifecycle is draft -> reviewed -> loaded -> superseded (§2).
-# NOTHING IS LOADED BY THIS FILE. The schema (`legba/collection/1.0.0`), the
-# `observations` table, `scripts/load_collection.py` and the registry route
-# are 7g-1's and do not exist yet; this manifest is drafted to the design
-# note's shape so 7g-1 implements a schema this file already satisfies. The
-# licence line is the OPERATOR's to approve (§7) — see `licence:` below.
+# STATE: draft. Lifecycle is draft -> reviewed -> loaded -> superseded.
+# NOTHING IS LOADED BY THIS FILE. Loading is done by
+# `scripts/load_collection.py` against the `legba/collection/1.0.0` schema
+# and the `observations` table. The
+# licence line is the OPERATOR's to approve — see `licence:` below.
 #
 # WHAT WAS ACTUALLY FETCHED. Every `coverage:` block in this file was measured
 # against the live providers on 2026-09-24 by
@@ -40,26 +38,26 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L0              # raw provider observations; no analysis
   state: draft
-  owner: p7g_lane_g0
+  owner: owner@local
   created: "2026-09-24T00:00:00Z"
 
-# §2 — WHERE the holding comes from. `archive_only`: these providers are
+# WHERE the holding comes from. `archive_only`: these providers are
 # archives in their own right (World Bank WDI, EIA International Energy Data);
 # no Legba source identity exists for either series API, so there is nothing
 # to stamp `backfill_native` against.
 origin_shape: archive_only
 
-# §3 — the class every loaded row carries in `observations.origin_class`.
+# The class every loaded row carries in `observations.origin_class`.
 # One of the three HISTORY classes; never `live`, never `seed`.
 origin_class: archive
 
-# §2 — FAILS CLOSED: a manifest without a recorded class does not load.
+# FAILS CLOSED: a manifest without a recorded class does not load.
 # Vocabulary is the access-class one already on sources
 # (legba.data.provenance.access.ACCESS_CLASSES).
 licence_class: public
 
 licence:
-  # The operator approves this block per collection (§7). Both providers are
+  # The operator approves this block per collection. Both providers are
   # free, keyless and redistributable; neither carries a noncommercial bar.
   providers:
     world_bank:
@@ -88,8 +86,8 @@ licence:
         acknowledgment, which includes the publication date."
       attribution: "Source: U.S. Energy Information Administration (Sep 2026)."
 
-# §2 — declared, not assumed. The registry refuses a collection whose
-# `excluded_from` omits any of the eight surfaces the design note lists.
+# Declared, not assumed. The registry refuses a collection whose
+# `excluded_from` omits any of the eight required surfaces.
 firewall:
   readers_opt_in:
     - consult
@@ -112,21 +110,21 @@ loader:
   priority: low
   batch: 200
   resume_key: "series_id:subject"
-  # NOTE FOR 7g-1: the two providers are fetched by two different SHAPES under
+  # NOTE: the two providers are fetched by two different SHAPES under
   # this one kind — World Bank is a per-(subject, indicator) JSON call, EIA is
   # ONE bulk JSONL file scanned once for every series and subject in the
   # manifest. Each series carries its own `fetch.mode` so the loader can
-  # branch without guessing. If 7g-1 would rather split the kinds, the EIA
+  # branch without guessing. If the kinds were split, the EIA
   # half is a `series_bulk`; this file names the mode either way.
   rate_limit_per_second:
     world_bank: 4
     eia: 1
-  # House rule (V3_IMPLEMENTATION_PLAN §0): every descriptor declares it.
+  # House rule: every descriptor declares it.
   # A collection makes no LLM call at all — it fetches numbers and writes
   # rows. The zero is the literal truth here, not a cap.
   budget_tokens_per_day: 0
 
-# The four pilot desks (§7). `subject_kind: country`; the SUBJECT written to
+# The four pilot desks. `subject_kind: country`; the SUBJECT written to
 # `observations.subject` is the ISO-3166-1 alpha-2 code, because that is what
 # the desks' `scope.geo` already carries. `iso3` is recorded only because the
 # EIA series ids are built from alpha-3.
@@ -192,7 +190,7 @@ manifest:
     # `record_time` for every WB row is the response envelope's `lastupdated`
     # (2026-07-13 for the whole WDI release), NOT the fetch time: a 2016 GDP
     # figure revised in the July 2026 release is a 2016 valid-time row with a
-    # 2026-07-13 record time (§3, bitemporal).
+    # 2026-07-13 record time (bitemporal).
     # ---------------------------------------------------------------------
 
     - series_id: wb.gdp_growth_annual_pct
@@ -538,7 +536,7 @@ open_items:
       4.0 and requires attribution on anything republished, EIA is U.S.
       public domain and asks for an acknowledgment with a publication date.
   - id: awaiting_7g1
-    owner: p7g_lane_1
+    owner: owner@local
     text: >-
       Nothing here loads until 7g-1 ships `legba/collection/1.0.0`, migration
       0219 (`observations`), `scripts/load_collection.py` and the

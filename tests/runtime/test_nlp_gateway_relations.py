@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W11-F113 — fact quality on the gateway's ``/relations`` answer.
+"""fact quality on the gateway's ``/relations`` answer.
 
 The first gateway facts (2026-10-23) landed at the 0.5 floor as junk
 ("Melania Trump | operates in | Oleshky", "truce | signed agreement with |
@@ -56,8 +56,8 @@ from legba.runtime.nlp_client_factory import (
 from legba.runtime.registry_client import RegistryHTTPClient
 
 _REPO = Path(__file__).resolve().parents[2]
-_YAML = _REPO / "descriptors" / "stack_component_nlp_innoai_gateway.yaml"
-_COMPONENT_ID = "nlp.innoai.gateway"
+_YAML = _REPO / "descriptors" / "stack_component_nlp_gateway_bearer.yaml"
+_COMPONENT_ID = "nlp.gateway.bearer"
 _BASE = "https://gw.test/v1"
 _TOKEN = "tok-test"
 _TEXT = "Melania Trump visited Kyiv; Russian forces shelled Oleshky."
@@ -397,7 +397,7 @@ def test_the_legacy_row_validates_unchanged_and_refuses_the_gateway_knobs():
                        ("relation_threshold", {"factory_kind": "number", "raw": 0.5})):
         body = _legacy_config()
         body[field] = raw
-        with pytest.raises(ValueError, match="innoai_gateway"):
+        with pytest.raises(ValueError, match="bearer_gateway"):
             NLPServiceConfig.model_validate(body)
 
 
@@ -464,3 +464,11 @@ async def test_the_factory_fails_loud_on_a_bad_knob():
         await build_nlp_client_from_stack_component(
             _COMPONENT_ID, registry_client=_registry(body), secrets_resolve=_secrets,
         )
+
+
+@pytest.fixture(autouse=True)
+def _gateway_env(monkeypatch):
+    """The gateway descriptors name their endpoint and models as ${env:NAME}."""
+    from tests._gateway_env import set_gateway_env
+
+    set_gateway_env(monkeypatch)

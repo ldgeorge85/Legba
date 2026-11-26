@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.eurostat.industrial_production_monthly": {
+      "source": "source_eurostat_industrial_production_monthly.yaml",
+      "state": "draft"
+    }
+  }
+}

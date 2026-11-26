@@ -520,7 +520,7 @@ def test_apparatus_lead_flag_is_idempotent():
 # turn instead of prose, and (pre-fix) that junk became BOTH body and title.
 # ---------------------------------------------------------------------------
 
-# The exact live junk string from the incident.
+# The exact live junk string that leaked.
 _LIVE_JUNK = '{"tool": "get_assessments", "args": {}}'
 
 
@@ -621,7 +621,7 @@ def test_json_lines_branch_needs_at_least_two_lines():
 
 @pytest.mark.asyncio
 async def test_narrate_leak_triggers_one_retry_and_recovers():
-    """The exact live incident shape: NARRATE's FINAL round (round_idx ==
+    """The exact live failure shape: NARRATE's FINAL round (round_idx ==
     _NARRATE_MAX_TOOL_ROUNDS - 1, where a tool call can never be EXECUTED
     regardless of whether its name is recognized — see the
     `round_idx < _NARRATE_MAX_TOOL_ROUNDS - 1` guard in the tool-routing

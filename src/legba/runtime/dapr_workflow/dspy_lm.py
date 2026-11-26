@@ -6,9 +6,8 @@ The GEPA optimizer (worker-only) needs an LM for its reflection + student
 calls. Stock dspy uses litellm for that. **We never invoke litellm** — this
 module routes every optimize-time LLM call through the project's existing
 ``LLMProviderHandler`` (the same provider + budget machinery the analysts
-use), so litellm stays an inert transitive dependency. This is an operator
-hard rule (see planning/OPTIMIZER_DSPY_GEPA_PLAN.md +
-``feedback-never-litellm-dspy-production``); it is enforced structurally —
+use), so litellm stays an inert transitive dependency. This is a hard rule,
+enforced structurally —
 this module lives in the worker-only ``dapr_workflow`` package and is never
 imported on the runtime inference hot path.
 
@@ -173,11 +172,14 @@ def make_provider_lm(
     bridge: _AsyncLoopBridge,
     *,
     model: str,
-    max_tokens: int = 1024,
     temperature: float = HOUSE_TEMPERATURE,
 ) -> Any:
     """Build a ``dspy.BaseLM`` that calls ``handler.chat_complete`` (async)
-    via ``bridge``. Imports dspy lazily (worker-only dep)."""
+    via ``bridge``. Imports dspy lazily (worker-only dep).
+
+    No ``max_tokens`` is passed to the handler (whatever dspy carries on its
+    own ``kwargs`` is ignored): the handler sends the alias's own maximum
+    output, so an optimizer call is never cut short by a number of ours."""
     import dspy
 
     class LegbaProviderLM(dspy.BaseLM):
@@ -186,7 +188,6 @@ def make_provider_lm(
                 model=model,
                 model_type="chat",
                 temperature=temperature,
-                max_tokens=max_tokens,
                 cache=False,
             )
             self._handler = handler
@@ -194,7 +195,6 @@ def make_provider_lm(
 
         def forward(self, prompt=None, messages=None, **kwargs):  # type: ignore[override]
             msgs, system = split_messages(prompt, messages)
-            mt = int(kwargs.get("max_tokens") or self.kwargs.get("max_tokens") or max_tokens)
             temp = float(
                 kwargs.get("temperature", self.kwargs.get("temperature", temperature))
             )
@@ -202,7 +202,7 @@ def make_provider_lm(
             try:
                 resp = self._bridge.run(
                     self._handler.chat_complete(
-                        msgs, system=system, max_tokens=mt, temperature=temp,
+                        msgs, system=system, temperature=temp,
                     ),
                     timeout=call_timeout or None,
                 )
@@ -275,7 +275,6 @@ def configure_gepa_lm(
         handler,
         bridge,
         model=state["model"],
-        max_tokens=int(state["max_tokens"]),
         temperature=float(state["temperature"]),
     )
     logger.info(
@@ -343,7 +342,7 @@ async def _build_handler(
     # it — the typed dump serializes enums to strings (identity.state='active')
     # which the model's strict is_instance_of[LifecycleState] field rejects.
     # The method.llm.primary StackRef is a {raw, factory_kind, expected_family}
-    # dict; max_tokens/temperature are bare scalars (or factory-wrapped).
+    # dict; temperature is a bare scalar (or factory-wrapped).
     llm_block = ((typed.get("method") or {}).get("llm")) or {}
     primary = llm_block.get("primary")
     if isinstance(primary, dict):
@@ -358,7 +357,6 @@ async def _build_handler(
             f"analyst {analyst_id!r} has no resolvable LLM component "
             "(method.llm.primary unset)"
         )
-    max_tokens = _scalar_option(llm_block.get("max_tokens"), default=1024)
     temperature = _scalar_option(llm_block.get("temperature"), default=HOUSE_TEMPERATURE)
 
     handler = await build_llm_handler_from_stack_component(
@@ -370,7 +368,6 @@ async def _build_handler(
         "handler": handler,
         "model": str(component_id),
         "component_id": str(component_id),
-        "max_tokens": int(max_tokens),
         "temperature": float(temperature),
         "pg": pg,
         "registry": registry,

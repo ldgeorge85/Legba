@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Integration tests for the P-11 optimizer-candidate review mutation.
+"""Integration tests for the optimizer-candidate review mutation.
 
 Covers the ``POST /api/v1/v3/optimizer/candidates/{id}/review`` endpoint
 added in :mod:`legba.data.registry.v3_api`.
@@ -95,7 +95,7 @@ def _india_analyst_body(descriptor_id: str) -> dict[str, Any]:
                 "input_type": "legba.x.IndiaIn",
                 "output_type": "legba.x.IndiaOut",
             },
-            "owner": "lewis@local",
+            "owner": "owner@local",
         },
         "subscription": {},
         "method": {

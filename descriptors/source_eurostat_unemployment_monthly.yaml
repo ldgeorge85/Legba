@@ -1,0 +1,137 @@
+# Eurostat's unemployment rate, seasonally
+# adjusted, total population, monthly (dataset une_rt_m), for the four
+# largest euro-area economies, as a SERIES. Ships DRAFT; the reference host
+# walks it to CONFIGURED (descriptors/LIFECYCLE.md), never active — activation
+# is an admin's call. Kind: series_api, `format: jsonstat`.
+#
+# WHY: the labour-market reading beside the inflation and policy-rate series
+# the archive already holds; one harmonised definition across countries.
+#
+# THE ENDPOINT. Eurostat dissemination API,
+# /api/dissemination/statistics/1.0/data/une_rt_m, with s_adj=SA, age=TOTAL,
+# sex=T, unit=PC_ACT (percent of the active population), geo=DE, FR, IT, ES and
+# lastTimePeriod=24. Checked 2026-11-25 (one GET, generic client identity,
+# lastTimePeriod=2): 200, application/json, ~3.7 KB, a JSON-stat 2.0 dataset
+# "Unemployment by sex and age - monthly data", updated 2026-11-24, dimensions
+# freq, s_adj, age, unit, sex, geo, time; the time codes were "2026-09" and
+# "2026-10". The reader turns each cell into a row whose fields are the
+# dimension ids, `value` and `status`. A request for the euro-area aggregate
+# under the code EA20 returned no cell for this dataset, so the aggregate is
+# not requested; the four countries are.
+#
+# SUBJECTS. A country's rate is subject_kind `country`, subject = the geo code
+# (the ISO 3166 alpha-2 the archive's country series use; DE, FR, IT, ES are
+# the same in both). UNIT: percent. Eurostat releases around the start of each
+# month and revises the latest months: every poll re-reads 45 + 120 days, so
+# a revised month is a new vintage and an unchanged re-read writes nothing. A
+# monthly series is always `insufficient` under series_change's daily band;
+# no rule is proposed for it.
+#
+# Licence, in the publisher's words
+# (https://ec.europa.eu/eurostat/web/main/help/copyright-notice): "Reuse of
+# statistical data, metadata, publications, and other dissemination tools
+# published on this website for commercial or non-commercial purposes is
+# authorised provided the source is acknowledged." robots.txt was not read.
+# Class: official (the EU statistical office).
+
+identity:
+  id: source.eurostat.unemployment_monthly
+  name: Eurostat — unemployment rate, seasonally adjusted, monthly (series)
+  kind: series_api
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: owner@local
+  created: "2026-11-25T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: [en]
+  tags: [unemployment, labour, macro, statistics, series, eu]
+  source_class: official
+  license_class: open_gov_attribution   # reuse authorised, source acknowledged
+  attribution: "Source: Eurostat, une_rt_m (Unemployment by sex and age - monthly data)"
+  access_class: public
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "53 10 * * *"            # daily; the release lands once a month
+  cooldown_seconds: 3600
+  jitter_seconds: 120
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data/une_rt_m"
+  params:
+    factory_kind: list
+    raw:
+      - ["geo", "DE"]
+      - ["geo", "FR"]
+      - ["geo", "IT"]
+      - ["geo", "ES"]
+      - ["s_adj", "SA"]
+      - ["age", "TOTAL"]
+      - ["sex", "T"]
+      - ["unit", "PC_ACT"]
+      - ["lastTimePeriod", "24"]
+  format:
+    factory_kind: text
+    raw: jsonstat
+  jsonstat_max_cells:
+    factory_kind: number
+    raw: 500
+  date_field:
+    factory_kind: text
+    raw: time
+  date_format:
+    factory_kind: text
+    raw: year_month
+  provenance_fields:
+    factory_kind: list
+    raw: [status]
+  outputs:
+    factory_kind: list
+    raw:
+      - series: eurostat.unemployment.rate_sa
+        value_field: value
+        subject_field: geo
+        unit: percent
+        period: month
+        subject_kind: country
+        methodology_version: eurostat-une-rt-m-sa-total/1
+  lag_days:
+    factory_kind: number
+    raw: 45
+  revision_days:
+    factory_kind: number
+    raw: 120
+  backfill_days:
+    factory_kind: number
+    raw: 730
+
+sink:
+  family: observation
+  config:
+    series:
+      - id: eurostat.unemployment.rate_sa
+        field: value
+        unit: percent
+        period: month
+        subject_kind: country
+        methodology_version: eurostat-une-rt-m-sa-total/1
+        description: "Unemployment rate, seasonally adjusted, total population, per cent of the active population, monthly (subject = the country's code in Eurostat's geo dimension)"
+
+pipeline:
+  ingestion_filters: []
+  enrichment: []
+  media: reference
+
+deps: {}
+
+subscription_policy: open

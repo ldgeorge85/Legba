@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """V-J (2026-08-28) — the HEDGED-CONFLICT defect, pinned by case, both ways.
 
-Source: ``planning/HARDFAIL_STEPCHANGE_CHECK_2026-08-27.md``, a read-only
+Source: a read-only
 adjudication of 13 of the 24 live ``absence_slice_contradicted`` hard fails on
 the ``2026-08-25/1`` stamp. Its tally was 5 true catches, 5 clear over-fires and
 3 borderline, and its §5 named the one template that recurred:
@@ -313,11 +313,10 @@ async def test_the_demotion_is_its_own_class_not_v_i5s() -> None:
 # THE LESSON, which is why these tests exist rather than a one-line diff: a
 # regression suite written in the same keyboard's characters cannot detect a
 # defect that lives in the producer's characters. The specimens below are
-# R3's ARCHIVED LIVE TEXT (planning/PROOF_ROUND_2026-08-29/mech/
-# hedged_conflict_livefire.json), copied byte-for-byte, U+2011 included.
+# ARCHIVED LIVE TEXT from a replay of the live compositions, copied byte-for-byte, U+2011 included.
 # ---------------------------------------------------------------------------
 
-#: Archived live composition prose — U+2011 throughout. R3 replayed all seven and
+#: Archived live composition prose — U+2011 throughout. A replay of all seven and
 #: recorded 0/7 firing as shipped, 4/7 with the fold applied.
 U2011_FIRES = (
     "A weakly‑supported read from the military‑posture desk claims no "
@@ -508,20 +507,17 @@ async def test_the_unenumerated_genuine_catches_keep_the_hard_class(
 # ---------------------------------------------------------------------------
 
 
-def test_the_stage_two_rubric_carries_the_two_domain_collision_negatives() -> None:
-    """§4 rows 6 and 7 — the sanctions-type conflation (a Kalimantan forest-fire
-    penalty read as trade coercion) and the civilian/military procurement
-    conflation (an EPR power station read as a military programme). Neither is
-    lexically decidable, so both ship as few-shot NEGATIVES worded from the
-    cases rather than as a fence in code."""
+def test_the_stage_two_rubric_carries_the_domain_collision_negative() -> None:
+    """A row that shares a WORD with the claim but is about a
+    different subject is not a violation. Neither case is lexically decidable,
+    so the rule ships in the prompt, with a neutral invented example; the two
+    real cases that taught it are in the judge regression set, so the prompt
+    does not anchor grading on those subjects."""
     system = V._ABSENCE_SLICE_JUDGE_SYSTEM
-    assert "DOMAIN COLLISION" in system
-    assert "Kalimantan" in system
-    assert "secondary sanctions" in system
-    assert "Second EPR site authorised for site preparations" in system
-    assert "CIVILIAN nuclear power station" in system
-    # It is an OVERRIDE rule, listed with the other two, and the lead-in counts.
-    assert "Three rules that override everything above" in system
-    # The two pre-existing overrides are untouched.
-    assert "CARVE-OUTS" in system
-    assert "EPISTEMIC QUALIFIERS" in system
+    assert "a different subject that shares a word with the claim" in system
+    assert "Read what the row is about" in system
+    for real in ("Kalimantan", "EPR", "2026-08-27"):
+        assert real not in system
+    # The exemption and confirmed-occurrence rules sit beside it.
+    assert "something the claim exempts" in system
+    assert "against a claim about confirmed occurrences" in system

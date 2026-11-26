@@ -1,4 +1,4 @@
-# worldview_panel/2 — worldview_panel/1 re-sized and re-judged (lane G-6).
+# worldview_panel/2 — worldview_panel/1 re-sized and re-judged.
 # Same shape as /1 (a blind map of worldview seats, a red team, a coverage
 # audit and a key-assumptions check, one rebuttal, a code sentence table, a
 # gate judge then three voting judges, a synthesis that keeps dissent). What
@@ -46,7 +46,7 @@ round:
       plane: llm.primary.openai_compat
       thinking: on
       reads: [{from: views.sealed, view: sentence_table}, {from: packet}]
-      output: position/1
+      output: challenge/1
       gates: [handed_rows]
       deadline_s: 180
       retries: 1
@@ -76,7 +76,7 @@ round:
     j_support:
       kind: judge
       card: cards/judges/support.md
-      plane: llm.verify.innoai_gemma.openai_compat
+      plane: llm.verify.gateway_judge.openai_compat
       family_rule: {differs_from: [worldview, red_team]}
       reads: [{from: table, view: sentence_table}]
       output: verdict/2

@@ -9,7 +9,8 @@
  * mode: the same UI states must POST the same bytes — key order included.
  *
  * The matrix covers what the panel can put on a turn: the three models, the
- * four window choices (the time band included), both grounding modes, pins
+ * time band's window (Consult sends the band's absolute ends, whatever its
+ * span — the `window` cases set the band), both grounding modes, pins
  * (manual and the ambient scope pin), the on-screen report (inside a frame),
  * "Drive the view" (present_case, which also moves the round cap), "Allow
  * changes this turn", a scope predicate and a round cap, and a follow-up turn
@@ -31,12 +32,14 @@ import { useWorldState } from '@/v4/world/worldState'
 import { registerFramePort, type FramePort } from '@/lib/panelActions'
 import { ConsultFrameProvider } from '@/components/ConsultFrameContext'
 import type { PanelRegistration } from '@/types'
+import { openConsultMenu } from '@/test/consultMenu'
 
 const PANEL = 'singleton:system.consult'
 const FIXTURE = resolve(dirname(new URL(import.meta.url).pathname), '__fixtures__/consultRequestBodies.json')
 const RECORD = process.env.LEGBA_RECORD_CONSULT_BODIES === '1'
 const NOW = Date.parse('2026-11-14T08:00:00.000Z')
 const HOUR = 3_600_000
+const BAND_HOURS = { '24h': 24, '168h': 168, '720h': 720 } as const
 
 function reg(): PanelRegistration {
   return {
@@ -178,11 +181,12 @@ async function ask(question: string, expected: number) {
 
 async function bodyFor(c: Case): Promise<string> {
   if (c.model) {
-    // an EXPLICIT pick (roll 84: a stored paid plane counts only with the pick marker)
+    // an EXPLICIT pick (a stored paid plane counts only with the pick marker)
     localStorage.setItem('legba_consult_model', c.model)
     localStorage.setItem('legba_consult_model_chosen', '1')
   }
-  if (c.window) localStorage.setItem('legba_consult_window', c.window)
+  // The window is the time band's: a case's window is the band's span, ending now.
+  if (c.window && c.window !== 'band') useWorldState.getState().setWindow(NOW - BAND_HOURS[c.window] * HOUR, NOW)
   if (c.recordOnly) localStorage.setItem('legba_consult_grounding', 'record_only')
   if (c.drive) useDriveMode.getState().setOn(true)
   if (c.frame) unregister = registerFramePort(FAKE_PORT)
@@ -200,6 +204,7 @@ async function bodyFor(c: Case): Promise<string> {
     )
   }
   if (c.scope !== undefined || c.rounds !== undefined) {
+    openConsultMenu()
     if (c.scope !== undefined) fireEvent.change(screen.getByTestId('consult-scope'), { target: { value: c.scope } })
     if (c.rounds !== undefined)
       fireEvent.change(screen.getByTestId('consult-max-rounds'), { target: { value: String(c.rounds) } })
@@ -210,13 +215,14 @@ async function bodyFor(c: Case): Promise<string> {
     expected += 1
     // a case turn moves the round cap only while drive is on; keep it on
   }
+  openConsultMenu()
   if (c.writes) fireEvent.click(screen.getByTestId('consult-allow-writes'))
   await ask(c.question ?? 'what moved this week?', expected)
   const all = consultBodies()
   return all[all.length - 1]
 }
 
-describe('M-1 — the desktop Consult POSTs byte-identical request bodies', () => {
+describe('The desktop Consult POSTs byte-identical request bodies', () => {
   const recorded: Record<string, string> = {}
   const fixture: Record<string, string> = !RECORD && existsSync(FIXTURE) ? JSON.parse(readFileSync(FIXTURE, 'utf8')) : {}
 

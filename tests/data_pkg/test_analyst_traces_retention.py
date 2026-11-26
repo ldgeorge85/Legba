@@ -21,6 +21,15 @@ import pytest_asyncio
 
 from legba.data.analysts.deterministic_handlers import analyst_traces_retention
 from legba.data.config import PostgresConfig
+from legba.data import trace_bulk_compact
+
+
+@pytest.fixture(autouse=True)
+def _compaction_off(monkeypatch):
+    """The retention handler also runs trace compaction when its switch is on.
+    These tests are about the purge only, so they switch compaction off
+    themselves rather than inheriting whatever the environment says."""
+    monkeypatch.delenv(trace_bulk_compact.ENV_SWITCH, raising=False)
 
 
 # ---------------------------------------------------------------------------

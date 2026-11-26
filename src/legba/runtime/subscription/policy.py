@@ -182,7 +182,7 @@ async def write_grant(
 ) -> str:
     """Record a ``grant`` subscription grant as a wiring_descriptor head row.
 
-    ``written_by`` is the granting principal's handle (lane 9; the caller
+    ``written_by`` is the granting principal's handle (the caller
     knows who it is acting for), or ``None``.
 
     Idempotent on (source, target): re-granting an existing active grant is a

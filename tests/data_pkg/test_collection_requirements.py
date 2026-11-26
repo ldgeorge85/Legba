@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""R-2 — collection requirements: gaps + the standing ``source_request``
+"""Collection requirements: gaps + the standing ``source_request``
 backlog become durable, provenance-carrying, reviewable COLLECTION
 REQUIREMENT proposals (migration 0113), written by the EXTENDED
 ``collection_gap`` analyst.
@@ -45,7 +45,7 @@ _ANALYST = "collection_gap_r2_test"
 
 
 def test_desk_iso2_is_the_desks_declared_subject_code():
-    # W10 SUBJECT-1: the subject ladder — the ONE geo code the profile declares
+    # The subject ladder — the ONE geo code the profile declares
     # for the desk, never a code parsed out of the id.
     assert cg._desk_iso2("country_watch_ml") == "ML"
     assert cg._desk_iso2("country_watch_ir") == "IR"
@@ -632,7 +632,7 @@ async def test_handle_source_request_idempotent_rerun(pg_pool, clean_slate):
 
 
 # ---------------------------------------------------------------------------
-# A-4 — the THIRD origin (`reference_gap`), written through THIS module's
+# The THIRD origin (`reference_gap`), written through THIS module's
 # writer. The design's three named properties: natural_key uniqueness under
 # re-detection, coexistence with a monthly `collection_gap` row for the same
 # desk x dimension, and degrade-not-break on any side-write failure.
@@ -708,7 +708,7 @@ def test_the_natural_key_carries_the_unit_so_two_desks_questions_are_two_needs()
 async def test_reference_gap_requirement_lands_through_the_shared_writer(
     pg_pool, clean_slate
 ):
-    """A-4 leg 1 through ``collection_gap``'s OWN writer: the candidate-source
+    """Leg 1 through ``collection_gap``'s OWN writer: the candidate-source
     cross-reference runs for this origin exactly as it does for the other two.
     """
     async with pg_pool.acquire() as conn:

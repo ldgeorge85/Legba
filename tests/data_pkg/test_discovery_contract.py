@@ -652,10 +652,10 @@ class TestDiscoveryKindRegistry:
         assert bundle.discover is None
 
     def test_first_party_kinds_register_when_present(self):
-        """Wave B (L-181 / L-182) lands kinds under
+        """First-party kinds live under
         ``legba.data.discovery.country_list_discovery`` and
         ``legba.data.discovery.file_sd_discovery``. They are NOT
-        required at L-180 time; the walker tolerates absence.
+        required; the walker tolerates absence.
         """
         registry = discover_discovery_kinds()
         # Pre-Wave-B: only the static sentinel is expected.

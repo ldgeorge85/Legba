@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Collection descriptor schema — a bounded, versioned HOLDING of the past
-(Program 7g §2, ``planning/PROGRAM_7G_COLLECTIONS_DESIGN_2026-09-25.md``).
+"""Collection descriptor schema — a bounded, versioned HOLDING of the past.
 
 A ``SourceDescriptor`` is a live feed: polled on a cadence, its silence a
 health signal, its arrival able to wake a reactive trigger, everything it
@@ -22,12 +21,12 @@ THREE THINGS THIS SCHEMA REFUSES, all fail-closed at validation:
 ``licence_class``
     Required, and drawn from the access-class vocabulary already on sources
     (:data:`legba.data.provenance.access.ACCESS_CLASSES`). A manifest without
-    a recorded class does not parse, so it cannot load (§D.6). The
+    a recorded class does not parse, so it cannot load. The
     ``licence:`` block beneath it must carry the holder, the licence name, a
     licence URL, the terms text and an attribution line per provider —
     "we did not write the licence down" is not a loadable state.
 ``firewall.excluded_from``
-    Required BY EQUALITY to the eight surfaces §2 fences a collection from
+    Required BY EQUALITY to the eight surfaces a collection is fenced from
     (:data:`FENCED_SURFACES`). Not "at least" — exactly: a manifest that
     quietly drops ``surge_detection`` from the list is refused, because the
     firewall is a declaration the registry checks and not a default it fills
@@ -85,7 +84,7 @@ CollectionId = Annotated[
 _DATE_RE = r"^\d{4}-\d{2}-\d{2}$"
 DateString = Annotated[str, Field(pattern=_DATE_RE)]
 
-#: §2 — the eight surfaces a collection is fenced from, in the design note's
+#: The eight surfaces a collection is fenced from, in a fixed
 #: order. ``firewall.excluded_from`` must name every one of them; the set is
 #: what the equality check compares against.
 FENCED_SURFACES: tuple[str, ...] = (
@@ -99,7 +98,7 @@ FENCED_SURFACES: tuple[str, ...] = (
     "surge_detection",
 )
 
-#: §2 — the readers that may opt in to history. Nothing reads history by
+#: The readers that may opt in to history. Nothing reads history by
 #: default; an opt-in reader takes an explicit ``origin_classes=`` argument.
 OPT_IN_READERS: tuple[str, ...] = (
     "consult",
@@ -109,7 +108,7 @@ OPT_IN_READERS: tuple[str, ...] = (
     "replay",
 )
 
-#: §2 — WHERE the holding comes from, and the ``origin_class`` each shape
+#: WHERE the holding comes from, and the ``origin_class`` each shape
 #: stamps on every row it writes. The map is the consistency rule: a
 #: manifest declaring ``archive_only`` cannot also declare
 #: ``backfill_native``.
@@ -124,7 +123,7 @@ HISTORY_CLASSES: frozenset[str] = frozenset(ORIGIN_SHAPE_CLASS.values())
 
 OriginShape = Literal["source_with_history", "source_without_history", "archive_only"]
 
-#: §2 — the loader kinds. The two ``series_*`` kinds are built (7g-1); the
+#: The loader kinds. The two ``series_*`` kinds are built; the
 #: two ``documents_*`` kinds are a DECLARED SEAM (SEAMS #62) — the schema
 #: accepts them so a manifest can be written and reviewed, and
 #: ``scripts/load_collection.py`` refuses them loudly at the top of the load
@@ -136,7 +135,7 @@ LoaderKind = Literal[
     "documents_cc_news",
 ]
 
-#: The loader kinds 7g-1 actually loads.
+#: The loader kinds actually loaded.
 SERIES_LOADER_KINDS: frozenset[str] = frozenset({"series_api", "series_csv"})
 
 #: The loader kinds that are a declared seam.
@@ -157,7 +156,7 @@ SubjectKind = Literal["country", "entity", "target", "global"]
 
 
 class CollectionState(str, Enum):
-    """``draft`` → ``reviewed`` → ``loaded`` → ``superseded`` (§2).
+    """``draft`` → ``reviewed`` → ``loaded`` → ``superseded``.
 
     Deliberately NOT :class:`legba.data.schemas.lifecycle.LifecycleState`: a
     holding is never "paused" and never "active". ``reviewed`` is the
@@ -625,7 +624,7 @@ class CollectionDescriptor(BaseModel):
             raise ValueError(
                 f"licence_class {v!r} is not in the access-class vocabulary "
                 f"{list(ACCESS_CLASSES)} — a collection whose class is not "
-                "recorded does not load (design note §D.6, fail-closed)"
+                "recorded does not load (fail-closed)"
             )
         return v
 
@@ -706,7 +705,7 @@ class CollectionDescriptor(BaseModel):
         return self
 
     def manifest_hash(self) -> str:
-        """The collection VERSION: the hash of the manifest (§2).
+        """The collection VERSION: the hash of the manifest.
 
         A collection version is the hash of its manifest and NOT of the whole
         descriptor, so re-approving a licence line or adding an open item

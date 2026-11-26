@@ -1,7 +1,7 @@
 /**
  * The supply-chain desk hook reads one timestamp per desk, so its findings
- * read is a summary-weight page (W11-F262: 8.56 MB of the live landing at full
- * weight after roll 80).
+ * read is a summary-weight page (8.56 MB of the live landing at full
+ * weight).
  */
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { renderHook, waitFor } from '@testing-library/react'

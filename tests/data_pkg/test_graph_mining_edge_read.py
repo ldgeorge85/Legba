@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Roll 85 — graph mining reads its edge set deterministically.
+"""Graph mining reads its edge set deterministically.
 
 The augment read ``LIMIT 20000`` with no ORDER BY while 36,443 world edges
 matched on live, so a plan-dependent ~45% of the brokerage graph was dropped

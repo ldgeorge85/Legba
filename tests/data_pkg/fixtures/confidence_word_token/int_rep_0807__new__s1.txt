@@ -1,0 +1,45 @@
+{
+  "title": "Veldmark - escalating dock protests over a berth-fee bill",
+  "body": "*As of 7 August 2026; slice covers the trailing 3 days to that date; 24 signals.*\n\n**BLUF:** Protests against the berth-fee bill have intensified in the capital, raising Veldmark's internal-stability risk to a moderate level.\n\n## What changed\n\nNo prior assessment exists for this three-day window, so this is the first report of large-scale street mobilisations in the desk's current collection.\n\n## Why it matters\n\nVeldmark's baseline instability is modest, but chronic fiscal strain and a polarised legislature create a background risk. The surge of several thousand demonstrators on 6-7 August, reported by the Example Port Gazette and two wire services, shows a sudden popular trigger that can erode confidence and pressure the authorities to act hard-line [1][2][4]. Police use of tear gas and water cannons demonstrates a state response that may deepen opposition resolve while also signalling a willingness to crack down [1][2]. The ruling bloc's concession - withdrawing the harbour-ownership chapter on 5 August - tempers the protest momentum, but the core grievance over berth fees remains unresolved, leaving the unrest trajectory open to further escalation.\n\n## What would change this read\n\nA credible report of defections or refusal-to-obey orders by a regular police unit would shift the assessment toward higher risk. The desk does not presently collect systematic insider reports; such intelligence would be needed to revise the verdict.\n\n## Indicators\n\n- Nationwide protest wave: sustained multi-city demonstrations against the berth-fee bill, reported on 6-7 August [1][2][4].\n- State-of-emergency: no declaration or communications shutdown observed in this window.\n- Security-force defection: no reports of police units refusing orders observed.\n",
+  "confidence": 0. nine,
+  "evidence": [
+    "1",
+    "2",
+    "4",
+    "12",
+    "21",
+    "24"
+  ],
+  "tags": [
+    "topic:internal_stability",
+    "severity:moderate"
+  ],
+  "indicators": [
+    {
+      "id": "security-force-defection",
+      "statement": "Example indicator statement",
+      "status": "not_observed",
+      "horizon_date": "21 August 2026",
+      "first_seen": "7 August 2026",
+      "citations": []
+    },
+    {
+      "id": "nationwide-protest-wave",
+      "statement": "Example indicator statement",
+      "status": "triggered",
+      "horizon_date": "14 August 2026",
+      "first_seen": "7 August 2026",
+      "citations": [
+        "1"
+      ]
+    },
+    {
+      "id": "state-of-emergency",
+      "statement": "Example indicator statement",
+      "status": "not_observed",
+      "horizon_date": "7 September 2026",
+      "first_seen": "7 August 2026",
+      "citations": []
+    }
+  ]
+}

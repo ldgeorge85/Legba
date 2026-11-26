@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# target country_watch_ht — the live head, folded into the tree 2026-10-04 (W6 SPLIT-1, DEC-13).
+# target country_watch_ht — the live head, folded into the tree.
 # It was registered by scripts/bringup_register_watch_country_targets.py (synthesised from iso_countries) + scripts/bringup_tag_targets.py (region/applicability tags);
 # scripts/bringup_register_descriptors.py now registers this file and nothing else does.
 # identity.version is the 16-zero placeholder: the registry stamps the content hash.
 # The live head also carries an inline `analyst:` block (analyst_ref null). It is
-# dead config: the runtime never reads it (X-1; 98d8ca54 removed it from every repo
+# dead config: the runtime never reads it (it has been removed from every repo
 # target file). This file leaves it out, so the bring-up dry-run reports this head as
 # would-update with that one difference until the block is dropped live.
 identity:
@@ -14,7 +14,7 @@ identity:
   id: country_watch_ht
   inherits: []
   name: Watch — Haiti
-  owner: watch_tier
+  owner: owner@local
   retire_after: null
   schema_uri: legba/target/2.0.0
   state: active

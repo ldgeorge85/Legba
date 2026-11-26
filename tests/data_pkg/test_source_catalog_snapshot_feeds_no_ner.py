@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Guard (W3 SRC-5): a SNAPSHOT catalog feed carries no NER stage.
+"""Guard: a SNAPSHOT catalog feed carries no NER stage.
 
 A snapshot feed (NWS active alerts, GDACS) returns the FULL current alert set
 on every poll. Enrichment runs before the write (``run_baseline`` then

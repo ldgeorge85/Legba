@@ -21,7 +21,7 @@ function draw(raw: Record<string, unknown>) {
   render(<ConsultContractBlock contract={c} />)
 }
 
-describe('ConsultContract (Q-2)', () => {
+describe('ConsultContract', () => {
   it('prints the reading the server took for ambiguous window words', () => {
     draw({
       window: {

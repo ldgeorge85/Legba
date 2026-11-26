@@ -168,8 +168,14 @@ class Registry:
             return r.json()
 
     def stack_component(self, component_id: str) -> dict[str, Any]:
+        from legba.data.schemas.env_refs import resolve_config_env_refs
+
         row = self.get(f"/api/v1/registry/stack/{component_id}")
-        cfg = (row.get("body") or {}).get("config") or {}
+        # ${env:NAME} endpoint and model fields resolve from this process's
+        # environment (source the instance's .env first); unset fails loudly.
+        cfg = resolve_config_env_refs(
+            (row.get("body") or {}).get("config") or {}, component_id=component_id,
+        )
 
         def raw(key: str) -> Any:
             v = cfg.get(key)
@@ -622,7 +628,7 @@ class Prices:
         if doc.get("verified_against_invoice") is not True or not doc.get("verified_by"):
             raise RuntimeError(
                 f"{path}: prices are not marked verified_against_invoice=true with "
-                "a verified_by — design §7 requires the invoice check before G1"
+                "a verified_by — the design requires the invoice check before G1"
             )
         row = (doc.get("models") or {}).get(model_name)
         if not isinstance(row, dict):

@@ -221,7 +221,7 @@ def _ego_sql(
         elif direction == "in":
             where.append(f"a.to_kind = ${kp} AND a.to_id = ${ip}")
         else:
-            # Parenthesised as ONE term (roll 84, found by P-7): bare, the OR
+            # Parenthesised as ONE term: bare, the OR
             # bound looser than the AND-joined plane and time filters, so
             # every plane's incoming arcs leaked into the result.
             where.append(

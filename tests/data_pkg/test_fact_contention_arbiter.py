@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Holes-B Wave 2 — the contested-claims arbiter (DETECT-ONLY, #101).
+"""The contested-claims arbiter (DETECT-ONLY, #101).
 
 Pure-logic (no live Postgres) tests for the deterministic arbiter:
 

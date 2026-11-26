@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W11-F103 — a transiently skipped entry never advances the cursor past itself.
+"""A transiently skipped entry never advances the cursor past itself.
 
-INCIDENT 2026-10-23: the hosted NLP service died, per-entry enrichment hung
-until the 12 s timeout, the timed-out entries were skipped ("the next poll
+Failure mode: the hosted NLP service dies, per-entry enrichment hangs
+until the 12 s timeout, the timed-out entries are skipped ("the next poll
 re-pulls it") — and the cursor advanced past them anyway, so the next poll
 never re-pulled them. These tests drive :class:`SourceCore.pull_once` against
 the in-memory doubles of ``test_source_actor_cursor`` (no DB, no network) with

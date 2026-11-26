@@ -230,7 +230,7 @@ def _g20_discovery_descriptor(discovery_id: str, template_id: str) -> TargetDesc
     body = {
         "identity": {
             "id": discovery_id,
-            "name": "G20 Per-Country Discovery (P-13 test)",
+            "name": "G20 Per-Country Discovery (test)",
             "schema_uri": "legba/target/2.0.0",
             "version": "0000000000000000",
             "abstraction_level": "L2",
@@ -474,7 +474,7 @@ def _source_discovery_descriptor(discovery_id: str, template_id: str, feeds: lis
     body = {
         "identity": {
             "id": discovery_id,
-            "name": "RSS feed-list source discovery (P-13 test)",
+            "name": "RSS feed-list source discovery (test)",
             "kind": "query_source_discovery",
             "schema_uri": "legba/source/1.0.0",
             "version": "0000000000000000",

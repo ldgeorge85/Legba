@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""``GET /v3/ledger/scorecard`` — the forecast ledger's scorecard (ST1-A/B).
+"""``GET /v3/ledger/scorecard`` — the forecast ledger's scorecard.
 
 Every sealed question with its status, due date, each arm's number, the
 spread between arms, the outcome and its evidence once resolved; from

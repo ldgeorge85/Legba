@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane G-6: the repair retry, verdict/2 judges, the calibration host rule,
+"""The repair retry, verdict/2 judges, the calibration host rule,
 the planted positions, decide-plane judges, the tool-read bound and the
 shadow gate on statement_gate.v3 — against fakes. No database, no model, no
 network.
@@ -21,7 +21,13 @@ from legba.data.rounds import judge_render as jr
 from legba.data.rounds.calibration import CalibrationBook, card_sha256, judge, save_book
 from legba.data.rounds.gates import GateContext, dates_in_evidence, numbers_in_evidence
 from legba.data.rounds.interpreter import Interpreter
-from legba.data.rounds.model_seats import LoopThread, ModelSeats, output_contract, render_prompt
+from legba.data.rounds.model_seats import (
+    LoopThread,
+    ModelSeats,
+    output_contract,
+    render_prompt,
+    render_repair,
+)
 from legba.data.rounds.repair import repair_note
 from legba.data.rounds.rows import parse_row
 from legba.data.rounds.seats import Dispatch, FrozenClock, SeatCall, SeatFailure, SeatReply, SyntheticSeats
@@ -142,6 +148,37 @@ def test_a_parse_failure_hands_the_parse_error_and_a_deadline_hands_nothing():
     assert note["kind"] == "parse" and "stance" in note["error"] and note["raw_head"]
     R.failure = "deadline"
     assert repair_note(R()) is None
+
+
+def test_a_parse_repair_shows_the_refused_reply():
+    note = {"attempt": 0, "kind": "parse",
+            "error": "unparseable: position/1: sentences.0.stance: Input should be 'supports'",
+            "raw_head": '{"sentences": [{"key": "k1", "stance": "agrees"}]}'}
+    user = render_repair(note)
+    assert "It could not be read:" in user
+    assert "Your refused reply began:" in user
+    assert '"stance": "agrees"' in user
+
+
+def test_parse_row_lists_every_validation_error():
+    bad = {"sentences": [
+        {"key": "k1", "text": "a", "stance": "agrees"},
+        {"key": "k2", "text": "b", "support": [{"ref_id": "r", "kind": "page"}]},
+    ]}
+    with pytest.raises(Exception) as info:
+        parse_row("position/1", bad)
+    msg = str(info.value)
+    assert "sentences.0.stance" in msg and "sentences.1.support.0.kind" in msg
+    assert "'supports'" in msg and "'signal'" in msg  # the allowed values are named
+
+
+def test_parse_row_caps_the_error_list():
+    bad = {"sentences": [{"key": f"k{i}", "text": "a", "stance": "x"} for i in range(12)]}
+    with pytest.raises(Exception) as info:
+        parse_row("position/1", bad)
+    msg = str(info.value)
+    assert "sentences.7.stance" in msg and "sentences.8.stance" not in msg
+    assert "4 more" in msg
 
 
 def test_the_contract_lists_closed_fields_and_says_not_to_copy_the_shape():

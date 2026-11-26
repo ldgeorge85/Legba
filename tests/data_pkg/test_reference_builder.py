@@ -883,7 +883,7 @@ async def test_a_refused_call_costs_no_tool_budget():
 @pytest.mark.asyncio
 async def test_a_measured_unreadable_host_leaves_discovery_but_keeps_its_tier():
     """Reuters is a wire and saying otherwise would be a lie about the source
-    ladder. It is also measured to serve this lane nothing, repeatedly, so a
+    ladder. It is also measured to serve this builder nothing, repeatedly, so a
     result pointing at it is not a lead — it is a budget sink."""
     assert tier_of("https://www.reuters.com/world/x") == 2      # tier UNCHANGED
     assert is_unfetchable("https://www.reuters.com/world/x")
@@ -1088,7 +1088,7 @@ async def _clear_target_heads(conn, targets: list[str]) -> None:
     """The reference roster admits a target with NO head or an ACTIVE one; a
     leftover DRAFT head (``test_research_web_evidence_e2e`` registers a
     ``country_watch_il`` one) drops it off the roster. These tests assume no
-    head, so they own that precondition (X4 NIGHTLY, W11-F50)."""
+    head, so they own that precondition (X4 NIGHTLY, )."""
     await conn.execute(
         "DELETE FROM target_descriptors WHERE descriptor_id = ANY($1::text[])", targets)
 
@@ -1823,7 +1823,7 @@ async def test_a_model_that_never_commits_yields_no_commit_within_the_cap(
         extras={RB.LLM_DEPS_EXTRA_KEY: llm,
                 RB.WEB_BINDING_DEPS_EXTRA_KEY: binding},
         as_of=_T0.isoformat(), reference_targets=[_TARGET],
-        # 3 s, not 1 s (roll 80): the wall-clock commit fires at 70 % of the
+        # 3 s, not 1 s: the wall-clock commit fires at 70 % of the
         # cap, and at 1 s a single round in flight across the 0.3 s window
         # under a loaded test host ran past the deadline first, so the build
         # stopped on the hard cap with no commit trigger (a timing flake, not
@@ -2288,7 +2288,7 @@ def test_the_outcome_of_this_run_lands_on_the_ledger_before_the_receipt_reads_it
 
 def test_the_env_wins_over_the_descriptor_knob(monkeypatch):
     """THE INVERSE of the two build walls, deliberately. This is the lever an
-    operator reaches for while the lane is stuck on one country, when a
+    operator reaches for while the builder is stuck on one country, when a
     descriptor PUT plus a re-register is the ceremony they cannot afford."""
     monkeypatch.setenv(ROSTER.RETRY_BACKOFF_ENV, "6")
     assert ROSTER.retry_backoff_hours(24) == (
@@ -2683,7 +2683,7 @@ async def test_the_receipt_this_tick_writes_is_the_ledger_the_next_tick_reads(
 async def test_an_operator_named_target_is_built_however_many_times_it_failed(
     pg_pool, roster_slate, monkeypatch, notes_root
 ):
-    """Naming a target is a person saying "build this one now". A lane that
+    """Naming a target is a person saying "build this one now". A builder that
     answered "not for another nineteen hours" would be obeying its own
     scheduler over the operator running it. The strike history still travels on
     the receipt, so they can see what they are asking for."""
@@ -2719,7 +2719,7 @@ async def test_a_backoff_of_zero_restores_the_old_relentless_behaviour(
 ):
     """The env is the incident lever and it wins over the descriptor knob. At 0
     the fence is off and the failing target is picked again immediately — which
-    is what the lane did before this fix, and is now something an operator has
+    is what the builder did before this fix, and is now something an operator has
     to ask for."""
     monkeypatch.setenv(RB.ENABLED_ENV, "1")
     monkeypatch.setenv(ROSTER.RETRY_BACKOFF_ENV, "0")
@@ -2751,7 +2751,7 @@ async def test_the_flag_is_standing_state_and_the_warning_is_an_event(
     pg_pool, roster_slate, monkeypatch, notes_root
 ):
     """`unbuildable_by_lane` stays on every receipt — any single row should show
-    which countries this lane cannot build. The paragraph that names the top-up
+    which countries this builder cannot build. The paragraph that names the top-up
     route is written only for a target THIS RUN attempted, so the one warning
     that tells a reader what to DO does not become the line they learn to skip.
     """
@@ -2787,7 +2787,7 @@ async def test_the_flag_is_standing_state_and_the_warning_is_an_event(
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_a_leftover_draft_head_does_not_drop_the_target_off_the_roster(pg_pool, clean_slate):
-    """X4 NIGHTLY (W11-F50): another file's draft ``country_watch_il`` head (owner
+    """X4 NIGHTLY: another file's draft ``country_watch_il`` head (owner
     ``test``) must not change this file's roster -- the slate removes it."""
     async with pg_pool.acquire() as conn:
         await conn.execute(

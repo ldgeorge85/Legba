@@ -286,7 +286,7 @@ def test_a_number_the_arithmetic_does_not_carry_denies_the_licence() -> None:
 def test_a_number_the_arithmetic_does_carry_survives_the_check() -> None:
     """The other direction, and it is what keeps condition 3 from being a ban on
     arithmetic: the counters the record publishes about itself ARE in the map,
-    which is P1's whole finding."""
+    which is the whole point."""
     decision = _decide(
         "The six carried reads [[ref:1]] outweigh the nothing that was shown "
         "and not carried [[ref:2]].",
@@ -532,7 +532,7 @@ async def test_the_licence_can_only_move_a_score_upward(monkeypatch) -> None:
 
 def test_a_licence_over_a_hard_verdict_is_counted_apart() -> None:
     """A relayed refusal to crown arrived as ``judge_contradicted`` — HARD — in
-    the live 09-04 12:00Z replay, and that is the ONLY way this train can move
+    the live 09-04 12:00Z replay, and that is the ONLY way this change can move
     the SEVERITY family. It gets its own counter precisely so the move is
     sizeable on its own rather than inferred from the score.
 

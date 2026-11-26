@@ -170,7 +170,7 @@ export function AlertActions({ id }: { id: string }) {
         // open, and the viewer may not act (a reader): say who can
         <Quiet testId="phone-alert-reader">A contributor or an admin can acknowledge or snooze an alert.</Quiet>
       ) : (
-        // Roll 87 (360 px): a closed episode takes no act — say so, rather
+        // At phone width a closed episode takes no act — say so, rather
         // than leave the page without its controls and without a reason.
         <Quiet testId="phone-alert-closed">This alert has closed, so there is nothing to acknowledge or snooze.</Quiet>
       )}

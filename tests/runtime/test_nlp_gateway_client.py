@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W11-F107 — the hosted-NLP client contract on the innoai gateway.
+"""the hosted-NLP client contract on the model gateway.
 
 legba-models (GLiREL/spaCy/DeBERTa/NLLB) is dead since 2026-10-22; the
 gateway serves entities, relations and zero-shot classify. These tests pin
@@ -46,10 +46,11 @@ from legba.runtime.nlp_client_factory import (
     resolve_nlp_component_id,
 )
 from legba.runtime.registry_client import RegistryHTTPClient
+from tests._gateway_env import GATEWAY_ENV
 
 _REPO = Path(__file__).resolve().parents[2]
-_YAML = _REPO / "descriptors" / "stack_component_nlp_innoai_gateway.yaml"
-_COMPONENT_ID = "nlp.innoai.gateway"
+_YAML = _REPO / "descriptors" / "stack_component_nlp_gateway_bearer.yaml"
+_COMPONENT_ID = "nlp.gateway.bearer"
 _BASE = "https://gw.test/v1"
 _TOKEN = "tok-test"
 _TEXT = "Cosmos 2612, operated by the Russian military, approached a US satellite."
@@ -131,7 +132,7 @@ async def test_extract_maps_relations_with_confidence_to_legacy_triples():
         "subject_start": None, "subject_end": None,
         "object_start": None, "object_end": None,
         "subject_confidence": 0.977, "object_confidence": 0.788,
-        # W11-F113: min(head, tail) — the relation is as sure as its weaker end.
+        # Min(head, tail) — the relation is as sure as its weaker end.
         "confidence": 0.788,
     }
     # A configured label comes back as the CONFIGURED surface, whatever the
@@ -394,7 +395,7 @@ async def test_ner_handler_emits_entities_and_relations_off_the_gateway():
     rels = out.payload["relations"]
     assert [(r["subject"], r["predicate"], r["object"]) for r in rels] == [
         ("Vladimir Putin", "leader of", "Russia")]
-    # W11-F113: the min endpoint score rides through NER's relation surface.
+    # The min endpoint score rides through NER's relation surface.
     assert rels[0]["confidence"] == 0.91
     assert handler._signals_failed == 0  # noqa: SLF001
 
@@ -443,9 +444,10 @@ def test_the_descriptor_validates_and_is_registered():
     assert model.state.value == "draft"
     assert model.schema_uri == "legba/stack/nlp_service/1.0.0"
     cfg = model.config
-    assert cfg.endpoint.raw == "https://api.innoai.net/v1"
-    assert cfg.api_key.raw == "llm.innoai.api_key"
-    assert cfg.provider.raw == "innoai_gateway"
+    # The endpoint is deployment data: the descriptor names the variable.
+    assert cfg.endpoint.raw == "${env:LEGBA_GATEWAY_API_ENDPOINT}"
+    assert cfg.api_key.raw == "llm.gateway.api_key"
+    assert cfg.provider.raw == "bearer_gateway"
     assert cfg.timeout_seconds.raw == 30
     assert cfg.api_user is None and cfg.api_pass is None
 
@@ -480,8 +482,8 @@ def test_the_legacy_component_still_validates_unchanged():
 
 
 @pytest.mark.parametrize("patch, needle", [
-    ({"provider": {"factory_kind": "text", "raw": "innoai_gateway"}}, "requires api_key"),
-    ({"api_key": {"factory_kind": "secret", "raw": "llm.innoai.api_key"}}, "api_user/api_pass"),
+    ({"provider": {"factory_kind": "text", "raw": "bearer_gateway"}}, "requires api_key"),
+    ({"api_key": {"factory_kind": "secret", "raw": "llm.gateway.api_key"}}, "api_user/api_pass"),
     ({"provider": {"factory_kind": "text", "raw": "spacy"}}, "must be"),
 ])
 def test_provider_and_auth_mode_must_agree(patch, needle):
@@ -522,8 +524,8 @@ async def test_the_factory_builds_the_gateway_client_from_the_descriptor():
         _COMPONENT_ID, registry_client=_registry(_COMPONENT_ID, body), secrets_resolve=secrets,
     )
     assert isinstance(client, GatewayNlpClient)
-    assert resolved == ["llm.innoai.api_key"]
-    assert client._endpoint == "https://api.innoai.net/v1"  # noqa: SLF001
+    assert resolved == ["llm.gateway.api_key"]
+    assert client._endpoint == GATEWAY_ENV["LEGBA_GATEWAY_API_ENDPOINT"]  # noqa: SLF001
     assert client._health_path == "/models"  # noqa: SLF001
     assert client._timeout == 30.0  # noqa: SLF001
     assert client.relation_labels == ["approached", "operated by"]
@@ -571,12 +573,12 @@ def test_the_component_id_knob(monkeypatch):
     assert resolve_nlp_component_id() == DEFAULT_NLP_COMPONENT_ID == "nlp.local.legba_models"
     monkeypatch.setenv("LEGBA_NLP_COMPONENT_ID", "  ")
     assert resolve_nlp_component_id() == DEFAULT_NLP_COMPONENT_ID
-    monkeypatch.setenv("LEGBA_NLP_COMPONENT_ID", "nlp.innoai.gateway")
-    assert resolve_nlp_component_id() == "nlp.innoai.gateway"
+    monkeypatch.setenv("LEGBA_NLP_COMPONENT_ID", "nlp.gateway.bearer")
+    assert resolve_nlp_component_id() == "nlp.gateway.bearer"
 
 
 async def test_the_registry_health_checker_probes_the_gateway_with_bearer(monkeypatch):
-    from legba.data.registry.health import HealthState, NLPServiceChecker, ResolvedConfig
+    from legba.data.registry.health import HealthState, StackHealthDispatcher
 
     seen: list[httpx.Request] = []
 
@@ -594,13 +596,22 @@ async def test_the_registry_health_checker_probes_the_gateway_with_bearer(monkey
 
     class _Resolver:
         async def resolve(self, secret_id: str) -> bytes:
-            assert secret_id == "llm.innoai.api_key"
+            assert secret_id == "llm.gateway.api_key"
             return _TOKEN.encode()
 
+    # Through the dispatcher, which resolves the ${env:NAME} endpoint first.
     cfg = NLPService.model_validate(yaml.safe_load(_YAML.read_text())).config
-    result = await NLPServiceChecker().check(
-        _COMPONENT_ID, ResolvedConfig(config=cfg, resolver=_Resolver()),
+    result = await StackHealthDispatcher().check_component(
+        _COMPONENT_ID, "nlp_service", cfg, _Resolver(),
     )
-    assert result.state == HealthState.HEALTHY
-    assert str(seen[0].url) == "https://api.innoai.net/v1/models"
+    assert result.state == HealthState.HEALTHY, result.detail
+    assert str(seen[0].url) == f"{GATEWAY_ENV['LEGBA_GATEWAY_API_ENDPOINT']}/models"
     assert seen[0].headers["authorization"] == f"Bearer {_TOKEN}"
+
+
+@pytest.fixture(autouse=True)
+def _gateway_env(monkeypatch):
+    """The gateway descriptors name their endpoint and models as ${env:NAME}."""
+    from tests._gateway_env import set_gateway_env
+
+    set_gateway_env(monkeypatch)

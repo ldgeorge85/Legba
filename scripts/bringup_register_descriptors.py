@@ -57,7 +57,7 @@ default plan is today's plan (``tests/test_profile.py`` asserts the equality).
 NOTHING (no head, no vocabulary row, no credibility seed). Run it against a
 live host after a roll: every live head should print ``unchanged``.
 
-NO DESCRIPTOR EVENT (lane N-R). The walker writes heads direct-DB through
+NO DESCRIPTOR EVENT. The walker writes heads direct-DB through
 ``_p17_registrar.open_registry``, whose registry has no bus connection, so a
 registration emits no ``descriptor.*`` event: the runtime picks a new or
 changed head up at the reconcile loop's periodic resync (5 minutes), not at
@@ -67,9 +67,8 @@ create_actor`` for a head this walker registered.
 Besides descriptor heads it seeds what the absorbed registrars seeded:
   * ``vocabulary_entries`` rows for the non-builtin analyst kinds
     (:data:`NON_BUILTIN_ANALYST_KINDS`; ON CONFLICT DO NOTHING),
-  * ``vocabulary_entries`` rows for the four TAXON families (W7 TAXON-1:
-    ``salience_class``, ``collection_gap_kind``, ``band``, ``source_layer``)
-    from their code literals in :mod:`legba.data.taxon_families` (ON CONFLICT
+  * ``vocabulary_entries`` rows for the four TAXON families (``salience_class``,
+    ``collection_gap_kind``, ``band``, ``source_layer``) from their code literals in :mod:`legba.data.taxon_families` (ON CONFLICT
     DO NOTHING — an operator's deprecation or note edit wins),
   * ``vocabulary_entries`` rows from every vocabulary seed file
     (``descriptors/vocabulary_<family>.yaml``, ``identity.schema_uri``
@@ -77,7 +76,7 @@ Besides descriptor heads it seeds what the absorbed registrars seeded:
     operator-deprecated row stays deprecated — :func:`seed_vocabulary`), and
   * ``source_credibility`` rows from every source-batch module's
     ``seed_credibility`` (ON CONFLICT DO NOTHING — operator overrides win).
-The P2-T7 bounded-unit drift guard runs over every analyst before any write.
+The bounded-unit drift guard runs over every analyst before any write.
 
 Transport: direct-DB via :mod:`_p17_registrar` (``DescriptorRegistry`` against
 ``LEGBA_DATA_PG_DB``; unset defaults to ``legba_pivot_test`` — deploy.sh pins
@@ -414,7 +413,7 @@ def validate(p: Planned) -> Any:
 
 
 def assert_unit_eval_coverage(planned: list[Planned]) -> None:
-    """The P2-T7 bounded-unit drift guard, over every planned analyst."""
+    """The bounded-unit drift guard, over every planned analyst."""
     from bringup_register_analysts import _assert_unit_eval_coverage
 
     _assert_unit_eval_coverage(
@@ -810,7 +809,7 @@ async def run(
     await seed_taxon_families(pg, dry_run=dry_run)
     await seed_vocabulary(pg, vocab_seeds, dry_run=dry_run)
     if not dry_run:
-        # K-1: the registry's vocabulary snapshot was taken when it opened,
+        # The registry's vocabulary snapshot was taken when it opened,
         # BEFORE the seeds above landed. A descriptor declaring a family seeded
         # in this same run (a source's scope.classifications, a target's
         # scope.signal_tags) would otherwise be refused as "family unloaded"
@@ -866,7 +865,7 @@ def main(argv: list[str] | None = None) -> int:
                          "(default: $LEGBA_PROFILE, "
                          "else profiles/geopolitics)")
     ap.add_argument("--id", action="append", dest="ids", metavar="DESCRIPTOR_ID",
-                    help="T-2: register only these descriptor ids (repeatable; "
+                    help="Register only these descriptor ids (repeatable; "
                          "an id the walk does not plan is refused)")
     args = ap.parse_args(argv)
     profile = load_profile(resolve_profile(args.profile, root=REPO_ROOT))

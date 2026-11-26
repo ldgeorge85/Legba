@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""V3/P6 — the event tools through the REAL governed path (spec §6.1 note:
-"Test the governed path, not only the direct port").
+"""The event tools through the REAL governed path (test the governed path,
+not only the direct port).
 
 Each test runs ``AgencyToolBinding.run_tool`` end-to-end — the three-way
 gate (resolve ∩ allow ∩ applicability), the governor, the pack handler,

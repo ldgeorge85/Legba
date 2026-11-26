@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Translation on the innoai gateway's chat model (W11-F109) — the pure parts.
+"""Translation on the model gateway's chat model — the pure parts.
 
 The gateway has no translation route, but it serves a multilingual chat model
 (alias ``fast``: thinking off) on ``POST /chat/completions``.

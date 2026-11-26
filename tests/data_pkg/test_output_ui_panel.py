@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""L-192 — `legba.data.outputs.ui_panel` registration tests.
+"""`legba.data.outputs.ui_panel` registration tests.
 
-Real Postgres (the shared `migrated_pg` fixture). Per L-001 the data-pkg
+Real Postgres (the shared `migrated_pg` fixture). Per the data-pkg
 test suite runs against the live substrate; the ui_panel registry is
 substrate-typed, so unit-only tests would not validate the contract that
 matters (the SQL round-trip + unique-index guard).
@@ -16,7 +16,7 @@ Covers:
   * ``register_from_descriptor`` materializes one row per ``ui_panel``
     entry on a descriptor's ``outputs`` block.
   * ``list_by_mode`` filters mode-conditionally; the column-based filter
-    is the load-bearing path for L-204 bundle-time mode strip.
+    is the load-bearing path for bundle-time mode strip.
   * ``list_by_layout_slot`` resolves a preset-slot to its panel (or
     history with ``include_retired=True``).
   * Retirement — ``retire_for_descriptor`` soft-deletes every row tied
@@ -278,7 +278,7 @@ async def pg_conn(migrated_pg: PostgresConfig):
 
 
 def _outputs_for_target(target_id: str) -> list[dict]:
-    """Materialize a realistic L-108 §3 outputs block for a target."""
+    """Materialize a realistic §3 outputs block for a target."""
     return [
         {"kind": "ui_panel", "config": {
             "panel": "panels.target_overview",
@@ -462,7 +462,7 @@ async def test_list_by_layout_slot_returns_active_holder(pg_conn):
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_list_by_layout_slot_includes_retired_when_requested(pg_conn):
-    """Layout restore (L-204) wants the history chain via include_retired."""
+    """Layout restore wants the history chain via include_retired."""
     target = f"t_{uuid4().hex[:8]}"
     slot = f"dashboard.{target}.slot"
 

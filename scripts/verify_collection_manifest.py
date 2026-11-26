@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Program 7g — verify a collection manifest against the live providers.
+"""Verify a collection manifest against the live providers.
 
 A collection manifest (``descriptors/collection_*.yaml``) claims, per series
 and per subject, what a provider actually holds: the first and last year with
@@ -9,7 +9,7 @@ a value, and how many years of the declared window are empty. This script is
 what makes that claim checkable. It reads the manifest, goes to the provider,
 and prints the coverage it MEASURES beside the coverage the file DECLARES.
 
-Why it exists rather than a comment in the YAML: Program 7g's whole premise is
+Why it exists rather than a comment in the YAML: The whole premise is
 that a number Legba cites is a number Legba fetched. A manifest that says
 "Iran, 2016-2024, one null" is worth nothing if nobody ever re-ran the fetch —
 and a provider that silently freezes a series (EIA's international crude trade

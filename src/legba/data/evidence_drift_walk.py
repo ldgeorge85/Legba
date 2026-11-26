@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The DEPENDANT WALK of a superseded page version (lane D-1) — bounded.
+"""The DEPENDANT WALK of a superseded page version — bounded.
 
 What relied on version V of address A, by depth:
 

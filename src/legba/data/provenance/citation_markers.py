@@ -90,7 +90,7 @@ _REF_MARKER_RE = re.compile(r"\[\[ref:(\d+)\]\]")
 # C1 (2026-07-03) — citation-marker drift normalization, applied to the body at
 # the TOP of _segment_claims so BOTH the section-segmentation and the [N] matching
 # that consumes the spans see ASCII markers. (a) full-width / CJK lenticular
-# brackets the core plane (gpt-oss / Qwen) non-deterministically emits — mirrors
+# brackets the core plane (the core model / Qwen) non-deterministically emits — mirrors
 # inline_target._VARIANT_CITATION_RE; (b) a parenthesized comma-list of TWO OR
 # MORE numbers, ``(57, 87)`` -> ``[57][87]``, while a single-number paren
 # ``(2023)`` is LEFT ALONE (year false-positive). verify.py stays stdlib-only — no
@@ -109,7 +109,7 @@ _BRACKET_CITATION_LIST_RE = re.compile(
     r"[\[【［〔〖](\s*\d{1,3}(?:\s*[,，、]\s*\d{1,3})+\s*)[\]】］〕〗]"
 )
 
-# W11-F86 — a run of citation markers that sits AFTER a sentence terminator,
+# A run of citation markers that sits AFTER a sentence terminator,
 # optionally behind a closing quote, with or without whitespace between:
 # ``…fighters. [[ref:1]]`` / ``…zones.\n[21]`` (P7-F1(2), the original rule),
 # and the two shapes that rule missed — ``…13 October.[11] Kharkiv …`` (no
@@ -358,7 +358,7 @@ def normalize_inline_citation_markers(text: str) -> str:
 
     NOT the same function as :func:`_normalize_verify_markers`, deliberately.
     That one additionally reads a bare parenthesized number list ``(57, 87)``
-    and a bracketed one ``[11, 47]`` (W11-F86) as one marker per member, and
+    and a bracketed one ``[11, 47]`` as one marker per member, and
     re-spells ``[no_citation]``; all three are GRADE-time readings of prose
     already written, and applying them at write time would rewrite an
     author's punctuation. The two differ by those three rules and nothing

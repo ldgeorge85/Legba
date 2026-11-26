@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""ST1-A/B — Brier scoring and ``GET /api/v1/v3/ledger/scorecard``.
+"""Brier scoring and ``GET /api/v1/v3/ledger/scorecard``.
 
 Hand-computed Brier cases; the single-arm and void rules; the payload before
 any resolution (useful and honest: numbers, spread, due dates, "0 resolved")
@@ -45,7 +45,7 @@ def test_brier_is_squared_error_and_void_is_none():
 def test_the_thresholds_are_the_shared_constants():
     assert fs.CALIBRATION_BINS_MIN_SAMPLE == ch.ACUTE_PILOT_MIN_SAMPLE
     src = pathlib.Path(fs.__file__).read_text()
-    assert "30" not in src.replace("2026", "")      # never hard-coded again (W11-F189)
+    assert "30" not in src.replace("2026", "")      # never hard-coded again
 
 
 def _row(slug, due, numbers, outcome=None, *, spec=None, exogenous=True):
@@ -126,7 +126,7 @@ def test_from_five_resolved_brier_per_number_per_arm_with_n_void_excluded_single
     assert [n["brier"] for n in fa["numbers"]] == [pytest.approx(0.04), pytest.approx(0.16)]
     assert fa["baselines"] == [{"name": "climatological", "p": 0.5, "brier": 0.25}]
     arms = {a["issuer_kind"]: a for a in sc["arms"]}
-    # operator (0.2^2 + 0.3^2 + 3 x 0.5^2) / 5 = 0.176 ; clef (0.4^2 + 0.1^2 + 3 x 0.25) / 5 = 0.184
+    # operator (0.2^2 + 0.3^2 + 3 x 0.5^2) / 5 = 0.176 ; decision arm (0.4^2 + 0.1^2 + 3 x 0.25) / 5 = 0.184
     assert arms["operator"]["n"] == 5 and arms["operator"]["mean_brier"] == pytest.approx(0.176)
     assert arms["clef_arm"]["mean_brier"] == pytest.approx(0.184)
     assert arms["operator"]["baseline_mean_brier"] == 0.25

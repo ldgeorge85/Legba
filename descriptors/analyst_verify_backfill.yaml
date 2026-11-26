@@ -1,4 +1,4 @@
-# verify_backfill — the standing sweep over findings whose verify leg never ran (W11-F84).
+# verify_backfill — the standing sweep over findings whose verify leg never ran.
 #
 # Every rolling deploy recreates the runtime actor host. An analyst run in flight
 # at that moment has already WRITTEN its finding, but the faithfulness verify leg
@@ -34,7 +34,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: active
-  owner: verify_backfill
+  owner: owner@local
 
 subscription:
   # No `targets` block → META analyst: one global sweep per cadence tick over

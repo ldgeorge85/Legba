@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """What a fetched page STATES about itself — read from its markup, never guessed.
 
-Lane I-2. One lxml parse of the page (in the caller's worker thread) yields:
+One lxml parse of the page (in the caller's worker thread) yields:
 
 * ``title`` — ``og:title``, else the JSON-LD article ``headline``, else the
   first ``<h1>`` of the content region, else ``<title>``;

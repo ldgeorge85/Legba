@@ -403,7 +403,7 @@ describe('rewriteSerializedLayout — the fromJSON pre-pass', () => {
     } as unknown as SerializedDockview
   }
 
-  it('UI-B3 — a RETIRED bound tile becomes the subject page on its tab, registration and all', () => {
+  it('A RETIRED bound tile becomes the subject page on its tab, registration and all', () => {
     const out = rewriteSerializedLayout(boundLayout(['target.findings:lane_hormuz']))
     expect(viewsOf(out.layout)).toEqual(['subject.page:lane_hormuz'])
     expect(out.rewritten).toEqual(['target.findings:lane_hormuz'])
@@ -421,7 +421,7 @@ describe('rewriteSerializedLayout — the fromJSON pre-pass', () => {
     expect(panel.title).toBe(`${PANEL_REGISTRY['subject.page'].definition.defaultTitle} · lane_hormuz`)
   })
 
-  it('UI-B3 — one subject\'s several retired tiles collapse onto ONE page; another subject keeps its own', () => {
+  it('One subject\'s several retired tiles collapse onto ONE page; another subject keeps its own', () => {
     const out = rewriteSerializedLayout(
       boundLayout(['target.overview:country_g20_br', 'target.claims:country_g20_br', 'target.desk_brief_page:lane_hormuz']),
     )
@@ -433,7 +433,7 @@ describe('rewriteSerializedLayout — the fromJSON pre-pass', () => {
     expect(panels['subject.page:lane_hormuz'].params.tab).toBe('brief')
   })
 
-  it('UI-B3 — each of the eight retired per-subject ids resolves onto its subject page tab', () => {
+  it('Each of the eight retired per-subject ids resolves onto its subject page tab', () => {
     const expected: Record<string, string> = {
       'target.overview': 'runtime',
       'target.signals': 'signals',

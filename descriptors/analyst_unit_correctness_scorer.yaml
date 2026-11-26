@@ -1,4 +1,4 @@
-# unit_correctness_scorer — the per-unit CORRECTNESS scorer (P2-T5, rewired M-1).
+# unit_correctness_scorer — the per-unit CORRECTNESS scorer.
 #
 # A `deterministic`-kind META analyst (sub_handler=unit_correctness_scorer).
 # Phase 2 measures each small reasoning UNIT individually, and "was the unit's
@@ -8,7 +8,7 @@
 # cannot see that, and the 2026-07-28 gold-set round measured exactly it —
 # operator correctness ~0.625 against a same-window faithfulness ~0.92.
 #
-# TWO AXES, and M-1 (2026-08-03) moved the headline between them.
+# TWO AXES; the headline moved between them.
 #
 # PRIMARY — the OPERATOR gold set (`correctness_labels`, migration 0096): the
 # weekly labeling loop's per-finding semantic verdicts. Judge-independent, and
@@ -65,7 +65,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: active
-  owner: p2_t5_unit_correctness
+  owner: owner@local
 
 subscription:
   # META analyst: one global sweep per tick over the bounded units' findings +

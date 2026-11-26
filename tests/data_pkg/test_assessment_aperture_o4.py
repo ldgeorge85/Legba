@@ -173,7 +173,7 @@ def test_the_offsets_are_utf16_exact_like_every_sibling() -> None:
 
 def test_a_sentence_that_names_a_declared_unit_passes() -> None:
     """The direction that matters. Naming what the record could not carry is the
-    behaviour the whole train exists to reward, and it must cost nothing."""
+    behaviour the whole change exists to reward, and it must cost nothing."""
     body = _body(NAMED_SENTENCE)
     marks, _ = _marks(body)
     assert _guesses(marks) == []
@@ -346,7 +346,7 @@ def test_the_router_takes_the_aperture_sentence_off_the_slice() -> None:
 
 
 def test_the_route_exclusion_demotes_a_hard_judge_verdict_to_soft() -> None:
-    """The contract this lane keeps: a marked guess is a SOFT finding. The
+    """The contract: a marked guess is a SOFT finding. The
     reason V-I5 substitutes is already classified, and it is not the hard one."""
     assert fail_class_for_reason("absence_slice_contradicted") == FAIL_CLASS_HARD
     assert (
@@ -370,12 +370,13 @@ class _Response:
         self.usage = _Usage()
 
 
-#: The V-B stage-2 system prompt's own opening words. The discriminator is the
-#: EXACT phrase rather than the word "slice", because the V3 ABSENCE RUBRIC —
-#: which a body like this one routes its negatives to — also says "slice", and a
-#: double that could not tell the two judge calls apart would report the rubric
-#: partition as a slice consultation and pass this file for the wrong reason.
-_STAGE2_MARKER = "ACTUAL INPUT SLICE"
+#: The V-B stage-2 system prompt, matched by IDENTITY. A phrase inside it would
+#: silently stop matching the next time the prompt is reworded, and a double
+#: that could not tell the stage-2 call from the absence rubric partition would
+#: report one as the other and pass this file for the wrong reason.
+from legba.data.provenance.verify import (  # noqa: E402
+    _ABSENCE_SLICE_JUDGE_SYSTEM as _STAGE2_SYSTEM,
+)
 
 _NUMBERED_CLAIM_RE = re.compile(r"^\s*\d+\.\s", re.MULTILINE)
 
@@ -394,7 +395,7 @@ class _SliceJudge:
     async def chat_complete(self, messages, *, max_tokens=None, temperature=None,
                             system=None, **kw):
         prompt = messages[0]["content"]
-        if _STAGE2_MARKER in (system or ""):
+        if system == _STAGE2_SYSTEM:
             self.slice_calls += 1
             return _Response(json.dumps(self._slice or {}))
         n = len(_NUMBERED_CLAIM_RE.findall(prompt))

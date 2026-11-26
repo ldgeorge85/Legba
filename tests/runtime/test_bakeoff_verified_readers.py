@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """X3/G0 — the bake-off's read scopes, on the REAL driver.
 
-Arm C of planning/reviews/BAKEOFF_DESIGN.md reads ONLY the findings a
+Arm C of the bake-off design reads ONLY the findings a
 composition would admit, and opens only the signals those findings cite. These
 tests seed ``analyst_outputs`` + ``signals`` in the ephemeral migrated database
 and read them back through the real ``PostgresQdrantSubstrateQueryPort`` and

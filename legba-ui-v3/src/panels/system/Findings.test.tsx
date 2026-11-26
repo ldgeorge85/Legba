@@ -225,7 +225,7 @@ beforeEach(() => {
   closeSpy.mockClear()
 })
 
-describe('Live Feed (reformed, S7-T4)', () => {
+describe('Live Feed (reformed)', () => {
   it('renders findings from the mocked page (intelligence stream)', async () => {
     stubFetch()
     render(wrap(<FindingsFeedPanel registration={reg()} scope={{}} mode="personal" />))
@@ -272,10 +272,10 @@ describe('Live Feed (reformed, S7-T4)', () => {
     // X4 READPATH — a live-tail finding arrived ahead of its verify pass.
     expect(
       within(screen.getByTestId('finding-f-live')).getByTestId('unverified-state').textContent,
-    ).toBe('unverified · judge pending')
+    ).toBe('not yet checked')
   })
 
-  it('X4 READPATH — the badge line carries the registry state of a finding with no verify verdict', async () => {
+  it('the badge line carries the registry state of a finding with no verify verdict', async () => {
     const state = (score_state: 'pending' | 'absent', reason: string) => ({
       score_state,
       since: '2026-06-03T10:00:00+00:00',
@@ -304,8 +304,8 @@ describe('Live Feed (reformed, S7-T4)', () => {
     render(wrap(feed()))
     await waitFor(() => expect(screen.getByTestId('finding-f-low')).toBeInTheDocument())
     const mark = (id: string) => within(screen.getByTestId(`finding-${id}`)).queryByTestId('unverified-state')
-    expect(mark('f-low')?.textContent).toBe('unverified · judge pending')
-    expect(mark('f-crit')?.textContent).toBe('unverified · not judged')
+    expect(mark('f-low')?.textContent).toBe('not yet checked')
+    expect(mark('f-crit')?.textContent).toBe('not checked')
     // A judged row: the verdict badge speaks; no unverified mark.
     expect(mark('f-judged')).toBeNull()
     // A verify-exempt row: its badge already reads `unverified — structural`.
@@ -765,7 +765,7 @@ describe('Live Feed — SCOPE filters, FOCUS highlights (defect 3, redone)', () 
   })
 })
 
-describe('Live Feed — the age is off the headline line (X4/D4, W11-F74)', () => {
+describe('Live Feed — the age is off the headline line', () => {
   it('the age rides the meta line, not the title row that carries the headline', async () => {
     stubFetch()
     render(wrap(feed()))

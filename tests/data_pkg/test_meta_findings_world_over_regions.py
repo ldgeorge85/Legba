@@ -675,7 +675,7 @@ async def test_world_run_no_gaps_stamps_coverage_without_block_or_gaps_key():
 
 
 # ---------------------------------------------------------------------------
-# H-3c — a DECLARED thematic lane floored/absent is a NAMED gap, not silent
+# A DECLARED thematic lane floored/absent is a NAMED gap, not silent
 # ---------------------------------------------------------------------------
 
 

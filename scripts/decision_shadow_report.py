@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Decision-shadow report (W11-F108) — READ-ONLY.
+"""Decision-shadow report — READ-ONLY.
 
 Reads ``decision_shadow_ledger`` (migration 0238) for one leg over a window and
 prints, overall and per analyst:
@@ -17,9 +17,9 @@ prints, overall and per analyst:
     SHARE of all the gate's yes;
   * agreement BY DAY (UTC).
 
-W11-F148: every figure is grouped by the (``gate_component_id``,
+Every figure is grouped by the (``gate_component_id``,
 ``shadow_component_id``) pair the ROWS carry, and printed with it. On
-2026-11-05 the roles swapped (clef-flash the gate, the chat judge its shadow),
+2026-11-05 the roles swapped (the decision model the gate, the chat judge its shadow),
 so which model held which role is read off each row, never assumed. A chat
 shadow ledgers NULL ``shadow_p_yes``: its rows count toward agreement and the
 confusion like any other, and its calibration section says it has no p_yes.
@@ -36,7 +36,7 @@ The DSN is the one every other host script that reads the live database uses
 (``scripts/rejudge_floor_critiques.py`` and friends):
 ``legba.data.config.PostgresConfig.from_env().dsn`` — ``LEGBA_DATA_PG_*`` over
 ``POSTGRES_*`` over the compose defaults, with the repo-root ``.env`` loaded at
-import and never overriding the shell (W11-F115: a private resolver here never
+import and never overriding the shell (a private resolver here once never
 loaded the ``.env`` and had no password default, so without ``--env-file`` it
 connected with no password and the host run failed authentication).
 ``--env-file`` names a different ``.env`` to load first, the same way. The
@@ -93,8 +93,8 @@ SELECT coalesce(analyst_id, '(none)')                          AS analyst_id,
  ORDER BY 1, 2, 3, 4
 """
 
-# W11-F148 — agreement BY DAY, per (gate, shadow) pairing: the roles swapped on
-# 2026-11-05 (clef-flash gate, the chat judge its shadow), so a day is only
+# Agreement BY DAY, per (gate, shadow) pairing: the roles can swap
+# (decision-model gate, the chat judge its shadow), so a day is only
 # comparable with a day of the same pairing, and the pairing is read off the
 # row, never assumed.
 _BY_DAY_SQL = """
@@ -156,7 +156,7 @@ def summarize(
     Pure — the report's arithmetic, testable without a database. Each key is
     one (analyst, gate component, shadow component) group, and its record
     carries ``analyst_id`` / ``gate_component_id`` / ``shadow_component_id``
-    as the ROWS named them (W11-F148: the roles swap, so the report never
+    as the ROWS named them (the roles swap, so the report never
     assumes which model was the gate). ``ALL`` sums the groups (latency is
     re-weighted by its own count, never averaged of averages); its pairing
     reads :data:`MIXED` when the window holds more than one."""
@@ -284,7 +284,7 @@ def render(summary: Mapping[str, Mapping[str, Any]], *, leg: str,
             "",
         ]
         if not any(c["rows"] for c in r["deciles"].values()):
-            # W11-F148 — a chat shadow gives no p_yes; say so rather than
+            # A chat shadow gives no p_yes; say so rather than
             # print ten rows of zeros that read as a dead decision model.
             lines.append("_No p_yes on these rows — the shadow component gave none "
                          "(a chat shadow), or nothing answered._")
@@ -303,7 +303,7 @@ def render(summary: Mapping[str, Mapping[str, Any]], *, leg: str,
 
 
 def resolve_dsn(env_file: str | None = None) -> str:
-    """The live-database DSN, from the shared resolver (W11-F115).
+    """The live-database DSN, from the shared resolver.
 
     ``PostgresConfig.from_env()`` is what the host scripts that work use; this
     report used to assemble its own connect kwargs and drifted from it. An

@@ -52,7 +52,7 @@ identity:
                                       # "paused until token" design described above —
                                       # production_gauge.descriptor_state_drift. If this source
                                       # is revived, follow the OPERATOR FLIP steps from `retired`.
-  owner: s1_units_sources
+  owner: owner@local
   created: "2026-07-02T00:00:00Z"
 
 scope:
@@ -62,7 +62,7 @@ scope:
   languages: [en]
   tags: [conflict, armed_conflict, political_violence, fatalities, events, structured, global]
   source_class: analysis           # S1-T9/S1-T8 reconcile — research/data project (coded conflict-event data), mirrors ACLED
-  access_class: public          # Wave-E — CC BY 4.0 (docs/DATA_SOURCES.md's licence note): attribution required on re-export, but no read/commercial restriction, unlike ACLED
+  access_class: public          # CC BY 4.0 (docs/DATA_SOURCES.md's licence note): attribution required on re-export, but no read/commercial restriction, unlike ACLED
 
 acquisition: poll
 

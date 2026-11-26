@@ -1,4 +1,4 @@
-# C-1 claim source class (2026-11-14) — draft SourceDescriptor. Ships DRAFT.
+# Draft SourceDescriptor. Ships DRAFT.
 # A claim source cannot go `active` until `scope.claim.sign_off` (who, when,
 # note) is recorded; the lifecycle route refuses the flip without it.
 #
@@ -19,7 +19,7 @@
 # without a path; the RSS address is the one machine-readable endpoint it
 # gives in full). Not fetched from this host: the item structure is
 # UNVERIFIED, so no `claim.claimant_path` is declared and every row is
-# attributed to the declared claimant (the tracker). Once the owner has read
+# attributed to the declared claimant (the tracker). Once an operator has read
 # the feed, a structured group field (e.g. the item's author or category)
 # can be declared as `claimant_path` to attribute rows to the group itself.
 #
@@ -44,7 +44,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: claims_c1
+  owner: owner@local
   created: "2026-11-14T00:00:00Z"
 
 scope:

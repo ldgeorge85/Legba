@@ -33,7 +33,7 @@
  *     publisher identity the exported line carries, printed beside the URL it
  *     was read from, never mapped to a brand name;
  *   * **date** prints only when the exported citation line states one, and it
- *     prints the route's own LABEL with it. Since wave O / lane o2 the route
+ *     prints the route's own LABEL with it. The route
  *     dates every signal endnote it can: `published <date>` when the source
  *     declared one, `fetched <date>` when it did not and the platform's read
  *     stamp is all there is. The label is carried through verbatim, never

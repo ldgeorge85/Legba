@@ -1,4 +1,4 @@
-# Sahel coverage pass — Mali desk (country_watch_ml) — 2026-09-07. Ships DRAFT.
+# Mali desk (country_watch_ml). Ships DRAFT.
 #
 # See source_aib_burkina.yaml's header for the full WHY-THIS-BATCH-EXISTS note
 # (the measured 09-07 gap, and the sibling files). This descriptor is AMAP's —
@@ -63,7 +63,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: source_batch_2026_09
+  owner: owner@local
   created: "2026-09-07T00:00:00Z"
 
 scope:
@@ -73,7 +73,7 @@ scope:
   languages: [fr]
   tags: [news, world, africa, sahel, mali, francophone, source_batch_2026_09]
   source_class: state_media
-  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
+  access_class: public          # free no-auth feed, no separate reuse agreement
 
 acquisition: poll
 

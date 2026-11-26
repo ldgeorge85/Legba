@@ -2,11 +2,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Shared pieces of the VOICE-4 unit-prompt flip kit.
 
-WHAT THE FLIP IS. The D6 wave (`planning/D6_DRAFTS_2026-08-19/`) rewrote the
+WHAT THE FLIP IS. The D6 prompt rewrite rewrote the
 nine bounded units' `method.system_prompt` around a shared preamble: WHO YOU
 ARE, WHAT EACH MISTAKE COSTS, WHAT YOU ARE READING, the scoped-absence rider,
 SPEAK ABOUT THE WORLD NOT THE PIPELINE, and five micro-amendments. The VOICE-3
-replay (`planning/VOICE_REPLAY_2026-08-20/`) cleared EIGHT of the nine and HELD
+replay cleared EIGHT of the nine and HELD
 ``narrative_coordination`` — its replay could not catch the coordination signal
 on the two positive windows. So this kit flips 8 and touches the 9th only to
 prove it did NOT move.
@@ -92,40 +92,41 @@ UNITS: tuple[str, ...] = (
 HELD_UNIT: str = "narrative_coordination"
 
 #: The dotted path this kit is allowed to touch. Exactly one, unlike
-#: ``voice_prompt_puts``' three: the D6 wave is a PROSE change, and the
+#: ``voice_prompt_puts``' three: the D6 rewrite is a PROSE change, and the
 #: rubric/window fields it left alone must stay alone.
 PROMPT_PATH: tuple[str, ...] = ("method", "system_prompt")
 
 #: sha256 of each unit's INTENDED prompt — the value the tree YAML carries and
 #: the value the live descriptor must hold after the flip.
 #:
-#: WHY PIN THEM HERE. ``planning/`` is gitignored (internal docs are not part of
-#: the release), so the D6 drafts these prompts were extracted from do NOT exist
-#: in a clean checkout. Without a pin, "byte-faithful to the draft" would be a
+#: WHY PIN THEM HERE. The D6 drafts these prompts were extracted from are not part
+#: of the release, so they do NOT exist in a clean checkout. Without a pin, "byte-faithful to the draft" would be a
 #: claim nobody downstream could re-check. These digests are that check: they
 #: were computed from the draft blocks at extraction time, and
 #: ``tests/data_pkg/test_voice4_flip_kit.py`` re-derives them from the tree on
 #: every run. The digest covers the descriptor value, i.e. the draft's ```text
 #: block PLUS the single trailing newline that YAML's ``|`` clip-chomping adds.
 INTENDED_SHA256: dict[str, str] = {
-    "escalation": "9d97da3ab47e8536721ffd7a89e762477f8bda7c6b098fffd26d327b50ecbaaf",
-    "energy_security": "3709be2e3d39b3133491e5cb32bec5922932bdb13b6002853c6004e7b6313d0e",
-    "economic_coercion": "25795927fcf6d29fdc1b5ac88e8fdd95249e2810b18a630a508eef2fd7c0468b",
-    "internal_stability": "7837106e755014665e359f7dc2ae0d10b755fdf324f85961f2ccbcc33b5240a6",
-    "military_posture": "bf7120da16bded053e43c7793ebbd24aaca153cfef91e718063df6125e38442b",
-    "leadership_transition": "d0ebacfd07fc4683f90e572644d95400617fb181cffd85fc65ef3b782a61ed98",
-    "disruption_status": "195af11deca1bda7711ab016ea7e0b8ae25714eff3821e4b60b2d8e315ed86e1",
-    "proliferation_watch": "31558c75ffd7ceaeaa60b9cc0a9ca42ce576c445003d460bbca5e6988bb33620",
+    "escalation": "9fe5a402ece54de4a9da39df3fc21011ded9b5289ede3a9379f7e80491930fc6",
+    "energy_security": "39e1938d22f81240b75982b24963ec30003c07782d3b77067903938aba2a8691",
+    "economic_coercion": "a6035f86c7f311693b40e1bf6daeea0f86847e43e5186ca11ac26c15f9372510",
+    "internal_stability": "c5acf5d56da9978af35238fe38ae18c48c78d13d39f1678f33f991670d286c2d",
+    "military_posture": "ab57fcbde3ce2df37ab0c59de71cb6ae25bbe85f473f1f5aec2f36734f8a7e11",
+    "leadership_transition": "78319bfd6e3bf18eb213a1d80f1561ba7ccb9b782d71ca9dfcf67d8da77d3664",
+    "disruption_status": "551d08575a41e2cb36a9b1de3a33b99e1cc80fadaa5d1ad8369d588219edce8d",
+    "proliferation_watch": "c119d4f20908e18b164a57bb7099075d41259f02a5d4065a83175fc17add251e",
 }
 
 #: sha256 of the HELD unit's prompt as it stands BEFORE and AFTER this train.
-#: Re-pinned 2026-09-24: Program 7 piece 7e gave narrative_coordination its
+#: Re-pinned again when the desk prompts took the quiet-window contract, and
+#: once more when the pasted-text sentence took the shared wording.
+#: Re-pinned 2026-09-24: narrative_coordination was given its
 #: coordination DEFINITION (the SPREAD BLOCK paragraph) — a deliberate prompt
 #: change outside this train; the VOICE hold itself is untouched (the v4 flip
 #: still never PUTs this unit).
 #: The whole point of the HOLD is that this value does not change.
 HELD_SHA256: str = (
-    "84c0fe7242a5121002a13581f1d744be547c2e798494c6bd2b8908e093e21739"
+    "798b9ff34d1ca856283ef516dc04d3298cca68d4dedd46a344c9b794ea094a17"
 )
 
 #: MA2's replay addendum — the fleet sentence, word-identical on every draft.
@@ -166,9 +167,9 @@ TITLE_AMENDMENT_SENTENCE: str = (
 LATER_CONTRACT_PARAGRAPHS: tuple[str, ...] = (SEVERITY_AS_STATE_RULE,)
 
 #: Paragraphs a later train added to SOME of the nine - not the house contract,
-#: so not (by construction) on every desk. X4 / ESC (2026-10-13, W11-F52) added
+#: so not (by construction) on every desk. A later change (2026-10-13) added
 #: ``UNIT_CITED_SENTENCE_RULE`` to ``escalation`` and ``military_posture``, ahead
-#: of the response-schema paragraph; W11-F86 (2026-10-24) pasted the same
+#: of the response-schema paragraph; a further change (2026-10-24) pasted the same
 #: paragraph, at the same place, into the other seven units once the after-read
 #: on the two held. Keyed unit -> paragraphs so the peel test can say which desks
 #: must carry which (a paragraph on a desk that is not listed is a failure,
@@ -179,7 +180,6 @@ LATER_DESK_PARAGRAPHS: dict[str, tuple[str, ...]] = {
     for unit in (
         "escalation",
         "military_posture",
-        # W11-F86
         "internal_stability",
         "economic_coercion",
         "energy_security",
@@ -194,7 +194,7 @@ LATER_DESK_PARAGRAPHS: dict[str, tuple[str, ...]] = {
 #: TITLE-FRAME-FIX (2026-09-01) — the second later train to touch these nine
 #: prompts, and the first to change a LINE rather than append a PARAGRAPH.
 #:
-#: WHAT IT CHANGED AND WHY. ``VOICE_ORGANIC_REVIEW_2026-09-01`` §2.a measured the
+#: WHAT IT CHANGED AND WHY. A review (2026-09-01) measured the
 #: per-desk ``"title"`` schema hint against each desk's own title corpus and
 #: found it predicts that desk's lock exactly: a hint of the form "the driving X
 #: vector" whose X composes with a risk noun produces the ``<subject> <verb>
@@ -228,39 +228,39 @@ LATER_DESK_PARAGRAPHS: dict[str, tuple[str, ...]] = {
 LATER_TITLE_HINTS: dict[str, tuple[str, str]] = {
     "escalation": (
         '"title": "<concise headline naming the country + the driving escalation vector — see TITLE in the HOUSE READ CONTRACT below>"',
-        '"title": "<concise headline: the country + what this window actually shows about who is doing what to whom — the concrete development in its own words, never a category label and never a bare risk level; where nothing moved, name what is HOLDING it — see TITLE in the HOUSE READ CONTRACT below>"',
+        '"title": "<concise headline: the country + what this window actually shows about who is doing what to whom — the concrete development in its own words, never a category label and never a bare risk level; where nothing moved, name the standing state and the date of the last move you can cite, for example \'<subject>: no new move in this desk\'s collection since <date>\' — see TITLE in the HOUSE READ CONTRACT below>"',
     ),
     "internal_stability": (
         '"title": "<concise headline naming the country + the driving instability vector — see TITLE in the HOUSE READ CONTRACT below>"',
-        '"title": "<concise headline: the country + what this window actually shows about who holds the street and who holds the state — the concrete development in its own words, never a category label and never a bare risk level; where nothing moved, name what is HOLDING it — see TITLE in the HOUSE READ CONTRACT below>"',
+        '"title": "<concise headline: the country + what this window actually shows about who holds the street and who holds the state — the concrete development in its own words, never a category label and never a bare risk level; where nothing moved, name the standing state and the date of the last move you can cite, for example \'<subject>: no new move in this desk\'s collection since <date>\' — see TITLE in the HOUSE READ CONTRACT below>"',
     ),
     "economic_coercion": (
         '"title": "<concise headline naming the country + the driving coercion vector + target/wielder — see TITLE in the HOUSE READ CONTRACT below>"',
-        '"title": "<concise headline: the country + what this window actually shows about who is squeezing whom and with what measure — name wielder and target; the concrete development in its own words, never a category label and never a bare risk level; where nothing moved, name what is HOLDING it — see TITLE in the HOUSE READ CONTRACT below>"',
+        '"title": "<concise headline: the country + what this window actually shows about who is squeezing whom and with what measure — name wielder and target; the concrete development in its own words, never a category label and never a bare risk level; where nothing moved, name the standing state and the date of the last move you can cite, for example \'<subject>: no new move in this desk\'s collection since <date>\' — see TITLE in the HOUSE READ CONTRACT below>"',
     ),
     "military_posture": (
         '"title": "<concise headline naming the country + the driving posture-shift vector — see TITLE in the HOUSE READ CONTRACT below>"',
-        '"title": "<concise headline: the country + what this window actually shows about what moved, whose it was and where it went — the concrete development in its own words, never a category label and never a bare risk level; where nothing moved, name what is HOLDING it — see TITLE in the HOUSE READ CONTRACT below>"',
+        '"title": "<concise headline: the country + what this window actually shows about what moved, whose it was and where it went — the concrete development in its own words, never a category label and never a bare risk level; where nothing moved, name the standing state and the date of the last move you can cite, for example \'<subject>: no new move in this desk\'s collection since <date>\' — see TITLE in the HOUSE READ CONTRACT below>"',
     ),
     "proliferation_watch": (
         '"title": "<concise headline naming the country + the driving proliferation vector — see TITLE in the HOUSE READ CONTRACT below>"',
-        '"title": "<concise headline: the country + what this window actually shows about the program or the safeguards around it — the concrete development in its own words, never a category label and never a bare risk level; where nothing moved, name what is HOLDING it — see TITLE in the HOUSE READ CONTRACT below>"',
+        '"title": "<concise headline: the country + what this window actually shows about the program or the safeguards around it — the concrete development in its own words, never a category label and never a bare risk level; where nothing moved, name the standing state and the date of the last move you can cite, for example \'<subject>: no new move in this desk\'s collection since <date>\' — see TITLE in the HOUSE READ CONTRACT below>"',
     ),
     "energy_security": (
         '"title": "<short headline: the country + its energy-security pressure — see TITLE in the HOUSE READ CONTRACT below>"',
-        '"title": "<short headline: the country + what this window actually shows about what is moving through its energy system and what is not — the concrete development in its own words, never a category label and never a bare risk level; where nothing moved, name what is HOLDING it — see TITLE in the HOUSE READ CONTRACT below>"',
+        '"title": "<short headline: the country + what this window actually shows about what is moving through its energy system and what is not — the concrete development in its own words, never a category label and never a bare risk level; where nothing moved, name the standing state and the date of the last move you can cite, for example \'<subject>: no new move in this desk\'s collection since <date>\' — see TITLE in the HOUSE READ CONTRACT below>"',
     ),
     "leadership_transition": (
         '"title": "<short headline naming the country + its transition-risk level — see TITLE in the HOUSE READ CONTRACT below>"',
-        '"title": "<short headline: the country + what this window actually shows about who holds power and what is testing that hold — the concrete development in its own words, never a category label and never a bare risk level; where nothing moved, name what is HOLDING it — see TITLE in the HOUSE READ CONTRACT below>"',
+        '"title": "<short headline: the country + what this window actually shows about who holds power and what is testing that hold — the concrete development in its own words, never a category label and never a bare risk level; where nothing moved, name the standing state and the date of the last move you can cite, for example \'<subject>: no new move in this desk\'s collection since <date>\' — see TITLE in the HOUSE READ CONTRACT below>"',
     ),
     "disruption_status": (
         '"title": "<concise headline naming the lane/flow + the driving vector — see TITLE in the HOUSE READ CONTRACT below>"',
-        '"title": "<concise headline: the lane/flow + what this window actually shows about what is moving through it and what is not — the concrete development in its own words, never a category label and never a bare risk level; where nothing moved, name what is HOLDING it — see TITLE in the HOUSE READ CONTRACT below>"',
+        '"title": "<concise headline: the lane/flow + what this window actually shows about what is moving through it and what is not — the concrete development in its own words, never a category label and never a bare risk level; where nothing moved, name the standing state and the date of the last move you can cite, for example \'<subject>: no new move in this desk\'s collection since <date>\' — see TITLE in the HOUSE READ CONTRACT below>"',
     ),
     "narrative_coordination": (
         '"title": "<short headline naming the narrative, if any — see TITLE in the HOUSE READ CONTRACT below>"',
-        '"title": "<short headline: what this window actually shows about who is pushing which line, if anyone — the concrete development in its own words, never a category label and never a bare risk level; where no coordination appears, name what you CHECKED — see TITLE in the HOUSE READ CONTRACT below>"',
+        '"title": "<short headline: what this window actually shows about who is pushing which line, if anyone — the concrete development in its own words, never a category label and never a bare risk level; where no coordination appears, say so and name what you checked, for example \'<country>: no coordinated framing in this desk\'s collection through <date>\' — see TITLE in the HOUSE READ CONTRACT below>"',
     ),
 }
 

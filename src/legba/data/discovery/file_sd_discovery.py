@@ -63,7 +63,7 @@ discovery DLQ alongside the cycle's diff. The handler logs each error
 at ``warning`` level with structured fields the registry log forwarder
 indexes.
 
-The handler is configured per L-106 §2 ``CONFIG_SCHEMA``: a list of
+The handler is configured by ``CONFIG_SCHEMA``: a list of
 ``watch_paths`` (glob patterns), a ``format`` discriminator
 (``yaml`` | ``json``, default ``yaml``), and a ``refresh_interval``
 :class:`Cron`. The runtime invokes :func:`FileSDDiscovery.discover`
@@ -100,7 +100,7 @@ logger = logging.getLogger(__name__)
 
 
 KIND_NAME = "file_sd_discovery"
-"""Registered kind name (L-106 §2). Loaded by
+"""Registered kind name. Loaded by
 :func:`legba.data.discovery.registry.discover_discovery_kinds`."""
 
 SCHEMA_VERSION = "legba/discovery/file_sd/1.0.0"
@@ -109,7 +109,7 @@ shape. Bumps on incompatible CONFIG_SCHEMA or natural_key shape changes."""
 
 DEFAULT_REFRESH_INTERVAL = "*/5 * * * *"
 """Default cron: every five minutes. Operators with rapidly-edited
-watch directories can drop to ``*/1 * * * *`` per L-106 §2."""
+watch directories can drop to ``*/1 * * * *``."""
 
 _STATE_KEY_MTIMES = "file_sd_mtimes"
 """StateStore key — maps absolute file path → last-seen mtime_ns (int)."""

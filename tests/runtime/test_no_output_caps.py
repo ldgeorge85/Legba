@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""No output token caps on any route (roll-86 follow-up).
+"""No output token caps on any route.
 
-Roll 86 found the deep Consult's ``max_analyze_tokens`` (the descriptor's
-``method.llm.max_tokens``, 32768) acting as a per-call output cap, with the plan
+The deep Consult's ``max_analyze_tokens`` (the descriptor's
+``method.llm.max_tokens``, 32768) acted as a per-call output cap, with the plan
 and candidate-extraction calls clamping it to 2048. On the core route it never
 reached the wire; on a priced Anthropic route it was the real cap (that API
 requires a ``max_tokens``).
@@ -11,7 +11,8 @@ requires a ``max_tokens``).
 Now: no provider sends a caller's ``max_tokens``. A wire that requires the
 field gets the model's maximum from ONE declared place per route
 (``LLMProviderHandler.model_max_output_tokens``: Anthropic's documented table,
-else the component's declared ``max_tokens``); the "partial" label and the
+else the component's declared ``max_output_tokens`` for the alias called); the
+"partial" label and the
 turn's spend projection read the same limit; and a durable workflow input
 written before this change still deserializes and replays.
 """
@@ -53,7 +54,7 @@ def _cfg(model: str, max_tokens: int) -> LLMProviderConfig:
         api_endpoint=Property.Text.of("https://gw.example.test/v1"),
         api_key=Property.Secret.of("k"),
         model_name=Property.Text.of(model),
-        max_tokens=Property.Number.of(max_tokens, minimum=1, maximum=200000),
+        max_output_tokens=Property.Number.of(max_tokens, minimum=1),
     )
 
 
@@ -88,16 +89,16 @@ def _vllm(wire: _Wire, *, declared: int) -> VLLMProviderHandler:
 async def test_the_deep_plan_clamp_never_reaches_a_wire_that_takes_a_limit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # a hosted endpoint that needs the field (the opt-in): the plan call sends
-    # the model's declared maximum, not min(2048, max_analyze_tokens)
-    monkeypatch.setenv("LEGBA_LLM_SEND_MAX_TOKENS", "1")
+    # the plan call sends the alias's declared maximum, never
+    # min(2048, max_analyze_tokens)
+    monkeypatch.delenv("LEGBA_LLM_SEND_MAX_TOKENS", raising=False)
     wire = _Wire([json.dumps({"sub_queries": [], "tool_plan": []})])
     deps = DeepConsultStageDeps(llm=_vllm(wire, declared=65_536), substrate=object())
     plan = await _run_plan(DeepConsultWorkflowInput(question="q", max_analyze_tokens=32_768), deps)
     assert plan["ok"] is True
     assert wire.bodies[0]["max_tokens"] == 65_536
-    # and the core route (no opt-in) sends no limit at all, as before
-    monkeypatch.delenv("LEGBA_LLM_SEND_MAX_TOKENS")
+    # and with the deployment-wide off switch, no limit at all
+    monkeypatch.setenv("LEGBA_LLM_SEND_MAX_TOKENS", "0")
     wire2 = _Wire([json.dumps({"sub_queries": [], "tool_plan": []})])
     await _run_plan(DeepConsultWorkflowInput(question="q"), DeepConsultStageDeps(llm=_vllm(wire2, declared=65_536), substrate=object()))
     assert "max_tokens" not in wire2.bodies[0]
@@ -178,7 +179,7 @@ def _priced(route: str = "llm.anthropic.fable_5_1") -> AnthropicProviderHandler:
 
 @pytest.mark.asyncio
 async def test_the_spend_projection_is_the_routes_largest_observed_output(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Roll 87: the projection is an ESTIMATE from the route's history, not the
+    # The projection is an ESTIMATE from the route's history, not the
     # model's 128,000 maximum (which stopped a priced turn after about one call).
     monkeypatch.setenv(TURN_COST_CEILING_ENV, "5")
     pool = _Pool({"largest": 9_562, "calls": 40})

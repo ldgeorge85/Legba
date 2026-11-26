@@ -80,7 +80,7 @@ describe('TargetClaimsPanel', () => {
       expect(screen.getByText('Troops massing near the border')).toBeInTheDocument()
     })
     // Corroboration source count surfaced in the row.
-    expect(screen.getByTestId('target-claim-corrob-f1')).toHaveTextContent('×3')
+    expect(screen.getByTestId('target-claim-corrob-f1')).toHaveTextContent('3 sources')
 
     fireEvent.click(screen.getByText('Troops massing near the border'))
     await waitFor(() => {
@@ -136,7 +136,7 @@ describe('TargetClaimsPanel', () => {
     expect(screen.getByText('Single-source rumor of a coup')).toBeInTheDocument()
   })
 
-  it('hides engine tag facets, labels topics in words and offers one severity scale (U-1)', async () => {
+  it('hides engine tag facets, labels topics in words and offers one severity scale', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => ({

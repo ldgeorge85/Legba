@@ -5,7 +5,7 @@
 The first model-free non-text modality. Coverage:
 
   * Config schema validation (defaults, bad URL, unknown field).
-  * L-102 class-var contract conformance.
+  * Class-var contract conformance.
   * 200 happy path: parse a FeatureCollection, Signal shape
     (``modality="structured"`` + ``mime_type="application/geo+json"`` +
     ``media_ref`` = source URL + inlined per-feature geojson in payload),
@@ -483,7 +483,7 @@ async def test_pull_304_yields_nothing_and_stays_healthy():
 # row) showed: NASA sends neither ETag nor Last-Modified at all (so the
 # HTTP conditional-GET cursor was never the mechanism — every poll was an
 # unconditional 200), the response consistently parsed 3 open events, and
-# S-4 intra-source content-hash dedupe correctly recognised all 3 as
+# Intra-source content-hash dedupe correctly recognised all 3 as
 # byte-identical re-serves of already-landed rows (`reserve_unchanged=3`
 # every poll) — which source_actor classifies `outcome='success'`. The
 # liveness watchdog's per-source cadence check only grants its honest-quiet
@@ -568,7 +568,7 @@ async def test_eonet_event_update_past_cursor_lands_as_new_signal():
 async def test_repeated_identical_polls_keep_cursor_and_signal_count_zero():
     """Several consecutive 200-identical-body polls (below the safety-valve
     threshold) each yield zero and never re-write the same feature cursor
-    value — the S-4-masking 'success' streak nasa.eonet_events showed."""
+    value — the -masking 'success' streak nasa.eonet_events showed."""
     def handler(req: httpx.Request) -> httpx.Response:
         return httpx.Response(200, text=_eonet_doc(), request=req)
 
@@ -592,7 +592,7 @@ async def test_consecutive_empty_200s_trigger_reset_valve_and_reyield():
     """After `_MAX_CONSECUTIVE_EMPTY` straight zero-yield polls, the NEXT
     poll clears the per-feature cursor and re-baselines — re-yielding the
     (still byte-identical) feature once — then the counter resets to 0. This
-    is the safety valve for a stuck per-feature comparator; downstream S-4
+    is the safety valve for a stuck per-feature comparator; downstream 
     dedupe is still free to collapse the re-yielded content as unchanged."""
     def handler(req: httpx.Request) -> httpx.Response:
         return httpx.Response(200, text=_eonet_doc(), request=req)

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane G-1: the round-spec format and the validator's refusal rules.
+"""The round-spec format and the validator's refusal rules.
 
 One planted violation per rule, each refused with its named reason and the
 path in the spec; the base spec passes; the closed grammar refuses free
@@ -407,7 +407,7 @@ def test_catalog_families_agree_with_the_grader_fence_map():
 
 def test_rounds_package_is_not_imported_by_the_registry():
     """The registry runs the slim image; nothing under data/registry may
-    import the rounds package until it is proven slim-safe (lane G-7)."""
+    import the rounds package until it is proven slim-safe."""
     root = Path(__file__).resolve().parents[2] / "src" / "legba" / "data" / "registry"
     offenders = [p.name for p in root.rglob("*.py") if "rounds" in p.read_text(encoding="utf-8")
                  and ("data.rounds" in p.read_text(encoding="utf-8")

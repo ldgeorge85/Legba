@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Gates at handoffs: code checks on a seat's output before any reader may
-have it (plan P4 §4.3, lane G-3).
+have it.
 
 The first five are the statement layer's honesty gates, CALLED (not copied)
 on the sentences a seat wrote:
@@ -19,7 +19,7 @@ Gate                        Rule                                         Uses
 ``control_text``            no model/harness control text                G11 ``check_control_text``
 ==========================  ===========================================  =====
 
-Round-specific (design §4.3): ``must_include_set`` (rows code marked
+Round-specific: ``must_include_set`` (rows code marked
 ``required`` are not dropped), ``every_sentence_maps_to_rows`` (each sentence
 cites at least one handed row, and only handed rows),
 ``probabilities_copied_not_averaged`` (every probability written is one a
@@ -198,6 +198,11 @@ def handed_rows(ctx: GateContext) -> GateResult:
                                   key, si))
             continue
         checks.append(_Tagged(check_handed_row(_support_row(r, rows), slice_, i), key, si))
+    # A row a seat keeps by id (a context pack) must be one it was handed.
+    for rid in ctx.payload.get("row_ids") or ():
+        ok = str(rid).lower() in handed
+        checks.append(_Check("G3", "handed", ok, None if ok else "not_in_run_slice",
+                             None, {} if ok else {"row_id": str(rid)}))
     return _from_checks("handed_rows", checks)
 
 
@@ -297,6 +302,7 @@ class _Check:
 def must_include_set(ctx: GateContext) -> GateResult:
     required = sorted(i for i, r in evidence_rows(ctx.handed).items() if r.get("required"))
     kept = {str(r.get("id")) for r in ctx.payload.get("rows") or () if isinstance(r, Mapping)}
+    kept |= {str(i) for i in ctx.payload.get("row_ids") or ()}
     kept |= {str(r.get("ref_id")) for r in support_of(ctx.payload)}
     missing = [i for i in required if i not in kept]
     return GateResult("must_include_set", not missing, "required_row_dropped" if missing else None,

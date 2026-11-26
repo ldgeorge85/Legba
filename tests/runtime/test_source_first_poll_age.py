@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W11-F265 — the first poll's entry-age cap.
+"""the first poll's entry-age cap.
 
 A feed source's first poll (no cursor) used to ingest every entry its feed
 document carried, whatever its age (a status feed loaded entries from March, a

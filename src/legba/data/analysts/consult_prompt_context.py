@@ -31,9 +31,10 @@ the live pack descriptor the binding already resolved. Deliberately NOT copied
 into this file: a rule that exists in two places drifts, and the descriptor is
 the one an operator edits.
 
-Everything in this module is best-effort by contract. A run context that
-cannot be built is an empty string and the prompt is exactly what it was
-before — this block informs an answer, it never costs one.
+Everything in this module is best-effort by contract. A part that cannot be
+read says so in words, and a run context with nothing else to say is still
+the banner with today's date — this block informs an answer, it never costs
+one.
 """
 
 from __future__ import annotations
@@ -55,9 +56,12 @@ __all__ = [
     "render_run_context",
 ]
 
-#: The block's own banner. Spelled out so the model reads it as a fact about
-#: this run rather than as one more standing instruction.
-RUN_CONTEXT_HEADER: str = (
+#: The block's own banner, followed on the same line by today's date (UTC),
+#: so every run states the date the prompt's "after today" rules mean.
+RUN_CONTEXT_HEADER: str = "RUN CONTEXT."
+
+#: The banner a bake-off arm was measured with (no date line).
+_FROZEN_RUN_CONTEXT_HEADER: str = (
     "RUN CONTEXT — read from the platform at the start of THIS run, not baked "
     "into this prompt."
 )
@@ -67,7 +71,7 @@ RUN_CONTEXT_HEADER: str = (
 MAX_SERIES_IDS_RENDERED: int = 24
 MAX_SUBJECTS_RENDERED: int = 24
 
-#: W11-F141 — the scheduled-events calendar's prompt window (now → +14 days)
+#: The scheduled-events calendar's prompt window (now → +14 days)
 #: and the most rows it renders. The events are injected into the run context
 #: so the dated list lands BEFORE the question, every run, with the line a
 #: memory-assertion can never replace.
@@ -88,12 +92,16 @@ _NEVER_ASSERT: str = (
 )
 
 
-async def render_run_context(*, substrate: Any, agency_binding: Any) -> str:
-    """The block appended to the consult system prompt for one run.
+async def render_run_context(
+    *, substrate: Any, agency_binding: Any, frozen: bool = False, now: datetime | None = None,
+) -> str:
+    """The block added to the consult system prompt for one run.
 
-    ``""`` when there is nothing to say — which is the case for a hand-built
-    deps bundle with neither a holdings reader nor a governed binding, so an
-    embedder's prompt is byte-identical to what it was before this existed.
+    Always at least the banner with today's date (UTC): the prompt's rules
+    about dates "after today" and tests whose date is past need a today to be
+    read against. ``frozen`` is a bake-off arm: the banner and the pack-rule
+    label it was measured with, no date, and ``""`` when there is nothing else
+    to say.
     """
     parts: list[str] = []
     holdings = await _holdings_line(substrate)
@@ -102,12 +110,16 @@ async def render_run_context(*, substrate: Any, agency_binding: Any) -> str:
     events = await _events_block(substrate)
     if events:
         parts.append(events)
-    pack = _pack_block(agency_binding)
+    pack = _pack_block(agency_binding, frozen=frozen)
     if pack:
         parts.append(pack)
-    if not parts:
-        return ""
-    return "\n\n" + RUN_CONTEXT_HEADER + "\n" + "\n".join(parts)
+    if frozen:
+        if not parts:
+            return ""
+        return "\n\n" + _FROZEN_RUN_CONTEXT_HEADER + "\n" + "\n".join(parts)
+    today = (now or datetime.now(timezone.utc)).date().isoformat()
+    header = f"{RUN_CONTEXT_HEADER} Today is {today} (UTC)."
+    return "\n\n" + "\n".join([header, *parts])
 
 
 async def _holdings_line(substrate: Any) -> str:
@@ -267,7 +279,7 @@ def _clip(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-def _pack_block(agency_binding: Any) -> str:
+def _pack_block(agency_binding: Any, *, frozen: bool = False) -> str:
     """The governed pack's OWN prompt fragments and rules, verbatim.
 
     Read off ``binding.pack`` — the live descriptor the runtime already
@@ -290,7 +302,7 @@ def _pack_block(agency_binding: Any) -> str:
     ]
     lines += [f"  - {text}" for text in fragments]
     if rules:
-        lines.append("Pack rules (hard):")
+        lines.append("Pack rules (hard):" if frozen else "Pack rules:")
         lines += [f"  - {text}" for text in rules]
     return "\n".join(lines)
 

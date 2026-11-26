@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""P4-T8 honesty contract #1 — a colored band ⟺ a real basis id.
+"""A colored band ⟺ a real basis id.
 
 The invariant, restated as an exclusive-or over the WHOLE band engine + the
 producer's row assembly:

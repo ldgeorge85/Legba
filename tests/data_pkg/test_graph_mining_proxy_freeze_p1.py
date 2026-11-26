@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""P1 event-loop freeze fix — graph_mining proxy-chain bounding + off-loop run.
+"""Event-loop freeze fix — graph_mining proxy-chain bounding + off-loop run.
 
 ROOT CAUSE (py-spy at the 2026-07-24 12:52 freeze): ``_proxy_chains`` calls
 networkx ``all_simple_paths`` — worst-case EXPONENTIAL path enumeration —

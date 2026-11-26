@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""S-6 — the typing gaps, closed in code where structure allows. Pure.
+"""The typing gaps, closed in code where structure allows. Pure.
 
 * the NUMBER rule (``statement_numbers``): number words, qualifiers,
   ranges, units, ordinals, compounds — as a table of cases;
@@ -71,7 +71,7 @@ def _numbers_ok(statement: str, *quotes: str) -> bool:
 # ---------------------------------------------------------------------------
 
 NUMBER_CASES = [
-    # number words on the statement side (S-2 kept "one" out; kept)
+    # number words on the statement side (kept "one" out; kept)
     ("Unrest killed ten", "dix personnes sont mortes", True),             # French quote word
     ("Unrest killed ten", "10 people died", True),
     ("Unrest killed ten", "11 people died", False),

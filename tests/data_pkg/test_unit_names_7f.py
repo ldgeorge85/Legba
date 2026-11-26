@@ -1,7 +1,6 @@
 """AMENDMENT 7f — THE UNIT'S HUMAN NAME reaches the voice and the judge.
 
-THE DEFECT, from the live replay (``planning/ASSESSMENT_TENSIONS_IN_MAP_REPORT``
-§5.1). The spine carried ``target_name == target_id`` on every block and every
+THE DEFECT, from the live replay (a map-report assessment). The spine carried ``target_name == target_id`` on every block and every
 drop-ledger row of every live record, so the only thing naming a unit anywhere
 in front of the voice was its machine handle. Handed ``country_watch_kp`` — North
 Korea — the core model wrote **"Pakistan"** (``pk``) three times across two arms,

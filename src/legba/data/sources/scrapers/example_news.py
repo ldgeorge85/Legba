@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Example scraper-impl — generic RSS- / sitemap-driven news scraper.
 
-AN EXAMPLE AND A TEST FIXTURE, NOT A PRODUCTION PATH (lane I-2). It writes
+AN EXAMPLE AND A TEST FIXTURE, NOT A PRODUCTION PATH. It writes
 its text under ``payload.body`` (downstream readers — enrichment, the
 summariser, the desks' slices, verify — read ``raw_body``), invents nothing
 but also checks nothing (no wall, challenge, soft-404 or navigation gates),

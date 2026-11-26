@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane N-U — a valueless query key that IS the item's identifier is kept.
+"""A valueless query key that IS the item's identifier is kept.
 
 Live 11-13: every lefaso.net SPIP article (``/spip.php?article<N>``, 1,503
 signals / 1,398 distinct articles) canonicalised to ``/spip.php`` and tier 1

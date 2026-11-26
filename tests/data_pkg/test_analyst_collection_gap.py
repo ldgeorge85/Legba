@@ -334,7 +334,7 @@ async def test_handle_empty_inputs_is_trace_only():
 
 
 # ---------------------------------------------------------------------------
-# A-4 — the THIRD origin's SELECTION, before a row is ever shaped.
+# The THIRD origin's SELECTION, before a row is ever shaped.
 #
 # The selection is where a "does not fit the design" answer would hide, so it
 # is tested apart from the row shape (test_collection_requirements.py) and

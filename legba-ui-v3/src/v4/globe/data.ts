@@ -13,7 +13,7 @@ import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ApiError, apiGet } from '@/lib/api'
 import { SUBJECT_ROSTER_QUERY_KEY, SUBJECT_ROSTER_ROUTE, subjectName } from '@/lib/deskNames'
-import { changedList, resolveVisit, visitCursor } from '@/lib/morningReadBands'
+import { changedList, pageVisit } from '@/lib/morningReadBands'
 import { LEDGER_ROUTE, type LedgerForecastsResponse } from '@/lib/ledgerModel'
 import { subjectReadsQuery, type SubjectReadsPage } from '@/lib/subjectReads'
 import { PROFILE_UI, subjectTierIds } from '@/lib/profileUi'
@@ -40,7 +40,7 @@ const ms = (iso: unknown) => (typeof iso === 'string' ? Date.parse(iso) : Number
 /**
  * Whether a roster row's subject declares a source: the whole body's `sources`
  * list, or the summary weight's `declared_sources` count (the roster reads
- * `fields=summary`, which cuts `sources` away — roll 86's live walk: read from
+ * `fields=summary`, which cuts `sources` away — read from
  * `sources` alone, every subject declared none and every place was hatched
  * "not covered", over every changed area). Neither: null, not a guess.
  */
@@ -128,9 +128,8 @@ export function useGlobeReads(active: boolean, on: Record<GlobeLayerId, boolean>
     enabled: active,
   })
 
-  // The Board list's own diff, same key, same cursor.
-  const visit = useMemo(() => resolveVisit(), [])
-  const cursor = useMemo(() => visitCursor(visit), [visit])
+  // The Board list's own diff, same key, same cursor (this page load's one "since").
+  const cursor = useMemo(() => pageVisit().cursor, [])
   const since = useQuery<unknown>({
     queryKey: ['morning-judgment', 'since', cursor],
     queryFn: () => apiGet<unknown>(`/v3/since?cursor=${encodeURIComponent(cursor)}`),

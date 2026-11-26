@@ -58,6 +58,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlparse
 
+from ..data.schemas.env_refs import resolve_env_value
+
 logger = logging.getLogger(__name__)
 
 #: Durable alert channel (``alert_sink_deliveries.channel_name``), paired with
@@ -395,8 +397,12 @@ RECENT_AUTH_PAGES_SQL = """
 """
 
 
-def endpoint_host(config: Any) -> str | None:
-    """The lower-cased host of a component's ``api_endpoint`` / ``base_url``."""
+def endpoint_host(config: Any, component_id: str = "") -> str | None:
+    """The lower-cased host of a component's ``api_endpoint`` / ``base_url``.
+
+    A ``${env:NAME}`` value resolves from the environment; unset raises
+    :class:`EnvRefError` naming the variable (the caller's pass logs it and
+    gives no verdict)."""
     if isinstance(config, str):
         try:
             config = json.loads(config)
@@ -408,6 +414,7 @@ def endpoint_host(config: Any) -> str | None:
         value = config.get(key)
         if isinstance(value, dict):
             value = value.get("raw")
+        value = resolve_env_value(value, component_id=component_id, field=key)
         if isinstance(value, str) and value.strip():
             host = urlparse(value.strip()).hostname
             if host:
@@ -500,7 +507,7 @@ async def _endpoints(pg: Any, components: list[str]) -> dict[str, str | None]:
     ids = sorted(set(components) | {INHOUSE_ANCHOR_COMPONENT})
     async with pg.acquire() as conn:
         rows = await conn.fetch(COMPONENT_ENDPOINTS_SQL, ids)
-    return {str(r["component_id"]): endpoint_host(r["config"]) for r in rows}
+    return {str(r["component_id"]): endpoint_host(r["config"], str(r["component_id"])) for r in rows}
 
 
 async def _recent_pages(wd: Any, now: Any, dedup_s: float) -> dict[str, Any]:

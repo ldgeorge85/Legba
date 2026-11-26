@@ -32,6 +32,8 @@ import logging
 import os
 from typing import Any, Mapping, NamedTuple
 
+from ..data.schemas.legacy_name_digests import canonical_component_id
+
 logger = logging.getLogger(__name__)
 
 #: The deployment-wide judge override, read to enforce refusal (c). Mirrored
@@ -90,7 +92,7 @@ def _stack_ref_raw(value: Any) -> str | None:
 #       consult-only and never scheduled. Reuses ``_is_anthropic_component``, the
 #       same predicate the deterministic LLM wiring already refuses on.
 #   (b) THE WRITER — the descriptor's own ``method.llm.primary``. The live core
-#       plane is the self-hosted gpt-oss-120b writer; the writer cannot grade itself.
+#       plane is the self-hosted core model writer; the writer cannot grade itself.
 #   (c) THE JUDGE — the live value of ``LEGBA_JUDGE_STACK_REF``, read at
 #       resolution time rather than captured at import, because the operator
 #       repoints the whole deployment's judging with that one variable and a
@@ -115,23 +117,23 @@ GRADER_STACK_REF_ENV = "LEGBA_EXTERNAL_GRADER_STACK_REF"
 #: falls back to id equality — see :func:`grader_fence_refusal`.
 GRADER_FAMILY_BY_COMPONENT: dict[str, str] = {
     # the WRITER's plane. Until the 2026-10-22 cutover this id served the
-    # self-hosted gpt-oss-120b (family openai_oss); from the cutover the SAME
-    # component id is a new head on the innoai gateway serving MiMo-V2.6-Flash
+    # self-hosted core model (family openai_oss); from the cutover the SAME
+    # component id is a new head on the model gateway serving its core chat model
     # (`fast`). The family label follows the model the head serves — the fence
     # only needs the writer's family to be distinct from the judge's and the
     # grader's, and both of those are declared below.
-    "llm.primary.openai_compat": "xiaomi_mimo",
+    "llm.primary.openai_compat": "core_writer",
     # the JUDGE on the box (cutover 2026-10-22): Gemma 4 via the gateway, rung 1;
-    # Nemotron Lightning (think on) rung 2; Lightning (think off) the grader.
-    "llm.verify.innoai_gemma.openai_compat": "google_gemma",
-    # the bake-off GOLD DRAFTER (W11-G1): the same Gemma behind the `gemma-think`
+    # Nemotron (think on) rung 2; Nemotron (think off) the grader.
+    "llm.verify.gateway_judge.openai_compat": "google_gemma",
+    # the bake-off GOLD DRAFTER: the same Gemma behind the `gemma-think`
     # alias — declared so the fence refuses it as a grader (design §4.4).
-    "llm.verify.innoai_gemma_think.openai_compat": "google_gemma",
-    "llm.judge.innoai_lightning_think.openai_compat": "nvidia",
-    "llm.grader.innoai_lightning.openai_compat": "nvidia",
-    # the DECISION model on the box (W11-F108): clef-flash, POST /decide — the
+    "llm.verify.gateway_gold_drafter.openai_compat": "google_gemma",
+    "llm.judge.gateway_rung2_think.openai_compat": "nvidia",
+    "llm.grader.gateway_third_family.openai_compat": "nvidia",
+    # the DECISION model on the box: POST /decide — the
     # bearing gate's shadow today; declared so a repoint onto it is fenced.
-    "llm.decide.innoai_clef_flash": "cloudflare_clef",
+    "llm.decide.gateway_typed_choice": "decision_model",
     # the JUDGE's plane
     "llm.judge.openrouter_nemotron120b": "nvidia",
     "llm.judge.nemotron3_super.openai_compat": "nvidia",
@@ -171,7 +173,8 @@ def grader_family_for_component(component_id: str | None) -> str:
     """
     if not component_id:
         return ""
-    ref = str(component_id).strip()
+    # A retired component id (still named by a live row or env) keeps its family.
+    ref = canonical_component_id(str(component_id).strip())
     family = GRADER_FAMILY_BY_COMPONENT.get(ref)
     if family:
         return family

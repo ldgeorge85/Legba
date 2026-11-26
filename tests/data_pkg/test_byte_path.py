@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""B-1 — what a reader can say about a signal's bytes (no database).
+"""What a reader can say about a signal's bytes (no database).
 
 * :func:`classify` returns EXACTLY one of the three labels, with the version
   it rests on: received bytes beat an archived copy; bytes that are gone fall

@@ -91,13 +91,13 @@ class SynthesizeResponse(BaseModel):
     synthesis_status: str = "complete"
     resynthesizable: bool = False
     usage: dict[str, Any] = Field(default_factory=dict)
-    # 2026-09-28 §B.3 — the census and the hold ride the RECOVERY too. This
+    # The census and the hold ride the RECOVERY too. This
     # path writes a NEW answer over the same evidence; without these two the
     # panel kept printing the original run's census beside prose that no
     # longer existed, which is a count describing a different answer.
     provenance_census: dict[str, Any] | None = None
     hold_reason: str | None = None
-    # §B.4 — the floor stamp and the watch candidates ride the recovery as
+    # The floor stamp and the watch candidates ride the recovery as
     # well, for the census's reason: the recovery is a NEW answer.
     uncertainty_floor_applied: dict[str, Any] | None = None
     watch_candidates: list[str] | None = None
@@ -125,7 +125,7 @@ def recovered_contract(
     the original's grounding accounting describes prose that is no longer the
     answer. A run that produced none (an unarmed runtime, a recovery that
     could not synthesise, a runtime before Q-2) answers with the original
-    turn's stored contract, as roll 81 did; none from either is ``None``.
+    turn's stored contract; none from either is ``None``.
     Never invented.
     """
     if isinstance(projected_contract, Mapping) and projected_contract.get("recovery") is not None:

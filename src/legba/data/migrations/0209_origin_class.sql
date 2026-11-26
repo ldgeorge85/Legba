@@ -3,8 +3,7 @@
 --
 -- 0209_origin_class.sql
 --
--- DATA MODEL V3 / P7 — the ORIGIN-CLASS columns and the reader firewall
--- (plan §2 P7; NEXT_ARC_CAPTURE_2026-09-23 §B5).
+-- DATA MODEL V3 — the ORIGIN-CLASS columns and the reader firewall.
 --
 -- Every substrate row now says WHERE it came from in one closed vocabulary,
 -- and the live gate refuses the classes that are history. The open-row gate
@@ -13,15 +12,15 @@
 -- and would silently feed freshness, source health, calibration, salience
 -- and the alert plane. The firewall therefore has to be the origin class,
 -- not the validity window — and it has to exist BEFORE a single historical
--- row does. Program 7's collections machinery (the loader, the manifests,
+-- row does. The collections machinery (the loader, the manifests,
 -- the observations table) comes later; this file is only the columns, the
 -- measured backfill, and the constraint that makes the meantime safe.
 --
 -- THE VOCABULARY (closed — a CHECK, not an enum type):
 --   live · web_retrieval · seed · backfill_native · backfill_reconstructed · archive
 -- `LIVE_CLASSES = {live, web_retrieval, seed}` is what every reader sees
--- today. The three history classes are refused AT THE TABLE until Program
--- 7's reader sweep lands.
+-- today. The three history classes are refused AT THE TABLE until the
+-- reader sweep lands.
 --
 -- THE TWO CONSTRAINTS PER TABLE, deliberately both:
 --   <table>_origin_class_vocab            — the closed six-class vocabulary;
@@ -33,7 +32,7 @@
 --                                           sees in its error.
 --
 -- `collection_id` is text with NO foreign key — the collections table does
--- not exist yet; the pointer is stamped now so Program 7 rows land
+-- not exist yet; the pointer is stamped now so those rows land
 -- classified rather than needing a second backfill.
 --
 -- `facts.superseded_at` closes the asymmetry `analyst_outputs` already had
@@ -43,11 +42,11 @@
 -- APPROXIMATION, stated plainly: the true close instant is not recoverable,
 -- and the successor's creation time is the nearest durable stamp.
 --
--- `btree_gist` is a trusted extension; Program 7's `entity_aliases` temporal
+-- `btree_gist` is a trusted extension; the `entity_aliases` temporal
 -- keys need it and the line belongs with the columns that make those keys
 -- meaningful.
 --
--- MEASURED AT REVIEW (2026-09-23 baseline, the live tower — the UPDATEs
+-- MEASURED AT REVIEW (a live baseline — the UPDATEs
 -- below touch ~1,200 rows; the column defaults are metadata-only in
 -- Postgres 18):
 --   facts = 154,960   of which seed_batch_id IS NOT NULL: 1,014 ·

@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The drift ASSESSMENT pass, the per-citer effect, the tracked auto-close and
-the re-open (lane D-2).
+the re-open.
 
-THE PASS (:func:`assess_pending`), run right after D-1's classify pass:
+THE PASS (:func:`assess_pending`), run right after the classify pass:
 
 1. every classification of a flag-writing class with no assessment under the
    CODE-ONLY stamp gets one (``assessor = code_only``) — always, whatever the
@@ -20,11 +20,11 @@ All in one transaction per classification; a re-run writes nothing twice
 
 SHADOW + AUTO-CLOSE (:func:`auto_close_pending`): every pass records each
 flag the auto-close rule WOULD close in ``evidence_drift_would_auto_close``
-(per rule version; never changes the flag) — that count is how the owner
+(per rule version; never changes the flag) — that count is how an admin
 knows when to switch it on. With ``LEGBA_DRIFT_AUTO_CLOSE`` on (default
 OFF): an open or reviewed ORIGINAL flag whose latest assessment is a
 spelling/name correction (by the final and the code type) and whose code
-claim effect is ``cited_text_survives`` moves through D-1's lifecycle to
+claim effect is ``cited_text_survives`` moves through the flag lifecycle to
 resolved / ``unchanged_in_substance`` as :data:`AUTO_CLOSE_PRINCIPAL`, with a
 note naming the assessment and the rule version, and a row in
 ``evidence_drift_auto_closes``.

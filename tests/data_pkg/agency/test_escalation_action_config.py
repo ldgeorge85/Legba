@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""X-1 Stage 1 — the escalation edge's ACTION is config-driven.
+"""The escalation edge's ACTION is config-driven.
 
 The escalation edge is the one threshold→action rule that actually runs in
 production (785 settled invocations on the live ledger), and three of its four

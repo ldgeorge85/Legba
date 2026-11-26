@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Per-host FETCH POLICY — which transport posture a named host gets (W11-F138).
+"""Per-host FETCH POLICY — which transport posture a named host gets.
 
 WHY THIS EXISTS. Every Times of Israel (826) and Jerusalem Post (1,628) signal
 of the last 30 days carries a summary and no ``payload.text``: both hosts

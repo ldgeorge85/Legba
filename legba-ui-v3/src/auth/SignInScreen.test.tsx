@@ -19,7 +19,7 @@ const desktopOnly = (cls: string) =>
     .filter((c) => c && !c.startsWith('max-sm:'))
     .join(' ')
 
-describe('SignInScreen on a narrow screen (M-0a)', () => {
+describe('SignInScreen on a narrow screen', () => {
   it('inputs and the button take a 48 px touch target and 16 px text below sm', () => {
     render(<SignInScreen onDone={() => {}} />)
     for (const id of ['sign-in-email', 'sign-in-password']) {

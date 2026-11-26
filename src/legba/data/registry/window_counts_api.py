@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """``GET /v3/counts`` — how many signals and findings landed in a window.
 
-W11-F271. The World KPI strip's "Signals 24h" and "Findings 24h" cards read
+The World KPI strip's "Signals 24h" and "Findings 24h" cards read
 the newest-500 page of ``/signals`` and ``/findings`` with no time bound and
 printed its length, so on any real day they said "500+" and the label was not
 true. No existing route carries a 24-hour count of either: ``/signals`` and

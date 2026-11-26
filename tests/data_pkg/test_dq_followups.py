@@ -30,7 +30,7 @@ from legba.data.config import PostgresConfig
 
 
 # ===========================================================================
-# FU1 — verify.py: shrink the forward-looking no-comma residual (P7 minor)
+# FU1 — verify.py: shrink the forward-looking no-comma residual
 # ===========================================================================
 
 
@@ -77,7 +77,7 @@ def test_fu1_noun_homograph_prediction_not_misgraded():
 
 
 def test_fu1_trimmed_noun_homograph_verbs_removed():
-    """FU1 round 2 (nit) — the noun-homograph -s forms the exclusion policy meant
+    """The noun-homograph -s forms the exclusion policy meant
     to avoid ('halts'/'resumes'/'captures'/'annexes') are trimmed from
     _PRESENT_FACT_VERB_RE; the unambiguous present-tense EVENT verbs stay."""
     from legba.data.provenance.verify import _PRESENT_FACT_VERB_RE
@@ -127,7 +127,7 @@ def test_fu2_high_severity_negation_framed_event_pages():
 
 def test_fu2_low_and_info_absence_verdicts_still_suppressed():
     """A genuinely low/info absence verdict is still title-gagged (the shipped
-    P7-F4 win is preserved for sub-moderate severity)."""
+    alert-gate win is preserved for sub-moderate severity)."""
     from legba.data.analysts.agency.binding import escalation_gate_decision
 
     assert escalation_gate_decision(
@@ -165,7 +165,7 @@ async def pg_pool(migrated_pg: PostgresConfig):
 
 
 # ===========================================================================
-# FU3 — seed-refresh office-keyed functional-role supersession (P5)
+# FU3 — seed-refresh office-keyed functional-role supersession
 # ===========================================================================
 
 
@@ -214,7 +214,7 @@ async def _write_leader_fact(pool, *, person: str, country: str, role: str):
 async def test_fu3_reseeding_new_leader_closes_prior_office_holder(pg_pool):
     """A re-seed of a NEW office-holder closes the PRIOR holder's open 'leader of
     <country>' row — keyed on the COUNTRY (value) + office (role), regardless of
-    the person subject (the P5 stale-leader class migration 0064 fixed by hand)."""
+    the person subject (the stale-leader class migration 0064 fixed by hand)."""
     country = f"Testlandia{uuid4().hex[:8]}"
     out_old, _ = await _write_leader_fact(
         pg_pool, person=f"OldLeader{uuid4().hex[:6]}", country=country,
@@ -270,7 +270,7 @@ async def test_fu3_dual_office_country_not_collapsed(pg_pool):
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_fu3_role_casing_drift_still_closes_prior_holder(pg_pool):
-    """FU3 round 2 (minor) — the office key is matched CASE-INSENSITIVELY: a prior
+    """The office key is matched CASE-INSENSITIVELY: a prior
     holder seeded with role 'President' is still closed by a re-seed carrying
     'president' (casing drift between adapter runs no longer skips the auto-close)."""
     country = f"Caselandia{uuid4().hex[:8]}"
@@ -298,7 +298,7 @@ async def test_fu3_role_casing_drift_still_closes_prior_holder(pg_pool):
 
 
 # ===========================================================================
-# FU4 — reifier sports gate over the UNION of source-signal texts (P5)
+# FU4 — reifier sports gate over the UNION of source-signal texts
 # ===========================================================================
 
 
@@ -352,7 +352,7 @@ def test_fu4_real_conflict_dyad_not_downgraded_by_union():
 
 
 def test_fu4_real_hostility_with_stray_sports_signal_not_downgraded():
-    """FU4 round 2 (BLOCKING) — a genuinely HOSTILE dyad whose lineage union
+    """A genuinely HOSTILE dyad whose lineage union
     contains BOTH real conflict signals AND a stray UNAMBIGUOUS sports signal
     ('World Cup') stays HOSTILE: the conflict/casualty vocab in the union BLOCKS
     the sports downgrade (a real Gaza/Israel dyad is never erased because it once
@@ -389,7 +389,7 @@ def test_fu4_real_hostility_with_stray_sports_signal_not_downgraded():
 
 
 def test_fu4_pure_worldcup_fixture_still_downgraded():
-    """FU4 round 2 — the round-1 gain is preserved: a PURE World-Cup fixture
+    """The earlier gain is preserved: a PURE World-Cup fixture
     (DR Congo face England, no conflict vocab anywhere in the union) is STILL
     downgraded to a neutral co-occurrence."""
     from legba.data.analysts.relationship_reifier import (
@@ -481,7 +481,7 @@ async def test_fu4_read_candidates_unions_cosource_signal_text(pg_pool):
 
 # ===========================================================================
 # FU5 — fact_contention_arbiter role-keyed clustering + junk-gated surfacing +
-# credibility-weighted quorum (P5, detect-only)
+# credibility-weighted quorum (detect-only)
 # ===========================================================================
 
 _ARB_NOW = datetime(2026, 6, 29, tzinfo=timezone.utc)
@@ -670,7 +670,7 @@ async def test_fu5a_run_arbiter_opens_cross_person_leader_dispute(pg_pool):
 
 
 # ===========================================================================
-# FU6 — world-composition stable situation_signature + live head fold (P6)
+# FU6 — world-composition stable situation_signature + live head fold
 # ===========================================================================
 
 

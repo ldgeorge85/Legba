@@ -1,6 +1,6 @@
-# reenrich_pending — the standing sweep over signals written UNENRICHED (W11-F118).
+# reenrich_pending — the standing sweep over signals written UNENRICHED.
 #
-# W11-F103 (runtime/source_enrich_hold.py) makes a SourceActor write an entry
+# runtime/source_enrich_hold.py makes a SourceActor write an entry
 # WITHOUT its enrichment chain when the NLP plane is degraded for the rest of a
 # poll, or when the same entry was skipped on three consecutive polls, tagging it
 # payload.enrichment_pending (nlp_degraded_this_poll / enrich_hold_exhausted).
@@ -30,7 +30,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: active
-  owner: reenrich_pending
+  owner: owner@local
 
 subscription:
   # No `targets` block → META analyst: one global sweep per cadence tick over the

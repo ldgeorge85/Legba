@@ -1,12 +1,12 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Fact quality on the gateway's ``/relations`` answer (W11-F113) — the pure parts.
+"""Fact quality on the gateway's ``/relations`` answer — the pure parts.
 
 The first gateway facts (2026-10-23) read as junk at the 0.5 floor ("Melania
 Trump | operates in | Oleshky", "truce | signed agreement with | Oleshky"):
 every hit was kept, none carried a relation score, and half the labels asked
 for named relations nothing downstream reads. Three knobs fix that on the
-client side, all component config (``nlp.innoai.gateway``), none an env var:
+client side, all component config (``nlp.gateway.bearer``), none an env var:
 
   * **confidence** (``relation_confidence``) — the triple's ``confidence`` is
     the ``min`` (default), ``mean`` or ``none`` (no key: the fact path's 0.5
@@ -37,7 +37,7 @@ from ...vocabulary import RELATIONSHIP_TYPES, normalize_predicate
 
 #: The 20 generic GLiREL labels legba-models' ``/extract`` asked for when the
 #: caller sent none (legba-models/app/main.py ``DEFAULT_RELATION_LABELS``) —
-#: the gateway's default until W11-F113. Kept for the record and for an
+#: the gateway's default until Kept for the record and for an
 #: operator who wants them back (``relation_labels`` on the component).
 LEGACY_GLIREL_RELATION_LABELS: tuple[str, ...] = (
     "leader of",

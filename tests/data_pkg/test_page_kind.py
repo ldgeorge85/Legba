@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane I-2 — the ``page`` source kind, without a database.
+"""The ``page`` source kind, without a database.
 
 * the kind is registered (plug-in declaration) and has an intake address
   adapter; the example scraper is not the production path;
@@ -202,7 +202,7 @@ FR_WALL = "https://unblock.federalregister.gov/"
 
 
 async def test_a_cross_host_redirect_to_a_wall_is_refused_and_its_bytes_kept(web) -> None:
-    """W11-F259: the Federal Register answered with a 200 redirect to its
+    """The Federal Register answered with a 200 redirect to its
     'Request Access' CAPTCHA page on another host; it passed every gate and
     landed as a document under the wall's address."""
     web.redirects[FR_URL] = FR_WALL

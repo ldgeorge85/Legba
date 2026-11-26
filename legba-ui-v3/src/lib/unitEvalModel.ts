@@ -1,8 +1,8 @@
 /**
- * unitEvalModel — the per-bounded-unit eval scoreboard (P2-T6).
+ * unitEvalModel — the per-bounded-unit eval scoreboard.
  *
  * Reads `GET /api/v1/eval/scores`, which surfaces each bounded reasoning unit's
- * eval off the latest `unit_correctness_scorer` run (P2-T5): faithfulness
+ * eval off the latest `unit_correctness_scorer` run: faithfulness
  * (measured by the mandatory verify pass) + correctness-vs-reference (None until
  * scorable gold labels exist) + a server-composed honest `badge` string. The
  * badge already encodes the "no invented number" contract (an unlabeled unit

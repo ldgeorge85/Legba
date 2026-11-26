@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""``list_due_resolvers`` — the forecast ledger's due-date reader (W11-F162).
+"""``list_due_resolvers`` — the forecast ledger's due-date reader.
 
 The consult had no way to ask "what resolves next": open-question watches,
 inquiry hypotheses and the forecast ledger each live elsewhere, and a model

@@ -124,7 +124,7 @@ describe('Figure — what it renders', () => {
   })
 })
 
-describe('W8-F6 — a count noun agrees with its count', () => {
+describe('A count noun agrees with its count', () => {
   it('prints "1 row", "2 rows", "0 rows"', () => {
     expect(figureValueText({ state: 'measured', value: 1, unit: 'rows', asOf: 'x' })).toBe('1 row')
     expect(figureValueText({ state: 'measured', value: 2, unit: 'rows', asOf: 'x' })).toBe('2 rows')

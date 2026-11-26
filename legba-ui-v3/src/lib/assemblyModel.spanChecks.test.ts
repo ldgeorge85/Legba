@@ -1,5 +1,5 @@
 /**
- * Lane N-D — the span checks and the honest quote-fidelity count.
+ * The span checks and the honest quote-fidelity count.
  *
  * `blocks[].span_checks` (server: `assembly_span_checks`) and the
  * `assembly_quote_sha_verified` counter (server: `assembly_arms`) both reach

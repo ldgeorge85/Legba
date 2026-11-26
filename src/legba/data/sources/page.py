@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""``page`` — ONE web page, fetched and landed as ONE document (lane I-2).
+"""``page`` — ONE web page, fetched and landed as ONE document.
 
 The kind the ingestion intake runs an address under: the intake's address
 adapter puts the address in ``config.url`` and the run is this handler's
@@ -175,7 +175,7 @@ def _analyse(body: bytes, content_type: str | None, final_url: str, cfg: PageCon
 
 
 class PageSourceHandler:
-    """L-102 source handler for the ``page`` kind (module docstring)."""
+    """Source handler for the ``page`` kind (module docstring)."""
 
     kind: ClassVar[str] = PAGE_KIND
     family: ClassVar[str] = "source"
@@ -353,7 +353,7 @@ class PageSourceHandler:
         final = out.final_url or out.url or ""
         canonical = meta.canonical or final
         if wall_host(canonical) or wall_host(final):
-            # W11-F259: never a wall's address as the document's own. The gates
+            # Never a wall's address as the document's own. The gates
             # refuse such a page first; this is the last line, not the rule.
             raise ValueError(f"page document on a wall address: {canonical or final}")
         host = (urlsplit(canonical).hostname or "").lower()

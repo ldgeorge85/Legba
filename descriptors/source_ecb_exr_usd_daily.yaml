@@ -1,26 +1,26 @@
-# X-1 source expansion (2026-11-14) — the ECB euro reference exchange rate
+# The ECB euro reference exchange rate
 # against the US dollar, daily, as a SERIES. Ships DRAFT; the reference host
 # walks it to CONFIGURED (descriptors/LIFECYCLE.md), never active — activation
-# is the owner's call. Kind: series_api (the generic series kind, S-1).
+# is the operator's call. Kind: series_api (the generic series kind).
 #
-# WHY: the first FX series in the tree (the "rates/prices" loss).
+# WHY: the first FX series in the tree (the "rates/prices" gap).
 #
 # THE ENDPOINT. ECB Data Portal SDMX REST, dataflow EXR, key D.USD.EUR.SP00.A
 # (daily, US dollar per euro, the ECB reference rate), `format=csvdata`.
-# Checked 2026-11-14 by the source-expansion review (one GET, generic client
+# Checked (one GET, generic client
 # identity, `lastNObservations=3`): no key; text/csv; header KEY, FREQ,
 # CURRENCY, CURRENCY_DENOM, EXR_TYPE, EXR_SUFFIX, TIME_PERIOD, OBS_VALUE,
-# OBS_STATUS, ... Only the key and the two parameters the review used are
+# OBS_STATUS, ... Only the key and the two parameters used are
 # relied on here: every poll asks for the last 60 observations (about twelve
 # weeks of TARGET days, a few KB), and the handler keeps the rows inside its
-# window. No since parameter is declared — the review did not exercise one.
+# window. No since parameter is declared — none was exercised.
 # Widening the key to more currencies (`D..EUR.SP00.A`) is a follow-up that
 # needs its own check.
 #
 # SUBJECT. The currency quoted against the euro (CURRENCY, "USD"),
-# subject_kind `entity`. UNIT: `fx_quote_per_base` (I-5's currency-pair unit:
+# subject_kind `entity`. UNIT: `fx_quote_per_base` (the currency-pair unit:
 # units of the QUOTE currency — the subject, USD — per one unit of the BASE
-# currency, the euro; X-1 wrote `ratio` before the unit existed; the
+# currency, the euro; the
 # description says which way round). Rates are published on TARGET business
 # days around 16:00 CET; a poll re-reads lag_days + revision_days (1 + 14)
 # days, so a late or corrected day is a new vintage and an unchanged re-read
@@ -28,7 +28,7 @@
 #
 # READER. series_change (descriptors/analyst_series_change.yaml) judges every
 # live series; one named by no rule gets the count band, whose Poisson floor
-# is meaningless on an exchange rate. series_change/2026-11.3 (I-5) names a
+# is meaningless on an exchange rate. series_change/2026-11.3 names a
 # rule for this family — `series_rules: ["ecb.exr.*=fx_move", ...]` (a move of
 # 2% or more across the current window is an event). Registering that option
 # is a roll step, not this file's (the analyst is live and this series is not).
@@ -43,7 +43,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: x1_source_expansion
+  owner: owner@local
   created: "2026-11-14T00:00:00Z"
 
 scope:

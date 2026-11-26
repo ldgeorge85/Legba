@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W11-F138 — the per-host fetch policy and everything it drives.
+"""the per-host fetch policy and everything it drives.
 
 The defect this pins: every Times of Israel / Jerusalem Post signal of the
 last 30 days carries a summary and no ``payload.text`` — both hosts answer

@@ -183,7 +183,7 @@ def test_range_citation_resolves_through_variant_brackets_too():
 
 
 def test_the_three_remaining_marker_syntaxes_resolve_on_the_verify_side():
-    """V-I3 — recommendation #5 of the round-4 panel, at the place it costs:
+    """A review-panel recommendation, at the place it costs:
     the FLOOR. A cited claim graded as uncited is a free precision loss, and all
     three of these have a named live specimen — the bare-parenthesis `(ref:N)`
     (S2, `country_composition`/cn), the compound `[[ref:N,M]]` (08-04 §6.2), and
@@ -240,7 +240,6 @@ async def test_null_result_uses_survey_rubric_and_scores_healthy(monkeypatch):
     judge = _CapturingJudge('{"verdicts": ["supported", "supported"]}')
     report = await verify_finding_faithfulness(body=body, citations=[], judge_llm=judge)
     # The survey rubric was selected...
-    assert any("NULL-RESULT" in s for s in judge.systems)
     assert judge.systems[0] == _NULL_RESULT_JUDGE_SYSTEM
     # ...and an honest null scores healthy rather than collapsing to ~0.
     assert report.judge_status == "llm"
@@ -298,7 +297,7 @@ def test_cross_target_leak_common_word_slug_desks_are_not_inert():
 
 
 def test_cross_target_leak_sees_the_bare_us_the_08_05_h6_specimen():
-    """V-I2. The round-4 H6 finding, condensed: a `country_g20_us` narrative desk
+    """A review-panel finding, condensed: a `country_g20_us` narrative desk
     that says "US" six times and was flagged — HARD — as naming only Iran. 100%
     of that day's `cross_target_leak` class, and the second round in which
     08-04 recommendation #4 went unshipped."""

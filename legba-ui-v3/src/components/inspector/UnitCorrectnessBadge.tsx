@@ -25,6 +25,7 @@
  * Mirrors `UnitEvalBadge`: self-fetching, memoised at the model layer so eight
  * desk badges share one request, and silent on a fetch failure.
  */
+import { useBelowAdminPassive as useBelowAdmin } from '@/auth/roles'
 import { useEffect, useState } from 'react'
 import { ChevronDown, ChevronRight, Scale } from 'lucide-react'
 import { InfoTip } from '@/components/InfoTip'
@@ -113,10 +114,13 @@ export function UnitCorrectnessBadge({
   const [page, setPage] = useState<UnitCorrectnessPage | null>(null)
   const [open, setOpen] = useState(false)
   const [ledger, setLedger] = useState<UnitCorrectnessClaim[] | null>(null)
+  // The engine's own badge is an admin's: a reader reads the outside
+  // reference in plain words in "How this was produced".
+  const belowAdmin = useBelowAdmin()
 
   useEffect(() => {
     let cancelled = false
-    if (!analystId || !targetId) {
+    if (!analystId || !targetId || belowAdmin) {
       setPage(null)
       return
     }
@@ -130,7 +134,7 @@ export function UnitCorrectnessBadge({
     return () => {
       cancelled = true
     }
-  }, [analystId, targetId])
+  }, [analystId, targetId, belowAdmin])
 
   // The ledger is pulled only when the drawer is actually opened — the badge
   // needs the shares, the drawer needs the claims, and most readers never ask.
@@ -151,6 +155,7 @@ export function UnitCorrectnessBadge({
   }, [open, analystId, targetId, ledger])
 
   const row: UnitCorrectness | null = findUnitCorrectness(page, analystId)
+  if (belowAdmin) return null
   // Read defensively: a route that answered with something other than a
   // correctness page (a proxy error body, a stubbed fetch in a sibling test)
   // must render NOTHING, never throw inside a read the operator is trying to

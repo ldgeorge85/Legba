@@ -26,7 +26,7 @@ set -u
 VLLM_CONTAINER="${VLLM_CONTAINER:-vllm-rtx-1}"
 METRICS_URL="${METRICS_URL:-http://127.0.0.1:8000/metrics}"
 LOG="${LOG:-/var/log/vllm_saturation.log}"
-STATE="${STATE:-/tmp/legba-ai1-saturation.state}"
+STATE="${STATE:-/tmp/legba-models-host-saturation.state}"
 HEALTHY_STAMP="/tmp/vllm_saturation.healthy"
 
 WAITING_BAR="${WAITING_BAR:-4}"        # queue depth that counts as saturated
@@ -158,7 +158,7 @@ log "sample running=$RUNNING waiting=$WAITING kv=$KV preempt_total=$PREEMPT pree
 if [ "$STREAK" -ge "$STREAK_N" ]; then
   if ! cooled_down "$WAIT_COOLDOWN"; then
     log "FIRE sustained queue: waiting=$WAITING > $WAITING_BAR for $STREAK samples"
-    page high "ai1 vLLM saturated: queue" \
+    page high "models host vLLM saturated: queue" \
       "num_requests_waiting=$WAITING (> $WAITING_BAR) for $STREAK consecutive samples; running=$RUNNING kv_cache=$KV ttft_p95=${TTFT_P95}. The box is scheduling more than it can batch — hold any budget raise and consider pausing a heavy analyst."
     touch "$WAIT_COOLDOWN"
   fi
@@ -169,7 +169,7 @@ fi
 if [ "$KV_OVER" = "1" ]; then
   if ! cooled_down "$KV_COOLDOWN"; then
     log "FIRE kv cache: $KV > $KV_BAR"
-    page high "ai1 vLLM saturated: KV cache" \
+    page high "models host vLLM saturated: KV cache" \
       "kv_cache_usage_perc=$KV (> $KV_BAR); running=$RUNNING waiting=$WAITING ttft_p95=${TTFT_P95}. Past this line the scheduler preempts and latency cliffs — the next signal is preemptions, and that one means headroom is GONE."
     touch "$KV_COOLDOWN"
   fi
@@ -180,7 +180,7 @@ fi
 if [ "$PREEMPT_DELTA" -gt 0 ]; then
   if ! cooled_down "$PREEMPT_COOLDOWN"; then
     log "FIRE preemption: +$PREEMPT_DELTA (total $PREEMPT)"
-    page max "ai1 vLLM PREEMPTING (headroom unsafe)" \
+    page max "models host vLLM PREEMPTING (headroom unsafe)" \
       "num_preemptions_total rose by $PREEMPT_DELTA (now $PREEMPT). The engine evicted running requests — the box already ran OUT of headroom at current load. Do NOT raise analyst budgets; kv_cache=$KV waiting=$WAITING ttft_p95=${TTFT_P95}."
     touch "$PREEMPT_COOLDOWN"
   fi

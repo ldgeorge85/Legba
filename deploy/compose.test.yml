@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# deploy/compose.test.yml — the TEST SUBSTRATE, isolated from production (X1-A4).
+# deploy/compose.test.yml — the TEST SUBSTRATE, isolated from production.
 #
 # WHY: until this file the suite ran `--network host` against the PRODUCTION
 # Postgres server (database `legba_pivot_test` beside `legba`), the PRODUCTION
@@ -134,7 +134,7 @@ services:
       retries: 30
 
   # --- Dapr: placement + scheduler + a daprd sidecar, all in the namespace ---
-  # Until X1-A4 the actor tests reached the PRODUCTION sidecar on 3500 (its
+  # Without this the actor tests reached the PRODUCTION sidecar on 3500 (its
   # outbound health answered every DaprClient constructed in a test) and the
   # app-channel tests skipped because the live runtime held 6090. Here daprd's
   # app channel is 127.0.0.1:6090 — the port the test process itself serves —

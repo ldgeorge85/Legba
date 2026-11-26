@@ -31,7 +31,7 @@ LLM-bearing
 Backed by the L-120 ``legba.data.stack.llm`` provider stack via the
 :class:`SLMPort` structural-typing port (shared with the sibling
 :class:`SLMClassificationRefineHandler`). Default config targets
-gpt-oss-120b / vLLM per the L-202 brief; the concrete provider is wired
+the core model / vLLM per the L-202 brief; the concrete provider is wired
 in by the runtime at activation.
 
 Idempotency (L-102 §3)

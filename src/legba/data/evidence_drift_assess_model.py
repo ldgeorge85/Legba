@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The MODEL step of the drift assessment (lane D-2) — behind
+"""The MODEL step of the drift assessment — behind
 ``LEGBA_DRIFT_ASSESS_MODEL``, OFF by default, on the free core plane only.
 
 THE MODEL DOES NOT TYPE. Code alone sets the change type (and the components

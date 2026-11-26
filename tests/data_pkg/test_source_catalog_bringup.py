@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""S-1 — tests for the embedded no-auth source catalog bring-up script.
+"""Tests for the embedded no-auth source catalog bring-up script.
 
-Two layers, per the S-1 brief:
+Two layers, per the brief:
 
 1. Schema validation of EVERY embedded catalog definition against the real
    ``SourceDescriptor`` pydantic schema AND the real per-kind handler config
@@ -57,7 +57,7 @@ finally:
 # no-op for them: ON CONFLICT DO NOTHING keeps the baseline row).
 _BASELINE_OVERLAP_HOSTS = {"npr.org", "economist.com"}
 
-# Hosts the S-1 brief explicitly requires the state-affiliation flag on.
+# Hosts the brief explicitly requires the state-affiliation flag on.
 _REQUIRED_STATE_AFFILIATED = {
     "tass.com", "xinhuanet.com", "globaltimes.cn",
     "aa.com.tr", "tehrantimes.com", "voanews.com",
@@ -141,7 +141,7 @@ def test_default_geojson_feed_is_geocode_only():
 
 def test_fact_extract_news_feeds_get_the_stage():
     """The text-rich news feeds opted into fact extraction (graph-and-data
-    Wave-1b item 4) carry a fact_extractor stage AFTER ner_multilingual and
+    carry a fact_extractor stage AFTER ner_multilingual and
     BEFORE geocode; the geocode stage stays last."""
     fact_ids = {"source.france24.english", "source.cna.all",
                 "source.npr.world", "source.economist.international"}

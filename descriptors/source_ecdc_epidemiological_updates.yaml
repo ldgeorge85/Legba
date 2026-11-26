@@ -1,0 +1,87 @@
+# Draft SourceDescriptor. Ships DRAFT; the reference host walks it to
+# CONFIGURED (descriptors/LIFECYCLE.md), never active — activation is an
+# admin's call.
+#
+# European Centre for Disease Prevention and Control (ECDC, an EU agency) —
+# its "Epidemiological update" pages: country and multi-country outbreak
+# pages that ECDC revises as an event develops (a page is an item; a revised
+# page appears again under the same address). OFFICIAL. Beside the weekly
+# Communicable Disease Threats Report (source.ecdc.threats_report) and ECDC
+# news (source.ecdc.news): this feed is the event-by-event updates.
+#
+# Checked 2026-11-25 (one GET, generic client identity): HTTP 200,
+# application/rss+xml, ~7 KB, channel "Epidemiological update", RSS 2.0 with
+# title, link, description (one HTML paragraph), pubDate, dc:creator and a
+# permalink guid. The newest item was dated 2026-11-17, the oldest ~two months
+# earlier: an update every week or two. Once a day is ample.
+#
+# Licence, in the publisher's words (https://www.ecdc.europa.eu/en/copyright):
+# "licenced in accordance with the CC BY 4.0 licence ... may be reproduced,
+# adapted and/or distributed ... for commercial or non-commercial purposes
+# provided ... ECDC is always acknowledged as the creator; you provide a link
+# to the CC BY 4.0 licence; and you indicate if you modified". robots.txt was
+# not read.
+#
+# Language: en. No declared geo: an update names its own countries, and the
+# in-text geocoder files it by them.
+
+identity:
+  id: source.ecdc.epidemiological_updates
+  name: ECDC — epidemiological updates
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: owner@local
+  created: "2026-11-25T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: [en]
+  tags: [health, disease, outbreak, eu, gov]
+  source_class: official
+  license_class: cc_by            # ECDC copyright notice: CC BY 4.0
+  attribution: "Source: European Centre for Disease Prevention and Control (ECDC), CC BY 4.0"
+  access_class: public            # free no-auth feed, no separate reuse agreement
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "23 6 * * *"
+  cooldown_seconds: 600
+  jitter_seconds: 120
+  expect_quiet: true             # days between updates are normal
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://www.ecdc.europa.eu/en/taxonomy/term/1310/feed"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    # language_detect FIRST so ner_multilingual uses the detected language.
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 604800
+  delivery: lossy
+
+subscription_policy: open

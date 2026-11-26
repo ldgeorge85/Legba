@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Program 7g-3 — the first collection manifest, and the verifier that reads it.
+"""The first collection manifest, and the verifier that reads it.
 
 Two halves, both offline:
 
@@ -22,8 +22,7 @@ Two halves, both offline:
    imported and called — nothing here re-implements a parser.
 
 NO NETWORK. Not one test in this file opens a socket. The fetching half of the
-verifier is exercised by running it (the lane report carries the live coverage
-table); what is pinned HERE is the parsing, the coverage arithmetic and the
+verifier is exercised by running it (its live coverage table is not pinned here); what is pinned HERE is the parsing, the coverage arithmetic and the
 exit-code arithmetic, which are the parts that can be wrong silently.
 
 THE ONE RULE THIS FILE ENFORCES HARDEST: absence is absence. A subject a

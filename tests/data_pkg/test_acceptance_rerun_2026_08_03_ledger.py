@@ -7,9 +7,9 @@ critiques; it cannot run in CI. What CAN run in CI is every row that panel
 DISAGREED with, reproduced from the adjudication file (§5) closely enough to
 exercise the mechanism that decided it. That is what this module is: one entry
 per adjudicated disagreement, plus the pass-side miss, each naming its row id,
-its class, and which train resolves it.
+its class, and which change resolves it.
 
-Its job is to be TRUTHFUL rather than green. A row no train has fixed carries
+Its job is to be TRUTHFUL rather than green. A row no change has fixed carries
 ``xfail(strict=True)``, which means:
 
   * the assertion states the CORRECT verdict, not the current one, so the file
@@ -19,7 +19,7 @@ Its job is to be TRUTHFUL rather than green. A row no train has fixed carries
     unrecorded, and a done fix cannot quietly stay marked owed.
 
 That contract has now been exercised end to end. V-G shipped with six rows
-resolved and five marked owed; the V-H residuals train (2026-08-04/1) turned four
+resolved and five marked owed; the V-H residuals change (2026-08-04/1) turned four
 of those five red and this file green again in the same commits — V-H1 the outlet
 in the judge's citation view, V-H2 the undecorated watch heading, V-H3 the
 evidence-bearing metadata arm, V-H4 the enumerated-denial scope miss.

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Splitting a multi-claim desk sentence into pieces, each typed and gated on
-its own (lane S-4).
+its own.
 
 WHY. A desk sentence often carries several figures or several assertions and
 one citation: "Exports rose 12%, imports fell 4% and the deficit hit $3bn [1]."

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""P-11 pure-unit coverage — three-way resolution, governor merge, seed packs.
+"""Pure-unit coverage — three-way resolution, governor merge, seed packs.
 
 No DB / NATS — exercises the resolution algebra + governor-tightening merge +
 that the three seed-pack descriptor YAMLs parse against the FROZEN ActionPack
@@ -26,7 +26,7 @@ _DESCRIPTORS = Path(__file__).resolve().parents[3] / "descriptors"
 _SEED_PACKS = [
     ("action_pack_media_processing.yaml", "media_processing", ["process_media"]),
     ("action_pack_incident_response.yaml", "incident_response", ["escalate", "create_incident"]),
-    # A-3: the governed consult tool surface + the D1 example pack.
+    # The governed consult tool surface + the D1 example pack.
     # (action_pack_discovery.yaml is RETIRED per F-1 — kept on disk for
     # registry history, no longer registered or asserted as a seed pack.)
     ("action_pack_substrate_read.yaml", "substrate_read",
@@ -41,16 +41,16 @@ _SEED_PACKS = [
       # Palette expansion — finished-intelligence reads (consult + GATHER) +
       # navigation readers (consult-only, but still pack-governed).
       "list_findings", "list_situations", "query_predictions",
-      # V3/P3 — the decision-time belief register.
+      # The decision-time belief register.
       "belief_as_of",
-      # V3/P6 — the bounded-occurrence readers.
+      # The bounded-occurrence readers.
       "query_events", "inspect_event",
       "list_targets", "list_sources",
-      # W11-F141 — the scheduled-events calendar (migration 0240).
+      # The scheduled-events calendar (migration 0240).
       "list_scheduled_events",
-      # W11-F162 — the forecast ledger's due-date reader.
+      # The forecast ledger's due-date reader.
       "list_due_resolvers",
-      # W11-F152 — per-source health with a staleness verdict.
+      # Per-source health with a staleness verdict.
       "get_source_health",
       # 7g-2 — the COLLECTION series reads. History, not now: the only tools
       # in this pack that read `observations`.
@@ -62,27 +62,27 @@ _SEED_PACKS = [
     ("action_pack_web_access.yaml", "web_access", ["web_fetch", "web_search"]),
     ("action_pack_propose_facts.yaml", "propose_facts",
      ["propose_fact", "request_source", "open_question"]),
-    # C-1b — consult presents a case: the nine read-only workstation actions.
+    # Consult presents a case: the nine read-only workstation actions.
     ("action_pack_workstation_drive.yaml", "workstation_drive",
      ["open_panel", "arrange", "set_scope", "focus", "map", "timeline",
       "run_mission", "narrate", "done",
-      # Q-1 — one console view by id, through its declared contract.
+      # One console view by id, through its declared contract.
       "panel_action"]),
-    # C-2b-1 — the consult write plane: thin clients of the registry executor
-    # (W6 adds rerun_object for units and compositions; W11 the entity
+    # The consult write plane: thin clients of the registry executor
+    # (including rerun_object for units and compositions, and the entity
     # and fact record tools).
     ("action_pack_consult_write.yaml", "consult_write",
      ["inspect_object", "create_object", "update_object", "transition_object",
       "revert_write", "rerun_object", "edit_entity", "merge_entities",
       "unmerge_entity", "assert_fact", "close_fact"]),
-    # I-1 — the ingestion intake (an agent asks for something to be ingested).
+    # The ingestion intake (an agent asks for something to be ingested).
     ("action_pack_ingestion_intake.yaml", "ingestion_intake",
      ["request_ingestion", "ingestion_request_status"]),
-    # D-1 — source drift (versions, diff, re-read, re-derive, flag review).
+    # Source drift (versions, diff, re-read, re-derive, flag review).
     ("action_pack_evidence_drift.yaml", "evidence_drift",
      ["evidence_versions", "evidence_diff", "request_evidence_reread",
       "request_rederive", "review_drift_flag",
-      # D-2 — the assessment, the flag list (closed_by), the re-open.
+      # The assessment, the flag list (closed_by), the re-open.
       "evidence_drift_assessment", "drift_flags", "reopen_drift_flag"]),
 ]
 
@@ -205,7 +205,7 @@ def test_seed_pack_yaml_parses(fname, pid, tools):
 
 
 def test_retired_discovery_pack_still_parses_as_retired():
-    # F-1: the file stays for registry history but must carry state=retired
+    # The file stays for registry history but must carry state=retired
     # so a stray re-registration cannot resurrect a tool with no handler.
     body = yaml.safe_load((_DESCRIPTORS / "action_pack_discovery.yaml").read_text())
     body["identity"]["version"] = "0" * 16
@@ -290,7 +290,7 @@ def test_substrate_read_covers_consult_known_tools():
 
 
 # ---------------------------------------------------------------------------
-# workstation_drive (C-1b): pack tools = the vocabulary's nine = registered
+# workstation_drive: pack tools = the vocabulary's nine = registered
 # specs = registered handlers, and none of them is a write.
 # ---------------------------------------------------------------------------
 
@@ -305,7 +305,7 @@ def test_workstation_drive_pack_specs_handlers_agree_and_write_nothing():
 
     body = yaml.safe_load((_DESCRIPTORS / "action_pack_workstation_drive.yaml").read_text())
     pack_tools = [t["name"] for t in body["tools"]]
-    assert pack_tools == [*V.DRIVE_TOOL_NAMES, "panel_action"]  # Q-1: view actions only
+    assert pack_tools == [*V.DRIVE_TOOL_NAMES, "panel_action"]  # View actions only
     reg = ToolRegistry()
     register_workstation_drive_tools(reg)
     assert set(reg.names) == set(pack_tools)

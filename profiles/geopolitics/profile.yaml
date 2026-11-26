@@ -3,7 +3,7 @@
 #
 # THE MANIFEST of the geopolitics exemplar — the instance the reference host
 # runs. Its paths point at today's tree (descriptors/), except prompts/, which
-# holds the profile's own prose (W9 SPLIT-2 moved the six lean lenses here).
+# holds the profile's own prose (the six lean lenses).
 # Loaded by src/legba/data/profile.py (closed: an unknown key is refused).
 # docs/PROFILES.md explains each key.
 
@@ -40,7 +40,7 @@ rosters:
   #   title_terms        the title-frame gauge's vocabulary (lower-case stems)
   #   reference_queries  the reference builder's query patterns ({country})
   #   structural         the status is a standing condition, measured by the
-  #                      descriptor's level-shaped indicators (W11-F36)
+  #                      descriptor's level-shaped indicators
   # A unit that declares none of them degrades by name, never by KeyError.
   units:
     - id: leadership_transition
@@ -161,7 +161,7 @@ rosters:
   # entry per verified feed, loaded by scripts/bringup_register_source_catalog.py.
   source_catalog: rosters/source_catalog.yaml
   # The gazetteer: the tables of names and codes the guards, the polity canon
-  # and the entity canon read (W10 CANON-1, docs/PROFILES.md "The gazetteer"),
+  # and the entity canon read (docs/PROFILES.md "The gazetteer"),
   # through src/legba/data/gazetteer.py; the runtime images read the packaged
   # copy, src/legba/data/profile_gazetteer.json
   # (scripts/gen_profile_gazetteer.py).
@@ -176,7 +176,7 @@ rosters:
     - bringup_register_supply_chain_sources
 
 # The profile's own prompt prose: ONE package, legba_geopolitics (the six
-# political-lean lenses, DEC-14 taken 2026-10-04). The registry and runtime
+# political-lean lenses). The registry and runtime
 # image builds copy this directory into site-packages; a checkout puts it on
 # PYTHONPATH (docs/PROFILES.md "Prompt packages").
 prompts: prompts
@@ -209,7 +209,7 @@ constants:
   # with `country` is homed on that desk (situation_clustering).
   subject_frame: country
   # The frame anchor's class gate and the coverage floor's fold: a frame is
-  # anchored on a foreign POLITY (design §3.2 refuses an ORG anchor).
+  # anchored on a foreign POLITY (an ORG anchor is refused).
   anchor_class: country
   # A curated alias pair of two `country`-typed rows merges without the
   # adjudicator; any other class mix stays gray.
@@ -243,7 +243,7 @@ constants:
       - [ML, NE]
       - [BF, NE]
   # The applicability tags a desk's own target file carries (the unit
-  # fan-out narrowing matrix, S1-T3); scripts/bringup_tag_targets.py merges
+  # fan-out narrowing matrix); scripts/bringup_tag_targets.py merges
   # them, with the desk's region frame tag, onto a live head.
   applicability_tags: [nuclear_watch, conflict_active, sanctions_regime]
   # INST-1: the non-scored subject-roster tags whose subjects the CORRECTNESS
@@ -252,12 +252,16 @@ constants:
   # the correctness grader grades it — the supply-chain lanes and flows are
   # graded desks. docs/GRADING.md "The roster".
   reference_subject_tags: [supply_chain]
+  # The level words a desk's typed read may give its subject, lowest first
+  # (the desk-rows seat). `none` is reserved for "nothing bears on the
+  # question" and is not listed. docs/PROFILES.md "Constants".
+  levels: [low, moderate, elevated, high, critical]
 
 # The profile's read-time view (VIEW-1): the declared shape the projector
 # (deterministic_handlers/profile_projector.py) materializes into the
 # profile_projection table under this plane, read at
 # GET /api/v1/registry/projection/<plane>. docs/PROFILES.md "The projection".
-# The subject ladder's data (src/legba/data/subject.py, W10 SUBJECT-1).
+# The subject ladder's data (src/legba/data/subject.py).
 # label: how a subject's display name joins its tier and its name
 # ("Watch — Pakistan"): unit_names.unit_label is the one producer and the one
 # parser of that label, in Python and in the SQL it renders.
@@ -272,7 +276,7 @@ projection:
   plane: geopolitics
 
 # The workstation's labels, exported to legba-ui-v3/src/lib/profile_ui.json by
-# scripts/gen_profile_ui.py. The workstation READS every string below (UI-B2):
+# scripts/gen_profile_ui.py. The workstation READS every string below:
 # no TypeScript site spells one (tests/test_profile.py checks both), and the
 # shell's label snapshot (lib/profileUi.test.ts) pins today's bytes. The file
 # names beside each key are where the string renders.

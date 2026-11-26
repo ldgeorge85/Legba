@@ -2,10 +2,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Idempotent actor deactivation — ``DELETE /actors/<Type>/<id>``.
 
-WHY (lane N-U, 11-13). The daprd sidecar (``legba-dapr-sidecar-1``) is a
-separate container that outlives every runtime roll — up since 09-23 while the
-runtime restarted at 13:21. Its in-memory active-actor table still holds the
-actors the PREVIOUS app process activated; when their idle timeout expires it
+WHY. The daprd sidecar (``legba-dapr-sidecar-1``) is a separate
+container that outlives every runtime restart. Its in-memory active-actor
+table still holds the actors the PREVIOUS app process activated; when their idle timeout expires it
 sends the deactivation DELETE to the NEW process, which never activated them.
 The dapr SDK's ``ActorManager.deactivate_actor`` raises ``ValueError('<id> is
 not activated')`` and ``dapr.ext.fastapi`` turns every exception into a bare

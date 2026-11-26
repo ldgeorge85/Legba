@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Desk output contract v2 (lane D-1): parse, gates, the repair round, the
+"""Desk output contract v2: parse, gates, the repair round, the
 renderer and its lead check, the slice scope and the computed block, and one
 whole shadow run through a scripted model. No I/O; no table."""
 from __future__ import annotations
@@ -265,7 +265,7 @@ def test_the_read_is_rendered_from_passed_rows_in_the_house_sections():
     heads = [ln for ln in body.splitlines() if ln.startswith("## ")]
     assert heads == ["## What changed", "## Why it matters", "## What would change this read", "## Indicators"]
     assert body.splitlines()[0].startswith("*As of 2026-11-03 — this desk's collection: 3 signals from 2 sources")
-    # D-2: the BLUF is BUILT by code — the top judgement, then the top fact row
+    # The BLUF is BUILT by code — the top judgement, then the top fact row
     assert ("**BLUF:** Supply to central Europe is at risk. (likely) [1] The Druzhba pipeline was halted on "
             "3 November after a drone strike. [1]") in body
     assert "Flows will not resume" not in body                      # the lead sentence that maps to no row

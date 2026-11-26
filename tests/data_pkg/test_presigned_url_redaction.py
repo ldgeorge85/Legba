@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W11-F59 — no presigned (signed) URL is persisted into ``signals``.
+"""No presigned (signed) URL is persisted into ``signals``.
 
 The OFAC download redirects to a presigned S3 URL carrying
 ``X-Amz-Security-Token``; ``instrument_snapshot`` strips its query before

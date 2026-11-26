@@ -177,7 +177,9 @@ async def test_supported_and_unsupported_verdicts_are_unaffected(monkeypatch) ->
 async def test_quote_rule_reaches_the_judge_prompt(monkeypatch) -> None:
     monkeypatch.setenv("LEGBA_VERIFY_LLM_JUDGE", "1")
     _, judge = await _run(None)
-    assert judge.prompts and '"quotes"' in judge.prompts[0]
+    # The refuting span is asked for inside each verdict entry, before the
+    # verdict, so a misaligned reply cannot misplace it.
+    assert judge.prompts and '"quote":' in judge.prompts[0]
     assert "VERBATIM" in judge.prompts[0]
 
 
@@ -185,7 +187,7 @@ def test_quote_rule_is_one_shared_constant() -> None:
     """Stated wherever the JSON shape is stated, from ONE constant — so the
     requirement cannot drift between the unit, composition and absence routes."""
     rule = V._JUDGE_QUOTE_RULE
-    assert '"quotes"' in rule and "VERBATIM" in rule
+    assert '"quote"' in rule and "VERBATIM" in rule
     assert rule in V._ABSENCE_JUDGE_SYSTEM
 
 
@@ -199,8 +201,8 @@ def test_judge_profile_versions_bumped_for_the_prompt_change() -> None:
     now asks every verdict entry for its ``claim_index``. The pin lives in
     test_judge_profile_resolution_pinned.py::_EXPECTED_PROFILES; this asserts the
     versions MOVED with the quote rule the module tests, not their values."""
-    assert V._JUDGE_PROFILES[V.CLAIM_KIND_CITATION_SUPPORT].version == "citsupp.v6"
-    assert V._JUDGE_PROFILES[V.CLAIM_KIND_ABSENCE].version == "absence.v5"
+    assert V._JUDGE_PROFILES[V.CLAIM_KIND_CITATION_SUPPORT].version == "citsupp.v7"
+    assert V._JUDGE_PROFILES[V.CLAIM_KIND_ABSENCE].version == "absence.v6"
 
 
 # ---------------------------------------------------------------------------

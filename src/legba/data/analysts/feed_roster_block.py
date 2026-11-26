@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane K-2 — the FEED ROSTER block: a desk's declared feeds, counted in code.
+"""The FEED ROSTER block: a desk's declared feeds, counted in code.
 
 THE GAP THIS CLOSES. A desk that reads a fixed set of feeds (the cyber desk's
 agency advisories, trade outlets and provider status pages) owes its reader a

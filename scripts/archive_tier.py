@@ -143,8 +143,7 @@ async def run_tier(conn: Any, store: EvidenceStore, backend: BlobBackend | None,
     if not apply:
         return report
     spool.mkdir(parents=True, exist_ok=True)
-    # A killed earlier pass leaves its half-built bundle behind (C-1 measured
-    # 548 MB); it is never trusted (nothing recorded points at it) — clear it.
+    # A killed earlier pass leaves its half-built bundle behind (once 548 MB); it is never trusted (nothing recorded points at it) — clear it.
     # One mover at a time per spool directory.
     for pattern in ("????-??.*.tar", "*.readback", "*.verify", "*.copy"):
         for stale in spool.glob(pattern):

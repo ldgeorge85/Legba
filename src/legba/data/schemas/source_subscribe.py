@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The ``subscribe`` block of a source descriptor (lane I-4).
+"""The ``subscribe`` block of a source descriptor.
 
 A SUBSCRIBED source is one Legba holds a connection open to, receiving
 records as the upstream emits them. It is the fourth acquisition mode beside

@@ -3,12 +3,12 @@
 --
 -- 0234_consult_turn_verification.sql
 --
--- A CONSULT TURN SAYS WHETHER ITS ANSWER WAS JUDGED (X2 lane C1).
+-- A CONSULT TURN SAYS WHETHER ITS ANSWER WAS JUDGED.
 --
 -- WHY
 -- ---
 -- Consult answers were the one product surface outside the measurement chain
--- (W11-F5, W11-F27): every finding a desk writes is faithfulness-judged and
+--: every finding a desk writes is faithfulness-judged and
 -- carries the verdict on its critique row, and a consult answer carried
 -- nothing — not a score, not a statement that it had none. A reader could not
 -- tell a judged answer from an unjudged one, because there was no unjudged

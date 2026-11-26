@@ -1,0 +1,65 @@
+# THE JUDGE ON THE BOX — Gemma 4 behind the model gateway (kind: llm_provider).
+#
+# Every model Legba calls sits behind ONE OpenAI-compatible gateway (the
+# `api_endpoint` below).
+# This component is the verify JUDGE's first rung, the
+# consult judge (LEGBA_CONSULT_JUDGE_STACK_REF) and the claim_watch bearing gate
+# (`bearing_gate_ref`), i.e. every job the idle in-house Llama-3.1-8B
+# (`llm.verify.slm_8b`) did. Gemma 4 scores well on calibration but stalls on long
+# queued inputs, so the chain's SECOND rung is the Nemotron think judge
+# (`llm.judge.gateway_rung2_think.openai_compat`), which handles them.
+# The interlock on OUR adjudicated rows (SEAMS #70) decides which leads.
+#
+# NAMING IS LOAD-BEARING: the id ends in `.openai_compat` so
+# `infer_llm_subprovider` routes it to the vLLM handler (Chat Completions +
+# Bearer; max_tokens = the alias's declared maximum output below).
+# FAMILY: `google_gemma`, declared where the grader fence reads it
+# (`GRADER_FAMILY_BY_COMPONENT`, src/legba/runtime/external_grader_route.py);
+# the schema is extra=forbid, so it cannot be declared here.
+# The `gemma` alias is thinking OFF — a judge verdict is a short structured
+# answer; `gemma-think` exists on the gateway and is NOT used here.
+# PRICE: our own box behind the gateway — $0 per token (no list price); the
+# burn gauge reports it ungauged, which is the honest posture for a $0 lane.
+id: llm.verify.gateway_judge.openai_compat
+name: Gemma 4 via the model gateway (verify judge rung 1, consult judge, bearing gate)
+schema_uri: legba/stack/llm_provider/1.0.0
+version: "0000000000000000"
+state: draft
+owner: owner@local
+config:
+  api_endpoint:
+    factory_kind: text
+    raw: "${env:LEGBA_GATEWAY_API_ENDPOINT}"
+  # VAULT REF — the gateway token (LEGBA_GATEWAY_API_TOKEN in the live .env) registered
+  # once as this secret id by scripts/cutover_gateway.py; never the plaintext.
+  api_key:
+    factory_kind: secret
+    raw: llm.gateway.api_key
+  model_name:
+    factory_kind: text
+    raw: "${env:LEGBA_GATEWAY_JUDGE_MODEL}"
+  # The alias's maximum output as the gateway states it (/v1/models
+  # `max_output_tokens`), sent as max_tokens on every call so the gateway's
+  # lower per-alias default never cuts an answer short. A number of the
+  # model's, never a limit of ours; per instance because the alias is.
+  max_output_tokens:
+    factory_kind: text
+    raw: "${env:LEGBA_GATEWAY_JUDGE_MAX_OUTPUT_TOKENS}"
+  # The window, input plus output, the gateway states for this alias
+  # (its /v1/models `context_tokens`); it sizes the input budgets and keeps
+  # max_tokens inside the window when the input is large.
+  context_window_tokens:
+    factory_kind: text
+    raw: "${env:LEGBA_GATEWAY_CONTEXT_WINDOW_TOKENS}"
+  timeout_seconds:
+    factory_kind: number
+    raw: 120
+  tier:
+    factory_kind: dropdown_static
+    raw: cheap
+    options: [primary, fallback, cheap]
+  # Client-side cap on in-flight calls from ONE process: the bearing gate alone
+  # made ≈ 32k calls a week to the 8B; the box's queue is not ours to be.
+  max_concurrent:
+    factory_kind: number
+    raw: 8

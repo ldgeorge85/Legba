@@ -2,7 +2,7 @@
 #
 # Mirrors the live post-F-bundle india_energy_infra descriptor: 7-filter
 # pipeline (the inline analyst block once carried here was dead config —
-# see the Defect C note below; it has been removed).
+# see the dead-config note below; it has been removed).
 #
 # RSS feed: https://www.premiumtimesng.com/feed used as suggested.
 # Probed from inside legba-legba-runtime-dapr-1 — HTTP 200,
@@ -16,7 +16,7 @@ identity:
   abstraction_level: L1
   inherits: []
   state: active
-  owner: lewis@local
+  owner: owner@local
   created: "2026-05-28T00:00:00Z"
 
 scope:
@@ -74,7 +74,7 @@ pipeline:
     - kind: dedupe_tier_2
       config: {}
 
-# Defect C (X-1 dead-config, 2026-07-29): an inline `analyst:` block used to
+# Dead config: an inline `analyst:` block used to
 # sit here. The runtime never builds a running analyst from a target's
 # inline `method`/`cadence`/`grounding`/`rubric` config — only
 # `analyst.analyst_ref` (a pointer to a separately registered analyst

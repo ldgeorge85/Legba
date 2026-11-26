@@ -370,7 +370,7 @@ function Centered({ children }: { children: React.ReactNode }) {
 }
 
 // ===========================================================================
-// P1-T7 — Selection-scoped LENSES over a country / finding READ.
+// Selection-scoped LENSES over a country / finding READ.
 //
 // Three lenses over the SAME read, all brushing the SAME global selection:
 //   • Temporal — a timeline (`ReadTimelineLens`) + geo (`ReadGeoLens`) of the

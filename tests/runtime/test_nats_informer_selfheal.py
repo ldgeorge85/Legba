@@ -4,7 +4,7 @@
 
 A dropped durable consumer surfaces as a non-timeout ``fetch()`` error (a 503
 ServiceUnavailable). The pre-fix loop retried the *same* dead subscription
-forever — a ~3h, 10k-log-line incident on 2026-06-11. The informer must instead
+forever, flooding the log. The informer must instead
 RE-BIND the consumer (re-create + re-subscribe) and recover on its own.
 """
 from __future__ import annotations

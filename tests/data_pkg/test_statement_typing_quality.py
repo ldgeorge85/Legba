@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""S-4 — making real desk sentences typeable without weakening the gates:
+"""Making real desk sentences typeable without weakening the gates:
 subject names (``statement_subject_names``), splitting multi-claim sentences
 (``statement_split`` / ``statement_piece_typing``), the date rule
 (``statement_dates``) and the G2 date-part fix. Pure: no DB, no model.
@@ -124,7 +124,7 @@ def test_gate_subject_check_reads_resolved_names_and_records_which_matched():
     homonym = SupportRow("evidence", "signal", "s1", quote="a storm hit Arland Bay overnight",
                          title=None, published_at=FRI)
     assert g.check_subject_named([homonym], names).reason == "subject_not_named"
-    # plain strings still work (the S-3 caller shape)
+    # plain strings still work (the caller shape)
     assert g.check_subject_named([row], ["Arlton"]).passed
 
 
@@ -324,7 +324,7 @@ def test_a_figure_after_the_last_citation_is_marked_uncited():
 
 
 def test_a_piece_citing_only_a_prior_read_has_no_evidence_row():
-    # S-5: a piece citing only the desk's prior read RESTATES it (linked, no
+    # A piece citing only the desk's prior read RESTATES it (linked, no
     # new piece); one citing only a non-record ref still has no evidence row
     text = "Exports rose 12% [1], and imports fell 4% [9]."
     refs = (CitedRef(1, "signal", "sig-1", None, None, True), CitedRef(9, "prior_read", "r", None, None, False))

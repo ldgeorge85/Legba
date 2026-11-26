@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""P1-1 dispatcher fan-out — ledger rows, idempotency, cooldown, wiring.
+"""Dispatcher fan-out — ledger rows, idempotency, cooldown, wiring.
 
 The dispatcher is the shared machinery every sink rides: one durable
 ``alert_sink_deliveries`` row per sink outcome (delivered / failed /

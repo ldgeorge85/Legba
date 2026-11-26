@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Register the Country Assessment analyst descriptor (Program 3 Lane A).
+"""Register the Country Assessment analyst descriptor.
 
 Create-only and idempotent, exactly like ``bringup_register_reference_builder.py``:
 the descriptor lands in ``draft`` and creates NO live actor, so registering it
@@ -10,7 +10,7 @@ active is the orchestrator's (or the operator's) call via
 ``POST .../descriptors/analyst/country_assessment/transition``, and it is a real
 decision rather than a formality: going active fans this channel out to ~32
 per-country runs per cycle, each of them ALWAYS judged, which is the 33x judge
-spend D-6 named when it deferred the country tier.
+spend that deferred the country tier.
 
 Registry base/token as the sibling registrars resolve them (``_bringup_http``
 / ``_token``); the token is never printed.

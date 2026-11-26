@@ -16,7 +16,7 @@
      "date": "fetched 2026-10-09T04:10:00+00:00",
      "masthead": "example.org",
      "title": "Synthetic page",
-     "url": "https://example.org/hormuz-transits"
+     "url": "https://example.org/eastmere-throughput"
     }
    ],
    "r": "R1"
@@ -27,5 +27,5 @@
   }
  ],
  "schema": "legba.bakeoff.normalised/1",
- "text": "Commercial transits through the Strait of Hormuz fell over the window compared with the previous six weeks, according to tanker-tracking reports dated 2026-10-06 [R1] and a port authority notice [R2]. Search results did not establish exact daily counts.\n\nStated confidence: 0.70"
+ "text": "Container traffic through the Port of Eastmere fell over the window compared with the previous six weeks, according to port-call reports dated 2026-10-06 [R1] and a port authority notice [R2]. Search results did not establish exact daily counts.\n\nStated confidence: 0.70"
 }

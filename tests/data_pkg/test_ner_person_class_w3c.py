@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W3-C (2026-08-04) — the NER person gate: the person table is not all persons.
+"""The NER person gate: the person table is not all persons.
 
 A 60-pair random sample of the V-G6 phonetic-alias backlog found NINE pairs
 (15%) whose ``entity_class='person'`` rows denote no human. Every one arrived
@@ -23,7 +23,7 @@ constantly. That veto would have demoted thousands of genuine names to shrink a
 nine-row defect class, so it was not taken; this module pins that decision too.
 
 THE REGRESSION SET IS THE LABELED SAMPLE. Every surface below marked a person
-comes from ``planning/TRANSLITERATION_LABELED_SAMPLE_2026-08-04.csv`` — 41 rows
+comes from a labeled transliteration sample (2026-08-04) — 41 rows
 labeled ``same_person`` with a citation apiece, plus the ``different_person``
 rows, which are still PEOPLE (two of them, which is a different problem). None
 of them may lose ``person``, under any predicate.

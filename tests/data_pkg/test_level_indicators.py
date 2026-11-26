@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""X4 LEVEL (W11-F36) — level-shaped indicators re-evidence a standing status.
+"""X4 LEVEL — level-shaped indicators re-evidence a standing status.
 
-The defect: the carried-state rule (W11-F14) withholds a unit status none of the
+The defect: the carried-state rule withholds a unit status none of the
 unit's own indicators re-evidenced inside N cadence windows, and the units whose
 status is a STANDING condition (energy_security "high" under a sanctions regime,
 military_posture on a war footing) had only change-shaped signposts, so their

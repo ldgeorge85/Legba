@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""G1 — THE GRADING PROTOCOL: one call per claim per family, and the ceiling.
+"""THE GRADING PROTOCOL: one call per claim per family, and the ceiling.
 
-A port of ``planning/PROGRAM1_2026-09-16/grade_p1.py``'s protocol onto the
-platform's own LLM handlers. Nothing about the protocol moves — same three
+The calibrated protocol, ported onto the platform's own LLM handlers.
+Nothing about the protocol moves — same three
 families, same one-call-per-atom, same label set READ OUT OF the rubric, same
 span check, same ONE corrective retry, same refusal to guess a label. What moves
 is the transport: instead of a hand-rolled ``urllib`` POST this calls
@@ -11,16 +11,16 @@ is the transport: instead of a hand-rolled ``urllib`` POST this calls
 holds, so the key, the endpoint, the timeout and the price table are the
 operator's config rather than this module's constants.
 
-THE THREE FAMILIES (PREREG_P1 §4, unchanged):
+THE THREE FAMILIES:
 
   ===  ==========================================  =============================
-  F0   gpt-oss-120b, the $0 self-hosted core plane  ``llm.primary.openai_compat``
+  F0   the core model, the $0 self-hosted core plane  ``llm.primary.openai_compat``
   F2   meta-llama/llama-3.3-70b-instruct            ``llm.audit.openrouter_llama33_70b.openai_compat``
   F3   mistralai/mistral-medium-3.1                 ``llm.judge.openrouter_mistral_large.openai_compat``
   ===  ==========================================  =============================
 
 F0 is DISCLOSED as the producer family: the same model writes the reads it is
-here grading. VERDICT_P1v4 measured it as not the outlier (F0×F3 = 0.90 was the
+here grading. Calibration measured it as not the outlier (F0×F3 = 0.90 was the
 strongest pair), and that disclosure travels with every number.
 
 ``max_tokens`` IS NEVER SENT — to any family. It is a HARD house rule for the
@@ -32,7 +32,7 @@ THE CEILING. ``LEGBA_GRADER_DAILY_CEILING_USD`` defaults to ``0``, at which F2
 and F3 are NEVER CALLED — not resolved, not attempted, not estimated. Above
 zero, the guard refuses the call that WOULD breach rather than reporting the
 breach afterwards (``spent + the largest cost seen so far > ceiling``), which is
-PREREG_P1 §5's rule and the only version of a ceiling that is one.
+the pre-registered rule and the only version of a ceiling that is one.
 
 THE TRIAGE. F2/F3 run ONLY on claims F0 did not call ``silent``. A ``silent``
 claim therefore carries ONE family's label. That is a real, stated limit: a
@@ -62,7 +62,7 @@ UNPARSEABLE = "UNPARSEABLE"
 #: The output contract's own field names, in the rubric's order. Only
 #: ``verdict`` is checked against a vocabulary; the rest are the grader's prose.
 CONTRACT_FIELDS: tuple[str, ...] = (
-    "verdict", "core_claim", "decisive_span", "reason",
+    "core_claim", "decisive_span", "reason", "verdict",
 )
 
 #: Family order. F0 first because the triage depends on its answer.
@@ -98,10 +98,10 @@ FAMILIES: dict[str, dict[str, Any]] = {
     "F2": {
         # Cutover 2026-10-23: the OpenRouter Llama-3.3 lane is RETIRED (its
         # credits ran out 10-17; every call 402). F2 is now Gemma 4 on our own
-        # box behind the innoai gateway — the same component that judges
-        # faithfulness, a family distinct from the MiMo writer (F0). $0 lane.
-        "label": "F2 Gemma 4 (innoai gateway)",
-        "component": "llm.verify.innoai_gemma.openai_compat",
+        # box behind the model gateway — the same component that judges
+        # faithfulness, a family distinct from the core writer (F0). $0 lane.
+        "label": "F2 Gemma 4 (model gateway)",
+        "component": "llm.verify.gateway_judge.openai_compat",
         "model": "gemma",
         "paid": False,
         "price_in": 0.0,
@@ -126,10 +126,10 @@ FAMILIES: dict[str, dict[str, Any]] = {
         # calibrated on a different one. Re-gate with
         # ``scripts/correctness_regate.py``; nothing here seeds a row.
         # Cutover 2026-10-23: the OpenRouter Mistral lane is RETIRED with the
-        # same credits. F3 is Nemotron Lightning (thinking off) on the box —
-        # the third family, distinct from F0 (MiMo) and F2 (Gemma). $0 lane.
-        "label": "F3 Nemotron Lightning (innoai gateway)",
-        "component": "llm.grader.innoai_lightning.openai_compat",
+        # same credits. F3 is the Nemotron grader (thinking off) on the box —
+        # the third family, distinct from F0 (the core model) and F2 (Gemma). $0 lane.
+        "label": "F3 Nemotron (model gateway)",
+        "component": "llm.grader.gateway_third_family.openai_compat",
         "model": "lightning",
         "paid": False,
         "price_in": 0.0,
@@ -145,7 +145,7 @@ FAMILIES: dict[str, dict[str, Any]] = {
 #: That is the point: F0's agreement with F2/F3 was measured on ONE model.
 CORE_MODEL_ENV = "LEGBA_LLM_MODEL_NAME"
 #: The model the v4 gate actually ran against on 2026-09-16, under its PUBLIC
-#: name: a self-hosted ``gpt-oss-120b`` core plane. Used ONLY when the env is
+#: name: a self-hosted core plane. Used ONLY when the env is
 #: unset, and named here rather than in a comment because the seeded calibration
 #: row has to be able to say which model it calibrated. A deployment whose core
 #: plane serves those weights under its own deployment-local id sets
@@ -180,7 +180,7 @@ class CeilingReached(RuntimeError):
 
 
 # ---------------------------------------------------------------------------
-# The span check (PREREG_P1 Amendment 2)
+# The span check
 # ---------------------------------------------------------------------------
 
 #: Curly quotes and apostrophes -> straight. References are wire copy and are
@@ -541,7 +541,7 @@ def would_breach(spent: float, ceiling: float, est_next: float) -> bool:
     """True if the NEXT call could take the day past the ceiling.
 
     NOT ``spent >= ceiling``: that lets the call that actually breaches go out
-    first and reports the breach afterwards. PREREG_P1 §5 says stop BEFORE the
+    first and reports the breach afterwards. The rule is to stop BEFORE the
     call that would breach, so the estimate of the next call — the largest cost
     seen so far, or the family's registered first-call estimate — is added in.
     """
@@ -611,7 +611,7 @@ async def grade_one(
         label the grader actually gave; the scorer gates on labels and reports
         the unverified spans beside them.
 
-    Both share the ONE corrective retry §5 registers — never two. A reply that
+    Both share the ONE corrective retry the protocol registers — never two. A reply that
     carried a valid label on ANY attempt is never written ``UNPARSEABLE``.
     """
     system_message = (

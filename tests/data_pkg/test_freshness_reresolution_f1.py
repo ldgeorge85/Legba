@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""F-1 (MASTER_PLAN 2026-07-13) — compose-time head re-resolution (freshness).
+"""Compose-time head re-resolution (freshness).
 
 A composition head freezes its lower-tier CITATIONS at its own tick. If a
 sub-finding it cited later REVERSES (is superseded by a materially different

@@ -15,12 +15,15 @@
  * DEGRADE / HONESTY: a legacy / uncited finding has no citations → the prose
  * renders plainly under an explicit "uncited" marker, no fabricated anchors.
  */
-import { ShieldAlert, FileText } from 'lucide-react'
+import { FileText } from 'lucide-react'
 import CitedProse from '@/components/CitedProse'
 import { RecordLink } from '@/components/inspector/RecordLink'
 import { UnitEvalBadge } from '@/components/inspector/UnitEvalBadge'
 import { UnitCorrectnessBadge } from '@/components/inspector/UnitCorrectnessBadge'
 import { VerdictBadge } from '@/components/VerdictBadge'
+import { HowProduced, TrustWords, verdictRows } from '@/components/HowProduced'
+import { whyNot } from '@/lib/claimsModel'
+import { distinctSources, findingTrust } from '@/lib/trustWords'
 import {
   citationAnchorId,
   citationDrill,
@@ -78,6 +81,13 @@ export interface CitedAssessmentProps {
   pending?: boolean
 }
 
+/** How many claims the check flagged, or null when the read carries no check. */
+function flaggedCount(verification: Record<string, unknown> | null): number | null {
+  if (!verification) return null
+  const w = whyNot(verification)
+  return w ? w.unsupportedSpans.length : 0
+}
+
 /**
  * The cited assessment card. Renders the cited path when `citations` is
  * non-empty, otherwise the honest uncited path (prose only + an "uncited"
@@ -103,42 +113,51 @@ export default function CitedAssessment({
     // `unverified — structural` badge, never the ambiguous bare `unverified`.
     analystId,
   })
+  const trust = findingTrust({ verification, citations }, false, { checkMayBeElsewhere: true })
 
   return (
     <div data-testid="cited-assessment">
-      <div className="mb-2 flex flex-wrap items-center gap-2">
+      <div className="mb-2 flex flex-wrap items-baseline gap-x-3 gap-y-1">
         {pending ? (
           <span
             className="inline-flex items-center gap-1 text-label text-ink-3"
             data-testid="cited-pending"
             aria-busy="true"
-            title="The record is still being read — its citations and verdict print once it answers"
+            title="The record is still being read; how far to trust it prints once it answers"
           >
             <FileText className="h-3 w-3" aria-hidden />
-            citations – · verdict reading…
-          </span>
-        ) : cited ? (
-          <span className="inline-flex items-center gap-1 text-label text-ink-2" data-testid="cited-marker">
-            <FileText className="h-3 w-3" aria-hidden />
-            {citations.length} citation{citations.length === 1 ? '' : 's'}
+            the check is still reading…
           </span>
         ) : (
-          <span
-            className="inline-flex items-center gap-1 rounded bg-surf-1 px-1.5 py-0.5 text-label text-ink-3"
-            data-testid="uncited-marker"
-            title="This finding predates citations — its prose has no linked evidence"
-          >
-            <ShieldAlert className="h-3 w-3" aria-hidden />
-            uncited (legacy finding)
+          // At most two plain words with their n (`lib/trustWords.ts`, the
+          // same words the Board's list shows); the full readout is in the
+          // collapsed disclosure below them.
+          <span data-testid={cited ? 'cited-marker' : 'uncited-marker'}>
+            <TrustWords words={trust} testId="cited-trust" />
           </span>
         )}
-        {!pending && <VerdictBadge verdict={verdict} showLegend />}
-        <UnitEvalBadge analystId={analystId} />
-        {/* G2 — correctness against an independent reference, a DIFFERENT
-            measurement from the faithfulness verdict beside it and never
-            pooled with it. */}
-        <UnitCorrectnessBadge analystId={analystId} targetId={targetId} />
       </div>
+      {!pending && (
+        <HowProduced
+          rows={verdictRows(verdict, {
+            citations: citations.length,
+            sources: distinctSources(citations),
+            flagged: flaggedCount(verification),
+            checkKnown: verification != null,
+          })}
+          analystId={analystId}
+          targetId={targetId}
+          className="mb-2"
+        >
+          {/* The engine readout, for an admin: the verdict chips and the
+              producer's server-composed badges. G2 — correctness against an
+              independent reference is a different measurement from the
+              per-claim check and is never pooled with it. */}
+          <VerdictBadge verdict={verdict} showLegend />
+          <UnitEvalBadge analystId={analystId} />
+          <UnitCorrectnessBadge analystId={analystId} targetId={targetId} />
+        </HowProduced>
+      )}
 
       {/* P0-4 — one-line subtext for a verify-EXEMPT structural read, so the
           exception is stated in place (the badge tooltip repeats it). */}
@@ -154,7 +173,7 @@ export default function CitedAssessment({
       {/* The report prose — one shared renderer: markdown always rendered, markers
           tokenized to chips (hover-card + unresolved state). Chip click scrolls to
           the evidence row below (CitedProse's default finds the on-page anchor).
-          The verify block rides along (P1-8) so each chip's hover card carries
+          The verify block rides along so each chip's hover card carries
           its per-claim judge verdict — or the honest not-recorded line. */}
       <div className="text-body text-ink-1">
         {/* 7b-i — `claimTags` is ON here and nowhere else by default: this is

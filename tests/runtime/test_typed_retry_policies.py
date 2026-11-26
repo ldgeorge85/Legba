@@ -315,7 +315,7 @@ async def test_budget_failure_short_circuits_transient_retry() -> None:
 
 
 # ---------------------------------------------------------------------------
-# W11-F101 — a provider Retry-After floors the transient wait
+# A provider Retry-After floors the transient wait
 # ---------------------------------------------------------------------------
 
 

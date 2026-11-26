@@ -14,9 +14,9 @@ publish gate applies (``evaluate_publish_gate``: control text, zero refs, or few
 than 80 % of cited refs resolving in ``REF_TABLES``). Rows already carrying
 ``evidence_unavailable`` (declared by the gate) are skipped. Refs are the
 structured column UNION every inline citation form in the body
-(``collect_refs``, lane N-H), and lens / inquiry / crossroads rows are judged
+(``collect_refs``), and lens / inquiry / crossroads rows are judged
 with their entry kind (zero refs withholds them only as a stub / tool call).
-A short-id ref (8-hex prefix, lane N-I) counts as resolved only when its prefix
+A short-id ref (8-hex prefix) counts as resolved only when its prefix
 matches exactly one stored row created before the citing row.
 
   * DRY-RUN (default): prints every failing row with its resolve counts, and the
@@ -29,8 +29,7 @@ matches exactly one stored row created before the citing row.
     untouched). Idempotent: closed rows are not open, so a second run plans
     nothing.
 
-Run inside the runtime container after the roll that ships lane N-G (the merger
-runs it, dry-run first; never from a lane):
+Run inside the runtime container after the release that ships it (dry-run first):
 
     docker exec -i legba-legba-runtime-dapr-1 python3 - < scripts/journal_correct_once.py
     docker exec -i legba-legba-runtime-dapr-1 python3 - --apply < scripts/journal_correct_once.py

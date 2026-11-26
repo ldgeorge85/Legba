@@ -139,6 +139,9 @@ describe('sign-in required', () => {
     await waitFor(() => expect(screen.getByTestId('identity-name')).toHaveTextContent('Ada'))
     expect(screen.getByTestId('identity-chip')).toHaveTextContent('· admin')
     expect(screen.getByTestId('identity-owner')).toBeInTheDocument()
+    expect(screen.queryByTestId('identity-sign-out')).toBeNull()
+    fireEvent.click(screen.getByTestId('identity-menu-trigger'))
+    expect(screen.getByTestId('identity-menu-who')).toHaveTextContent(/·?\s*(reader-own-rows|admin)/)
     expect(screen.getByTestId('identity-sign-out')).toBeInTheDocument()
   })
 

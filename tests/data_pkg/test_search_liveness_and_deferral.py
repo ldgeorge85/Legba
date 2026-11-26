@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""R-3d — the binding, the control probe, and the deferral contract.
+"""The binding, the control probe, and the deferral contract.
 
 Three claims, each with its own section:
 
 1. **The seam is BOUND.** ``ToolContext.search`` / ``search_route`` were
-   declared by R-3b and bound by nothing, which is what kept the discovery leg
+   declared by and bound by nothing, which is what kept the discovery leg
    inert: ``web_search`` could not reach a provider at all. The runtime now
    resolves the configured ``search_provider`` component into the ``web_access``
    pack's ToolContext. A DECLARED route that will not resolve stays a LOUD
@@ -553,7 +553,7 @@ def test_the_ttl_override_refuses_to_disable_the_cache(monkeypatch):
 
 
 async def test_a_cadence_canary_uses_the_same_code_path(cache):
-    """R-3b declared a separate low-cadence control-query canary. It is THIS —
+    """Declared a separate low-cadence control-query canary. It is THIS —
     ``force=True`` refreshes the verdict regardless of the freshness cache, so
     there is one probe query, one threshold, one implementation (the coherence
     audit's ~40-organs finding)."""

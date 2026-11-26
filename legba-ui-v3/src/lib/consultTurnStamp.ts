@@ -9,7 +9,7 @@
  *     `unassessable · <why>` (never a number: an unassessable turn is not
  *     0.5, W11-F29), or `not judged · <why>`. A turn recorded before judging
  *     existed (the server sends `verification: null`) says exactly that;
- *   * a not-judged label whose judge could not run names WHY (W11-F93) —
+ *   * a not-judged label whose judge could not run names WHY —
  *     `judge_unavailable_reason`: budget exhausted / route down / timed out /
  *     not settled — never a bare "judge unavailable";
  *   * a usage field the run did not report reads "not measured", never 0;

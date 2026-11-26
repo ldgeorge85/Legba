@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""X4 LEVEL (W11-F36) — the third later train to touch two of the flipped
+"""X4 LEVEL — the third later train to touch two of the flipped
 prompts, peeled for the D6 pin exactly as TITLE-FRAME-FIX's line swap is.
 
 ``energy_security`` and ``military_posture`` gained level-shaped indicators: the
@@ -122,7 +122,7 @@ def pre_level_indicators(prompt: str) -> str:
         if not any(present):
             continue
         if not all(present):
-            raise ValueError(f"{unit}: only part of X4 LEVEL's prompt edit is present")
+            raise ValueError(f"{unit}: only part of the LEVEL prompt edit is present")
         for new, old in swaps:
             out = out.replace(new, old, 1)
     return out

@@ -11,8 +11,8 @@
   "usd": null
  },
  "created_at": "2026-10-09T03:44:04.272992+00:00",
- "desk": "lane_hormuz",
- "desk_display_name": "Lane — Strait of Hormuz",
+ "desk": "lane_eastmere_port",
+ "desk_display_name": "Lane — Port of Eastmere",
  "elapsed_s": null,
  "label": "C",
  "model": {
@@ -30,7 +30,7 @@
   "harness_git_sha": "758f177fd1344eeb3f966ce5f73f0884dc1cda18",
   "prompt_sha256": "80917b35c5ee526fb89e8c2198d19333f23a531d18db538da57c5b5200bd5995"
  },
- "question": "Over the window, did commercial traffic through the Strait of Hormuz recover, hold, or fall compared with the previous six weeks?",
+ "question": "Over the window, did container traffic through the Port of Eastmere recover, hold, or fall compared with the previous six weeks?",
  "question_id": "P02",
  "raw_answer": null,
  "receipts": [],
@@ -50,9 +50,9 @@
      "max_tool_rounds": 10,
      "messages": [],
      "mode": "chat",
-     "question": "Over the window, did commercial traffic through the Strait of Hormuz recover, hold, or fall compared with the previous six weeks?\n\nAs of: 2026-10-09T04:00:00+00:00. Desk scope: lane_hormuz.",
+     "question": "Over the window, did container traffic through the Port of Eastmere recover, hold, or fall compared with the previous six weeks?\n\nAs of: 2026-10-09T04:00:00+00:00. Desk scope: lane_eastmere_port.",
      "request_id": "7fe30b93-8857-4346-8258-d99394c8f1b8",
-     "scope_predicate": "target_id == \"lane_hormuz\""
+     "scope_predicate": "target_id == \"lane_eastmere_port\""
     }
    ],
    "trigger_kind": "method"

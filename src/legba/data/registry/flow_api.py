@@ -41,6 +41,8 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
+from ..schemas.env_refs import EnvRefError, resolve_env_value, resolve_token_count
+from ..trace_bulk import hydrate_traces, pointer_columns_sql, present_sql
 from .api import RegistryAPIDeps, require_bearer
 from .flow_graph import FAMILY_TO_KIND, apply_scope, derive_graph
 from .flow_params import sampling_params
@@ -83,15 +85,21 @@ def _graph_sql() -> str:
 
 GRAPH_ROWS_SQL = _graph_sql()
 
-# Only the model name, cap and timeout leave this query — never a credential
-# field of the component config.
+# Only the model names, the model's declared limits and the timeout leave this
+# query — never a credential field of the component config.
 STACK_SQL = """/* flow:stack */
 SELECT component_id, state,
        body->'config'->'model_name'->>'raw' AS model,
-       body->'config'->'max_tokens'->>'raw' AS max_tokens,
+       body->'config'->'thinking_model_name'->>'raw' AS thinking_model,
+       body->'config'->'max_output_tokens'->>'raw' AS max_output_tokens,
+       body->'config'->'thinking_max_output_tokens'->>'raw' AS thinking_max_output_tokens,
+       body->'config'->'context_window_tokens'->>'raw' AS context_window_tokens,
        body->'config'->'timeout_seconds'->>'raw' AS timeout_seconds
   FROM stack_components
  WHERE is_head AND kind = 'llm_provider'"""
+
+#: The declared model limits a component row may carry (``LLMProviderConfig``).
+_LIMIT_FIELDS = ("max_output_tokens", "thinking_max_output_tokens", "context_window_tokens")
 
 RECENT_RUNS_SQL = """/* flow:recent_runs */
 SELECT run_id, analyst_version, target_id, cadence_trigger, status, run_started_at, run_ended_at,
@@ -101,11 +109,14 @@ SELECT run_id, analyst_version, target_id, cadence_trigger, status, run_started_
  ORDER BY run_started_at DESC
  LIMIT $2"""
 
-LATEST_PROMPT_SQL = """/* flow:latest_prompt */
+# The three trace reads below that carry prompt / input / output select the
+# bulk pointer columns too and go through ``trace_bulk.hydrate_traces``, so a
+# run older than the trace compaction age reads the same as a recent one.
+LATEST_PROMPT_SQL = f"""/* flow:latest_prompt */
 SELECT run_id, run_started_at, analyst_version, prompt_rendered, prompt_sha256,
-       input_payload->'prompt_tail' AS prompt_tail
+       input_payload, {pointer_columns_sql()}
   FROM analyst_traces
- WHERE analyst_id = $1 AND prompt_rendered IS NOT NULL
+ WHERE analyst_id = $1 AND {present_sql("prompt_rendered")}
  ORDER BY run_started_at DESC
  LIMIT 1"""
 
@@ -116,19 +127,35 @@ SELECT run_id, run_started_at, status, intermediate_steps, output_row_refs
  ORDER BY run_started_at DESC
  LIMIT 1"""
 
-RUN_SQL = """/* flow:run */
+RUN_SQL = f"""/* flow:run */
 SELECT run_id, analyst_id, analyst_version, target_id, cadence_trigger, status,
        run_started_at, run_ended_at, receipt_hash, prev_receipt_hash, prompt_sha256,
        intermediate_steps, llm_calls, tool_calls, input_row_refs, output_row_refs,
        prompt_rendered, input_payload, error_payload,
        octet_length(input_payload::text) AS input_payload_bytes,
-       octet_length(output_payload::text) AS output_payload_bytes
+       octet_length(output_payload::text) AS output_payload_bytes,
+       {pointer_columns_sql()}
   FROM analyst_traces WHERE run_id = $1"""
 
-RUN_BODY_SQL = """/* flow:run_body */
+RUN_BODY_SQL = f"""/* flow:run_body */
 SELECT run_id, intermediate_steps, llm_calls, tool_calls, prompt_rendered,
-       input_payload, output_payload, error_payload
+       input_payload, output_payload, error_payload, {pointer_columns_sql()}
   FROM analyst_traces WHERE run_id = $1"""
+
+
+def _prompt_tail(input_payload: Any) -> Any:
+    """``input_payload.prompt_tail`` from a jsonb value or its text."""
+    if isinstance(input_payload, str):
+        try:
+            input_payload = json.loads(input_payload)
+        except ValueError:
+            return None
+    return input_payload.get("prompt_tail") if isinstance(input_payload, Mapping) else None
+
+
+async def _hydrated_row(conn: Any, row: Any) -> dict[str, Any] | None:
+    return (await hydrate_traces(conn, [row]))[0] if row is not None else None
+
 
 OUTPUT_ROWS_SQL = """/* flow:output_rows */
 SELECT 'analyst_outputs' AS "table", id, kind, title, schema_uri, produced_at, data,
@@ -162,13 +189,47 @@ def _int_or_none(v: Any) -> int | None:
         return None
 
 
+def _shown_model(component_id: str, raw: Any, field: str = "model_name") -> Any:
+    """The model a component names, its ``${env:NAME}`` reference resolved for
+    display; an unresolvable one is shown as the reference itself, so the
+    reader sees which variable is missing."""
+    try:
+        return resolve_env_value(raw, component_id=component_id, field=field)
+    except EnvRefError:
+        return raw
+
+
+def _declared_limits(component_id: str, row: Any) -> dict[str, Any]:
+    """The row's declared model limits as ints (``None`` = not declared), plus
+    ``limits_unresolved``: each field whose value this process cannot read (an
+    ``${env:NAME}`` reference unset here, shown by its reference)."""
+    out: dict[str, Any] = {}
+    unresolved: dict[str, str] = {}
+    for field in _LIMIT_FIELDS:
+        raw = row.get(field)
+        if raw is None:
+            out[field] = None
+            continue
+        try:
+            out[field] = resolve_token_count(raw, component_id=component_id, field=field)
+        except (EnvRefError, ValueError):
+            out[field] = None
+            unresolved[field] = str(raw)
+    out["limits_unresolved"] = unresolved
+    return out
+
+
 async def load_graph(conn: Any) -> tuple[dict[str, Any], dict[str, Any]]:
     """``(graph, stack_models)`` from the live heads."""
     rows = [dict(r) for r in await conn.fetch(GRAPH_ROWS_SQL)]
     stack = {
         str(r["component_id"]): {
-            "model": r["model"], "state": r["state"],
-            "max_tokens": _int_or_none(r["max_tokens"]),
+            "model": _shown_model(str(r["component_id"]), r["model"]), "state": r["state"],
+            "thinking_model": (
+                _shown_model(str(r["component_id"]), r.get("thinking_model"), "thinking_model_name")
+                if r.get("thinking_model") is not None else None
+            ),
+            **_declared_limits(str(r["component_id"]), r),
             "timeout_seconds": _int_or_none(r["timeout_seconds"]),
         }
         for r in await conn.fetch(STACK_SQL)
@@ -296,7 +357,9 @@ def build_flow_router(deps: RegistryAPIDeps) -> APIRouter:
                 ]
             if family == "analyst":
                 body = node["fields"] if isinstance(node["fields"], Mapping) else {}
-                latest = await conn.fetchrow(LATEST_PROMPT_SQL, did)
+                latest = await _hydrated_row(conn, await conn.fetchrow(LATEST_PROMPT_SQL, did))
+                if latest is not None:
+                    latest["prompt_tail"] = _prompt_tail(latest.pop("input_payload", None))
                 recent = [dict(r) for r in await conn.fetch(RECENT_RUNS_SQL, did, runs)]
                 steps_row = await conn.fetchrow(LATEST_STEPS_SQL, did)
                 observed_rows: list[dict] = []
@@ -304,7 +367,7 @@ def build_flow_router(deps: RegistryAPIDeps) -> APIRouter:
                     for r in await conn.fetch(OUTPUT_ROWS_SQL, list(steps_row["output_row_refs"])):
                         observed_rows.append({"table": r["table"], "id": str(r["id"]),
                                               "kind": r["kind"], "schema_uri": r["schema_uri"]})
-                out["prompt"] = _prompt_block(body, dict(latest) if latest else None)
+                out["prompt"] = _prompt_block(body, latest)
                 out["output_contract"] = _output_contract(body, observed_rows)
                 out["params"] = sampling_params(str(did), body, stack)
                 out["params"]["observed"] = {
@@ -357,10 +420,9 @@ def build_flow_router(deps: RegistryAPIDeps) -> APIRouter:
     async def flow_run(run_id: str, principal: str = Depends(require_bearer)) -> dict[str, Any]:
         rid = _uuid(run_id)
         async with _pg().acquire() as conn:
-            row = await conn.fetchrow(RUN_SQL, rid)
+            row = await _hydrated_row(conn, await conn.fetchrow(RUN_SQL, rid))
             if row is None:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, f"no run {run_id}")
-            row = dict(row)
             refs = list(row.get("output_row_refs") or [])
             outputs = [dict(r) for r in await conn.fetch(OUTPUT_ROWS_SQL, refs)] if refs else []
             crit = ([dict(r) for r in await conn.fetch(CRITIQUES_SQL, [str(x) for x in refs])]
@@ -378,11 +440,11 @@ def build_flow_router(deps: RegistryAPIDeps) -> APIRouter:
         if part not in BODY_PARTS:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, f"part must be one of {', '.join(BODY_PARTS)}")
         async with _pg().acquire() as conn:
-            row = await conn.fetchrow(RUN_BODY_SQL, rid)
+            row = await _hydrated_row(conn, await conn.fetchrow(RUN_BODY_SQL, rid))
         if row is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"no run {run_id}")
         try:
-            return body_part(dict(row), part, index)
+            return body_part(row, part, index)
         except IndexError as exc:
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"no {part} at index {index}") from exc
 

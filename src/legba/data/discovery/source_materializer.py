@@ -67,7 +67,7 @@ from .source_validate import validate_candidate_source
 
 logger = logging.getLogger(__name__)
 
-#: Who writes the discovered source rows (lane 9): this code path.
+#: Who writes the discovered source rows: this code path.
 _WRITTEN_BY = rule_handle("source_materializer")
 
 
@@ -461,7 +461,7 @@ async def materialize_discovered_source(
         evidence=candidate.evidence.model_dump(mode="json"),
     )
 
-    # 6. Selector auto-wire (PIVOT §4.4) — gated by subscription_policy.
+    # 6. Selector auto-wire — gated by subscription_policy.
     auto_wired: list[str] = []
     if auto_wire:
         try:

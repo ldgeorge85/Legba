@@ -1,6 +1,5 @@
-# CURATED — descriptors/layer_map_ir.yaml. Was
-# planning/LAYER_MAP_DRAFTS_2026-09-24/layer_map_ir.yaml (the retag
-# generator's `--country IR` output, map_version layer_map_ir.draft, every
+# CURATED — descriptors/layer_map_ir.yaml. Started from the retag
+# generator's `--country IR` output (map_version layer_map_ir.draft, every
 # reason "derived:" and every aperture `unmeasured`). Curation is the
 # layer's bias (docs/DATA_SOURCES.md): every entries[].reason below is now either
 # "curated: ..." (a per-country judgement was made and is explained) or the
@@ -16,7 +15,7 @@ identity:
   name: IR layer map (curated)
   schema_uri: legba/layer_map/1.0.0
   kind: layer_map
-  owner: operator_curated
+  owner: owner@local
   created: '2026-01-01T00:00:00Z'
   state: reviewed
 country: IR

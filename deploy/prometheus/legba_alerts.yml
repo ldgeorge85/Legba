@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# Legba Prometheus alert rules (resilience P2).
+# Legba Prometheus alert rules (resilience).
 #
 # Companion to the registry's /metrics exposition
 # (src/legba/data/registry/metrics_api.py). Load this into a Prometheus

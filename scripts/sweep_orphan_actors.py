@@ -255,7 +255,7 @@ async def main() -> int:
         )
         print(
             "Note: legacy run_source_* reminders (if any) self-disarm on "
-            "their next fire via the A-1 reminder guard — they cannot be "
+            "their next fire via the reminder guard — they cannot be "
             "enumerated from here (scheduler-owned)."
         )
         return 1 if failures else 0

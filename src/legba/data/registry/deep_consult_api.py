@@ -192,7 +192,7 @@ _TASK_OWNER_SQL = (
 
 
 async def require_deep_task_owner(pg: Any, request: Request, task_id: str) -> None:
-    """X4 GATE (W11-F76): refuse (403 ``not_row_owner``) a signed-in user on a
+    """X4 GATE: refuse (403 ``not_row_owner``) a signed-in user on a
     deep-consult task they did not submit (module docstring, "Owner check").
 
     Unconfined callers (``session_auth.consult_owner_filter`` is ``None``: the
@@ -272,8 +272,7 @@ def build_deep_consult_router(deps: RegistryAPIDeps) -> APIRouter:
         run_id = str(uuid4())
         # F1 model picker: thread the plane. The deep_consult kind validates it
         # against the same allowlist and stamps it into the workflow input, so
-        # the workflow's stage deps + budget key off the plane. Roll 84 (the
-        # owner: "there is no paid deep... it's just the same model"): the
+        # the workflow's stage deps + budget key off the plane. The
         # DEFAULT is threaded too — the core component, explicitly — so a deep
         # run that names no model runs on core whatever the descriptor head's
         # primary says; a paid plane runs only when the request picks it.

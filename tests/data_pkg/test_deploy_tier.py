@@ -641,7 +641,7 @@ def test_t3_registry_builds_and_recreates_the_registry_alone_and_logs_it(rig):
 
 
 def test_the_post_roll_prune_caps_the_cache_with_the_ceiling_flag(rig):
-    """Roll 87: 8.8 GB of reclaimable build cache against the 4 GB cap and the
+    """With 8.8 GB of reclaimable build cache against the 4 GB cap and the
     prune reclaimed 0 B. Docker 29's prune lists both flags; ``--reserved-space``
     is a floor (it prunes nothing on its own), ``--max-used-space`` the cap."""
     p, out = _run(rig, "--tier", "t3", tier_out=_tier_out("t3", services="registry"))

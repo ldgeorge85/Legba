@@ -114,7 +114,7 @@ EXPECTED_YAML_ACCESS: dict[str, str] = {
     "source_oilprice.yaml": "public",
     "source_opensanctions_api.yaml": "licensed_noncommercial",
     "source_opensanctions_bulk.yaml": "licensed_noncommercial",
-    "source_page_pipeline_default.yaml": "restricted",   # I-2: generic page adapter, fail-closed
+    "source_page_pipeline_default.yaml": "restricted",   # Generic page adapter, fail-closed
     "source_pancanal.yaml": "public",
     "source_presstv_english.yaml": "public",
     "source_query_source_discovery_template.yaml": "restricted",
@@ -155,8 +155,8 @@ EXPECTED_YAML_ACCESS: dict[str, str] = {
     "source_usgs_earthquakes.yaml": "public",
     "source_who_disease_outbreak_news.yaml": "public",
     "source_imf_portwatch_chokepoints.yaml": "public",  # N-L series source, keyless API
-    "source_eia_petroleum_spot_daily.yaml": "public",  # S-1 series source, free keyed API
-    "source_bis_policy_rates_daily.yaml": "public",  # S-1 series source, keyless API
+    "source_eia_petroleum_spot_daily.yaml": "public",  # Series source, free keyed API
+    "source_bis_policy_rates_daily.yaml": "public",  # Series source, keyless API
     "source_worldnuclearnews.yaml": "public",
     "source_wto_news.yaml": "public",
     # 2026-11-13 official-document gap closers (loss funnel S0): free no-auth feeds.
@@ -165,9 +165,9 @@ EXPECTED_YAML_ACCESS: dict[str, str] = {
     "source_federalregister_presidential.yaml": "public",
     "source_bmvg_news.yaml": "public",
     "source_bundeswehr_procurement.yaml": "public",
-    # roll 73: UKMTO incident list (Royal Navy SCCD), keyless JSON.
+    # UKMTO incident list (Royal Navy SCCD), keyless JSON.
     "source_ukmto_incidents.yaml": "public",
-    # K-1 cyber desk (2026-11-14): free no-auth feeds and the KEV JSON.
+    # Cyber desk (2026-11-14): free no-auth feeds and the KEV JSON.
     "source_cisa_kev.yaml": "public",
     "source_cisa_advisories.yaml": "public",
     "source_ncsc_uk.yaml": "public",
@@ -176,9 +176,19 @@ EXPECTED_YAML_ACCESS: dict[str, str] = {
     "source_certeu_advisories.yaml": "public",
     "source_bsi_press.yaml": "public",
     "source_therecord.yaml": "public",
-    "source_ransomware_live.yaml": "public",   # C-1: free no-auth feed (claim class)
+    "source_ransomware_live.yaml": "public",   # Free no-auth feed (claim class)
     "source_cyberscoop.yaml": "public",
-    "source_ransomlook.yaml": "public",   # C-3: free no-auth feed (claim class)
+    "source_ransomlook.yaml": "public",   # Free no-auth feed (claim class)
+    "source_ecdc_epidemiological_updates.yaml": "public",
+    "source_gdacs_events.yaml": "public",
+    "source_emsc_earthquakes.yaml": "public",
+    "source_swpc_alerts.yaml": "public",
+    "source_nhc_atlantic.yaml": "public",
+    "source_nhc_eastern_pacific.yaml": "public",
+    "source_consilium_press_releases.yaml": "public",
+    "source_federalregister_significant.yaml": "public",
+    "source_eurostat_unemployment_monthly.yaml": "public",
+    "source_eurostat_industrial_production_monthly.yaml": "public",
     "source_checkpoint_research.yaml": "public",
     "source_cloudflare_ddos.yaml": "public",
     "source_securityweek.yaml": "public",
@@ -186,7 +196,7 @@ EXPECTED_YAML_ACCESS: dict[str, str] = {
     "source_azure_status.yaml": "public",
     "source_gcp_status.yaml": "public",
     "source_gworkspace_status.yaml": "public",
-    # X-1 source expansion (2026-11-14): free no-auth feeds, keyless series
+    # Source expansion (2026-11-14): free no-auth feeds, keyless series
     # endpoints, two public sanctions registers, and the staged Telegram batch
     # (public channels, the live monitor's class). The three non-commercial
     # licences (Novaya Gazeta Europe, OC Media, Canada SEMA) are a
@@ -207,11 +217,11 @@ EXPECTED_YAML_ACCESS: dict[str, str] = {
     "source_eu_fsf_sanctions_list.yaml": "public",
     "source_canada_sema_sanctions_list.yaml": "public",
     "source_telegram_x1_staged.yaml": "public",
-    # I-5 (2026-11-14): five keyless series endpoints and one keyless JSON
+    # Five keyless series endpoints and one keyless JSON
     # bulletin list, all openly licensed with attribution.
     "source_worldbank_wdi_cpi_inflation_world.yaml": "public",
     "source_nbu_exchange_daily.yaml": "public",
-    "source_nbu_key_rates.yaml": "public",  # roll 84
+    "source_nbu_key_rates.yaml": "public",
     "source_bcb_selic_target.yaml": "public",
     "source_boe_bank_rate_daily.yaml": "public",
     "source_eurostat_hicp_ea_monthly.yaml": "public",
@@ -229,7 +239,7 @@ FAIL_CLOSED_FILES: frozenset[str] = frozenset(
         "source_firecrawl.yaml",
         "source_generic_webhook.yaml",
         "source_query_source_discovery_template.yaml",
-        # I-2: the page pipeline — fetches whatever address a request names.
+        # The page pipeline — fetches whatever address a request names.
         "source_page_pipeline_default.yaml",
     }
 )
@@ -371,5 +381,5 @@ def test_public_is_the_overwhelming_default():
     public_count = sum(
         1 for c in EXPECTED_YAML_ACCESS.values() if c == "public"
     )
-    assert public_count == 144  # S-1: + BIS and EIA series; K-1: + 14 cyber sources; X-1: + 15 (all public); C-1: + 1; I-5: + 6 (all public); roll 84: + NBU key rates; C-3: + 3
-    assert len(EXPECTED_YAML_ACCESS) == 153   # I-2: + the page pipeline (restricted); S-1: + 2; K-1: + 14; X-1: + 15; C-1: + 1; I-5: + 6; roll 84: + 1; C-3: + 3
+    assert public_count == 154  # BIS and EIA series, 14 cyber sources, 15 expansion sources, 1 + 6 + 3 further feeds, NBU key rates, ten hazard / health / government / series feeds (all public)
+    assert len(EXPECTED_YAML_ACCESS) == 163   # the page pipeline (restricted) plus the public sources counted above

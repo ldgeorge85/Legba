@@ -68,6 +68,7 @@ import { severityRank } from '@/lib/findingsViews'
 import { humanizeId } from '@/lib/deskNames'
 import { bandsFromProjection, PROFILE_UI, useProjection, type ProjectionRead } from '@/lib/profileUi'
 import { sessionNonce } from '@/lib/readTelemetry'
+import { pageLoadGeneration } from '@/lib/pageLoad'
 import { whyNot, type UnsupportedSpanView } from '@/lib/claimsModel'
 import {
   isInsufficient,
@@ -236,6 +237,43 @@ export function visitCursor(visit: MorningVisit, nowMs: number = Date.now()): st
   return new Date(clamped).toISOString()
 }
 
+/**
+ * THE ONE "SINCE" of this page load: the visit resolved once and the cursor
+ * built from it, shared by every region that says "since you last looked" —
+ * the Board list, the rail's change counts, the map's change layer, the full
+ * daily read and the Wall's movers. Each used to resolve its own: the first
+ * to mount rolled the stored visit forward and said "first visit" while the
+ * next read the rolled record and printed a since-time.
+ *
+ * `firstVisit` here means there is no earlier visit to diff from (the
+ * cursor is the fallback reading hour) — true for every region alike.
+ */
+export interface PageVisit {
+  visit: MorningVisit
+  /** The `?cursor=` every since read sends. */
+  cursor: string
+  /** No earlier visit: the cursor is yesterday's reading hour. */
+  firstVisit: boolean
+}
+
+let pageVisitMemo: { nonce: string; load: number; value: PageVisit } | null = null
+
+/** This page load's visit and cursor — resolved on first use, then fixed. */
+export function pageVisit(nowMs: number = Date.now()): PageVisit {
+  const nonce = sessionNonce()
+  const load = pageLoadGeneration()
+  if (pageVisitMemo && pageVisitMemo.nonce === nonce && pageVisitMemo.load === load) return pageVisitMemo.value
+  const visit = resolveVisit(nowMs)
+  const value: PageVisit = { visit, cursor: visitCursor(visit, nowMs), firstVisit: visit.previousVisitAt === null }
+  pageVisitMemo = { nonce, load, value }
+  return value
+}
+
+/** Tests only: forget this page load's visit. */
+export function __resetPageVisit(): void {
+  pageVisitMemo = null
+}
+
 /** Elapsed ms of this visit, floored at zero (a skewed clock reads 0, not −). */
 export function visitElapsedMs(visit: MorningVisit, nowMs: number = Date.now()): number {
   return Math.max(0, nowMs - visit.startedAt)
@@ -345,7 +383,7 @@ export interface ChangedRow {
 }
 
 /**
- * W11-F73 — a since-finding's effective confidence as printed, or `—` when the
+ * A since-finding's effective confidence as printed, or `—` when the
  * row does not carry a finite number. The live `/v3/since` route cannot omit
  * it on `new_findings` (`SinceFinding.effective_confidence` is a required
  * float over `LEAST(confidence NOT NULL, faithfulness_score)` on a JOINed

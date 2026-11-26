@@ -1,0 +1,122 @@
+# Draft SourceDescriptor. Ships DRAFT; the reference host walks it to
+# CONFIGURED (descriptors/LIFECYCLE.md), never active — activation is an
+# admin's call.
+#
+# The Federal Register (the US government's daily journal of rules, proposed
+# rules and notices) — the documents its API marks SIGNIFICANT (those whose
+# associated Unified Agenda entry is deemed significant under Executive Order
+# 12866), from every agency. Kind: json_api. OFFICIAL. Beside the three
+# agency- and type-specific feeds (BIS, OFAC, presidential documents): this is
+# the cross-agency slice of the rules that matter, with the abstract.
+#
+# Checked 2026-11-25 (one GET, generic client identity):
+# https://www.federalregister.gov/api/v1/documents.json?per_page=5&order=newest&conditions[significant]=1
+# -> HTTP 200, application/json, {description, count, total_pages,
+# next_page_url, results[]}. Each result has title, type ("Rule", "Proposed
+# Rule", "Notice"), abstract, document_number (the id, e.g. "2026-23951"),
+# html_url, pdf_url, public_inspection_pdf_url, publication_date
+# ("2026-11-24", a date with no time), agencies[] and excerpts. The API needs
+# no key. The document count behind the filter is large (the response reports
+# 10,000 and counts on), so the query asks only from yesterday's date on:
+# `conditions[publication_date][gte]`. A document dated today reads as newer
+# than the last poll; one dated before it was seen at its own poll.
+#
+# Licence: the API documentation
+# (https://www.federalregister.gov/developers/documentation/api/v1) says
+# "FederalRegister.gov APIs do not require API keys" and states no reuse terms,
+# so the terms are NOT STATED there; the conservative class for unreviewed
+# terms (`permissive_feed_unreviewed`) is set until they are read. The page
+# also warns that those relying on it for legal research should check the
+# official edition. robots.txt was not read.
+#
+# Cadence: the journal is published on weekdays in the morning US Eastern
+# time; one poll a weekday late morning.
+
+identity:
+  id: source.federalregister.significant_documents
+  name: Federal Register — significant documents (all agencies)
+  kind: json_api
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: owner@local
+  created: "2026-11-25T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: [US]
+  languages: [en]
+  tags: [gov, regulation, rulemaking, us, federal_register]
+  source_class: official
+  license_class: permissive_feed_unreviewed   # terms not stated on the page read
+  access_class: public          # free no-auth API, no key
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "37 15 * * 1-5"
+  cooldown_seconds: 600
+  jitter_seconds: 120
+
+config:
+  url_template:
+    factory_kind: text
+    raw: "https://www.federalregister.gov/api/v1/documents.json?per_page=100&order=newest&conditions%5Bsignificant%5D=1&conditions%5Bpublication_date%5D%5Bgte%5D={date_yesterday}"
+  items_path:
+    factory_kind: text
+    raw: "results"
+  id_path:
+    factory_kind: text
+    raw: "document_number"
+  title_path:
+    factory_kind: text
+    raw: "title"
+  title_template:
+    factory_kind: text
+    raw: "{type}: {title}"
+  url_path:
+    factory_kind: text
+    raw: "html_url"
+  timestamp_path:
+    factory_kind: text
+    raw: "publication_date"
+  body_path:
+    factory_kind: text
+    raw: "abstract"
+  language:
+    factory_kind: text
+    raw: "en"
+  static_tags:
+    factory_kind: list
+    raw: [federal_register]
+  lookback_minutes:
+    factory_kind: number
+    raw: 4320                    # first poll reaches back three days
+  max_items_per_pull:
+    factory_kind: number
+    raw: 100
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1
+      config: {}
+    - kind: dedupe_tier_2
+      config: {}
+  enrichment:
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 604800
+  delivery: lossy
+
+subscription_policy: open

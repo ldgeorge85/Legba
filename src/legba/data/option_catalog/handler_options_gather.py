@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """X-1 option spec — the GATHER loop's evidence cap on an ``inline_target``
-unit (W11-F91).
+unit.
 
 ``method.options.evidence_char_cap`` bounds the evidence a multi-round GATHER
 run carries in its message array: the rendered slice it starts from plus every
@@ -21,22 +21,23 @@ from .handler_options_base import OptionSpec
 #: The descriptor knob, ``method.options.evidence_char_cap``.
 EVIDENCE_CHAR_CAP_OPTION = "evidence_char_cap"
 
-#: Upper bound on an explicit value: the model's whole 262,144-token context at
-#: the house chars/4 estimate. A value above it cannot bound anything.
+#: Upper bound on an explicit value: a 262,144-token context at the house
+#: chars/4 estimate. A value above it cannot bound anything on such a window.
 EVIDENCE_CHAR_CAP_MAXIMUM = 1_048_576
 
 GATHER_CONTEXT_OPTIONS: tuple[OptionSpec, ...] = (
     OptionSpec(
         EVIDENCE_CHAR_CAP_OPTION,
         "int",
-        "W11-F91: the cap, in characters, on the evidence a GATHER run carries "
+        "The cap, in characters, on the evidence a GATHER run carries "
         "in its message array (the rendered slice plus every tool result). The "
         "slice is packed to 60% of it; past it, older tool results are "
         "replaced, oldest first and never the newest round, by a digest that "
         "keeps their [N] numbers and document ids; before every round the "
-        "whole input is estimated (chars/4) and a round over "
-        "LEGBA_LLM_INPUT_TOKEN_BUDGET is not sent — the run writes with what "
-        "it has. Absent ⇒ derived per run for a multi-round GATHER (max_rounds "
+        "whole input is estimated (chars/4) and a round over the input budget "
+        "(derived from the route's context window; LEGBA_LLM_INPUT_TOKEN_BUDGET "
+        "overrides it) is not sent — the run writes with what it has. Absent ⇒ "
+        "derived per run for a multi-round GATHER (max_rounds "
         ">= 2): 0.6 × the input budget × 4 chars, less the gather system "
         "prompt, floor 16,000; a single-round or tool-less run is untouched. "
         "An explicit value engages it on any GATHER run; 0 ⇒ off.",

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""C-1 — the CLAIM source class, enforced by the platform (pure tests).
+"""The CLAIM source class, enforced by the platform (pure tests).
 
 A source with ``scope.source_class: claim`` publishes a party's own claim. Its
 rows may ground only "<claimant> claimed/posted/listed ...", never the event,
@@ -146,7 +146,7 @@ def test_transition_refusal_body():
 
 
 def test_telegram_per_channel_claim_class_needs_its_declaration():
-    """C-2 lifted C-1's refusal: a channel marked ``claim`` is a claim source
+    """Lifted C-1's refusal: a channel marked ``claim`` is a claim source
     of its own and must carry ``config.claims.<channel>`` (the per-channel
     rules are in ``test_claim_channels_and_lineage.py``)."""
     from legba.data.sources.telegram import TelegramChannelSourceConfig

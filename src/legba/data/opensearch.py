@@ -68,7 +68,7 @@ CORPUS_INDEX_MAPPING: dict[str, Any] = {
             # modalities never populate raw_body, so without this field their
             # content was invisible to the corpus (~96.8% of telegram signals).
             "text": {"type": "text", "analyzer": "english"},
-            # P2-1 / S-10: the evidence_archiver's Trafilatura-extracted FULL
+            # The evidence_archiver's Trafilatura-extracted FULL
             # article text (payload.archived_text) — upgrades the thin teaser
             # doc for every archived cited signal via the corpus_indexer
             # dirty-marker re-index.
@@ -121,7 +121,7 @@ _SEARCH_FIELDS: tuple[str, ...] = (
 #: is embed-widget UI CHROME, not an article (see evidence_archiver's
 #: t.me skip-extraction guard) — real prose from the platform itself is
 #: always preferable to whatever an article-extractor made of a page with no
-#: article on it), then the archived FULL article text (P2-1 evidence
+#: article on it), then the archived FULL article text (evidence
 #: archival — a genuine upgrade for actual article pages, when present), then
 #: the ingest body, then the teaser, then rarer manual/derived text fields.
 _BEST_BODY_FIELDS: tuple[str, ...] = (
@@ -264,7 +264,7 @@ def signal_license_class(
     ``payload.license_class`` (the LIC-2 SourceScope→signal ingest stamp)
     first, then the manual-batch ``raw_provenance`` license, else ``None``.
     The ONE resolution shared by the corpus doc projection (facet hint) and
-    the P2-2 evidence-archiver license gate (enforcement) — so the gate and
+    the evidence-archiver license gate (enforcement) — so the gate and
     the facet can never disagree. ``payload`` may be omitted; it is then
     coerced from ``row['payload']`` (asyncpg jsonb may arrive as str)."""
     if payload is None:
@@ -315,9 +315,9 @@ def signal_to_doc(row: Mapping[str, Any]) -> dict[str, Any]:
         # R6: the chat-platform full message body (telegram/discord) — see
         # _BEST_BODY_FIELDS docstring for why this outranks archived_text.
         "text": _as_text_field(payload.get("text")),
-        # P2-1: the archived FULL article text (evidence_archiver writes
+        # The archived FULL article text (evidence_archiver writes
         # payload.archived_text + nulls indexed_at per the dirty-marker
-        # contract, so the re-index lands it here — the S-10 depth fix).
+        # contract, so the re-index lands it here).
         "archived_text": _as_text_field(payload.get("archived_text")),
         "summary": _as_text_field(payload.get("summary")),
         "best_body": _first_nonempty(payload, _BEST_BODY_FIELDS) or None,
@@ -594,7 +594,7 @@ class OpenSearchStore:
 
         ``filters`` maps a keyword field → a scalar (term) or a list (terms).
         ``before`` maps a date field → an instant; each adds a ``range``
-        filter ``field < instant`` (lane E0's known_at cut). A doc with no
+        filter ``field < instant`` (the known_at cut). A doc with no
         value in that field does not match — an unknown time is not "before".
         A falsy ``query`` degrades to match_all (filter-only browse). Returns
         ``[{"id", "score", "source"}]`` sorted by BM25 score.

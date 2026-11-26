@@ -1,6 +1,6 @@
 # The `crosswalk` vocabulary family — a profile's value -> the platform value
-# it is (W9 VIEW-1, DEC-12: per-profile projections with a crosswalk family,
-# not one merged taxonomy).
+# it is (per-profile projections with a crosswalk family, not one merged
+# taxonomy).
 #
 # Seeded by the descriptor walker (scripts/bringup_register_descriptors.py,
 # "vocabulary seeds"), the same generic loader descriptors/vocabulary_frame.yaml

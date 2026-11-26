@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The ``journal_read`` pack — the journal_assessor's GOVERNED read surface.
 
-Wave 1 (planning/JOURNAL_ASSESSOR_PLAN.md §5 / §12) gives the journal the WHOLE
+This pack gives the journal the WHOLE
 ANIMAL + its OWN instruments — the read surface that makes it the self-narrating
 analyst. Three slices:
 
@@ -53,7 +53,7 @@ the consult path — it runs in-actor through the agency ``run_pack_tool`` GATHE
 loop. The instrument tools are journal-specific self-introspection that the
 operator-facing consult surface does NOT need, so they are deliberately NOT added
 to consult's ``_KNOWN_TOOLS`` (consult reaches the substrate, not the journal's
-own dormancy/budget). The one exception is ``get_source_health`` (W11-F152):
+own dormancy/budget). The one exception is ``get_source_health``:
 the consult gained it (it is the honest per-source staleness read, where
 ``list_sources`` is the thin one), so it is now ALSO a substrate_read pack tool
 and a consult ``_KNOWN_TOOL``; its handler is the same port call either way.
@@ -81,7 +81,7 @@ logger = logging.getLogger(__name__)
 
 JOURNAL_READ_PACK_ID = "journal_read"
 
-# Wave 1: the whole animal + its own instruments. Keep this tuple ==
+# The whole animal + its own instruments. Keep this tuple ==
 # the descriptor's `tools` names == the handlers registered below (the per-pack
 # drift guard asserts it).
 JOURNAL_READ_TOOLS = (
@@ -101,7 +101,7 @@ JOURNAL_READ_TOOLS = (
     "get_source_health",
     "get_budget_status",
     "get_journal_delta",
-    # VOICES LV-1 (planning/VOICES_BUILD_DESIGN §3.2): the chorus DIFF pass reads
+    # The chorus DIFF pass reads
     # this cycle's four faculty lens reads through this tool. It is granted to the
     # whole journal_read pack (one pack, one grant) but is inert for the tiers
     # that never call it (entry/consolidation/chronicle/faculty).

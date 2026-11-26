@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""D-3 — THE ASSEMBLY ARMS: four deterministic auditors over ``assembly.v1``.
+"""THE ASSEMBLY ARMS: four deterministic auditors over ``assembly.v1``.
 
 EVERY FIXTURE BELOW IS BUILT FROM REAL ROWS. The three origin bodies are
 verbatim excerpts of live desk heads read out of ``analyst_outputs`` on
@@ -471,7 +471,7 @@ def test_arm2_scope_widened_is_the_other_direction() -> None:
 
 def test_arm2_the_declared_token_is_verified_by_the_predicate_not_a_substring(
 ) -> None:
-    """THE LIVE REGRESSION (2026-09-05), and it is the whole reason this train
+    """THE LIVE REGRESSION (2026-09-05), and it is the whole reason this change
     exists.
 
     ``scope_tokens`` is an IDENTIFIER list. The shipped SCOPE_WIDENED tested it
@@ -1030,7 +1030,7 @@ async def test_the_buried_lead_check_still_bites_on_a_legacy_row(monkeypatch) ->
 async def test_the_buried_lead_check_is_disabled_on_an_assembly_row(
     monkeypatch,
 ) -> None:
-    """D-3 owns this fold, and it is DISABLED for ``regime == "assembly"``.
+    """Owns this fold, and it is DISABLED for ``regime == "assembly"``.
 
     The legacy check compares the lead's magnitude to the top input's on
     ``max_salience()`` — a max-pool at sd 0.024, whose world burial guard is
@@ -1231,7 +1231,7 @@ def test_every_counter_this_brick_can_bump_is_declared() -> None:
     ``assembly_drops_{key}`` family the drop ledger publishes verbatim."""
     from legba.data.provenance import assembly_floor_arm
 
-    # W4 F-3: ARM 4(c) lives in its own leaf and declares its counters here.
+    # ARM 4(c) lives in its own leaf and declares its counters here.
     src = inspect.getsource(AA) + inspect.getsource(assembly_floor_arm)
     bumped = set(re.findall(r'bump\(\s*"([a-z_]+)"', src))
     bumped |= {f"assembly_drops_{k}" for k in AA._DROP_COUNT_KEYS}
@@ -1299,7 +1299,7 @@ def test_the_arms_add_no_undefended_verdict_token_table() -> None:
 
 
 def test_the_claim_kind_axis_is_untouched() -> None:
-    """F-11: D-3 does NOT build the D3/#71 claim-class split (zero code, own
+    """D-3 does NOT build the D3/#71 claim-class split (zero code, own
     stamp, sequenced after #69). The ASSEMBLY branch is a new
     ``_JUDGE_PROFILES`` entry and NOT a ``_claim_kind`` return value, so the
     fleet's existing branch telemetry does not move."""

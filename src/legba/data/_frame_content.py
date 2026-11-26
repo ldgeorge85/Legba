@@ -1,19 +1,17 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""R1-d — THE FRAME-CONTENT GAUGE. It counts and it names. It never repairs.
+"""THE FRAME-CONTENT GAUGE. It counts and it names. It never repairs.
 
-The instrument ``planning/R1_FRAME_REPAIR_DESIGN_2026-09-06.md`` row R1-d asks
-for, amended by ``planning/R1_FRAME_REPAIR_AMENDMENT_2026-09-06.md`` §3 and §4,
-riding ``situation_clustering``'s own receipt in the ``_title_frame_gauge`` /
-``composition_lineage_sweep`` precedent: **count and name, never repair, never
+An instrument riding ``situation_clustering``'s own receipt in the
+``_title_frame_gauge`` / ``composition_lineage_sweep`` precedent: **count and name, never repair, never
 gate.** Nothing here writes a row, moves a threshold, changes a frame, touches
 an alert or reaches the verify plane. If every function in this module returned
 ``None`` the fleet would behave identically.
 
 WHY IT SHIPS BEFORE THE REPAIR, WHICH IS THE ONLY REASON IT IS INTERESTING.
-R-1's flag (``LEGBA_REGISTER_CONTENTFUL_FRAMES``) does not exist yet and this
+The repair flag (``LEGBA_REGISTER_CONTENTFUL_FRAMES``) does not exist yet and this
 module must not wait for it: a gauge that starts measuring *after* the flip has
-no baseline to be judged against, and the amendment's §4 is explicit that four
+no baseline to be judged against, and four
 of these numbers are obligations precisely because the post-flip reading is
 worthless without its pre-flip twin. So this runs FLAG-OFF, publishes the
 degenerate values the flag-off world actually has (``anchored: 0``,
@@ -21,11 +19,11 @@ degenerate values the flag-off world actually has (``anchored: 0``,
 flag-on run needs no change to it whatsoever — every anchored-side field is
 computed from the signature's ``#evt:`` slot, which is simply empty today.
 
-THE FOUR AMENDED DEFINITIONS (§3, R1-d), each of which was re-cut for a reason:
+THE FOUR DEFINITIONS, each of which was cut for a reason:
 
 ``anchored``
     Frames whose key carries a non-``_domestic`` ``#evt:`` slot. Zero today —
-    the mint is post-R4.
+    the mint comes after the repair.
 ``domestic`` / ``retiring``
     ``#evt:_domestic`` (and, flag-off, un-suffixed) frames that RECEIVED
     MEMBERS this run are ``domestic``; one that received none is ``retiring``,
@@ -33,26 +31,25 @@ THE FOUR AMENDED DEFINITIONS (§3, R1-d), each of which was re-cut for a reason:
     growth — a frame draining toward closure would be indistinguishable from a
     frame the desks are still feeding.
 ``contentless``
-    The ``COVERAGE_FLOOR_82`` §1.1 method on ``situations.name`` and NOTHING
+    The coverage-floor name method on ``situations.name`` and NOTHING
     else. Deliberately independent of the anchor: if the gauge scored content
     by asking whether a frame carries an anchor, then after the flip it would
     be measuring the repair WITH the repair, and would report success by
     construction. It stays a NAME test or it is not a measurement.
 ``evidence_mass_p50``
     Median distinct naming findings over ANCHORED frames — a FINDING count,
-    not a signal count, because (amendment §1.2) the signal count is
+    not a signal count, because the signal count is
     desk-uniform to within four signals across a desk's eight frames and
     therefore cannot order anything. Flag-off it is ``None``, never ``0``: no
     anchored frames is an empty denominator, and an empty denominator that
-    reports a confident zero is the failure mode ``_title_frame_gauge`` §5.0
+    reports a confident zero is the failure mode ``_title_frame_gauge``
     retires entropy for. **Every ratio here is ``None`` on an empty
     denominator.**
 
-THE PRE-FLIP TWIN (§4, obligation 3). ``evidence_mass_p50`` has no value to
+THE PRE-FLIP TWIN. ``evidence_mass_p50`` has no value to
 publish flag-off, so the number that will BECOME it is published instead:
 ``naming_findings_distribution``, the p25/p50/p75 of "distinct findings naming
-each nominated polity per (desk, dimension)" over the window (live 2026-09-06:
-≈ 6 / 9 / 14). After the flip the p50 has a pre-flip twin computed by this same
+each nominated polity per (desk, dimension)" over the window (live: ≈ 6 / 9 / 14). After the flip the p50 has a pre-flip twin computed by this same
 code over this same window, which is the only way the comparison is honest.
 
 It is published in BOTH readings, because they are different populations and
@@ -61,19 +58,19 @@ cell, and ``naming_findings_at_mint_floor`` over the cells that would actually
 anchor (see :func:`mint_floor_twin`). The second is the comparable one —
 ``evidence_mass_p50`` will be a median over ANCHORED frames — and the first is
 published beside it so the restriction is visible rather than assumed. Pooled
-ONLY as the twin: per amendment F-12 a desk's finding count is a cadence
+ONLY as the twin: a desk's finding count is a cadence
 artifact (9 dimensions on IL, 8 elsewhere), so it must never order desks
 against each other, and ``evidence_mass_p50`` is reported per desk.
 
-THE GUARD, CARRIED NOT RECOMPUTED (§4, obligation 1). ``breaches`` and
+THE GUARD, CARRIED NOT RECOMPUTED. ``breaches`` and
 ``breaches_naming_only`` are read off the last real ``coverage_floor`` scan's
 receipt (``analyst_traces``) and reported side by side under ``guard``. Carried
 rather than recomputed on purpose: the detector's numbers must come from the
-detector, or the post-R4 delta is measured against a number produced by
+detector, or the post-repair delta is measured against a number produced by
 different code. ``None`` when no recent scan is readable — the gauge never
 substitutes a zero for "I could not look".
 
-THE CENSUS (design §2.2), and its one honest limit. ``naming_census`` pairs each
+THE CENSUS, and its one honest limit. ``naming_census`` pairs each
 (desk, polity) whose evidence clears the coverage-floor SIGNAL bar with
 ``frames_naming`` (open frames whose ``name`` is ``represented_by`` the polity)
 and ``desks_engaging`` (latest head per analyst in the engagement window whose
@@ -82,7 +79,7 @@ nomination — ``cluster_entities`` then ``candidate_clusters``, the same class
 gate and the same home exclusion — with BOTH frame clauses off: clause 5
 because a pair some frame already names is precisely the LICENSED half of the
 2×2 and must be counted rather than suppressed, clause 6 for the same reason
-R1-e now reports two numbers.
+the gauge reports two numbers.
 
 It stops at NOMINATION and does not re-run phase 2's exact per-signal recount,
 which makes the pair set a deliberate SUPERSET of the detector's breaches — and
@@ -93,7 +90,7 @@ are upper bounds on summed numbers: applying the rest to them is not
 conservative but simply wrong, and measured live 2026-09-06 it DROPS
 IL/Palestine — the founding case — on a summed weighted mean magnitude of 0.498
 against the exact recount's 0.508. A gauge that quietly loses the case it exists
-to watch is worse than no gauge. **§2.3's circularity stands unamended: pre-flip
+to watch is worse than no gauge. **The circularity stands: pre-flip
 the census reads a loop (a frame is named because a desk wrote it), and only its
 post-flip reading is a lever test.**
 
@@ -118,7 +115,7 @@ second set of false positives — the argument ``_polity_match``'s own banner
 makes for existing at all. All three are leaf-ish and the direction is asserted
 acyclic by ``test_frame_content_gauge.py``'s import test.
 
-NO LLM, NO ANCHOR-SIDE SELF-DESCRIPTION (D-n, narrowed by amendment §2.4). This
+NO LLM, NO ANCHOR-SIDE SELF-DESCRIPTION (narrowed). This
 module may not import an LLM handler and may not read ``data.key_entities`` or
 its four producer-self-description siblings. A finding's ``title`` and ``body``
 ARE allowed and are the substrate the naming counts read: under the QUOTATION
@@ -190,7 +187,7 @@ _MAX_FINDING_ROWS = 40_000
 _MAX_CENSUS_PAIRS = 400
 
 #: Bounds the prose projection. Live max finding body is 14,598 B and the mean
-#: 1,822 B (amendment §2.6); 6,000 keeps the read at ~13 MB over 14 days.
+#: 1,822 B; 6,000 keeps the read at ~13 MB over 14 days.
 _MAX_BODY_CHARS = 6_000
 
 #: Candidate polities kept per desk, worst-first by signal count. The live
@@ -203,14 +200,14 @@ _MAX_CANDIDATES_PER_DESK = 6
 #: ``evidence_mass_p50`` will be a median over ANCHORED frames, so its pre-flip
 #: twin must be taken over the cells that would actually anchor — otherwise the
 #: comparison is a different population wearing the same name, which is the
-#: failure amendment §4's obligation 3 exists to prevent. These mirror the
-#: amendment §2.2 recommendation for R1-a's bar (``min_anchor_findings = 5``,
+#: failure the pre-flip twin exists to prevent. These mirror the
+#: recommended anchor bar (``min_anchor_findings = 5``,
 #: ``max_anchor_ubiquity = 0.75``) so the twin is taken where the mint will be.
 #:
 #: They are NOT the bar and they are NOT knobs: nothing here mints, refuses or
 #: suppresses anything, and the unrestricted distribution is published beside
-#: the restricted one so the choice is visible rather than baked in. When R1-a
-#: ships its own calibrated values these follow them; until then a drift
+#: the restricted one so the choice is visible rather than baked in. When the
+#: mint ships its own calibrated values these follow them; until then a drift
 #: between the two is a reporting inaccuracy, never a behaviour change.
 _TWIN_MIN_FINDINGS = 5
 _TWIN_MAX_UBIQUITY = 0.75
@@ -218,9 +215,12 @@ _TWIN_MAX_UBIQUITY = 0.75
 #: How far back to look for the coverage floor's last REAL scan (its own
 #: interval gate declines most ticks, and a declined tick's zeros are not the
 #: guard's state). Bounded so the read stays on the analyst/started_at index.
+#: The read filters on ``output_payload`` in SQL, which is NULL on a trace
+#: whose bulk was compacted; it stays correct because compaction never touches
+#: a run younger than ``trace_bulk_compact.MIN_AGE_DAYS`` (a test pins that).
 _GUARD_LOOKBACK_HOURS = 48
 
-#: The flag R-1's mint will hide behind. Named here only so the receipt can
+#: The flag the repair's mint will hide behind. Named here only so the receipt can
 #: say, in the row itself, which world these numbers were taken in.
 REGISTER_FLAG_ENV: str = "LEGBA_REGISTER_CONTENTFUL_FRAMES"
 
@@ -237,7 +237,7 @@ class FrameContentConfig:
     #: The census / naming window. Matches the coverage floor's own, so the two
     #: instruments cannot disagree about which fortnight they are describing.
     window_days: int = 14
-    #: ``desks_engaging``'s window — the design §2.2 "latest head per analyst
+    #: ``desks_engaging``'s window — the "latest head per analyst
     #: in a 7-day window".
     engagement_days: int = 7
     #: Minimum spacing between the heavy 14-day entity aggregates. 0 runs the
@@ -294,14 +294,14 @@ def _coerce(name: str, raw: Any, fallback: Any) -> Any:
 
 
 # ---------------------------------------------------------------------------
-# THE NAME TEST — COVERAGE_FLOOR_82 §1.1, and nothing to do with the anchor
+# THE NAME TEST — the coverage-floor method, and nothing to do with the anchor
 # ---------------------------------------------------------------------------
 
 
 def leading_token(name: str) -> str:
     """The name's first word — capitalised by grammar, not by reference.
 
-    ``COVERAGE_FLOOR_82`` §1.1/§1.3 excludes it explicitly, and the exclusion
+    The coverage-floor census excludes it explicitly, and the exclusion
     is load-bearing rather than cosmetic: it is the difference between
     reproducing that census (136 of 232 live at the time of writing, 112 of the
     192 RENDERED frames — the published figure exactly) and reporting 112 of
@@ -402,7 +402,7 @@ def _quantile(sorted_values: Sequence[float], q: float) -> float:
 def distribution(values: Iterable[float]) -> dict[str, Any]:
     """``{n, min, p25, p50, p75, max}`` — every statistic ``None`` when n=0.
 
-    The pre-flip twin of ``evidence_mass_p50`` (amendment §4, obligation 3),
+    The pre-flip twin of ``evidence_mass_p50`` (see above),
     and the shape ``evidence_mass_p50`` itself is read out of.
     """
     ordered = sorted(float(v) for v in values)
@@ -509,7 +509,7 @@ def naming_census_rows(
     heads: Mapping[str, Sequence[Mapping[str, Any]]],
     naming_findings: Mapping[tuple[str, str], int] | None = None,
 ) -> dict[str, Any]:
-    """The design §2.2 pair table plus its ``licensed × engaged`` 2×2.
+    """The pair table plus its ``licensed × engaged`` 2×2.
 
     ``pairs`` is ``(target_id, polity)``; ``frames`` the open frames;
     ``heads`` the desk's latest head per analyst in the engagement window, each
@@ -764,7 +764,7 @@ def mint_floor_twin(
     ``evidence_mass_p50`` is a median over anchored frames; a pre-flip twin
     taken over EVERY nominated pair is a wider, softer population and would
     make the post-flip p50 look like a change when it is a change of
-    denominator. So the twin drops the two families R1-a's bar drops: cells
+    denominator. So the twin drops the two families the anchor bar drops: cells
     below the recurrence floor, and polities so ubiquitous on their own desk
     that they are wire boilerplate rather than a second story (live: the
     United States is named in 94-97% of every desk's finding bodies, which is
@@ -796,7 +796,7 @@ def _naming_counts(
 
     Returns ``(by (desk, dimension, polity), by (desk, polity))``. The prose is
     the finding's own ``title`` + ``body`` — the analyst's authored judgment,
-    which amendment §1.4 measures as the only projection that discriminates at
+    which is measured as the only projection that discriminates at
     frame grain (IL's frames name Palestine in 12/12/7/5/1/0/0/0 bodies where
     the signal pool is flat to within four signals across all eight).
     """
@@ -1004,10 +1004,10 @@ async def collect(
             },
             "desks": desk_gauge,
             "fleet": fleet,
-            # The pre-flip twin of ``evidence_mass_p50`` (§4, obligation 3),
+            # The pre-flip twin of ``evidence_mass_p50``,
             # in both readings: every nominated cell, and the cells that would
             # actually anchor. Pooled ONLY as the twin — never as a cross-desk
-            # ordering (F-12: a desk's finding count is a cadence artifact).
+            # ordering (a desk's finding count is a cadence artifact).
             "naming_findings_distribution": distribution(
                 mass_by_dimension.values()
             ),

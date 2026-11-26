@@ -37,7 +37,7 @@ identity:
   # production_gauge.descriptor_state_drift) so a re-register from this file
   # cannot resurrect it.
   state: retired
-  owner: fact_decay_activation
+  owner: owner@local
 
 subscription:
   # META analyst: one global sweep per tick directly over the `facts` table via

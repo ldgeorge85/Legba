@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The forecast resolvers' SEARCH — read-only SQL over the record (ST1-A).
+"""The forecast resolvers' SEARCH — read-only SQL over the record.
 
 For each :class:`~legba.data.forecast_resolvers.SearchPlan` it reads the
 canonical signals fetched inside the plan's bounds whose title + summary +
@@ -68,7 +68,7 @@ WINDOW_COUNT_SQL = """
 SELECT count(*) FROM signals WHERE fetched_at >= $1 AND fetched_at <= $2
 """
 
-#: The sealed series as RECORDED at the as-of (st1.2, lane S-1): LIVE rows
+#: The sealed series as RECORDED at the as-of: LIVE rows
 #: only (each rests on a fetch receipt), the series named by the sealed
 #: ``source`` + ``series`` (id ``<source>.<...>.<series>``, case-folded — EIA
 #: RBRTE is ``eia.pet_spot.rbrte``), the newest vintage per day with

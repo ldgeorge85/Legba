@@ -57,7 +57,7 @@ question over the question thesis + a signal digest.
     reasoning: the budget is ours, the loss must not be the matcher's.
 
 **W-B2 — the confirm (batched, $0 core plane).** For gate-YES edges ONLY, a
-second opinion from the PRIMARY core-plane model (gpt-oss-120b — never
+second opinion from the PRIMARY core-plane model (the core model — never
 Anthropic; the deterministic plane is self-hosted-only and
 ``_wire_deterministic_llm`` hard-refuses an Anthropic component). Batched and
 echo-bound by id, the ``signal_salience`` discipline: an item whose id matches
@@ -69,9 +69,8 @@ binding a verdict to the wrong edge is worse than no verdict. Writes
 CW-1 — THE CONFIRM LEG IS NOW BLOCKING (measured, not assumed)
 --------------------------------------------------------------
 Through 3.3.0 the confirm never blocked: it was "a richer second reading"
-recorded on an edge the gate had already passed. K-4 round 3 measured what
-that reading was worth on 120 labeled rows off the LIVE gated stream
-(``planning/K4_LABELS_R3.csv``)::
+recorded on an edge the gate had already passed. Measured on 120 labeled
+rows off the LIVE gated stream, that reading was worth::
 
     confirm = yes       38/57 = 0.667
     confirm = no         4/47 = 0.085      <- 7.8x discriminator, discarded
@@ -123,7 +122,7 @@ the 0116 column default, i.e. byte-identical to what 3.2.0 wrote. Turning the
 pipeline on is a descriptor PUT at deploy time (``method.options.bearing_gate:
 "on"``), not a code change and not a rebuild. That is the X-1 contract, held.
 
-TWO SHAPES OF GATE (W11-F148)
+TWO SHAPES OF GATE
 -----------------------------
 The ``bearing_gate_ref`` component may be a CHAT model or a DECISION model
 (``POST /decide``, the ``.decide.`` components). The gate asks whichever it
@@ -315,8 +314,8 @@ CONFIRM_MAX_TOKENS = 1200
 #: one prompt apart from an edge judged by another.
 GATE_PROMPT_VERSION = "fewshot+desk+consequence/3"
 
-#: The prompt-lab's chosen prompt (planning-doc measurement 2026-07-30,
-#: seed 20260730, 50/50 stratified split): the NAIVE criterion as the system
+#: The prompt-lab's chosen prompt (measured with seed 20260730, 50/50
+#: stratified split): the NAIVE criterion as the system
 #: message plus SEVEN few-shot exemplar turns (4 NO drawn from the measured
 #: failure taxonomy — hub fan-out, same-desk-off-topic, wrong-decision-locus,
 #: vocabulary collision — and 3 YES), all drawn from the TRAIN half only.
@@ -344,17 +343,17 @@ GATE_PROMPT_VERSION = "fewshot+desk+consequence/3"
 #: question has ``target_id`` NULL and shows no line — the desk-less shape the
 #: original seven already demonstrate). The version bump is the contract:
 #: 0.842 was measured on ``fewshot/1`` and does not transfer to this string.
-#: The next K-4 round re-measures it.
+#: The next measurement round re-checks it.
 #:
-#: CW-2b (``fewshot+desk+consequence/3``) — the consequence-specificity line,
-#: verbatim from the K-4 R4 report (§11.3). R4 measured the residual failure
-#: class it targets (F1, 3 of the round's 6 failures): a chokepoint-disruption
+#: ``fewshot+desk+consequence/3`` — the consequence-specificity line,
+#: verbatim from the measured report. It targets the residual failure
+#: class (3 of the 6 failures): a chokepoint-disruption
 #: question scoped to a SPECIFIC country's imports reliably matched
 #: chokepoint-disruption reporting that never touched the country-side leg —
 #: "the question names a country's imports and the signal never mentions that
 #: country's imports." One sentence, no exemplar change (the eight are still
 #: byte-for-byte the measured set), and — per the replay's own rule, because a
-#: prompt change moves what the MODEL says — its effect is measured by K-4 R6,
+#: prompt change moves what the MODEL says — its effect is measured live,
 #: never by replay.
 GATE_SYSTEM_PROMPT = (
     "Does this news item provide genuine evidence bearing on the thesis - "
@@ -595,7 +594,7 @@ class EdgeCandidate:
     #: as a scope.
     desk_label: str = ""
 
-    #: W11-F108 — the desk id that owns the question (``hypotheses.target_id``,
+    #: The desk id that owns the question (``hypotheses.target_id``,
     #: empty for a desk-less question). Carried for the shadow ledger only; it
     #: never reaches a prompt or ``data_payload``.
     target_id: str = ""
@@ -605,10 +604,10 @@ class EdgeCandidate:
     gate: str | None = None
     #: The component that judged it — stamped onto the row for provenance.
     gate_ref: str = ""
-    #: W11-F148 — ``'decide'`` when a decision model judged this pair, else
+    #: ``'decide'`` when a decision model judged this pair, else
     #: ``''`` (the chat path, whose stamp stays byte-identical).
     gate_shape: str = ""
-    #: W11-F148 — the decision model's confidence / p_yes; ``None`` on the
+    #: The decision model's confidence / p_yes; ``None`` on the
     #: chat path (a chat model gives neither).
     gate_confidence: float | None = None
     gate_p_yes: float | None = None
@@ -682,7 +681,7 @@ def bearing_counter_defaults() -> dict[str, Any]:
         "bearing_gate_mode": DEFAULT_BEARING_GATE,
         "bearing_gate_ref": "",
         "bearing_gate_prompt": GATE_PROMPT_VERSION,
-        # W11-F148 — which shape answered this run ('decide' | 'llm'); empty
+        # Which shape answered this run ('decide' | 'llm'); empty
         # when no gate client answered (off, or the component did not build).
         "bearing_gate_shape": "",
         "bearing_gate_calls": 0,
@@ -1031,7 +1030,7 @@ def read_decide_answer(answers: Any) -> tuple[str | None, float | None, float | 
 
 
 async def _gate_one_decide(client: Any, cand: EdgeCandidate) -> str | None:
-    """W11-F148 — one gate verdict from a DECISION model, stamping its
+    """one gate verdict from a DECISION model, stamping its
     confidence/p_yes on the candidate. ``None`` on any failure (transport,
     timeout, an unreadable choice): the chat path's collapse rule."""
     cand.gate_shape = "decide"
@@ -1088,13 +1087,13 @@ async def _run_gate(
 ) -> list[EdgeCandidate]:
     """W-B1. Returns the SURVIVING candidates (gate-NO dropped), stamped.
 
-    ``asked`` (W11-F108) collects ``(candidate, 'yes'|'no'|'unavailable')``
+    ``asked`` collects ``(candidate, 'yes'|'no'|'unavailable')``
     for every pair the model was ACTUALLY asked — the shadow's population. An
     observer only: appending to it changes no verdict and no flow."""
     client = await _resolve_gate_client(deps, gate_ref)
     decide = client is not None and is_decide_client(client)
     if client is not None:
-        # W11-F148 — which shape this run's gate answers in.
+        # Which shape this run's gate answers in.
         counters["bearing_gate_shape"] = "decide" if decide else "llm"
         if decide:
             counters["bearing_gate_prompt"] = GATE_DECIDE_QUESTION_VERSION
@@ -1259,9 +1258,9 @@ async def run_bearing_pipeline(
     each survivor carrying ``data.bearing_watch`` = 'confirmed'/'unconfirmed'
     so an adjudicated edge and an un-adjudicated one are never one population.
 
-    ``asked`` (W11-F108): when a list is passed, the gate leg appends every
+    ``asked``: when a list is passed, the gate leg appends every
     pair it asked, with its verdict — read AFTER this returns by the
-    clef-flash shadow (:mod:`.bearing_shadow`). Passing it moves nothing.
+    decision-model shadow (:mod:`.bearing_shadow`). Passing it moves nothing.
     """
     counters.update(bearing_counter_defaults())
     if not gate_enabled(mode):

@@ -225,7 +225,7 @@ describe('scoreBand', () => {
 })
 
 // --------------------------------------------------------------------------
-// calibration / skill scoreboard — the honest-top reducer (P4-T4)
+// calibration / skill scoreboard — the honest-top reducer
 // --------------------------------------------------------------------------
 describe('calibrationBanner', () => {
   it('carries the untrusted/legacy label and a stale note (lane E)', () => {
@@ -340,7 +340,7 @@ const LAG: ConsumerLagRow[] = [
 ]
 
 // --------------------------------------------------------------------------
-// band-calibration harness (P2-3, NOT a Brier score)
+// band-calibration harness (NOT a Brier score)
 // --------------------------------------------------------------------------
 
 describe('orderedBandHorizons', () => {
@@ -699,7 +699,7 @@ describe('relTime', () => {
 })
 
 // --------------------------------------------------------------------------
-// country banded scorecard — the honest-top drillable card (P4-T3/T5)
+// country banded scorecard — the honest-top drillable card
 // --------------------------------------------------------------------------
 function ev(over: Partial<DimensionEval> = {}): DimensionEval {
   return {

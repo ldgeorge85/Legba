@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # Supply-chain pack — TIER-B desk 8/10: critical minerals.
-# planning/SUPPLY_CHAIN_PACK_PLAN_2026-07-29.md §1.2.
 #
 # ============================ ACTIVATION GATE =============================
 # TIER B: registered so the topology is DECLARED and the collection gap is
@@ -10,16 +9,15 @@
 # it (source_first_runtime.py:901 boot-wires only `active` targets) and the
 # disruption_status unit never fans onto it.
 #
-#   GATE (plan §1.2): needs mining / commodity trade press — the plan's §5.2
-#   slot C-1.
+#   GATE: needs mining / commodity trade press (source slot C-1).
 #   ACTIVATE AT: >= 100 titles / 30d AND a PRECISION SPOT-CHECK passes.
 #   MEASURED 2026-07-29 (live, read-only): 36 titles / 30d on the mineral-name
-#   vocabulary (plan measured 33) — STILL WELL UNDER THE GATE. And one CONFIRMED
+#   vocabulary (an earlier measurement found 33) — STILL WELL UNDER THE GATE. And one CONFIRMED
 #   FALSE POSITIVE stands: a `%nickel%` match landed on a FIFA story. That is why
 #   this desk's gate carries a precision spot-check and the others do not; a
 #   mineral name is a much weaker discriminator than a corridor name.
 #
-#   NOTE: slot C-1 IS FILLED. `source.northernminer.news`
+#   NOTE: the mining-press gap IS FILLED. `source.northernminer.news`
 #   (descriptors/source_northernminer.yaml, `reporting`) went `state: active` on
 #   2026-07-29 and is ingesting. Sequence: let it accumulate a full 30d ->
 #   re-measure -> sample ~15 matched titles by hand for genuine mineral-supply
@@ -39,7 +37,7 @@ identity:
   abstraction_level: L1
   inherits: []
   state: draft
-  owner: supply_chain_pack
+  owner: owner@local
   created: "2026-07-29T00:00:00Z"
 
 scope:
@@ -47,7 +45,7 @@ scope:
   themes: [supply_chain, minerals, mining, commodity]
   # THE SQL PUSHDOWN — the producer states for the battery/electronics mineral
   # set (CD/ZM cobalt-copper, ID nickel, AU lithium/rare earths, CL lithium-
-  # copper, ZA platinum-group, MN coking coal/copper). No US (plan §0.3).
+  # copper, ZA platinum-group, MN coking coal/copper). No US.
   geo: [CD, ZM, ID, AU, CL, ZA, MN]
   entity_classes:
     - country

@@ -17,8 +17,7 @@ target-agnostic signals (see ``runtime/source_actor.py``).
     ``write_critique`` — thin per-kind specializations.
 
 All analyst-output writes validate the payload against its registered
-pydantic model first. Failures route to ``output_dead_letter`` (L-107 §6)
-and the wrapper returns ``None`` for the row + the DLQ entry.
+pydantic model first. Failures route to ``output_dead_letter`` and the wrapper returns ``None`` for the row + the DLQ entry.
 
 NATS event emission is best-effort and pluggable: pass ``publish_fn`` to
 the call site. Phase 5 runtime injects this; tests can omit it.
@@ -110,11 +109,11 @@ NatsPublishFn = Callable[[str, bytes], Awaitable[None]]
 
 
 # ---------------------------------------------------------------------------
-# Per-fact source credibility (Holes-B Wave 0 — facts.source_credibility)
+# Per-fact source credibility (facts.source_credibility)
 # ---------------------------------------------------------------------------
 #
 # Each ``facts`` row carries a ``source_credibility real`` (0..1) so the
-# contested-claims arbiter (Holes-B, #101) can weight competing values by how
+# contested-claims arbiter can weight competing values by how
 # trustworthy the asserting source is. The nominal is a coarse per-TIER prior
 # (operator-blessed ground truth is more credible than a machine extraction);
 # the real per-host score from ``signals.source_credibility`` overrides it when
@@ -255,7 +254,7 @@ async def resolve_fact_source_credibility(
     source_type: str | None,
     derived_from: Sequence[UUID],
 ) -> float:
-    """Resolve a fact's ``source_credibility`` (Holes-B Wave 0).
+    """Resolve a fact's ``source_credibility``.
 
     The real per-host score from the backing signals wins: take the MAX over
     ``signals.source_credibility`` for the ``derived_from`` signal ids (the most
@@ -369,8 +368,8 @@ async def write_analyst_output(
 ) -> tuple[OutputRow | None, OutputDeadLetterEntry | None]:
     """Generic analyst-output writer.
 
-    A FINDING also gets its citations as rows (lane DM-A,
-    ``citation_rows_store``; ``LEGBA_CITATION_ROWS``, default on): the
+    A FINDING also gets its citations as rows
+    (``citation_rows_store``; ``LEGBA_CITATION_ROWS``, default on): the
     ``analyst_outputs`` INSERT and the sentence / support / unresolved /
     handed rows commit in ONE transaction. ``handed_refs`` is the run's
     typed render index (``citation_rows.HandedRef``), when the kind keeps one.
@@ -387,8 +386,7 @@ async def write_analyst_output(
     Returns (OutputRow, None) on success; (None, OutputDeadLetterEntry) on
     schema failure.
 
-    ``source_type`` / ``seed_batch_id`` are the curated-seeding marker
-    (planning/SEEDING_SKETCH.md). They are honored ONLY by the ``facts`` and
+    ``source_type`` / ``seed_batch_id`` are the curated-seeding marker. They are honored ONLY by the ``facts`` and
     ``nexuses`` insert routes (the knowledge-layer tables); other kinds ignore
     them. Both default to ``None`` so existing callers are unchanged: a fact
     write with ``source_type=None`` falls back to the payload's ``source_type``
@@ -682,7 +680,7 @@ async def write_fact(
     **kwargs: Any,
 ) -> tuple[OutputRow | None, OutputDeadLetterEntry | None]:
     """Write an analyst-/workflow-emitted ``fact`` row to the dedicated
-    ``facts`` table (anchor §5 PIECE 2).
+    ``facts`` table.
 
     Mirrors ``write_hypothesis``/``write_finding``. The underlying
     ``_insert_fact`` uses the ``idx_facts_temporal_triple_open`` ``ON
@@ -818,7 +816,7 @@ async def write_journal(
     **kwargs: Any,
 ) -> tuple[OutputRow | None, OutputDeadLetterEntry | None]:
     """Write one ``journal`` row (entry | consolidation) to the dedicated
-    ``journal_entries`` table (plan §3.2 / §8).
+    ``journal_entries`` table.
 
     Mirrors ``write_situation``/``write_nexus`` but with one hard difference:
     the journal is a **direction-asymmetric lineage node** — it carries its
@@ -826,12 +824,12 @@ async def write_journal(
     ``journal_entries.derived_from`` is written **empty** so a downstream
     lineage walk FROM a fact/situation/nexus can NEVER surface the lyrical
     journal row inside the very provenance graph the Why room renders as "the
-    chain" (§3.5). We therefore IGNORE any ``derived_from`` passed in and force
+    chain". We therefore IGNORE any ``derived_from`` passed in and force
     it empty — the off-chain invariant is not left to call-site discipline.
 
     The journal must NEVER write a fact / nexus / finding / situation /
-    hypothesis (§3.1); this is the only write helper it is granted (and the
-    grant layer §7.6 enforces the rest).
+    hypothesis; this is the only write helper it is granted (and the
+    grant layer enforces the rest).
     """
     if derived_from:
         logger.warning(
@@ -844,7 +842,7 @@ async def write_journal(
         analyst_ctx=analyst_ctx,
         kind=OutputKind.JOURNAL,
         output_payload=payload,
-        derived_from=[],  # OFF the chain — always empty (§3.5).
+        derived_from=[],  # OFF the chain — always empty.
         **kwargs,
     )
 
@@ -932,7 +930,7 @@ async def _insert_for_spec(
         # Consolidation supersession runs INSIDE this route (close-prior +
         # insert-new are one logical step on the same conn). Entries are pure
         # append. derived_from is forced empty here regardless of what was
-        # passed — the off-chain invariant (§3.5).
+        # passed — the off-chain invariant.
         await _insert_journal_entry(
             conn,
             row_id=row_id,
@@ -1200,7 +1198,7 @@ async def _insert_event(
     ]
     lifecycle_stamp = max(link_times) if link_times else produced_at
     # V3/P1 — geo_lat/geo_lon are ALWAYS server-derived from the member
-    # signals, never trusted off the payload (spec §2.7): the point from the
+    # signals, never trusted off the payload: the point from the
     # majority country's earliest geocoded member — never a country
     # centroid, never invented, NULL when no member carries one. The
     # ``geo`` text[] column itself is left exactly as the caller supplied it
@@ -1449,7 +1447,7 @@ async def _insert_fact(
     # C-1: claim rows alone never ground the claimed event as fact (and so
     # never reach the same-triple confidence lift below).
     await refuse_claim_only_fact(conn, predicate=predicate, derived_from=prov.derived_from)
-    # Holes-B Wave 0 — resolve this fact's source_credibility BEFORE the write.
+    # Resolve this fact's source_credibility BEFORE the write.
     # The backing-signal MAX (signals.source_credibility) wins; else the tier
     # nominal for effective_source_type (seed/curated 0.9, agent/ingestion 0.5).
     # An analyst emission usually has no signal lineage, so it lands on the tier
@@ -1781,7 +1779,7 @@ async def _insert_nexus(
 
 
 # ---------------------------------------------------------------------------
-# Journal — off-chain dedicated table (plan §3.2 / §8)
+# Journal — off-chain dedicated table
 # ---------------------------------------------------------------------------
 
 
@@ -1792,7 +1790,7 @@ async def supersede_prior_consolidation(
     analyst_id: str | None,
 ) -> UUID | None:
     """Close the single open journal CONSOLIDATION, pointing it at
-    ``new_entry_id`` (plan §8 — mirrors :func:`supersede_prior_facts`).
+    ``new_entry_id`` (mirrors :func:`supersede_prior_facts`).
 
     The "current inner landscape" is the single open consolidation row
     (``entry_kind='consolidation' AND valid_until IS NULL AND superseded_by IS
@@ -1871,7 +1869,7 @@ async def _insert_journal_entry(
     — no supersession.
 
     ``derived_from`` is forced EMPTY here regardless of ``prov.derived_from`` —
-    the journal is the direction-asymmetric lineage node (§3.5). The citations
+    the journal is the direction-asymmetric lineage node. The citations
     live only in ``claims`` / ``cited_substrate_refs``.
     """
     p = payload                                          # type: ignore[assignment]
@@ -1936,7 +1934,7 @@ async def _insert_journal_entry(
         prov.analyst_id,
         prov.analyst_version,
         produced_at,
-        [],  # OFF the chain — always empty (§3.5).
+        [],  # OFF the chain — always empty.
         effective_schema_uri,
         prov.run_id,
         # VOICES LV-1 (0090): the free-form per-row metadata. json.dumps mirrors

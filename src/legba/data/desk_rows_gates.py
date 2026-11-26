@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Contract-v2 rows through the statement gates, BEFORE anything is written
-(lane D-1).
+"""Contract-v2 rows through the statement gates, BEFORE anything is written.
 
 Every row ends as exactly one OUTCOME, with its named reasons when it fails —
 a failed row is kept, never silently dropped:
@@ -59,6 +58,7 @@ from typing import Any
 
 from .desk_rows_contract import (
     FACT_KINDS,
+    MAX_SPLIT_ROWS,
     AbsenceRow,
     AssessmentRow,
     FactRow,
@@ -439,24 +439,30 @@ def gate_reply(reply: RowsReply, ctx: GateContext, *, repaired: frozenset[str] =
 # ---------------------------------------------------------------------------
 
 
-REPAIR_INSTRUCTIONS = (
-    "REPAIR ROUND. The rows below, from the read you just wrote, failed the platform's checks; "
-    "each is shown with its reasons. For each row you may FIX it — copy the quote word for word "
-    "from the cited row's text (a quote that NAMES the subject when the subject is not named), "
-    "narrow the text to what the quote states, correct its kind, subject, counterpart or dates, "
-    "cite the row that actually says it — SPLIT a fact row that states more than one figure or "
-    "claim into one row per figure, each with its own quote — or WITHDRAW it. THE RULE: a fixed "
-    "text may only use words of the original or words of its own quotes; it adds no figure or "
-    "date its quotes do not state; it keeps every negation, attribution ('said', 'according to') "
-    "and condition the original had; it cites only numbered rows of this run. You may NOT add a "
-    "row except by splitting a failed one, and you may NOT add a claim. When a fact's actor is "
-    "named in your quote but is not on the SUBJECTS list, set \"subject_kind\": \"surface\" and "
-    "\"subject\" to the name copied exactly from the quote; a generic role ('officials', 'a "
-    "spokesperson') is never a subject. Reply with ONE JSON object and nothing else: "
-    '{"repairs": [{"id": "<row id>", "action": "fix", "row": {<the whole fixed row, same fields '
-    'as before>}}, {"id": "<row id>", "action": "split", "rows": [{<a whole row>}, {<a whole '
-    'row>}]}, {"id": "<row id>", "action": "withdraw"}]}'
-)
+REPAIR_INSTRUCTIONS = "\n".join((
+    "REPAIR ROUND. The items below, from the read you just wrote, failed the platform's checks; "
+    "each is shown with its reasons. For each item, do one of three things:",
+    "- FIX it: copy the quote word for word from the cited row's text (a quote that names the "
+    "subject when the subject is not named), narrow the text to what the quote states, correct "
+    "its kind, subject, counterpart or dates, or cite the evidence row that actually says it.",
+    f"- SPLIT a fact item that states more than one figure or claim into 2 to {MAX_SPLIT_ROWS} "
+    "items, one figure or claim each, each with its own quote.",
+    "- WITHDRAW it.",
+    "The rule for a fixed text:",
+    "- it uses only words of the original or words of its own quotes;",
+    "- it adds no figure or date its quotes do not state;",
+    "- it keeps every negation, attribution ('said', 'according to'), hedge ('reportedly', 'may') "
+    "and condition the original had;",
+    "- it cites only numbered evidence rows of this run.",
+    "You may NOT add an item except by splitting a failed one, and you may NOT add a claim. When a "
+    "fact's actor is named in your quote but is not on the SUBJECTS list, set \"subject_kind\": "
+    "\"surface\" and \"subject\" to the name copied exactly from the quote; a generic role "
+    "('officials', 'a spokesperson') is never a subject.",
+    "Reply with ONE JSON object and nothing else: "
+    '{"repairs": [{"id": "<item id>", "action": "fix", "row": {<the whole fixed item, same fields '
+    'as before>}}, {"id": "<item id>", "action": "split", "rows": [{<a whole item>}, {<a whole '
+    'item>}]}, {"id": "<item id>", "action": "withdraw"}]}',
+))
 
 
 def failed_ids(outcomes: Sequence[RowOutcome]) -> frozenset[str]:
@@ -473,7 +479,7 @@ def build_repair_prompt(reply: RowsReply, outcomes: Sequence[RowOutcome], ctx: G
     from .desk_rows_contract import reply_as_dict
 
     by_id = {r["id"]: r for rows in reply_as_dict(reply).values() for r in rows}
-    lines = [REPAIR_INSTRUCTIONS, "", "FAILED ROWS:"]
+    lines = [REPAIR_INSTRUCTIONS, "", "FAILED ITEMS:"]
     for o in failed:
         lines.append(f"{o.row_id} — failed because: " + "; ".join(_plain(r) for r in o.reasons))
         lines.append("  row: " + json.dumps(by_id.get(o.row_id, {}), ensure_ascii=False))
@@ -492,7 +498,7 @@ def build_repair_prompt(reply: RowsReply, outcomes: Sequence[RowOutcome], ctx: G
         lines += ["", subjects_block(ctx.subjects)]
     if any(o.row_kind in ("assessment", "restatement") for o in failed):
         ok = [o for o in outcomes if o.outcome in (ESTABLISHED_ELIGIBLE, ABSENCE)]
-        lines += ["", "ROWS THAT PASSED (a judgement may rest on, a restatement may be borne by, these ids):"]
+        lines += ["", "ITEMS THAT PASSED (a judgement may rest on, a restatement may be borne by, these ids):"]
         lines += [f"  {o.row_id}: {o.text}" for o in ok] or ["  (none)"]
     return "\n".join(lines)
 
@@ -718,10 +724,9 @@ def _reorders_parties(old: str, new: str, src: str) -> bool:
     a name both texts carry may change its ROLE (:func:`party_roles`) only
     into the role the quotes give it. Word ORDER alone is not a swap: the
     faithful passive, a moved attribution, reordered co-actors and a moved
-    place phrase all keep every role. (D-2 judged by order and was tested on
-    four planted cases; on roll 85's planted set of 29 swaps and 24 good
-    repairs the order rule caught 21 and refused all 24 good ones — the
-    role rule catches 29 and refuses none.)"""
+    place phrase all keep every role. (Judging by order instead caught 21 of
+    29 planted swaps and refused all 24 planted good repairs — the role rule
+    catches 29 and refuses none.)"""
     before, after, quoted = party_roles(old), party_roles(new), party_roles(src)
     return any(role != before[name] and quoted.get(name) != role
                for name, role in after.items() if name in before)

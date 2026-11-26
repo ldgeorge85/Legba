@@ -1,26 +1,11 @@
 {
  "arm": "C",
  "cut": {
-  "dropped": [
-   7,
-   8,
-   9,
-   12,
-   13,
-   15,
-   16,
-   19,
-   20,
-   23,
-   24,
-   27,
-   28,
-   29
-  ],
-  "sentences_in": 30,
-  "top": 18,
-  "words_in": 563,
-  "words_out": 300
+  "dropped": [],
+  "sentences_in": 11,
+  "top": 0,
+  "words_in": 121,
+  "words_out": 121
  },
  "question_id": "P01",
  "receipts": [
@@ -67,52 +52,8 @@
   {
    "documents": [],
    "r": "R11"
-  },
-  {
-   "documents": [],
-   "r": "R12"
-  },
-  {
-   "documents": [],
-   "r": "R13"
-  },
-  {
-   "documents": [],
-   "r": "R14"
-  },
-  {
-   "documents": [],
-   "r": "R15"
-  },
-  {
-   "documents": [],
-   "r": "R16"
-  },
-  {
-   "documents": [],
-   "r": "R17"
-  },
-  {
-   "documents": [],
-   "r": "R18"
-  },
-  {
-   "documents": [],
-   "r": "R19"
-  },
-  {
-   "documents": [],
-   "r": "R20"
-  },
-  {
-   "documents": [],
-   "r": "R21"
-  },
-  {
-   "documents": [],
-   "r": "R22"
   }
  ],
  "schema": "legba.bakeoff.normalised/1",
- "text": "The world is currently in a high‐tension, multi‐theater arc where military escalation risk is rising in several flashpoints, economic and trade pressures are intensifying, and social unrest is modest but showing early signs in advanced economies. Military‐security arc. US‐Iran naval standoff is the top‐ranked active situation, driving a heightened escalation risk for the United States[R1]. Russian GRU sabotage of German defence firms spikes European security concerns[R2]. India‐Pakistan diplomatic spat keeps the South Asian border at a moderate escalation level[R3]. China’s proxy support for Iran (including technology transfers) raises regional escalation risk[R4], while Iran’s Hormuz blockade sustains high energy‐security pressure and the risk of broader naval confrontation[R5]. Turkey’s Mecca defence pact modestly boosts collective defence posture in the Middle East[R6]. Economic‐trade arc. China’s military posture remains high but static, with no new basing or capability shifts[R8]. Japan shows no new economic coercion measures[R11], but trade pressure is evident in a coordinated narrative of “anti‐US rhetoric” from Brazil[R12] and a Chinese anti‐dumping cash‐deposit on chip materials targeting Japan (dormant frame)[R13]. The overall direction points to increasing economic coercion as a complement to kinetic posturing. Social‐movement arc. Other regions (e.g., Brazil, South Africa) have dormant frames for mass shootings or protests, indicating limited current unrest but a capacity for rapid escalation if triggers emerge. Assessment: Social movements are low‐intensity but poised in technologically advanced societies (Japan) and latent in others. Military‐economic convergence: Proxy wars (China‐Iran), sanctions (US‐Iran, China‐Japan), and energy‐security pressures are tightly linked; disruptions in one domain (e.g., a new naval clash in the Strait of Hormuz) will likely reverberate through trade and financial markets. Trend direction: The arc is tilting toward a fragmented, high‐risk environment where states rely on a mix of hard power (naval standoffs, sabotage), economic coercion (sanctions, trade barriers), and soft‐power/information tactics to achieve objectives without full‐scale war.\n\nStated confidence: 0.65"
+ "text": "The network is currently in a low-throughput, multi-port pattern where berth restrictions are rising at several ports, surcharges are intensifying, and regulatory review is modest but growing. Capacity pattern. Eastmere northern berth closure is the top-ranked active situation, cutting weekly calls[R1]. Halden Quay terminal restriction keeps capacity at a moderate level[R2]. Northvale Freight's diversion of services raises pressure on neighbouring ports[R3]. Assessment: the pattern is a scramble for scarce slots, with carriers and port authorities using scheduling, surcharges and closures to press advantage. Pricing pattern. Surcharges on Eastmere cargo remain in force[R4]. Regulator review of berth rules adds uncertainty[R5]. What would change the assessment: – see watch candidates above. Not established: the exact sequence of events in the last 48 hours.\n\nStated confidence: 0.65"
 }

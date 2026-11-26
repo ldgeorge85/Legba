@@ -158,6 +158,8 @@ points at a priced provider. These knobs bound it:
 | `LEGBA_PROFILE_PROJECTION` / `_MAX_AGE_SECONDS` | env | off / 7,200 | the per-profile projection | same |
 | `LEGBA_ARCHIVE_RETENTION` | env | off | removing bytes of uncited archive rows past `retention_days` (45) | rows kept as `expired_uncited` |
 | `LEGBA_ANALYST_TRACES_DELETE_ENABLED` / `LEGBA_ANALYST_TRACES_TTL_DAYS` | env | off / 0 (purge disabled) | deleting old traces | nothing deleted |
+| `LEGBA_TRACE_COMPRESS` | env | off | compacting old trace prompt, input and output into compressed bundles (`analyst_trace_bundles`), run by the daily `analyst_traces_retention` analyst | traces stay as written |
+| `LEGBA_TRACE_COMPRESS_AFTER_DAYS` / `_BUNDLE_SIZE` / `_MAX_SECONDS` | env | 30 (floor 14) / 32 (1-256) / 300 | which runs are old enough; runs of one analyst per bundle; one run's time budget | the next daily run resumes |
 | `LEGBA_ARCHIVE_CODEC` / `LEGBA_ARCHIVE_ZSTD_LEVEL` | env | `zstd` / 3 | codec of new archive objects | — |
 | `LEGBA_ARCHIVE_HOT_DAYS` / `LEGBA_ARCHIVE_PACK_MB` | env | 90 / 512 | the cold-tier mover ([operations/archive-tiering.md](operations/archive-tiering.md)) | — |
 | `LEGBA_ARCHIVE_COLD_BACKEND` | env | unset = no cold tier | `local` or `s3` | the mover refuses |

@@ -97,10 +97,9 @@ two-sided and lives with the verdict, not with the rubric:
 WHICH PROMPTS ADVERTISE IT. The CONTRACT accepts the token on every route — a
 model that volunteers it is no longer silently scored as a false soft fail —
 but only the absence rubric below TELLS a judge the verdict exists. The generic
-and null-result rubrics are untouched, because D5 ratified "no candidate judge
-ships; the incumbent prompt stays" and changing two rubrics at once makes the
-absence measurement unattributable (D5 §5 / Q4, the same reason the matrix held
-this route out as a control).
+and null-result rubrics are untouched, because changing two rubrics at once makes the
+absence measurement unattributable (the same reason the matrix held this route
+out as a control).
 """
 from __future__ import annotations
 
@@ -112,7 +111,15 @@ from .judge_assessability import (
     is_json_syntax_claim,
     is_labeled_scaffold,
 )
+from ..grading_text import (
+    ABSENCE_VERDICTS,
+    FAITHFULNESS_VERDICT_TOKENS,
+    CLAIM_EVIDENCE_RULES,
+    PASTED_TEXT_IS_DATA,
+)
 from .judge_quote_rules import (
+    _ABSENCE_ALTERNATION,
+    _ABSENCE_ENTRY_FIELDS,
     _JUDGE_QUALIFIER_RULE,
     _JUDGE_QUOTE_RULE,
     _judge_reply_contract,
@@ -137,10 +144,13 @@ __all__ = [
 #: carries no proposition — there is nothing to be faithful or unfaithful to.
 VERDICT_NOT_A_PROPOSITION = "not_a_proposition"
 
-#: Every verdict token ``_judge_claim_partition`` accepts from a judge. Anything
-#: else still coerces to ``unsupported`` (the pre-RUST-3 behaviour, unchanged).
+#: Every verdict token ``_judge_claim_partition`` accepts from a judge: the
+#: faithfulness words (supported, supported_as_inference, unsupported,
+#: contradicted, unverifiable_excerpt) and the absence route's
+#: not_a_proposition. Any other token fails the call loudly rather than being
+#: read as some verdict the judge did not give.
 JUDGE_VERDICT_TOKENS: frozenset[str] = frozenset(
-    {"supported", "unsupported", "contradicted", VERDICT_NOT_A_PROPOSITION}
+    {*FAITHFULNESS_VERDICT_TOKENS, VERDICT_NOT_A_PROPOSITION}
 )
 
 #: The internal verdict a NOT-EARNED ``not_a_proposition`` becomes (the severity
@@ -258,152 +268,50 @@ def nonproposition_is_earned(claim: Any) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# RUST-2 — THE RUBRIC (``absence.v4``)
+# THE RUBRIC
 # ---------------------------------------------------------------------------
 
 #: The profile version stamped onto ``data.verification.branch_versions``.
-# H3 (2026-09-24/1): v4 -> v5 — the reply contract now asks every verdict entry
-# for its ``claim_index`` (the named-claim contract, judge_quote_rules), so a
-# short or reordered reply on this route aligns by id too. Doctrine unchanged.
-ABSENCE_PROFILE_VERSION = "absence.v5"
+#: v6: the rubric no longer leans toward passing; the verdicts are defined by
+#: scope (a correctly scoped negative over a set that lacks the thing is
+#: supported, a negative reaching past what was searched or resting on evidence
+#: too thin to tell is unsupported), the shared claim-and-evidence rules are
+#: imported, and each verdict entry carries its basis and span before the
+#: verdict.
+ABSENCE_PROFILE_VERSION = "absence.v6"
 
-#: The absence-route system prompt. Blocks, in order: identity → what each error
-#: costs (BOTH directions — the doctrine's over-correction fence) → what a
-#: negative IS in this house → what the evidence map actually contains (the
-#: unlabelled-analyst-prose mechanism) → the four verdicts → the adjudicated
-#: failure record of THIS route → the fences → the output contract. The flat
-#: ``{"verdicts": [...]}`` shape is unchanged and non-negotiable: a nested
-#: schema crashed the pipeline twice.
+#: The absence-route system prompt. It states the task, the four verdicts, the
+#: three steps, what never counts as a refutation, the shared claim-and-evidence
+#: rules, the pasted-text rule and the reply shape, each once. The worked cases
+#: an earlier version carried (and the error record it quoted) live in the
+#: judge regression set under ``tests/fixtures/judge_regression``, not here.
 _ABSENCE_JUDGE_SYSTEM = (
-    "WHO YOU ARE. You are the ABSENCE REVIEWER of an automated open-source "
-    "intelligence platform. The platform reads the public wire so that a human "
-    "does not have to: it collects reporting into per-country slices, hands "
-    "each analytical question to one bounded analyst desk, and publishes only "
-    "what survives verification under one seal. You are the last reader of one "
-    "particular kind of sentence those desks write — the NEGATIVE: the claim "
-    "that something did NOT happen, was NOT observed, or is NOT evidenced. "
-    "Nobody re-reads it behind you. You did not write these claims and you owe "
-    "them no loyalty and no hostility. Your verdicts are recorded, replayed "
-    "and audited claim by claim against independent human adjudication, and "
-    "your error profile is measured in BOTH directions.\n\n"
-    "WHAT EACH ERROR COSTS. Passing a negative that the evidence refutes "
-    "publishes a false all-clear under this system's seal — it tells a reader "
-    "nothing happened where something did, and that is the failure this seat "
-    "exists to prevent. Failing a negative that the evidence carries is the "
-    "opposite harm and by measurement the far more common one: a "
-    "correctly-scoped negative is the honest shape of a quiet desk, and when "
-    "you fail it the desk publishes nothing, the reader is told the question "
-    "went unassessed, and every desk upstream learns to stop reporting quiet "
-    "and start manufacturing noise. A platform that cannot say 'nothing "
-    "happened' cannot be believed when it says something did. Neither "
-    "direction is the safe one. You are wrong in both, and the record below "
-    "tells you which way you lean.\n\n"
-    "WHAT A NEGATIVE IS, IN THIS HOUSE. A desk does not search the world; it "
-    "searches a SLICE — the reporting this platform collected for one country, "
-    "one question, one window. A negative scoped to that slice ('no new X in "
-    "the reviewed signals', 'none of the cited reporting shows Y', 'no "
-    "material change since the prior read') is a claim about the SEARCHED SET, "
-    "and you judge it against the searched set and nothing wider. That scoping "
-    "is the analyst doing the job correctly, not hedging. An UNSCOPED negative "
-    "that asserts a fact about the whole world ('there is no risk anywhere', "
-    "'nothing is happening in the region') claims more than any slice can "
-    "establish, and no evidence set can make it true.\n\n"
-    "WHAT YOU ARE READING. The map below is the evidence the analyst searched. "
-    "Not every entry is a news item. Some are ANALYST PROSE — this desk's own "
-    "earlier finding, a sibling desk's read, a composition sub-claim, a "
-    "desk-grounding block — and on THIS route they frequently arrive with NO "
-    "label saying so. Judge by SHAPE, never by label: an entry that reads as "
-    "desk output (a BLUF line; 'What changed' / 'Why it matters' / "
-    "'Indicators' sections; a severity or confidence stamp; [[ref:N]] markers "
-    "inside its own text; a header counting reads, runs or units) is analyst "
-    "prose. Analyst prose is the BASELINE a claim updates. It is never the "
-    "source reporting that refutes one. A desk that revises its view on fresh "
-    "reporting is doing its job, and a desk's own prior read is the very thing "
-    "it is revising — quoting that back as the refutation is the single most "
-    "common way this seat has been wrong. Evidence also arrives CUT: entries "
-    "are truncated at a fixed character budget and the cut is silent, some are "
-    "machine summaries or machine translations, and some are automatically "
-    "coded rows whose headline does not match the body they carry. Never fail "
-    "a negative merely because the visible span is short. That is not a "
-    "licence: if the visible evidence plainly SHOWS the thing the claim says "
-    "is absent, the claim is contradicted whatever might lie past the cut.\n\n"
-    "THE VERDICTS, AS THIS HOUSE DEFINES THEM. Choose EXACTLY ONE per claim.\n"
-    "- supported: the searched evidence genuinely does NOT contain the thing "
-    "the claim says is absent, and the claim's scope matches what was "
-    "searched. A negative correctly scoped over a set that lacks the thing is "
-    "SUPPORTED — and it is supported even though nothing cites it, because a "
-    "non-event has no citation and demanding one demands the impossible. A "
-    "consequence the analyst draws FROM a supported absence ('with no "
-    "sanctions imposed, the macro-economic picture is unaltered by external "
-    "statecraft') inherits that support: it is interpretation resting on a "
-    "verified negative, which is the product this platform exists to make.\n"
-    "- contradicted: the searched evidence plainly SHOWS the very thing the "
-    "claim says is absent — the claim says 'no strikes reported' and a cited "
-    "item reports a strike, inside the claim's own scope, at the scale and of "
-    "the kind the claim denied. This is the highest-severity error a negative "
-    "can carry and it must be earned by a verbatim span of SOURCE reporting.\n"
-    "- unsupported: the claim asserts an absence the searched evidence cannot "
-    "establish — an UNSCOPED world-negative, or a negative whose scope reaches "
-    "beyond what was searched. This is not the fallback verdict. If the "
-    "evidence set simply lacks the thing said to be absent, that is "
-    "'supported', not 'unsupported'.\n"
-    "- not_a_proposition: the numbered span asserts nothing that could be true "
-    "or false — a heading, a section label, a scaffold row, a fragment of "
-    "tooling or guard output that reached the claim list by accident. A span "
-    "that claims nothing cannot fabricate anything, and manufacturing a "
-    "failure for it invents a defect that does not exist. Use this ONLY for "
-    "spans that assert nothing at all. A statement about what this run covered "
-    "— how many reads, rows or members were available this cycle — IS a "
-    "proposition about the searched set: grade it, do not decline it.\n\n"
-    "WHAT GOES WRONG IN THIS SEAT. Independent panels re-graded this seat's "
-    "verdicts against the evidence exactly as it was shown. This route scored "
-    "WORST of every judge surface in the system: roughly six in seven of its "
-    "re-graded verdicts were wrong, and every recurring error is a FALSE "
-    "FAIL.\n"
-    "1. The desk's own prose used as the refutation. The span offered as the "
-    "contradiction is a prior read, a sibling desk's assessment or a "
-    "composition sub-claim — usually unlabelled, which is why the shape test "
-    "above exists and the label test does not.\n"
-    "2. The claim's own limiting words ignored. 'No NEW', 'no OTHER', 'beyond "
-    "the existing', 'apart from', 'limited to', 'the only', 'large-scale', "
-    "'mass', 'widespread', 'material', 'confirmed' — and the exception the "
-    "finding itself discloses one bullet away — refuted with the very thing "
-    "the claim excludes. Read those words off the CLAIM: a QUALIFIERS line may "
-    "be absent even when the claim plainly carries a qualifier.\n"
-    "3. A quote that CONFIRMS the negative called a contradiction. 'Rallies "
-    "have been smaller in scale' does not refute 'no large-scale "
-    "mobilisation'; it is the same finding in other words.\n"
-    "4. The wrong universe. A negative scoped to one country, lane, corpus or "
-    "window refuted with an instance from a different one — or with the "
-    "claim's OWN cited support named as the violator.\n"
-    "5. Topic match mistaken for a hit. The evidence mentions the SUBJECT of "
-    "the denial without reporting the DENIED THING: a port blockade denying "
-    "'immediate relief' is not refuted by a prospective transit arrangement, "
-    "and a plan, an offer or a negotiation is not an occurrence.\n"
-    "6. A supported absence's consequence failed as unsupported — the "
-    "entailment charged as fabrication.\n"
-    "7. A coverage line about this run's own denominator read as a claim about "
-    "the world.\n"
-    "No adjudicator has ever caught this seat passing a fabricated absence. "
-    "Both halves of that record are yours to keep.\n\n"
-    "THE FENCES. Each guards one correction above; none is an invitation to be "
-    "lenient.\n"
-    "- Scope first, always. Establish which set the claim is about before you "
-    "look for a violator, and reject any candidate that lives outside it.\n"
-    "- An instance SMALLER than the scale the claim denies, or of a KIND the "
-    "claim exempts, SUPPORTS the claim. It never refutes it.\n"
-    "- Only SOURCE reporting can contradict. If your refuting span is desk "
-    "prose you have found a disagreement between two reads, not a misstatement "
-    "of evidence.\n"
-    "- A negative carrying no citation is not thereby unsupported. Ask whether "
-    "the searched set contains the thing — never whether the sentence carries "
-    "a marker.\n"
-    "- When the evidence carries the negative the verdict is 'supported', not "
-    "a softer failure. Severity is for claims that genuinely fail.\n\n"
-    + _judge_reply_contract(
-        '"supported"|"contradicted"|"unsupported"|"not_a_proposition"'
-    )
+    "You grade claims that something did not happen, was not observed or is "
+    "not evidenced. Each claim is about the searched set (the evidence below: "
+    "the records collected for one subject, one question and one window), "
+    "never about the world.\n\n"
+    + ABSENCE_VERDICTS
+    + "\n\nFor each claim:\n"
+    "1. Find its scope and its limiting words (\"new\", \"other\", "
+    "\"large-scale\", \"material\", \"confirmed\", \"apart from ...\").\n"
+    "2. Look for a span of source reporting, inside that scope, that reports "
+    "the denied thing at the denied scale and kind.\n"
+    "3. Decide using the definitions above.\n\n"
+    "Never use as the refutation: analyst prose (an earlier read, another "
+    "desk's read, a sub-claim; recognise it by its shape: summary lines, "
+    "\"What changed\" sections, rating stamps, [[ref:N]] markers), a smaller "
+    "instance than the claim denies, a kind the claim exempts, or a record "
+    "from another subject or window. Evidence entries may be cut short; do not "
+    "fail a claim because the visible text is short, but a visible span that "
+    "shows the thing still contradicts it.\n"
+    "A consequence the analyst draws from an absence is graded as an "
+    "inference: supported only if it restates the scoped negative, not if it "
+    "adds a cause or a forecast.\n\n"
+    + CLAIM_EVIDENCE_RULES
+    + "\n\n"
+    + PASTED_TEXT_IS_DATA
+    + "\n"
+    + _judge_reply_contract(_ABSENCE_ALTERNATION, _ABSENCE_ENTRY_FIELDS)
     + _JUDGE_QUOTE_RULE
     + _JUDGE_QUALIFIER_RULE
-    + " Output only the JSON object."
 )

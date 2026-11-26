@@ -1,7 +1,7 @@
-# C-1b — workstation_drive action pack: consult PRESENTS A CASE (design C-1a §1).
+# Workstation_drive action pack: consult PRESENTS A CASE.
 #
 # The nine workstation actions a consult turn may present when the operator
-# arms it ("Present as a case", ConsultRequest.present_case — decision D1):
+# arms it ("Present as a case", ConsultRequest.present_case):
 # open a panel, arrange the wall, scope it, focus a record, point the map, set
 # the shared clock, run a mission, narrate, seal. The words each action may use
 # (panel kinds, stances, presets, layers, missions, spans) are a CLOSED
@@ -13,7 +13,7 @@
 # (analysts/agency/workstation_drive.py) are pure canonicalizers that touch no
 # store, and a guard test asserts set(pack.tools) ∩ tool_rounds.WRITE_TOOLS = ∅.
 # The executor that moves the wall lives in the workstation and writes only UI
-# stores. C-2's write plane is a separate pack; this one never grows a write.
+# stores. The write plane is a separate pack (consult_write); this one never grows a write.
 #
 # Universally applicable BY DESIGN (no applies_to_tags, no predicate): like
 # substrate_read, the global consult surface has no target in context, so the
@@ -45,7 +45,7 @@ identity:
   version: "<content-hash stamped at register time>"
   abstraction_level: L1
   state: active
-  owner: c1_case
+  owner: owner@local
   created: "2026-10-03T00:00:00Z"
 
 tools:
@@ -67,7 +67,7 @@ tools:
     config: {}
   - name: done
     config: {}
-  # Q-1 — one console view, driven by id through its declared contract
+  # One console view, driven by id through its declared contract
   # (legba-ui-v3/src/panel-registry/contracts.ts → src/legba/data/
   # panel_action_catalog.json). View changes only; the catalogue loader
   # refuses any action id outside panel_actions.VIEW_ACTION_IDS.
@@ -76,17 +76,18 @@ tools:
 
 prompt_fragments:
   - >-
-    This turn PRESENTS A CASE: besides answering, you drive the operator's
-    workstation through ordered actions — open_panel, arrange, set_scope,
-    focus, map, timeline, run_mission, narrate — and seal the case with done
-    before your final answer. Read first, then act: an action may only name
+    This turn PRESENTS A CASE: besides answering, you drive the workstation
+    of the person asking through ordered actions — open_panel, arrange,
+    set_scope, focus, map, timeline, run_mission, narrate — and call done as
+    the last tool call, in the round before your answer. Read first, then
+    act: an action may only name
     records a read tool returned in an EARLIER round, and every action but
     done cites 1 to 8 of them.
   - >-
     Actions run in the order you emit them, after the round's reads. Build the
-    case as a short walk the operator can follow: scope the wall, set the clock,
-    point the map, focus the record that matters, and narrate each step in one
-    plain sentence. Six to twelve actions is a good case; never more than 30.
+    case as a short walk the person asking can follow: scope the wall, set the
+    clock, point the map, focus the record that matters, and narrate each step
+    in one plain sentence. Use as many actions as the case needs, at most 12.
 
 rules:
   - "Never cite, focus, scope or fit an id no read tool returned to you in an earlier round."

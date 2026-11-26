@@ -353,8 +353,11 @@ def test_version_value_and_shape() -> None:
 
     ``2026-11-13/1`` — the SAMPLING REGIME: temperature 1.0 on every model
     call (judge, critic and graders move from 0.0/0.1). All families MOVES.
+
+    ``2026-11-25/1`` — the judges stop leaning toward a pass: four checks, two
+    new verdict words, unknown verdict words fail loudly. All families MOVES.
     """
-    assert JUDGE_PIPELINE_VERSION == "2026-11-13/1"
+    assert JUDGE_PIPELINE_VERSION == "2026-11-25/1"
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}/\d+", JUDGE_PIPELINE_VERSION)
 
 
@@ -736,11 +739,12 @@ def test_real_lineage_pooling_yield_for_the_score_family() -> None:
         ("2026-10-03/1",),
         ("2026-10-03/2",),
         ("2026-11-13/1",),
+        ("2026-11-25/1",),
     ]
     # 25 stamps -> 21 populations (carried_unsupported opened a singleton;
     # carried_ungraded MOVES the score family, so it opens another; the W4 F-3
     # world floor adds a check unit to every world read, so it opens a third).
-    assert len(STAMP_LINEAGE) == 26 and len(pools) == 22
+    assert len(STAMP_LINEAGE) == 27 and len(pools) == 23
 
     # THE HEAD IS A SINGLETON (carried_ungraded moves the score family, as
     # carried_unsupported did before it): carried_unsupported declares ``moves`` on every

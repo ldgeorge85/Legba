@@ -1,6 +1,6 @@
-# roll 73 (2026-11-13) — SourceDescriptor for the UK Maritime Trade Operations
+# SourceDescriptor for the UK Maritime Trade Operations
 # (UKMTO) incident list, published by the Royal Navy's SCCD site. Ships DRAFT
-# (operator-approved for activation on the reference host; LIFECYCLE.md).
+# (activation: LIFECYCLE.md).
 #
 # Endpoint: https://sccd.royalnavy.mod.uk/api/ukmto/all — keyless JSON. Its
 # CDN blocks the HTTP/2 fingerprint, so this source is fetched ONLY over
@@ -16,7 +16,7 @@
 #   vesselName, vesselType, crewHeld, otherDetails (the narrative text).
 # Mapping: id = sitecoreId, body = otherDetails, timestamp = utcDateCreated
 # (publication — a "time-late" report of an older incident is still picked
-# up; the incident date stays in payload.item). Lane N-R (2026-11-13):
+# up; the incident date stays in payload.item).
 #   * title = title_template "{incidentTypeName}: {place} — {vesselType}"
 #     ("Attack: Strait of Hormuz — Tanker"); a missing or junk field ("." /
 #     "-") drops with its separator; all missing falls back to the type name.
@@ -34,8 +34,8 @@
 # Poll budget: 180 s (handler ceiling 240). Each written signal costs ~9 s —
 # NOT enrichment (the NLP chain measured <0.1 s per item on the first poll)
 # but the fleet-wide tier-1 ingest dedupe scan (data/filters/ingest_dedupe.py
-# _lookup_by_url_hash reads every canonical_url row of the tenant, ~381k on
-# 2026-11-13, per signal). At the generic 30 s budget the 30-day backlog
+# _lookup_by_url_hash reads every canonical_url row of the tenant, ~381k at
+# the time of measurement, per signal). At the generic 30 s budget the 30-day backlog
 # drained four incidents an hour; 180 s drains ~20.
 # Credibility: host royalnavy.mod.uk seeded at 0.90 / gov / state-affiliated
 # (scripts/bringup_register_source_batch_2026_09.py).
@@ -48,7 +48,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: roll_73
+  owner: owner@local
   created: "2026-11-13T00:00:00Z"
 
 scope:
@@ -99,7 +99,7 @@ config:
     raw: 100
   poll_budget_seconds:
     factory_kind: number
-    raw: 180                     # N-R: drain the backlog (see header)
+    raw: 180                     # drain the backlog (see header)
   title_template:
     factory_kind: text
     raw: "{incidentTypeName}: {place} — {vesselType}"

@@ -1,6 +1,6 @@
-# stance_linear/2 — stance_linear/1 re-sized from the first real runs (lane G-6).
+# stance_linear/2 — stance_linear/1 re-sized from the first real runs.
 # Same seats and shape as /1; what changed:
-#  * deadlines from measurement (lane G-5, 131 calls): thinking OFF p50 6.3 s,
+#  * deadlines from measurement (131 calls): thinking OFF p50 6.3 s,
 #    p95 14.5 s; thinking ON p50 26.9 s, p95 121 s. A thinking seat gets 180 s, a
 #    plain seat 60 s, a seat with tool rounds 150-180 s (two rounds of reads,
 #    each read cut off at 25 s, its duration on the receipt);
@@ -105,7 +105,7 @@ round:
     verifier:
       kind: judge
       card: cards/judges/verifier.md
-      plane: llm.verify.innoai_gemma.openai_compat
+      plane: llm.verify.gateway_judge.openai_compat
       family_rule: {differs_from: [adjudicator, collector_a]}
       reads: [{from: adjudicator, view: sentence_table}]
       output: verdict/2

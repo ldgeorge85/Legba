@@ -3,8 +3,7 @@
 --
 -- 0264_drop_unused_indexes.sql
 --
--- Thirty-two secondary indexes nobody reads (lane P-8, the data-layers review
--- 03c §1.6 / §6 change 8). Each was listed by scripts/report_unused_indexes.py
+-- Thirty-two secondary indexes nobody reads (found in a data-layers review). Each was listed by scripts/report_unused_indexes.py
 -- against live on 2026-11-14 (statistics window since 2026-08-29, 77 days):
 -- zero scans over at least 30 days of observation, NOT unique, backing NO
 -- constraint, NOT on graph_arcs (rebuilt by swap every hour, so its counters

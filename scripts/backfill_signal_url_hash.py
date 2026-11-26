@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Build the canonical_url_hash indexes and backfill the column — DRY RUN by default.
 
-Lane N-S, the out-of-transaction half of migration 0247. The migration adds
+The out-of-transaction half of migration 0247. The migration adds
 ``signals.canonical_url_hash`` (nullable, catalog-only) and builds its two
 partial indexes only on a small table; on the live table (~430k rows) both
 the index builds and the backfill are this script's job, because the runner

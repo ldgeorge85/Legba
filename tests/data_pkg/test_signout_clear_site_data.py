@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""P-1 — sign-out from the phone app answers ``Clear-Site-Data: "storage"``.
+"""Sign-out from the phone app answers ``Clear-Site-Data: "storage"``.
 
 The phone app (``/m/``) sends ``X-Legba-Clear-Device: phone`` on its sign-out;
 only then does the registry ask the browser to clear the origin's storage

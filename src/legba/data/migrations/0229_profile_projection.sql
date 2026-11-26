@@ -3,7 +3,7 @@
 --
 -- 0229_profile_projection.sql
 --
--- THE PER-PROFILE PROJECTION (W9 VIEW-1, Review A §2.2d, DEC-12).
+-- THE PER-PROFILE PROJECTION.
 --
 -- WHY
 -- ---

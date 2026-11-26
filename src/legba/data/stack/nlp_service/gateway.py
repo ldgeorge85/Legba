@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The innoai gateway behind the hosted-NLP client contract (W11-F107).
+"""The model gateway behind the hosted-NLP client contract.
 
 The legba-models service (GLiREL triples over spaCy NER, DeBERTa zero-shot,
-NLLB translation) is dead since 2026-10-22. The innoai gateway serves the
+NLLB translation) is dead since 2026-10-22. The model gateway serves the
 same jobs on OpenAI-style routes with Bearer auth:
 
   * ``POST /entities``  — ``{"model": "ner", "text", "entities": [...]}`` →
@@ -16,7 +16,7 @@ same jobs on OpenAI-style routes with Bearer auth:
     zero-shot scores (shape unverified; read defensively below).
   * no translate route — but ``POST /chat/completions`` serves a multilingual
     chat model (alias ``fast``, thinking off), which :meth:`translate` asks
-    (W11-F109).
+.
 
 :class:`GatewayNlpClient` exposes the SAME public methods, return shapes and
 exceptions as :class:`~legba.data.stack.nlp_service.client.NlpServiceClient`,
@@ -27,12 +27,12 @@ unchanged:
     ``{"triples": [{"subject", "predicate", "object", ...}], "ms"}``. The
     predicate is the CONFIGURED label (lowercase-spaced, e.g. ``"leader of"``),
     whatever separator the gateway keys its answer by, because the fact write
-    path and ``ner.py``'s predicate cues key on that surface. W11-F113: the
+    path and ``ner.py``'s predicate cues key on that surface. The
     default labels are DERIVED from the graph's relationship types, the
     triple's ``confidence`` is the min of its endpoint scores, hits below
     ``relation_threshold`` (sent as ``threshold``) and junk pairs are dropped
     and counted — see :mod:`.gateway_relations`.
-  * :meth:`translate` (W11-F109) → one chat completion per chunk on the
+  * :meth:`translate` → one chat completion per chunk on the
     configured ``translate_model``, answered as the legacy
     ``{"translated", "source_lang", "target_lang", "ms"}``; an empty or
     oversized answer is :class:`NlpServiceUnavailable`, never a stamp. With no
@@ -77,12 +77,12 @@ logger = logging.getLogger(__name__)
 
 
 PROVIDER_LEGBA_MODELS = "legba_models"
-PROVIDER_INNOAI_GATEWAY = "innoai_gateway"
-NLP_PROVIDERS: tuple[str, ...] = (PROVIDER_LEGBA_MODELS, PROVIDER_INNOAI_GATEWAY)
+PROVIDER_BEARER_GATEWAY = "bearer_gateway"
+NLP_PROVIDERS: tuple[str, ...] = (PROVIDER_LEGBA_MODELS, PROVIDER_BEARER_GATEWAY)
 
 #: ``DEFAULT_RELATION_LABELS`` (the labels ``extract`` asks for when the
 #: component names none) is derived from the graph's relationship types in
-#: :mod:`.gateway_relations` (W11-F113) and re-exported here; legba-models' 20
+#: :mod:`.gateway_relations` and re-exported here; legba-models' 20
 #: generic GLiREL labels are kept there as ``LEGACY_GLIREL_RELATION_LABELS``.
 
 #: Legba's closed entity taxonomy (``legba.data.vocabulary.ENTITY_CLASSES``)
@@ -123,7 +123,7 @@ MAX_RETRY_WAIT_S = 10.0
 _RETRY_STATUSES = frozenset({429, 500, 502, 503, 504, 529})
 
 #: The gateway chat alias translation asks when the component names none
-#: (``translate_model`` absent; the client factory applies it): MiMo flash,
+#: (``translate_model`` absent; the client factory applies it): the core chat model,
 #: thinking off — multilingual, and the cheapest lane on the gateway.
 DEFAULT_TRANSLATE_MODEL = "fast"
 
@@ -369,14 +369,14 @@ def classify_scores(data: Any) -> dict[str, float] | None:
 
 
 class GatewayNlpClient:
-    """Async client for the innoai gateway's NLP routes (Bearer auth).
+    """Async client for the model gateway's NLP routes (Bearer auth).
 
     Same public surface as :class:`NlpServiceClient`: :meth:`health`,
     :meth:`classify`, :meth:`extract`, :meth:`translate`, :meth:`summarize`,
     :meth:`aclose` and the async context manager. Adds :meth:`entities`.
     """
 
-    provider = PROVIDER_INNOAI_GATEWAY
+    provider = PROVIDER_BEARER_GATEWAY
 
     def __init__(
         self,
@@ -412,7 +412,7 @@ class GatewayNlpClient:
         self._health_path = health_path
         self._relation_labels = list(relation_labels or DEFAULT_RELATION_LABELS)
         self._entity_labels = list(entity_labels or DEFAULT_ENTITY_LABELS)
-        # W11-F113: None = the provider defaults ("min", 0.5); a threshold of
+        # None = the provider defaults ("min", 0.5); a threshold of
         # 0 is OFF. Bad values fail at construction, never at the first call.
         self._relation_confidence = coerce_confidence_mode(relation_confidence)
         self._relation_threshold = coerce_threshold(relation_threshold)
@@ -563,7 +563,7 @@ class GatewayNlpClient:
     async def extract(self, text: str) -> dict[str, Any]:
         """ONE ``/relations`` call → ``{"triples": [...], "ms": float}``.
 
-        W11-F113: ``threshold`` rides on the body when one is configured; a
+        ``threshold`` rides on the body when one is configured; a
         400/422 that names it is retried ONCE without it (and the client stops
         sending it), so an unknown field never costs the whole call. Whatever
         the server did with it, the threshold is applied again here to the
@@ -755,7 +755,7 @@ class GatewayNlpClient:
         self, texts: list[str], max_length: int = 64,
     ) -> dict[str, Any]:
         raise NlpServiceUnsupported(
-            "summarize: the innoai gateway has no summarization route"
+            "summarize: the model gateway has no summarization route"
         )
 
 
@@ -769,7 +769,7 @@ __all__ = [
     "NLP_PROVIDERS",
     "NlpServiceRejected",
     "NlpServiceUnsupported",
-    "PROVIDER_INNOAI_GATEWAY",
+    "PROVIDER_BEARER_GATEWAY",
     "PROVIDER_LEGBA_MODELS",
     "classify_scores",
     "entities_to_list",

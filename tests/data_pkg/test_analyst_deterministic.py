@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""L-173 dispatcher tests for the deterministic analyst kind.
+"""Dispatcher tests for the deterministic analyst kind.
 
 Unit tests only — sub-handler internals live in
 ``test_analyst_deterministic_handlers.py``. These tests cover:
@@ -40,9 +40,9 @@ def test_kind_name_constant():
 
 
 def test_sub_handler_registry_has_l173_four():
-    """L-173 — the original four deterministic sub-handlers must remain registered.
+    """The original four deterministic sub-handlers must remain registered.
 
-    L-203 extends the registry with maintenance migrations; we don't pin the
+    extends the registry with maintenance migrations; we don't pin the
     full set here so future migrations can land without rewriting the test.
     """
     l173_expected = {
@@ -120,8 +120,8 @@ async def test_run_method_each_real_sub_handler_returns_method_result():
     """Sanity: each real sub-handler returns the right shape on empty input.
 
     R-1: the handlers that REFUSE LOUD without a live pg_pool are no longer a
-    hand list here (every lane that added one had to append it, and three
-    lanes forgot and left the suite red). Each declares ``requires_pool=True``
+    hand list here (every handler that added one had to append it, and some
+    forgot and left the suite red). Each declares ``requires_pool=True``
     in its type-registry declaration, with the reason; their empty-input
     contract is exercised with a real pool in their own test modules, and
     :func:`test_requires_pool_handlers_refuse_without_a_pool` holds the

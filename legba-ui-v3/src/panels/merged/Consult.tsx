@@ -1,63 +1,24 @@
 /**
- * Consult (`system.consult`) — U-3 merge set 4: Deep Consult becomes a depth
- * toggle on Consult.
+ * Consult (`system.consult`) — the one Consult panel.
  *
- * Chat Consult (`system.consult`) answers synchronously in the envelope, no
- * durable row. Deep Consult (`system.deep_consult`) is architecturally
- * different — it submits a DETACHED Dapr Workflow (`POST /api/v1/
- * deep_consult`) and polls a task id — so this wrapper doesn't try to unify
- * the two calls; it just puts a Chat/Deep switch above them and mounts
- * whichever original, UNMODIFIED panel component the operator picked, inside
- * `PanelEmbedProvider` so its own (otherwise-standalone) `PanelChrome`
- * header/border stays suppressed — this wrapper's header is the ONLY chrome
- * that renders (the "double chrome" fix).
- *
- * `system.deep_consult` stays registered (hidden from the sidebar) pointing
- * at the SAME untouched component — see panel-registry/registry.ts
- * HIDDEN_KINDS — so a saved layout referencing the old id keeps resolving
- * exactly as before.
+ * Deep Consult is a mode switch inside the Consult composer (see
+ * `panels/system/Consult.tsx`), not a second tab or form. This wrapper is kept
+ * so the registered kind and its retired address (`system.deep_consult`, which
+ * resolves here with the initial tab "deep") keep landing on the same panel;
+ * inside the frame the dock's own header names Consult, so there is no strip.
  */
-import { useState } from 'react'
 import type { PanelProps } from '@/types'
-import { initialTab, PanelTabStrip, type PanelTabDef } from '@/components/PanelTabs'
 import { PanelEmbedProvider } from '@/components/PanelEmbedContext'
 import ConsultPanel from '@/panels/system/Consult'
-import DeepConsultPanel from '@/panels/system/DeepConsult'
 import { useConsultFrame } from '@/components/ConsultFrameContext'
 
-type Depth = 'chat' | 'deep'
-
-const TABS: readonly PanelTabDef[] = [
-  { id: 'chat', label: 'Chat' },
-  { id: 'deep', label: 'Deep' },
-]
-
 export default function ConsultMerged(props: PanelProps) {
-  // `system.deep_consult` retired onto the "deep" depth (aliases.ts).
-  const [depth, setDepth] = useState<Depth>(() => initialTab(props.initialTab, TABS, 'chat') as Depth)
-  // U-6 — in the frame the dock's own head names Consult; as the ask bar
-  // alone the depth strip folds away too (a chat turn is what the bar sends).
   const frame = useConsultFrame()
-  const compact = !!frame?.compact
   return (
     <div className={frame ? 'flex h-full w-full flex-col' : 'flex h-full w-full flex-col bg-surf-2'}>
-      <div
-        className={
-          compact ? 'hidden' : frame ? 'flex items-center gap-2 pb-1.5' : 'flex items-center gap-2 border-b border-line bg-surf-3 px-density py-1.5'
-        }
-      >
-        {!frame && <span className="text-label uppercase tracking-wider text-ink-3">Consult</span>}
-        <PanelTabStrip
-          tabs={TABS}
-          active={depth}
-          onChange={(id) => setDepth(id as Depth)}
-          ariaLabel="Consult depth"
-          testIdPrefix="consult-depth"
-        />
-      </div>
       <div className="min-h-0 flex-1">
         <PanelEmbedProvider>
-          {depth === 'chat' || compact ? <ConsultPanel {...props} /> : <DeepConsultPanel {...props} />}
+          <ConsultPanel {...props} />
         </PanelEmbedProvider>
       </div>
     </div>

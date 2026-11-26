@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""R-1 BEFORE/AFTER — adding a deterministic handler and an alert kind.
+"""BEFORE/AFTER — adding a deterministic handler and an alert kind.
 
 The fixture package ``tests/data_pkg/type_registry_fixture`` adds one handler
 (``fixture_echo``, with an inline option) and one alert kind
@@ -10,11 +10,11 @@ them up with NO edit to any shared file, and that the invariants hold for them.
 
 The count, for the record: the fixture is THREE new files (handler code, its
 declaration, the alert kind's declaration) plus THIS test = four. In-tree, a
-real lane adds a descriptor YAML (and, when the host activates it, one
+a real change adds a descriptor YAML (and, when the host activates it, one
 ``descriptors/LIFECYCLE.d`` row file), and re-runs ``scripts/gen_type_tables.py``,
 which regenerates the docs tables (and, for a ``finding`` handler, the console
 mirror) — generated lines, no hand edits. The measured cost of the same change
-this week (lane E-1) was 18 files, 14 of them edits to shared files.
+this week was 18 files, 14 of them edits to shared files.
 """
 from __future__ import annotations
 

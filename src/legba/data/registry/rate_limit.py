@@ -91,7 +91,7 @@ def build_limiter() -> Any:
             exc,
         )
         return _NoopLimiter()
-    # W11-F85: at LEGBA_REGISTRY_WORKERS > 1 the buckets live in Redis, so a
+    # At LEGBA_REGISTRY_WORKERS > 1 the buckets live in Redis, so a
     # budget is per principal, not per principal per worker; a Redis that
     # stops answering falls back to in-memory buckets (slowapi's own switch).
     # One worker keeps slowapi's in-memory default, unchanged.

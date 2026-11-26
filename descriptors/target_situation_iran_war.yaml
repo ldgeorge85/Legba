@@ -15,7 +15,7 @@ identity:
   abstraction_level: L1
   inherits: []
   state: active
-  owner: phase5c
+  owner: owner@local
   created: "2026-06-20T00:00:00Z"
 
 scope:
@@ -44,7 +44,7 @@ sources:
     subscription:
       canonical_only: true
 
-# Defect C (X-1 dead-config, 2026-07-29): this target used to carry an inline
+# Dead config: this target used to carry an inline
 # `analyst:` block here, believed (from registration onward) to be the thing
 # that ran an inline_target assessor over this thematic slice. It never did —
 # the runtime never builds a running analyst from a target's inline `method`/

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for the ``archive_retention`` sub-handler (SW-12) — the evidence archive's
+"""Tests for the ``archive_retention`` sub-handler — the evidence archive's
 expiry sweep for UNCITED rows, shipped behind ``LEGBA_ARCHIVE_RETENTION`` (OFF).
 
 What is pinned, against a real Postgres and real files on a tmp archive root:
@@ -527,7 +527,7 @@ async def test_the_status_check_still_refuses_an_unknown_status(pg_pool, clean_s
 
 
 # ---------------------------------------------------------------------------
-# C-1: the other keepers of a content address (fetch receipts, observations)
+# The other keepers of a content address (fetch receipts, observations)
 # ---------------------------------------------------------------------------
 
 
@@ -558,7 +558,7 @@ async def clean_fetch_versions(pg_pool):
 async def test_bytes_a_fetch_receipt_still_holds_are_never_unlinked(
     pg_pool, clean_slate, clean_fetch_versions, root,
 ):
-    """The known gap (C-1): an uncited archive row and a fetch version share
+    """The known gap: an uncited archive row and a fetch version share
     one content address; expiring the row must not take the receipt's bytes."""
     async with pg_pool.acquire() as conn:
         row = await _archive_row(conn, root, age=60 * DAY, payload=b"page bytes also a receipt")

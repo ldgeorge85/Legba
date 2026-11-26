@@ -10,7 +10,7 @@ and both are operator-tunable by env. Neither bounds the input a call actually
 sends: with compaction pinned off (``LEGBA_CONSULT_KEEP_FULL_ROUNDS=1000`` on
 the live box since the 2026-09-16 revert) every round's full bodies ride every
 later call, and the call that writes the answer is by construction the one
-carrying the most. Session 181a8bab (Opus, 2026-09-28) sent 136,833 prompt
+carrying the most. One recorded session sent 136,833 prompt
 tokens on its ninth and answering call; its trace's ``usage.input_tokens`` of
 621,505 is the RUN's running sum over nine calls, which is the figure the
 2026-09-28 review quoted as "the final input".
@@ -27,9 +27,9 @@ the loop sends — on the native route any round's reply may be the answer, so
 final and the recovery replay alike.
 
 When the descriptor sets no ceiling (absent, or ``0``) the loop DERIVES one
-(:func:`derive_ceiling`, W11-F133): the active model's context window minus the
-call's output budget minus :data:`DERIVED_MARGIN_TOKENS`, else the
-``LEGBA_LLM_INPUT_TOKEN_BUDGET``. Consult 6cd91190 ran 19 rounds with no
+(:func:`derive_ceiling`): ``LEGBA_LLM_INPUT_TOKEN_BUDGET`` when set, else the
+active route's context window less room for its largest maximum output less
+:data:`DERIVED_MARGIN_TOKENS`, else the input budget's default. Consult 6cd91190 ran 19 rounds with no
 ceiling into a provider refusal at 229,377 prompt tokens; a route whose window
 the loop can outrun is never left unbounded. The stamp's ``ceiling_source``
 says which number applied.
@@ -66,9 +66,13 @@ from typing import Any
 
 from ._llm_budget import (
     CHARS_PER_TOKEN,
+    DERIVED_MARGIN_TOKENS as _DERIVED_MARGIN_TOKENS,
     LLM_INPUT_TOKEN_BUDGET_ENV,
+    SOURCE_INPUT_BUDGET_DEFAULT as _SOURCE_INPUT_BUDGET_DEFAULT,
+    SOURCE_INPUT_BUDGET_ENV as _SOURCE_INPUT_BUDGET_ENV,
+    SOURCE_MODEL_WINDOW as _SOURCE_MODEL_WINDOW,
+    derived_input_budget,
     estimate_tokens,
-    input_token_budget,
 )
 
 logger = logging.getLogger(__name__)
@@ -77,7 +81,7 @@ logger = logging.getLogger(__name__)
 OPTION_NAME = "context_ceiling_tokens"
 
 #: Code default: OFF. The operator reverted every capacity cut on 2026-09-16
-#: (round compaction, spend ceilings), and the 181a8bab answering call read
+#: (round compaction, spend ceilings), and that session's answering call read
 #: 136,833 tokens, so no default that respects that revert would have fired
 #: on it. The ceiling is opt-in per descriptor (``context_ceiling_tokens``);
 #: 160,000 is the value to set on the Anthropic planes (200k window).
@@ -116,17 +120,14 @@ def resolve_ceiling(options: Mapping[str, Any] | None) -> int | None:
     return value or None
 
 
-#: Tokens held back from the window on top of the call's output budget when the
-#: ceiling is DERIVED (W11-F133): the house estimator is chars/4, not a
-#: tokenizer, so the derived number keeps a margin rather than sitting on the
-#: provider's exact limit.
-DERIVED_MARGIN_TOKENS = 4096
-
-#: ``ceiling_source`` values on the stamp and the ``render_prompt`` frame.
+#: ``ceiling_source`` values on the stamp and the ``render_prompt`` frame. The
+#: derived ones are ``_llm_budget``'s, so the unit and consult paths name a
+#: source the same way.
+DERIVED_MARGIN_TOKENS = _DERIVED_MARGIN_TOKENS
 SOURCE_DESCRIPTOR = "descriptor"
-SOURCE_MODEL_WINDOW = "model_window"
-SOURCE_INPUT_BUDGET_ENV = "input_token_budget_env"
-SOURCE_INPUT_BUDGET_DEFAULT = "input_token_budget_default"
+SOURCE_MODEL_WINDOW = _SOURCE_MODEL_WINDOW
+SOURCE_INPUT_BUDGET_ENV = _SOURCE_INPUT_BUDGET_ENV
+SOURCE_INPUT_BUDGET_DEFAULT = _SOURCE_INPUT_BUDGET_DEFAULT
 
 _SOURCES_LOGGED: set[str] = set()
 
@@ -143,48 +144,27 @@ def _log_source_once(source: str, ceiling: int, detail: str) -> None:
     )
 
 
-def derive_ceiling(llm: Any, *, max_tokens: int | None) -> tuple[int, str]:
+def derive_ceiling(llm: Any) -> tuple[int, str]:
     """``(ceiling, source)`` for a run whose descriptor sets no ceiling.
 
-    Consult 6cd91190 (2026-10-29): with no ceiling the core-plane transcript
-    grew to 229,377 tokens and the provider refused the call (262,144 window,
-    32,768 output requested) — after 19 rounds and 162 tool calls. A route
-    whose window the loop can outrun never runs without a ceiling now:
+    Consult 6cd91190: with no ceiling the core-plane transcript grew to
+    229,377 tokens and the provider refused the call. A route whose window the
+    loop can outrun never runs without a ceiling; the number is the shared
+    input budget (``_llm_budget.derived_input_budget``):
 
-    * the active handler's ``context_window_tokens()`` (the gateway's
-      ``/v1/models`` ``context_tokens``; Anthropic's documented window) minus
-      the call's ``max_tokens`` minus :data:`DERIVED_MARGIN_TOKENS`;
-    * else ``LEGBA_LLM_INPUT_TOKEN_BUDGET`` (its code default when unset).
+    * ``LEGBA_LLM_INPUT_TOKEN_BUDGET`` when set (an explicit override);
+    * else the route's context window less room for its largest maximum
+      output (at most half the window; a thinking alias's reasoning counts
+      against its output) less :data:`DERIVED_MARGIN_TOKENS`;
+    * else the budget's code default.
 
-    Which one was used is logged once per source and returned for the stamp.
+    The descriptor's ``method.llm.max_tokens`` plays no part. Which source
+    applied is logged once per source and returned for the stamp.
     """
-    window: int | None = None
-    probe = getattr(llm, "context_window_tokens", None)
-    if callable(probe):
-        try:
-            raw = probe()
-            if isinstance(raw, int) and not isinstance(raw, bool) and raw > 0:
-                window = raw
-        except Exception:  # noqa: BLE001 — a probe must never fail a run
-            logger.debug("consult.context_ceiling.window_probe_failed", exc_info=True)
-    if window is not None:
-        out = int(max_tokens or 0)
-        ceiling = window - out - DERIVED_MARGIN_TOKENS
-        if ceiling > 0:
-            _log_source_once(
-                SOURCE_MODEL_WINDOW, ceiling,
-                f"(window={window} max_tokens={out} margin={DERIVED_MARGIN_TOKENS})",
-            )
-            return ceiling, SOURCE_MODEL_WINDOW
-    budget = input_token_budget()
-    env_set = bool((os.getenv(LLM_INPUT_TOKEN_BUDGET_ENV) or "").strip())
-    source = SOURCE_INPUT_BUDGET_ENV if env_set else SOURCE_INPUT_BUDGET_DEFAULT
-    _log_source_once(
-        source, budget,
-        f"(the active handler reports no usable context window; "
-        f"{LLM_INPUT_TOKEN_BUDGET_ENV}={'set' if env_set else 'unset'})",
-    )
-    return budget, source
+    ceiling, source = derived_input_budget(llm)
+    _log_source_once(source, ceiling, f"({LLM_INPUT_TOKEN_BUDGET_ENV}="
+                     f"{'set' if (os.getenv(LLM_INPUT_TOKEN_BUDGET_ENV) or '').strip() else 'unset'})")
+    return ceiling, source
 
 
 def _tokens(chars: int) -> int:
@@ -296,7 +276,7 @@ def apply_context_ceiling(
 
     The stamp is returned only when the input was over the ceiling; under it
     the input comes back as the SAME object with ``None``. ``source``
-    (W11-F133: ``descriptor`` / ``model_window`` / ``input_token_budget_*``)
+    (``descriptor`` / ``model_window`` / ``input_token_budget_*``)
     rides the stamp as ``ceiling_source`` when given.
     """
     if not ceiling:

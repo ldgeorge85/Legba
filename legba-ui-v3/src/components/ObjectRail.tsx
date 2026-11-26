@@ -549,12 +549,82 @@ export function groupSubjects(rows: SubjectRow[], projected: ProjectionRead): Su
 }
 
 /**
+ * The roster ranked by what changed (the reader's rail): the subjects with
+ * changes since the reader last looked first, most changes first, each with
+ * its count; then the rest under "No change", by name. The confidence band
+ * the grouped roster prints read "High" on nearly every row, so it says
+ * nothing here and is left off.
+ */
+function RankedRoster({
+  rows,
+  changes,
+  onPicked,
+}: {
+  rows: SubjectRow[]
+  changes: ReadonlyMap<string, number> | null
+  onPicked?: () => void
+}) {
+  const byName = (a: SubjectRow, b: SubjectRow) => a.name.localeCompare(b.name)
+  /** The subject's change count; null when it has none (or none is read yet). */
+  const countOf = (id: string): number | null => {
+    const n = changes?.get(id)
+    return typeof n === 'number' && n > 0 ? n : null
+  }
+  const moved = rows.filter((r) => countOf(r.id) !== null)
+  moved.sort((a, b) => (countOf(b.id) as number) - (countOf(a.id) as number) || byName(a, b))
+  const still = rows.filter((r) => countOf(r.id) === null).sort(byName)
+  const row = (r: SubjectRow) => {
+    const n = countOf(r.id)
+    return (
+      <RailRow
+        key={r.id}
+        object="subject"
+        testId={`rail-subject-${r.id}`}
+        label={r.name}
+        hint={n !== null ? String(n) : undefined}
+        title={n !== null ? `${r.name} · ${n} ${n === 1 ? 'change' : 'changes'} since you last looked` : r.name}
+        onClick={() => {
+          drive(subjectReadActions(r.id, r.name))
+          onPicked?.()
+        }}
+        menu={<DrillMenu object="subject" id={r.id} label={r.name} />}
+      />
+    )
+  }
+  return (
+    <div data-testid="rail-subjects-ranked" data-read={changes ? '1' : '0'}>
+      {moved.length > 0 && <ul className="space-y-px" data-testid="rail-subjects-changed">{moved.map(row)}</ul>}
+      {changes && still.length > 0 && (
+        <div className="mt-1 px-3 py-0.5 text-label uppercase tracking-wider text-ink-3" data-testid="rail-subjects-still-head">
+          No change
+        </div>
+      )}
+      <ul className="space-y-px" data-testid="rail-subjects-still">
+        {still.map(row)}
+      </ul>
+    </div>
+  )
+}
+
+/**
  * THE SUBJECT ROSTER — grouped, with each subject's band — exported so the
  * reader side's top-bar switcher shows the same list the rail does. A click
  * opens the subject's read (the Subject surface follows it); `onPicked` lets a
- * popover close behind the click.
+ * popover close behind the click. Given the change counts, it is ranked by
+ * them instead ({@link RankedRoster}; the reader's rail).
  */
-export function SubjectRoster({ onPicked }: { onPicked?: () => void } = {}) {
+export function SubjectRoster({
+  onPicked,
+  changes,
+}: {
+  onPicked?: () => void
+  /**
+   * Changes per subject since the reader last looked. Given (even as null,
+   * while the diff is being read), the roster is ranked by them instead of
+   * grouped; left out, it is the grouped roster.
+   */
+  changes?: ReadonlyMap<string, number> | null
+} = {}) {
   const { verdicts, isLoading: vLoading } = useCountryVerdicts()
   const { desks, isLoading: dLoading } = useSupplyChainDesks()
   // The subject roster: a subject's declared name and its roster leg.
@@ -590,6 +660,7 @@ export function SubjectRoster({ onPicked }: { onPicked?: () => void } = {}) {
   if (rows.length === 0) {
     return <Muted testId="rail-subjects-empty">no assessed {PROFILE_UI.subject.plural.toLowerCase()} yet</Muted>
   }
+  if (changes !== undefined) return <RankedRoster rows={rows} changes={changes} onPicked={onPicked} />
   return (
     <div>
       <ProjectionNote read={projected} what="grouped by roster" testId="rail-projection-subject_groups" />

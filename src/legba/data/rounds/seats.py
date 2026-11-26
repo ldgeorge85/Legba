@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The seat-call contract and the seat providers a host injects (lane G-2).
+"""The seat-call contract and the seat providers a host injects.
 
 The interpreter never calls a model. It hands each seat a :class:`SeatCall`
 (the seat's definition, its card, exactly the inputs the store released to
@@ -20,9 +20,9 @@ Providers here:
   reply, or a list by execution ordinal), falling back to another provider;
 * :class:`Dispatch` — routes code seats with a pure function to it, and
   everything else to the injected provider. A substrate code function with no
-  provider raises :class:`SeatNotBuilt` (SEAMS #92).
+  provider raises :class:`SeatNotBuilt`.
 
-Model seats (:mod:`.model_seats`, lane G-5) and the substrate code seats
+Model seats (:mod:`.model_seats`) and the substrate code seats
 (:mod:`.substrate_seats`) are other providers with the same signature.
 """
 from __future__ import annotations
@@ -50,7 +50,7 @@ class SeatFailure(Exception):
 
 
 class SeatNotBuilt(RuntimeError):
-    """A run reached a code function no host has implemented (SEAMS #92)."""
+    """A run reached a code function no host has implemented."""
 
 
 @dataclass(frozen=True)
@@ -244,7 +244,7 @@ class SyntheticSeats:
             ids = tuple(r["id"] for r in rows)
             return {"core": ids, "slices": {}, "rows": rows}
         if rt == "context_pack/1":
-            return {"rows": rows}
+            return {"row_ids": [r["id"] for r in rows]}
         if rt == "question_set/1":
             return {"questions": [{"key": f"q{i}", "text": f"Question {i}?"} for i in range(3)],
                     "working_reading": f"working reading of {call.seat_id}@{call.path}"}
@@ -263,6 +263,9 @@ class SyntheticSeats:
             if rt == "position/1":
                 out["probability"] = round((_h(call.seat_id, call.path) % 90 + 5) / 100, 2)
             return out
+        if rt == "challenge/1":
+            return {"sentences": self._sentences(call),
+                    "challenges": [{"key": "C1", "text": "The positions leave out the quiet sources."}]}
         if rt in ("verdict/1", "verdict/2"):
             return self._verdict(call)
         if rt == "weakest_link/1":

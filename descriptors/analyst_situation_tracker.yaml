@@ -7,13 +7,13 @@
 #      already rides; plan D2 asks for that idiom rather than a second table),
 #   2. SELECTS the open situations (superseded_by IS NULL, not closed, still
 #      valid) on a MIXED budget — most on intensity, a reserved slice on
-#      least-recently-adjudicated (REGISTER-1f, see `staleness_fraction`) —
+#      least-recently-adjudicated (see `staleness_fraction`) —
 #      and for each pulls the NEW attached findings since its
 #      own watermark, gated at the house floor: an INNER join onto the
 #      faithfulness critique with LEAST(confidence, faithfulness) >= 0.50, so
 #      only VERIFIED evidence can move a situation,
 #   3. ADJUDICATES each situation-with-news on the LLM provider plane (the $0
-#      core plane, gpt-oss-120b; NEVER Anthropic) in small batches — escalates /
+#      core plane, the core model; NEVER Anthropic) in small batches — escalates /
 #      de_escalates / broadens / unchanged_checkpoint, one sentence why, citing
 #      which numbered items — with an ECHO-BOUND parse (the model echoes the
 #      situation handle) and NO positional fallback,
@@ -41,7 +41,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: draft
-  owner: continuity_phase2
+  owner: owner@local
 
 subscription:
   # No `targets` block => META analyst (single global sweep; _cadence_targets
@@ -89,10 +89,9 @@ method:
       factory_kind: stack_ref
       raw: llm.primary.openai_compat
       expected_family: llm_provider
-    max_tokens: 1600           # one batched verdict array per ~4 situations
     temperature: 1.0           # deterministic adjudication
     # --- kind-specific options (read by _build_situation_tracker) ------------
-    # REGISTER-1f (2026-08-29) — the tick's TOTAL adjudication budget, and the
+    # The tick's TOTAL adjudication budget, and the
     # ONE option here with an ENV OVERRIDE ABOVE IT:
     # `LEGBA_SITUATION_TRACKER_MAX_SITUATIONS` wins over this line (clamped to
     # [1, 500]). The dial exists because #64's migration 0188 splits the

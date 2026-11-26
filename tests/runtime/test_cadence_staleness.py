@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Roll 65 — the cadence-stall threshold follows the analyst's own SCHEDULE.
+"""The cadence-stall threshold follows the analyst's own SCHEDULE.
 
-On 2026-11-08 at 11:21Z the watchdog called ``correctness_grader`` stalled.
+The watchdog once called ``correctness_grader`` stalled.
 Its descriptor's ``fallback_schedule`` is ``20 1-9 * * *`` (hourly, 01:20-09:20
-UTC); its runs that day started 01:21 … 09:21, and the next at 01:21 on 11-09.
+UTC); its runs started 01:21 … 09:21, and the next at 01:21 the following day.
 The old evaluator took the gap between the next two fires after NOW (01:20 and
 02:20 the next day = 1 h) as the interval and alerted at 2 x 1 h after 09:21.
 """
@@ -33,7 +33,7 @@ def _rows(cron: str, last_run: datetime | None, aid: str = "a") -> list[dict]:
 
 
 def _old_threshold_s(cron: str, now: datetime, factor: float = 2.0) -> float:
-    """The pre-roll-65 rule: factor x the gap between the next two fires after NOW."""
+    """The previous rule: factor x the gap between the next two fires after NOW."""
     it = croniter(cron, start_time=now)
     first, second = it.get_next(datetime), it.get_next(datetime)
     return max(factor * (second - first).total_seconds(), FLOOR_S)
@@ -96,7 +96,7 @@ def test_a_continuous_analyst_keeps_its_threshold(age_min: int, stale: bool) -> 
         _rows(DEDUP_CRON, last, "cross_source_dedup"), now=now, factor=2.0, min_threshold_s=FLOOR_S,
     )
     assert bool(out) is stale
-    if out:  # unchanged from the pre-roll-65 rule on a uniform cron
+    if out:  # unchanged from the previous rule on a uniform cron
         assert out[0][2] == pytest.approx(_old_threshold_s(DEDUP_CRON, now))
 
 

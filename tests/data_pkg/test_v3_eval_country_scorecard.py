@@ -15,7 +15,7 @@ scorecard_banding import; an empty result is a first-class honest state, NOT a
 404; a distinct path from the critic-rollup ``/eval/scorecard``) is asserted on
 the model + the path set.
 
-B0-5 (audit W6) — the scorecard↔composition DISAGREEMENT surface: the pure
+The scorecard↔composition DISAGREEMENT surface: the pure
 reducers (``_composition_usages`` / ``_scorecard_disagreements``) are exercised
 with real inputs (the ``test_v3_escalations`` precedent), and the handler is
 driven end-to-end through a stubbed pg pool to prove the wiring over the
@@ -148,7 +148,7 @@ def test_country_scorecard_empty_defaults_are_honest() -> None:
 
 
 # ---------------------------------------------------------------------------
-# B0-5 — the scorecard↔composition disagreement surface (audit W6).
+# The scorecard↔composition disagreement surface.
 # ---------------------------------------------------------------------------
 
 
@@ -176,7 +176,7 @@ def _dims(
 
 
 def test_disagreement_when_composition_cites_an_excluded_finding() -> None:
-    """The W6 US case: the scorecard excluded the leadership_transition claim
+    """The US case: the scorecard excluded the leadership_transition claim
     (R1b low-faithfulness, empty basis) while the composition head CITES that
     exact finding — exactly one disagreement row, fully attributed."""
     excluded_id = str(uuid4())

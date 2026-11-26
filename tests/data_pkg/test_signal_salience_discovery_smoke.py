@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""S-1 registrar-train smoke: signal_salience discovers as a kind + validates."""
+"""Registrar-train smoke: signal_salience discovers as a kind + validates."""
 from __future__ import annotations
 
 

@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""``narrative_mapper`` sub-handler — P4-1 reified narratives + P4-2 source-echo
-graph (planning/PROGRAM_RECOMMENDATIONS_2026-07-24.md §A11).
+"""``narrative_mapper`` sub-handler — reified narratives + a source-echo
+graph.
 
-The substrate-native narrative analysis the operator amended in: NOT
+The substrate-native narrative analysis: NOT
 account-level platform forensics (blocked on firehose data we do not hold) but
 the reification of NARRATIVES over OUR own graph — the same philosophy as the
 signed ``nexuses`` and the contention arbiter.

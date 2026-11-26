@@ -1,0 +1,1577 @@
+[
+  {
+    "session_id": "7c3e91a2-b213-5fda-8734-95fc5203c9d3",
+    "role": "user",
+    "content": "Okay.  There is a lot going on currently really in Kestrel Bay right now. Can you review the larger arc and patterns, and from that can you provide any larger view of the current direction of geopolitics, focused on ports, fuel, trade and labour disputes, etc?",
+    "steps": [],
+    "tool_calls": [],
+    "cited_refs": [],
+    "created_at": "2031-01-14T00:48:45.303296+00:00",
+    "request_id": null,
+    "synthesis_status": "complete"
+  },
+  {
+    "session_id": "7c3e91a2-b213-5fda-8734-95fc5203c9d3",
+    "role": "assistant",
+    "content": "## Bottom line\n\n**The Kestrel Bay system has shifted from a contest over harbours to a contest over *passage*.** Every one of the four sea lanes the platform monitors is degraded at once, the microchip flow with them, and the main instrument of pressure is now denial of passage (locks, levies, licences, exclusion zones) rather than control of ground. Assess with **high confidence** on the observed pattern; **moderate confidence** on the reading that this is one structural shift rather than coincident disputes.\n\n---\n\n## 1. The arc: what actually changed\n\n- **Observation 1.** In this period the Kestrel Bay Port Authority suspended night berthing at Marrow Point after the Dunmere Canal locks were shut [f97bfbad-e7f3-5168-86e2-ce4912be1f3d].\n- **Observation 2.** In this period the Ostrel Fuel Cooperative rerouted three tanker convoys around the Fenwick Isles [4d404836-fe64-5419-a559-3c82200c206c].\n- **Observation 3.** In this period the Halden Grain Union extended its work-to-rule at the northern quays [5a6cb8a5-ffa4-5b17-a250-2098bec03532].\n- **Observation 4.** In this period Vesper Shipping Line posted a surcharge of 14 percent on all Cobalt Sound crossings [266e0582-2e21-555a-8778-827511f2003d].\n- **Observation 5.** In this period the Veldmark coast guard doubled its patrol hours in the Grey Narrows [8b67fe18-d47f-5538-9901-e08578d99c68].\n- **Observation 6.** In this period Brindle Cargo Rail diverted microchip freight to the Tessaly Passage corridor [e08e94d3-5668-50bb-8967-a0debd182780].\n- **Observation 7.** In this period the Tessaly clearing union opened a settlement ledger denominated in a regional basket [128a7845-5dbd-5a9b-8993-4977ad066adf].\n- **Observation 8.** In this period a snap vote in Halden returned a coalition committed to lower harbour fees [79fdca40-80ff-5389-bd35-19226dcb0b91].\n- **Observation 9.** In this period Tarn rebels seized the Cobalt Gate pier and announced a toll on passing ships [d20f864c-09f8-59ee-9092-ffbdb880a791].\n- **Observation 10.** In this period the Sarn navy declared an exclusion zone in the Grey Narrows during live-fire drills [a10cb5e9-3491-5405-8f73-7d0c9a34f28d].\n\n**Judgment (0.70).** The pattern in this area is consistent with the wider Kestrel Bay picture and is best read as a managed squeeze on port access rather than a collapse of trade.\n\n## 2. Ports and patrols: wide, shallow, and stuck\n\n- **Observation 11.** In this period dockworkers at Marrow Point voted to continue the walkout for a further week [5cdb5cb3-2ea3-5cdb-b049-99a651d5c1cf].\n- **Observation 12.** In this period student groups marched on the harbour board demanding the resignation of its chair [cb1c2059-727d-5a0b-8da7-f4d8767ecbc6].\n- **Observation 13.** In this period the Kestrel Bay grain price index reached its highest reading of the quarter [84eb2e80-71fa-54a6-a4b5-ca0dfb9b7e81].\n- **Observation 14.** In this period an inspection backlog at Wick Port left forty vessels waiting at anchor [a9bfddc9-7582-5a09-b77a-a8d970332b61].\n- **Observation 15.** In this period the Brindle summit produced a framework on levies but left the data-channel dispute open [6fad15bd-5fbb-5faa-ba07-e663633ffb4b].\n- **Observation 16.** In this period microchip cargo was held at the Marrow Point customs shed under a new licence rule [c249c08e-d3d4-5370-ad4e-55fcd354ca1d].\n- **Observation 17.** In this period Veldmark and Ostrel signed a joint harbour defence pact with a thirty-day consultation clause [9633e6f2-4b53-5d87-be34-aaa275e1ca7a].\n- **Observation 18.** In this period the Fenwick Isles assembly rejected a request to host additional pilot stations [57c01ae0-12da-57d0-8fa5-cbddd9c50311].\n- **Observation 19.** In this period freight rates for the Cobalt Sound lane rose for the sixth consecutive week [bbcff33b-bd15-5d48-a473-97a0f85987ac].\n- **Observation 20.** In this period insurers withdrew cover for night transits of the Dunmere Canal [9ba26a69-e1a1-5974-b1ac-4ed23cad1224].\n\n**Judgment (0.85).** The pattern in this area is consistent with the wider Kestrel Bay picture and is best read as a managed squeeze on port access rather than a collapse of trade.\n\n## 3. Fuel and freight: a supply shock, not a demand recession\n\n- **Observation 21.** In this period the Kestrel Bay Port Authority suspended night berthing at Marrow Point after the Dunmere Canal locks were shut [724839a0-ada7-5300-8330-5a68a0f7fd1b].\n- **Observation 22.** In this period the Ostrel Fuel Cooperative rerouted three tanker convoys around the Fenwick Isles [cae2d0bb-ba08-5710-a0dc-a99b84e7d2d0].\n- **Observation 23.** In this period the Halden Grain Union extended its work-to-rule at the northern quays [2fc83f9e-2dd9-5077-b739-a3a570fe1307].\n- **Observation 24.** In this period Vesper Shipping Line posted a surcharge of 14 percent on all Cobalt Sound crossings [5ec41677-1c93-57fa-86b2-19ff55620749].\n- **Observation 25.** In this period the Veldmark coast guard doubled its patrol hours in the Grey Narrows [0bce731f-f690-5b7a-a701-46027ee72338].\n- **Observation 26.** In this period Brindle Cargo Rail diverted microchip freight to the Tessaly Passage corridor [5caec047-f742-591b-b802-7ef368376061].\n- **Observation 27.** In this period the Tessaly clearing union opened a settlement ledger denominated in a regional basket [fb697d5d-bade-5e1f-a0c4-437850b2632b].\n- **Observation 28.** In this period a snap vote in Halden returned a coalition committed to lower harbour fees [3972f30d-2fba-5320-ba7c-83243d786254].\n- **Observation 29.** In this period Tarn rebels seized the Cobalt Gate pier and announced a toll on passing ships [2fbe742e-793c-5255-9f43-299f62d43218].\n- **Observation 30.** In this period the Sarn navy declared an exclusion zone in the Grey Narrows during live-fire drills [e31f2c44-8703-5bc3-ab2f-18af9fd630e7].\n\n**Judgment (0.65).** The pattern in this area is consistent with the wider Kestrel Bay picture and is best read as a managed squeeze on port access rather than a collapse of trade.\n\n## 4. Trade: levies are now furniture, and leverage has moved to licences\n\n- **Observation 31.** In this period dockworkers at Marrow Point voted to continue the walkout for a further week [62297882-19a1-5fab-bf6a-7930a38d12f7].\n- **Observation 32.** In this period student groups marched on the harbour board demanding the resignation of its chair [431655e1-3492-5450-a9b2-abc313ae57a9].\n- **Observation 33.** In this period the Kestrel Bay grain price index reached its highest reading of the quarter [9f1861d9-2c0c-5029-b73b-b031a64d0a98].\n- **Observation 34.** In this period an inspection backlog at Wick Port left forty vessels waiting at anchor [e3dde77d-82e7-5579-ae1a-1fadabfee0c5].\n- **Observation 35.** In this period the Brindle summit produced a framework on levies but left the data-channel dispute open [30f0d295-e6e9-5663-92e4-0a97dde0f2e2].\n- **Observation 36.** In this period microchip cargo was held at the Marrow Point customs shed under a new licence rule [c9520a79-d249-525e-a1a8-4247cd28fa47].\n- **Observation 37.** In this period Veldmark and Ostrel signed a joint harbour defence pact with a thirty-day consultation clause [6f6e5b78-5567-542c-91b8-eced63134b4e].\n- **Observation 38.** In this period the Fenwick Isles assembly rejected a request to host additional pilot stations [249d2307-17db-5162-b004-ee70a5a89c49].\n- **Observation 39.** In this period freight rates for the Cobalt Sound lane rose for the sixth consecutive week [096b5fe4-fcb6-5651-9c57-da7a98b847d2].\n- **Observation 40.** In this period insurers withdrew cover for night transits of the Dunmere Canal [35122b9c-217f-5efa-851f-ea11ba17f609].\n\n**Judgment (0.80).** The pattern in this area is consistent with the wider Kestrel Bay picture and is best read as a managed squeeze on port access rather than a collapse of trade.\n\n## 5. Alliances: re-blocking into small pacts\n\n- **Observation 41.** In this period the Kestrel Bay Port Authority suspended night berthing at Marrow Point after the Dunmere Canal locks were shut [da4fdf16-afe0-5697-85d3-524ad76b5c72].\n- **Observation 42.** In this period the Ostrel Fuel Cooperative rerouted three tanker convoys around the Fenwick Isles [6d792391-0419-5f30-beb6-f29c45382c53].\n- **Observation 43.** In this period the Halden Grain Union extended its work-to-rule at the northern quays [fb709a44-d2e4-5ce7-a858-4f7a57153542].\n- **Observation 44.** In this period Vesper Shipping Line posted a surcharge of 14 percent on all Cobalt Sound crossings [3dac3eaa-4d02-5b35-8087-ef327452d819].\n- **Observation 45.** In this period the Veldmark coast guard doubled its patrol hours in the Grey Narrows [ee38ef38-e114-5836-ae15-593925c83573].\n- **Observation 46.** In this period Brindle Cargo Rail diverted microchip freight to the Tessaly Passage corridor [377f953a-e075-5f4e-b5ac-8f2227f94859].\n- **Observation 47.** In this period the Tessaly clearing union opened a settlement ledger denominated in a regional basket [7d1b437e-e398-5679-adf2-79833f36ea47].\n- **Observation 48.** In this period a snap vote in Halden returned a coalition committed to lower harbour fees [a74b9bd8-69f6-546b-b2bb-40ad66fd98fc].\n- **Observation 49.** In this period Tarn rebels seized the Cobalt Gate pier and announced a toll on passing ships [928ab356-23df-5729-ac08-262d0a13131c].\n\n**Judgment (0.55).** The pattern in this area is consistent with the wider Kestrel Bay picture and is best read as a managed squeeze on port access rather than a collapse of trade.\n\n## 6. Labour and street: two different revolts, one cause\n\n- **Observation 50.** In this period the Sarn navy declared an exclusion zone in the Grey Narrows during live-fire drills [d817e07a-9f68-5fac-a938-bb92d49b1d6a].\n- **Observation 51.** In this period dockworkers at Marrow Point voted to continue the walkout for a further week [c08ed14e-7d86-521d-8e1f-b7ce6595567e].\n- **Observation 52.** In this period student groups marched on the harbour board demanding the resignation of its chair [ffef3b42-bb94-54c2-afe2-49805a89475e].\n- **Observation 53.** In this period the Kestrel Bay grain price index reached its highest reading of the quarter [166bd6fc-6fbf-5db2-9178-5c766f58ddcf].\n- **Observation 54.** In this period an inspection backlog at Wick Port left forty vessels waiting at anchor [7509521a-00e0-5ab5-b071-2dc53063db01].\n- **Observation 55.** In this period the Brindle summit produced a framework on levies but left the data-channel dispute open [1d90bca1-e43e-5d81-bbcc-23885483143b].\n- **Observation 56.** In this period microchip cargo was held at the Marrow Point customs shed under a new licence rule [4ab19f76-4a8f-57f1-834d-bd597b82c868].\n- **Observation 57.** In this period Veldmark and Ostrel signed a joint harbour defence pact with a thirty-day consultation clause [d24c0e81-1c28-56d4-95ab-973e0e1d550d].\n- **Observation 58.** In this period the Fenwick Isles assembly rejected a request to host additional pilot stations [4cce02eb-7b31-52f8-8224-38e4f158a028].\n\n**Judgment (0.65).** The pattern in this area is consistent with the wider Kestrel Bay picture and is best read as a managed squeeze on port access rather than a collapse of trade.\n\n## 7. Direction of travel - 6 to 12 months\n\n- **Observation 59.** In this period freight rates for the Cobalt Sound lane rose for the sixth consecutive week [2a9ed79d-146c-5b33-90f0-2515d4c84336].\n- **Observation 60.** In this period insurers withdrew cover for night transits of the Dunmere Canal [5dbaf45b-311f-532e-9537-ead8d09388fe].\n- **Observation 61.** In this period the Kestrel Bay Port Authority suspended night berthing at Marrow Point after the Dunmere Canal locks were shut [40dde545-fb24-574b-ac36-332de1ce5cf5].\n- **Observation 62.** In this period the Ostrel Fuel Cooperative rerouted three tanker convoys around the Fenwick Isles [a6b8da83-ef52-5b2f-9735-a044f03e287f].\n- **Observation 63.** In this period the Halden Grain Union extended its work-to-rule at the northern quays [8ddf6f24-fde0-5f03-ad3e-6466dfd28a54].\n- **Observation 64.** In this period Vesper Shipping Line posted a surcharge of 14 percent on all Cobalt Sound crossings [385c4a5d-0386-51fd-a899-3cb43406a70d].\n- **Observation 65.** In this period the Veldmark coast guard doubled its patrol hours in the Grey Narrows [06aca92d-dede-5204-b9c0-af19ba281642].\n- **Observation 66.** In this period Brindle Cargo Rail diverted microchip freight to the Tessaly Passage corridor [9fc15264-ab1e-548c-9541-de8e9522652e].\n- **Observation 67.** In this period the Tessaly clearing union opened a settlement ledger denominated in a regional basket [2dddc6c1-4ddc-5d33-99d1-8c57651bc6b7].\n\n**Judgment (0.75).** The pattern in this area is consistent with the wider Kestrel Bay picture and is best read as a managed squeeze on port access rather than a collapse of trade.\n\n## 8. What would change my mind - watch these\n\n- **Observation 68.** In this period a snap vote in Halden returned a coalition committed to lower harbour fees [40645a05-9a02-5da9-a8d6-5385b133f70c].\n- **Observation 69.** In this period Tarn rebels seized the Cobalt Gate pier and announced a toll on passing ships [702868a6-f9e0-53ed-ba68-fd645d3ebaaa].\n- **Observation 70.** In this period the Sarn navy declared an exclusion zone in the Grey Narrows during live-fire drills [562219bf-717c-5655-9d98-9abeaaaf7556].\n- **Observation 71.** In this period dockworkers at Marrow Point voted to continue the walkout for a further week [5c0fbf1a-0ef9-56b8-b2fc-f17052077994].\n- **Observation 72.** In this period student groups marched on the harbour board demanding the resignation of its chair [a36cd5d0-dd39-54a3-b359-c62b6f77f6ce].\n- **Observation 73.** In this period the Kestrel Bay grain price index reached its highest reading of the quarter [97efb56c-98de-5bf5-b20d-ab7e0bdc7b68].\n- **Observation 74.** In this period an inspection backlog at Wick Port left forty vessels waiting at anchor [0a20d4e8-dee4-52f5-afb9-b19a28726da8].\n- **Observation 75.** In this period the Brindle summit produced a framework on levies but left the data-channel dispute open [747bb750-5d4e-574b-901f-d688578524dd].\n- **Observation 76.** In this period microchip cargo was held at the Marrow Point customs shed under a new licence rule [93096388-f319-5fa3-8c27-4f1e316cf2b6].\n\n**Judgment (0.85).** The pattern in this area is consistent with the wider Kestrel Bay picture and is best read as a managed squeeze on port access rather than a collapse of trade.\n\n## 9. Health warnings on this answer\n\n- **Observation 77.** In this period Veldmark and Ostrel signed a joint harbour defence pact with a thirty-day consultation clause [d658f962-d8b5-568b-a8d9-550e9602f38e].\n- **Observation 78.** In this period the Fenwick Isles assembly rejected a request to host additional pilot stations [fc676469-49fc-5d25-8b79-44d252e033d6].\n- **Observation 79.** In this period freight rates for the Cobalt Sound lane rose for the sixth consecutive week [55f608e7-6b63-5b12-b139-3abb45d1f22c].\n- **Observation 80.** In this period insurers withdrew cover for night transits of the Dunmere Canal [69cae3d7-5161-534b-a073-da60079e1d1c].\n- **Observation 81.** In this period the Kestrel Bay Port Authority suspended night berthing at Marrow Point after the Dunmere Canal locks were shut [8de0b1d2-3727-51f9-92ce-933b6ef96772].\n- **Observation 82.** In this period the Ostrel Fuel Cooperative rerouted three tanker convoys around the Fenwick Isles [fe976592-5bad-542c-87a7-6858fc6466e1].\n- **Observation 83.** In this period the Halden Grain Union extended its work-to-rule at the northern quays [c704ee15-d093-5c44-8c92-4cc35eebb67a].\n- **Observation 84.** In this period Vesper Shipping Line posted a surcharge of 14 percent on all Cobalt Sound crossings [4a826e9c-2bed-51b9-aecc-936e0b8721a6].\n- **Observation 85.** In this period the Veldmark coast guard doubled its patrol hours in the Grey Narrows [43aee7a9-7fb0-5d8c-aff4-53fd1282c646].\n\n**Judgment (0.60).** The pattern in this area is consistent with the wider Kestrel Bay picture and is best read as a managed squeeze on port access rather than a collapse of trade.\n\n- **Note 1.** The tessaly clearing union opened a settlement ledger denominated in a regional basket; this is recorded as an observation and not as a forecast.\n\n- **Note 2.** A snap vote in halden returned a coalition committed to lower harbour fees; this is recorded as an observation and not as a forecast.\n\n- **Note 3.** Tarn rebels seized the cobalt gate pier and announced a toll on passing ships; this is recorded as an observation and not as a forecast.\n\n- **Note 4.** The sarn navy declared an exclusion zone in the grey narrows during live-fire drills; this is recorded as an observation and not as a forecast.\n\n- **Note 5.** Dockworkers at marrow point voted to continue the walkout for a further week; this is recorded as an observation and not as a forecast.\n\n- **Note 6.** Student groups marched on the harbour board demanding the resignation of its chair; this is recorded as an observation and not as a forecast.\n\n- **Note 7.** The kestrel bay grain price index reached its highest reading of the quarter; this is recorded as an observation and not as a forecast.\n\n- **Note 8.** An inspection backlog at wick port left forty vessels waiting at anchor; this is recorded as an observation and not as a forecast.\n\n- **Note 9.** The brindle summit produced a framework on levies but left the data-channel dispute open; this is recorded as an observation and not as a forecast.\n\n- **Note 10.** Microchip cargo was held at the marrow point customs shed under a new licence rule; this is recorded as an observation and not as a forecast.\n\n- **Note 11.** Veldmark and ostrel signed a joint harbour defence pact with a thirty-day consultation clause; this is recorded as an observation and not as a forecast.\n\n- **Note 12.** The fenwick isles assembly rejected a request to host additional pilot stations; this is recorded as an observation and not as a forecast.\n\n- **Note 13.** Freight rates for the cobalt sound lane rose for the sixth consecutive week; this is recorded as an observation and not as a forecast.\n\n- **Note 14.** Insurers withdrew cover for night transits of the dunmere canal; this is recorded as an observation and not as a forecast.\n\n- **Note 15.** The kestrel bay port authority suspended night berthing at marrow point after the dunmere canal locks were shut; this is recorded as an observation and not as a forecast.\n\n- **Note 16.** The ostrel fuel cooperative rerouted three tanker convoys around the fenwick isles; this is recorded as an observation and not as a forecast.\n\n- **Note 17.** The halden grain union extended its work-to-rule at the northern quays; this is recorded as an observation and not as a forecast.\n\n*This is a synthetic fixture answer about a fictional region.*",
+    "steps": [
+      {
+        "kind": "render_prompt",
+        "calls": 0,
+        "phase": "plan",
+        "max_rounds": 10,
+        "est_cost_usd": 0.0,
+        "input_tokens": 0,
+        "max_cost_usd": 1000000.0,
+        "final_floor_s": 240.0,
+        "output_tokens": 0,
+        "prompt_module": "legba.prompts.consult_on_demand.v1",
+        "rounds_source": "request",
+        "question_chars": 260,
+        "round_protocol": "native_tools",
+        "total_budget_s": 900.0,
+        "scope_predicate": false,
+        "max_input_tokens": 100000000,
+        "native_batch_cap": 5,
+        "round_result_bytes": 40000
+      },
+      {
+        "kind": "llm_call",
+        "phase": "reason",
+        "round": 1,
+        "usage": {
+          "calls": 1,
+          "est_cost_usd": 0.1892,
+          "input_tokens": 156,
+          "max_cost_usd": 1000000.0,
+          "output_tokens": 173,
+          "max_input_tokens": 100000000
+        },
+        "tokens": 329
+      },
+      {
+        "ok": true,
+        "args": {
+          "limit": 30
+        },
+        "kind": "tool_call",
+        "tool": "list_situations",
+        "phase": "act",
+        "round": 1,
+        "result": {
+          "refs": 30,
+          "count": 30
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "limit": 30
+        },
+        "kind": "tool_call",
+        "tool": "list_findings",
+        "phase": "act",
+        "round": 1,
+        "result": {
+          "refs": 30,
+          "count": 30
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {},
+        "kind": "tool_call",
+        "tool": "list_targets",
+        "phase": "act",
+        "round": 1,
+        "result": {
+          "refs": 0,
+          "count": 44
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "kind": "llm_call",
+        "phase": "reason",
+        "round": 2,
+        "usage": {
+          "calls": 2,
+          "est_cost_usd": 0.5345,
+          "input_tokens": 19075,
+          "max_cost_usd": 1000000.0,
+          "output_tokens": 807,
+          "max_input_tokens": 100000000
+        },
+        "tokens": 19553
+      },
+      {
+        "ok": true,
+        "args": {
+          "limit": 40,
+          "since": "2031-09-01"
+        },
+        "kind": "tool_call",
+        "tool": "query_events",
+        "phase": "act",
+        "round": 2,
+        "result": {
+          "refs": 40,
+          "count": 40
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "target_ids": [
+            "lane_dunmere_canal",
+            "lane_cobalt_sound",
+            "lane_grey_narrows",
+            "lane_tessaly_passage",
+            "flow_microchips",
+            "flow_fuel_shipping"
+          ]
+        },
+        "kind": "tool_call",
+        "tool": "compare_targets",
+        "phase": "act",
+        "round": 2,
+        "result": {
+          "refs": 6,
+          "count": 0
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "limit": 25
+        },
+        "kind": "tool_call",
+        "tool": "query_hypotheses",
+        "phase": "act",
+        "round": 2,
+        "result": {
+          "refs": 25,
+          "count": 25
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "limit": 20,
+          "query": "levies licence limits port fees chip shortages"
+        },
+        "kind": "tool_call",
+        "tool": "search_signals",
+        "phase": "act",
+        "round": 2,
+        "result": {
+          "refs": 0,
+          "count": 0
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "limit": 20,
+          "query": "dock strikes crew shortages labour unrest walkouts"
+        },
+        "kind": "tool_call",
+        "tool": "vector_search",
+        "phase": "act",
+        "round": 2,
+        "result": {
+          "refs": 20,
+          "count": 20
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "kind": "llm_call",
+        "phase": "reason",
+        "round": 3,
+        "usage": {
+          "calls": 3,
+          "est_cost_usd": 1.163,
+          "input_tokens": 57299,
+          "max_cost_usd": 1000000.0,
+          "output_tokens": 1357,
+          "max_input_tokens": 100000000
+        },
+        "tokens": 38774
+      },
+      {
+        "ok": true,
+        "args": {
+          "size": 15,
+          "query": "levy licence limits microchip cargo trade retaliation Kestrel"
+        },
+        "kind": "tool_call",
+        "tool": "search_corpus",
+        "phase": "act",
+        "round": 3,
+        "result": {
+          "refs": 15,
+          "count": 15
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "size": 15,
+          "query": "strike lockout dockworkers unrest Marrow Point union"
+        },
+        "kind": "tool_call",
+        "tool": "search_corpus",
+        "phase": "act",
+        "round": 3,
+        "result": {
+          "refs": 15,
+          "count": 15
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "event_id": "6d792391-0419-5f30-beb6-f29c45382c53"
+        },
+        "kind": "tool_call",
+        "tool": "inspect_event",
+        "phase": "act",
+        "round": 3,
+        "result": {
+          "refs": 114,
+          "count": 0
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "limit": 10,
+          "target_id": "port_kestrel_bay"
+        },
+        "kind": "tool_call",
+        "tool": "list_findings",
+        "phase": "act",
+        "round": 3,
+        "result": {
+          "refs": 10,
+          "count": 10
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "limit": 10,
+          "target_id": "port_marrow_point"
+        },
+        "kind": "tool_call",
+        "tool": "list_findings",
+        "phase": "act",
+        "round": 3,
+        "result": {
+          "refs": 10,
+          "count": 10
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "kind": "llm_call",
+        "phase": "reason",
+        "round": 4,
+        "usage": {
+          "calls": 4,
+          "est_cost_usd": 2.0199,
+          "input_tokens": 110889,
+          "max_cost_usd": 1000000.0,
+          "output_tokens": 1878,
+          "max_input_tokens": 100000000
+        },
+        "tokens": 54111
+      },
+      {
+        "ok": true,
+        "args": {
+          "limit": 5,
+          "target_id": "region_north_shore"
+        },
+        "kind": "tool_call",
+        "tool": "list_findings",
+        "phase": "act",
+        "round": 4,
+        "result": {
+          "refs": 1,
+          "count": 1
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "limit": 5,
+          "target_id": "region_eastern_reach"
+        },
+        "kind": "tool_call",
+        "tool": "list_findings",
+        "phase": "act",
+        "round": 4,
+        "result": {
+          "refs": 1,
+          "count": 1
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "limit": 5,
+          "target_id": "region_southern_basin"
+        },
+        "kind": "tool_call",
+        "tool": "list_findings",
+        "phase": "act",
+        "round": 4,
+        "result": {
+          "refs": 1,
+          "count": 1
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "size": 12,
+          "query": "Tessaly clearing union settlement currency reserves ledger"
+        },
+        "kind": "tool_call",
+        "tool": "search_corpus",
+        "phase": "act",
+        "round": 4,
+        "result": {
+          "refs": 12,
+          "count": 12
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "size": 12,
+          "query": "harbour patrol budget increase coast guard fleet Veldmark"
+        },
+        "kind": "tool_call",
+        "tool": "search_corpus",
+        "phase": "act",
+        "round": 4,
+        "result": {
+          "refs": 12,
+          "count": 12
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "kind": "llm_call",
+        "phase": "reason",
+        "round": 5,
+        "usage": {
+          "calls": 5,
+          "est_cost_usd": 3.1122,
+          "input_tokens": 180027,
+          "max_cost_usd": 1000000.0,
+          "output_tokens": 2429,
+          "max_input_tokens": 100000000
+        },
+        "tokens": 69689
+      },
+      {
+        "ok": true,
+        "args": {
+          "limit": 5,
+          "target_id": "situation_canal_lockout"
+        },
+        "kind": "tool_call",
+        "tool": "list_findings",
+        "phase": "act",
+        "round": 5,
+        "result": {
+          "refs": 5,
+          "count": 5
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "size": 12,
+          "query": "fuel price surge freight rates inflation grain prices cost of living"
+        },
+        "kind": "tool_call",
+        "tool": "search_corpus",
+        "phase": "act",
+        "round": 5,
+        "result": {
+          "refs": 12,
+          "count": 12
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "size": 12,
+          "query": "snap election result Halden coalition government tariff backlash"
+        },
+        "kind": "tool_call",
+        "tool": "search_corpus",
+        "phase": "act",
+        "round": 5,
+        "result": {
+          "refs": 12,
+          "count": 12
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "as_of": "2031-07-05",
+          "limit": 20
+        },
+        "kind": "tool_call",
+        "tool": "list_situations",
+        "phase": "act",
+        "round": 5,
+        "result": {
+          "refs": 20,
+          "count": 20
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "limit": 15
+        },
+        "kind": "tool_call",
+        "tool": "query_predictions",
+        "phase": "act",
+        "round": 5,
+        "result": {
+          "refs": 15,
+          "count": 15
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "kind": "llm_call",
+        "phase": "reason",
+        "round": 6,
+        "usage": {
+          "calls": 6,
+          "est_cost_usd": 4.4521,
+          "input_tokens": 265588,
+          "max_cost_usd": 1000000.0,
+          "output_tokens": 2997,
+          "max_input_tokens": 100000000
+        },
+        "tokens": 86129
+      },
+      {
+        "ok": true,
+        "args": {
+          "limit": 3,
+          "target_id": "region_salt_coast"
+        },
+        "kind": "tool_call",
+        "tool": "list_findings",
+        "phase": "act",
+        "round": 6,
+        "result": {
+          "refs": 1,
+          "count": 1
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "limit": 3,
+          "target_id": "region_western_isles"
+        },
+        "kind": "tool_call",
+        "tool": "list_findings",
+        "phase": "act",
+        "round": 6,
+        "result": {
+          "refs": 1,
+          "count": 1
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "size": 10,
+          "query": "Dunmere Canal lock closure fuel shock began dispute Ostrel Veldmark"
+        },
+        "kind": "tool_call",
+        "tool": "search_corpus",
+        "phase": "act",
+        "round": 6,
+        "result": {
+          "refs": 10,
+          "count": 10
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "size": 12,
+          "query": "regional growth forecast recession Kestrel Bay trade volumes slowdown"
+        },
+        "kind": "tool_call",
+        "tool": "search_corpus",
+        "phase": "act",
+        "round": 6,
+        "result": {
+          "refs": 12,
+          "count": 12
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "size": 10,
+          "query": "Cobalt Sound blockade harbour drills microchip seizure export"
+        },
+        "kind": "tool_call",
+        "tool": "search_corpus",
+        "phase": "act",
+        "round": 6,
+        "result": {
+          "refs": 10,
+          "count": 10
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "kind": "llm_call",
+        "phase": "reason",
+        "round": 7,
+        "usage": {
+          "calls": 7,
+          "est_cost_usd": 6.0202,
+          "input_tokens": 366804,
+          "max_cost_usd": 1000000.0,
+          "output_tokens": 3476,
+          "max_input_tokens": 100000000
+        },
+        "tokens": 101695
+      },
+      {
+        "ok": true,
+        "args": {
+          "size": 10,
+          "query": "Ostrel Veldmark summit Brindle outcome agreement levies data channel"
+        },
+        "kind": "tool_call",
+        "tool": "search_corpus",
+        "phase": "act",
+        "round": 7,
+        "result": {
+          "refs": 10,
+          "count": 10
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "size": 10,
+          "query": "Brindle Joint Harbour Agreement Veldmark Ostrel collective defence pact"
+        },
+        "kind": "tool_call",
+        "tool": "search_corpus",
+        "phase": "act",
+        "round": 7,
+        "result": {
+          "refs": 10,
+          "count": 10
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "size": 8,
+          "query": "Fenwick Isles pilot stations Halden northern sovereignty annexation"
+        },
+        "kind": "tool_call",
+        "tool": "search_corpus",
+        "phase": "act",
+        "round": 7,
+        "result": {
+          "refs": 8,
+          "count": 8
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "size": 10,
+          "query": "Grey Narrows ceasefire negotiations peace plan Sarn territory talks"
+        },
+        "kind": "tool_call",
+        "tool": "search_corpus",
+        "phase": "act",
+        "round": 7,
+        "result": {
+          "refs": 10,
+          "count": 10
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "kind": "llm_call",
+        "phase": "reason",
+        "round": 8,
+        "usage": {
+          "calls": 8,
+          "est_cost_usd": 7.8272,
+          "input_tokens": 484672,
+          "max_cost_usd": 1000000.0,
+          "output_tokens": 3811,
+          "max_input_tokens": 100000000
+        },
+        "tokens": 118203
+      },
+      {
+        "ok": true,
+        "args": {
+          "size": 12,
+          "query": "student protests youth uprising harbour board resignation demonstrations"
+        },
+        "kind": "tool_call",
+        "tool": "search_corpus",
+        "phase": "act",
+        "round": 8,
+        "result": {
+          "refs": 12,
+          "count": 12
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "size": 10,
+          "query": "Tarn rebels Cobalt Gate Wick port blockade Cobalt Sound attacks shipping"
+        },
+        "kind": "tool_call",
+        "tool": "search_corpus",
+        "phase": "act",
+        "round": 8,
+        "result": {
+          "refs": 10,
+          "count": 10
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "active_only": true
+        },
+        "kind": "tool_call",
+        "tool": "list_sources",
+        "phase": "act",
+        "round": 8,
+        "result": {
+          "refs": 0,
+          "count": 118
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "kind": "llm_call",
+        "phase": "reason",
+        "round": 9,
+        "usage": {
+          "calls": 9,
+          "est_cost_usd": 11.0999,
+          "input_tokens": 621505,
+          "max_cost_usd": 1000000.0,
+          "output_tokens": 19895,
+          "max_input_tokens": 100000000
+        },
+        "tokens": 152917
+      },
+      {
+        "kind": "final",
+        "phase": "reflect",
+        "round": 9
+      }
+    ],
+    "tool_calls": [
+      {
+        "args": {
+          "limit": 30
+        },
+        "tool": "list_situations",
+        "result": {
+          "refs": 30,
+          "count": 30
+        }
+      },
+      {
+        "args": {
+          "limit": 30
+        },
+        "tool": "list_findings",
+        "result": {
+          "refs": 30,
+          "count": 30
+        }
+      },
+      {
+        "args": {},
+        "tool": "list_targets",
+        "result": {
+          "refs": 0,
+          "count": 44
+        }
+      },
+      {
+        "args": {
+          "limit": 40,
+          "since": "2031-09-01"
+        },
+        "tool": "query_events",
+        "result": {
+          "refs": 40,
+          "count": 40
+        }
+      },
+      {
+        "args": {
+          "target_ids": [
+            "lane_dunmere_canal",
+            "lane_cobalt_sound",
+            "lane_grey_narrows",
+            "lane_tessaly_passage",
+            "flow_microchips",
+            "flow_fuel_shipping"
+          ]
+        },
+        "tool": "compare_targets",
+        "result": {
+          "refs": 6,
+          "count": 0
+        }
+      },
+      {
+        "args": {
+          "limit": 25
+        },
+        "tool": "query_hypotheses",
+        "result": {
+          "refs": 25,
+          "count": 25
+        }
+      },
+      {
+        "args": {
+          "limit": 20,
+          "query": "levies licence limits port fees chip shortages"
+        },
+        "tool": "search_signals",
+        "result": {
+          "refs": 0,
+          "count": 0
+        }
+      },
+      {
+        "args": {
+          "limit": 20,
+          "query": "dock strikes crew shortages labour unrest walkouts"
+        },
+        "tool": "vector_search",
+        "result": {
+          "refs": 20,
+          "count": 20
+        }
+      },
+      {
+        "args": {
+          "size": 15,
+          "query": "levy licence limits microchip cargo trade retaliation Kestrel"
+        },
+        "tool": "search_corpus",
+        "result": {
+          "refs": 15,
+          "count": 15
+        }
+      },
+      {
+        "args": {
+          "size": 15,
+          "query": "strike lockout dockworkers unrest Marrow Point union"
+        },
+        "tool": "search_corpus",
+        "result": {
+          "refs": 15,
+          "count": 15
+        }
+      },
+      {
+        "args": {
+          "event_id": "6d792391-0419-5f30-beb6-f29c45382c53"
+        },
+        "tool": "inspect_event",
+        "result": {
+          "refs": 114,
+          "count": 0
+        }
+      },
+      {
+        "args": {
+          "limit": 10,
+          "target_id": "port_kestrel_bay"
+        },
+        "tool": "list_findings",
+        "result": {
+          "refs": 10,
+          "count": 10
+        }
+      },
+      {
+        "args": {
+          "limit": 10,
+          "target_id": "port_marrow_point"
+        },
+        "tool": "list_findings",
+        "result": {
+          "refs": 10,
+          "count": 10
+        }
+      },
+      {
+        "args": {
+          "limit": 5,
+          "target_id": "region_north_shore"
+        },
+        "tool": "list_findings",
+        "result": {
+          "refs": 1,
+          "count": 1
+        }
+      },
+      {
+        "args": {
+          "limit": 5,
+          "target_id": "region_eastern_reach"
+        },
+        "tool": "list_findings",
+        "result": {
+          "refs": 1,
+          "count": 1
+        }
+      },
+      {
+        "args": {
+          "limit": 5,
+          "target_id": "region_southern_basin"
+        },
+        "tool": "list_findings",
+        "result": {
+          "refs": 1,
+          "count": 1
+        }
+      },
+      {
+        "args": {
+          "size": 12,
+          "query": "Tessaly clearing union settlement currency reserves ledger"
+        },
+        "tool": "search_corpus",
+        "result": {
+          "refs": 12,
+          "count": 12
+        }
+      },
+      {
+        "args": {
+          "size": 12,
+          "query": "harbour patrol budget increase coast guard fleet Veldmark"
+        },
+        "tool": "search_corpus",
+        "result": {
+          "refs": 12,
+          "count": 12
+        }
+      },
+      {
+        "args": {
+          "limit": 5,
+          "target_id": "situation_canal_lockout"
+        },
+        "tool": "list_findings",
+        "result": {
+          "refs": 5,
+          "count": 5
+        }
+      },
+      {
+        "args": {
+          "size": 12,
+          "query": "fuel price surge freight rates inflation grain prices cost of living"
+        },
+        "tool": "search_corpus",
+        "result": {
+          "refs": 12,
+          "count": 12
+        }
+      },
+      {
+        "args": {
+          "size": 12,
+          "query": "snap election result Halden coalition government tariff backlash"
+        },
+        "tool": "search_corpus",
+        "result": {
+          "refs": 12,
+          "count": 12
+        }
+      },
+      {
+        "args": {
+          "as_of": "2031-07-05",
+          "limit": 20
+        },
+        "tool": "list_situations",
+        "result": {
+          "refs": 20,
+          "count": 20
+        }
+      },
+      {
+        "args": {
+          "limit": 15
+        },
+        "tool": "query_predictions",
+        "result": {
+          "refs": 15,
+          "count": 15
+        }
+      },
+      {
+        "args": {
+          "limit": 3,
+          "target_id": "region_salt_coast"
+        },
+        "tool": "list_findings",
+        "result": {
+          "refs": 1,
+          "count": 1
+        }
+      },
+      {
+        "args": {
+          "limit": 3,
+          "target_id": "region_western_isles"
+        },
+        "tool": "list_findings",
+        "result": {
+          "refs": 1,
+          "count": 1
+        }
+      },
+      {
+        "args": {
+          "size": 10,
+          "query": "Dunmere Canal lock closure fuel shock began dispute Ostrel Veldmark"
+        },
+        "tool": "search_corpus",
+        "result": {
+          "refs": 10,
+          "count": 10
+        }
+      },
+      {
+        "args": {
+          "size": 12,
+          "query": "regional growth forecast recession Kestrel Bay trade volumes slowdown"
+        },
+        "tool": "search_corpus",
+        "result": {
+          "refs": 12,
+          "count": 12
+        }
+      },
+      {
+        "args": {
+          "size": 10,
+          "query": "Cobalt Sound blockade harbour drills microchip seizure export"
+        },
+        "tool": "search_corpus",
+        "result": {
+          "refs": 10,
+          "count": 10
+        }
+      },
+      {
+        "args": {
+          "size": 10,
+          "query": "Ostrel Veldmark summit Brindle outcome agreement levies data channel"
+        },
+        "tool": "search_corpus",
+        "result": {
+          "refs": 10,
+          "count": 10
+        }
+      },
+      {
+        "args": {
+          "size": 10,
+          "query": "Brindle Joint Harbour Agreement Veldmark Ostrel collective defence pact"
+        },
+        "tool": "search_corpus",
+        "result": {
+          "refs": 10,
+          "count": 10
+        }
+      },
+      {
+        "args": {
+          "size": 8,
+          "query": "Fenwick Isles pilot stations Halden northern sovereignty annexation"
+        },
+        "tool": "search_corpus",
+        "result": {
+          "refs": 8,
+          "count": 8
+        }
+      },
+      {
+        "args": {
+          "size": 10,
+          "query": "Grey Narrows ceasefire negotiations peace plan Sarn territory talks"
+        },
+        "tool": "search_corpus",
+        "result": {
+          "refs": 10,
+          "count": 10
+        }
+      },
+      {
+        "args": {
+          "size": 12,
+          "query": "student protests youth uprising harbour board resignation demonstrations"
+        },
+        "tool": "search_corpus",
+        "result": {
+          "refs": 12,
+          "count": 12
+        }
+      },
+      {
+        "args": {
+          "size": 10,
+          "query": "Tarn rebels Cobalt Gate Wick port blockade Cobalt Sound attacks shipping"
+        },
+        "tool": "search_corpus",
+        "result": {
+          "refs": 10,
+          "count": 10
+        }
+      },
+      {
+        "args": {
+          "active_only": true
+        },
+        "tool": "list_sources",
+        "result": {
+          "refs": 0,
+          "count": 118
+        }
+      }
+    ],
+    "cited_refs": [
+      {
+        "id": "f97bfbad-e7f3-5168-86e2-ce4912be1f3d",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "5cdb5cb3-2ea3-5cdb-b049-99a651d5c1cf",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "724839a0-ada7-5300-8330-5a68a0f7fd1b",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "62297882-19a1-5fab-bf6a-7930a38d12f7",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "da4fdf16-afe0-5697-85d3-524ad76b5c72",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "d817e07a-9f68-5fac-a938-bb92d49b1d6a",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "2a9ed79d-146c-5b33-90f0-2515d4c84336",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "40645a05-9a02-5da9-a8d6-5385b133f70c",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "d658f962-d8b5-568b-a8d9-550e9602f38e",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "4d404836-fe64-5419-a559-3c82200c206c",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "cb1c2059-727d-5a0b-8da7-f4d8767ecbc6",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "cae2d0bb-ba08-5710-a0dc-a99b84e7d2d0",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "431655e1-3492-5450-a9b2-abc313ae57a9",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "6d792391-0419-5f30-beb6-f29c45382c53",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "c08ed14e-7d86-521d-8e1f-b7ce6595567e",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "5dbaf45b-311f-532e-9537-ead8d09388fe",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "702868a6-f9e0-53ed-ba68-fd645d3ebaaa",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "fc676469-49fc-5d25-8b79-44d252e033d6",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "5a6cb8a5-ffa4-5b17-a250-2098bec03532",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "84eb2e80-71fa-54a6-a4b5-ca0dfb9b7e81",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "2fc83f9e-2dd9-5077-b739-a3a570fe1307",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "9f1861d9-2c0c-5029-b73b-b031a64d0a98",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "fb709a44-d2e4-5ce7-a858-4f7a57153542",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "ffef3b42-bb94-54c2-afe2-49805a89475e",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "40dde545-fb24-574b-ac36-332de1ce5cf5",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "562219bf-717c-5655-9d98-9abeaaaf7556",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "55f608e7-6b63-5b12-b139-3abb45d1f22c",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "266e0582-2e21-555a-8778-827511f2003d",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "a9bfddc9-7582-5a09-b77a-a8d970332b61",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "5ec41677-1c93-57fa-86b2-19ff55620749",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "e3dde77d-82e7-5579-ae1a-1fadabfee0c5",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "3dac3eaa-4d02-5b35-8087-ef327452d819",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "166bd6fc-6fbf-5db2-9178-5c766f58ddcf",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "a6b8da83-ef52-5b2f-9735-a044f03e287f",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "5c0fbf1a-0ef9-56b8-b2fc-f17052077994",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "69cae3d7-5161-534b-a073-da60079e1d1c",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "8b67fe18-d47f-5538-9901-e08578d99c68",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "6fad15bd-5fbb-5faa-ba07-e663633ffb4b",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "0bce731f-f690-5b7a-a701-46027ee72338",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "30f0d295-e6e9-5663-92e4-0a97dde0f2e2",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "ee38ef38-e114-5836-ae15-593925c83573",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "7509521a-00e0-5ab5-b071-2dc53063db01",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "8ddf6f24-fde0-5f03-ad3e-6466dfd28a54",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "a36cd5d0-dd39-54a3-b359-c62b6f77f6ce",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "8de0b1d2-3727-51f9-92ce-933b6ef96772",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "e08e94d3-5668-50bb-8967-a0debd182780",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "c249c08e-d3d4-5370-ad4e-55fcd354ca1d",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "5caec047-f742-591b-b802-7ef368376061",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "c9520a79-d249-525e-a1a8-4247cd28fa47",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "377f953a-e075-5f4e-b5ac-8f2227f94859",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "1d90bca1-e43e-5d81-bbcc-23885483143b",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "385c4a5d-0386-51fd-a899-3cb43406a70d",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "97efb56c-98de-5bf5-b20d-ab7e0bdc7b68",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "fe976592-5bad-542c-87a7-6858fc6466e1",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "128a7845-5dbd-5a9b-8993-4977ad066adf",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "9633e6f2-4b53-5d87-be34-aaa275e1ca7a",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "fb697d5d-bade-5e1f-a0c4-437850b2632b",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "6f6e5b78-5567-542c-91b8-eced63134b4e",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "7d1b437e-e398-5679-adf2-79833f36ea47",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "4ab19f76-4a8f-57f1-834d-bd597b82c868",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "06aca92d-dede-5204-b9c0-af19ba281642",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "0a20d4e8-dee4-52f5-afb9-b19a28726da8",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "c704ee15-d093-5c44-8c92-4cc35eebb67a",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "79fdca40-80ff-5389-bd35-19226dcb0b91",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "57c01ae0-12da-57d0-8fa5-cbddd9c50311",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "3972f30d-2fba-5320-ba7c-83243d786254",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "249d2307-17db-5162-b004-ee70a5a89c49",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "a74b9bd8-69f6-546b-b2bb-40ad66fd98fc",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "d24c0e81-1c28-56d4-95ab-973e0e1d550d",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "9fc15264-ab1e-548c-9541-de8e9522652e",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "747bb750-5d4e-574b-901f-d688578524dd",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "4a826e9c-2bed-51b9-aecc-936e0b8721a6",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "d20f864c-09f8-59ee-9092-ffbdb880a791",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "bbcff33b-bd15-5d48-a473-97a0f85987ac",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "2fbe742e-793c-5255-9f43-299f62d43218",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "096b5fe4-fcb6-5651-9c57-da7a98b847d2",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "928ab356-23df-5729-ac08-262d0a13131c",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "4cce02eb-7b31-52f8-8224-38e4f158a028",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "2dddc6c1-4ddc-5d33-99d1-8c57651bc6b7",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "93096388-f319-5fa3-8c27-4f1e316cf2b6",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "43aee7a9-7fb0-5d8c-aff4-53fd1282c646",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "a10cb5e9-3491-5405-8f73-7d0c9a34f28d",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "9ba26a69-e1a1-5974-b1ac-4ed23cad1224",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "e31f2c44-8703-5bc3-ab2f-18af9fd630e7",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "35122b9c-217f-5efa-851f-ea11ba17f609",
+        "kind": "signal",
+        "description": null
+      }
+    ],
+    "created_at": "2031-01-14T00:55:50.774158+00:00",
+    "request_id": null,
+    "synthesis_status": "complete"
+  }
+]

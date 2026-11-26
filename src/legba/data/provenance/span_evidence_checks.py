@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""SPAN → CITED-SOURCE checks: deterministic, no model, no DB (lane N-D).
+"""SPAN → CITED-SOURCE checks: deterministic, no model, no DB.
 
 The verify judge grades a claim against its citations and the assembly arms
 prove a quotation is a verbatim slice of its desk head. Neither checks that the

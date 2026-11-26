@@ -1,4 +1,4 @@
-# The `event_type` vocabulary family — `events.event_type` (W9 TAX-4).
+# The `event_type` vocabulary family — `events.event_type`.
 #
 # A PLATFORM family (src/legba/data/schemas/vocabulary.py PLATFORM_FAMILIES):
 # what kind of occurrence an event is, independent of the instance's case.

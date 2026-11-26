@@ -36,7 +36,7 @@ DESCRIPTORS_DIR = REPO_ROOT / "descriptors"
 
 VOCAB = {"reporting", "analysis", "official", "state_media", "claim"}
 
-#: C-1: the claim class needs its declaration (claimant) to validate.
+#: The claim class needs its declaration (claimant) to validate.
 _CLAIM_DECL = {"claimant": "Example tracker", "verb": "listed"}
 
 # The committed YAML source descriptors and their honest, conservative class.
@@ -60,14 +60,14 @@ EXPECTED_YAML_CLASS: dict[str, str] = {
     "source_irna_english.yaml": "state_media",
     "source_presstv_english.yaml": "state_media",
     "source_ukrinform_english.yaml": "state_media",
-    # W1-E draft binds for the never-bound adapters — class as declared; each gets a
+    # Draft binds for the never-bound adapters — class as declared; each gets a
     # real classification review at activation (none has a live actor yet)
     "source_common_crawl_news.yaml": "analysis",
     "source_discord_webhook.yaml": "analysis",
     "source_firecrawl.yaml": "analysis",
     "source_generic_webhook.yaml": "analysis",
     "source_query_source_discovery_template.yaml": "analysis",
-    # A7 RSSHub-lane feeds (pre-existing omission from the rsshub merge; all reporting)
+    # RSSHub feeds (pre-existing omission from the rsshub merge; all reporting)
     "source_rsshub_aljazeera_drcongo.yaml": "reporting",
     "source_rsshub_apnews_drcongo.yaml": "reporting",
     "source_rsshub_apnews_haiti.yaml": "reporting",
@@ -78,11 +78,11 @@ EXPECTED_YAML_CLASS: dict[str, str] = {
     "source_rsshub_rfa_korea.yaml": "reporting",
     "source_rsshub_rfi_afrique.yaml": "reporting",
     "source_rsshub_rfi_ameriques.yaml": "reporting",
-    # P3-6 Wave-A breadth batch (41 draft no-auth feeds)
+    # Breadth batch (41 draft no-auth feeds)
     "source_who_disease_outbreak_news.yaml": "official",
     "source_imf_portwatch_chokepoints.yaml": "official",  # N-L series source
-    "source_eia_petroleum_spot_daily.yaml": "official",  # S-1 series source
-    "source_bis_policy_rates_daily.yaml": "official",  # S-1 series source
+    "source_eia_petroleum_spot_daily.yaml": "official",  # Series source
+    "source_bis_policy_rates_daily.yaml": "official",  # Series source
     "source_eia_today_in_energy.yaml": "official",
     "source_cgtn_world.yaml": "state_media",
     "source_timesofisrael.yaml": "reporting",
@@ -124,16 +124,16 @@ EXPECTED_YAML_CLASS: dict[str, str] = {
     "source_bangkokpost.yaml": "reporting",
     "source_dawn.yaml": "reporting",
     # Supply-chain domain top-10 first registrations (2026-07-29):
-    # planning/SUPPLY_CHAIN_SOURCES_2026-07-29.md §5.
+    # Supply-chain source selection.
     "source_pancanal.yaml": "official",
-    "source_page_pipeline_default.yaml": "reporting",   # I-2: the page pipeline
+    "source_page_pipeline_default.yaml": "reporting",   # The page pipeline
     "source_splash247.yaml": "reporting",
     "source_theloadstar.yaml": "reporting",
     "source_maritime_executive.yaml": "reporting",
     "source_digitimes.yaml": "reporting",
     "source_wto_news.yaml": "official",
     "source_northernminer.yaml": "reporting",
-    # 2026-08-03 batch — AP world re-route + Niger coverage pass (roadmap B-7).
+    # 2026-08-03 batch — AP world re-route + Niger coverage pass (roadmap).
     # All reporting: AP is a private newswire cooperative; ActuNiger and Sahel
     # Intelligence are commercial outlets; Studio Kalangou is an independent
     # non-profit newsroom (donor-funded, but an NGO operator is not an
@@ -161,9 +161,9 @@ EXPECTED_YAML_CLASS: dict[str, str] = {
     "source_studioyafa.yaml": "reporting",
     "source_studiotamani.yaml": "reporting",
     # sources_wave_2 batch (2026-09-07) — closes reviewer-flagged coverage gaps:
-    # planning/COVERAGE_VS_SELECTION_AUDIT_2026-09-07.md. OHCHR (stale/non-news
+    # Coverage-vs-selection audit. OHCHR (stale/non-news
     # RSS), Kyiv Post and Sudan Tribune (site blocked this fetcher on every path)
-    # were researched and NOT registered — see the sources-wave-2 report.
+    # were researched and NOT registered.
     "source_un_news_africa.yaml": "official",
     "source_un_news_middle_east.yaml": "official",
     "source_un_news_peace_security.yaml": "official",
@@ -181,8 +181,8 @@ EXPECTED_YAML_CLASS: dict[str, str] = {
     "source_federalregister_presidential.yaml": "official",
     "source_bmvg_news.yaml": "official",
     "source_bundeswehr_procurement.yaml": "official",
-    "source_ukmto_incidents.yaml": "official",  # roll 73: UKMTO (Royal Navy)
-    # K-1 cyber desk (2026-11-14): national CERTs / agencies and the provider
+    "source_ukmto_incidents.yaml": "official",  # UKMTO (Royal Navy)
+    # Cyber desk (2026-11-14): national CERTs / agencies and the provider
     # status feeds (a primary-source publisher about its own service) are
     # official; the three trade outlets are reporting.
     "source_cisa_kev.yaml": "official",
@@ -199,7 +199,7 @@ EXPECTED_YAML_CLASS: dict[str, str] = {
     "source_azure_status.yaml": "official",
     "source_gcp_status.yaml": "official",
     "source_gworkspace_status.yaml": "official",
-    # X-1 source expansion (2026-11-14): three independent outlets (reporting);
+    # Source expansion (2026-11-14): three independent outlets (reporting);
     # government / EU-institution / central-bank / public-health publishers,
     # their series and two sanctions registers (official); the staged Telegram
     # batch keeps the `reporting` batch default, its government channels are
@@ -219,17 +219,29 @@ EXPECTED_YAML_CLASS: dict[str, str] = {
     "source_eu_fsf_sanctions_list.yaml": "official",
     "source_canada_sema_sanctions_list.yaml": "official",
     "source_telegram_x1_staged.yaml": "reporting",
-    # C-1 claim source class
+    # Claim source class
     "source_ransomware_live.yaml": "claim",
-    # C-3 claims sources (2026-11-15)
+    # Claims sources (2026-11-15)
     "source_ransomlook.yaml": "claim",
     "source_checkpoint_research.yaml": "reporting",
     "source_cloudflare_ddos.yaml": "reporting",
-    # I-5 (2026-11-14): an IFI's statistics, three central banks, the EU
+    # Public feeds from official publishers: disaster and health alerts, space
+    # weather, a council, the Federal Register, the EU statistical office.
+    "source_ecdc_epidemiological_updates.yaml": "official",
+    "source_gdacs_events.yaml": "official",
+    "source_emsc_earthquakes.yaml": "official",
+    "source_swpc_alerts.yaml": "official",
+    "source_nhc_atlantic.yaml": "official",
+    "source_nhc_eastern_pacific.yaml": "official",
+    "source_consilium_press_releases.yaml": "official",
+    "source_federalregister_significant.yaml": "official",
+    "source_eurostat_unemployment_monthly.yaml": "official",
+    "source_eurostat_industrial_production_monthly.yaml": "official",
+    # 2026-11-14: an IFI's statistics, three central banks, the EU
     # statistical office and a national seismological agency — all official.
     "source_worldbank_wdi_cpi_inflation_world.yaml": "official",
     "source_nbu_exchange_daily.yaml": "official",
-    "source_nbu_key_rates.yaml": "official",  # roll 84
+    "source_nbu_key_rates.yaml": "official",
     "source_bcb_selic_target.yaml": "official",
     "source_boe_bank_rate_daily.yaml": "official",
     "source_eurostat_hicp_ea_monthly.yaml": "official",
@@ -250,7 +262,7 @@ EXPECTED_YAML_CHANNEL_CLASS_OVERRIDES: dict[str, dict[str, str]] = {
     "source_telegram_monitor.yaml": {
         "Almasirah_En": "state_media",
         "ansarollah1": "state_media",
-        # X-1 channels moved in from the staged batch on 2026-11-14 (roll 83),
+        # Channels moved in from the staged batch on 2026-11-14,
         # overrides with them. A government body's channel
         # is that government's official voice.
         "GeneralStaffZSU": "official",
@@ -261,9 +273,9 @@ EXPECTED_YAML_CHANNEL_CLASS_OVERRIDES: dict[str, dict[str, str]] = {
         "SyPresidency": "official",
         "DeepStateUA": "analysis",
     },
-    # X-1 (2026-11-14): the staged batch (configured only — channels move into
+    # 2026-11-14: the staged batch (configured only — channels move into
     # source_telegram_monitor.yaml to go live, overrides with them). Empty
-    # since roll 83: all ten moved.
+    # all ten moved.
     "source_telegram_x1_staged.yaml": {},
 }
 
@@ -405,7 +417,7 @@ def test_telegram_monitor_file_level_class_is_reporting_not_the_override():
     assert cfg.classes.get("Almasirah_En") == "state_media"
     assert cfg.classes.get("ansarollah1") == "state_media"
     # A non-overridden channel on the same descriptor has NO entry — it
-    # falls back to scope.source_class at the S-1 stamping path.
+    # falls back to scope.source_class at the stamping path.
     assert "bloomberg" not in cfg.classes
 
 

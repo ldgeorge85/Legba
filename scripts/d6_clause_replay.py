@@ -3,12 +3,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """d6_clause_replay.py — the WEAK-SPECIMEN CLAUSE's before/after, N=5 world spines.
 
-WHAT THIS MEASURES. D-6 §7.6 diagnosed the weakest of its five replay specimens
-(fidelity floor 0.545) as *"prose about the record's own machinery … an analyst
-narrating an instrument rather than a world"* and named ONE prompt clause as the
-lever — instrument-plan item N2, prereg item E-2. The first natural post-fix live
-Assessment then measured the diagnosis exactly: ``citation_support`` **0.4286**
-on 2026-09-06 00:15Z, with ALL FOUR ``soft_fail`` claims in that single class and
+WHAT THIS MEASURES. The weakest of five earlier replay specimens
+(fidelity floor 0.545) was diagnosed as *"prose about the record's own machinery
+… an analyst narrating an instrument rather than a world"*, with ONE prompt
+clause as the lever. The first live Assessment after the fix then measured the
+diagnosis exactly: ``citation_support`` **0.4286**, with ALL FOUR ``soft_fail`` claims in that single class and
 every substantive world claim supported. This script replays five real world
 spines through the REAL channel path under both prompts and grades both arms
 through the REAL verify path.
@@ -25,17 +24,16 @@ ONLY THE SYSTEM PROMPT MOVES. The user prompt (``build_assessment_prompt``), the
 spine, the marker resolution, the evidence map, the temperature and the model are
 identical across arms — the arm is planted by rebinding
 ``assessment_prompts.ASSESSMENT_SYSTEM``, which is the single name the run
-resolves the WORLD voice from (P3 Lane A: ``run_assessment`` asks
+resolves the WORLD voice from (``run_assessment`` asks
 ``assessment_prompts.system_prompt_for(payload)``, which reads that name at call
 time and answers the country constant for a country record). Everything else
 runs byte-identically to production, which is what makes the contrast the clause
 and not a confound.
 
 THE FIVE SPINES, and how the legacy-era three are built. Two are live
-``assembly.v1`` payloads (2026-09-05 12:00Z and 2026-09-06 00:00Z — the records
-the two live Assessments actually read). The other three world cycles ran BEFORE
+``assembly.v1`` payloads (the records the two live Assessments actually read). The other three world cycles ran BEFORE
 the assembly cutover and carry ``regime: legacy`` with no blocks, so their spines
-are rebuilt the way D-6 built its five: D-2's OWN builder
+are rebuilt with the production builder
 (``assembly_payload.build_assembly``) over that run's OWN input heads, taken from
 its ``derived_from``. Nothing is hand-written and nothing is invented — the
 builder is the production one and the inputs are the run's own.
@@ -46,27 +44,27 @@ channel's own ``citations``, with the live judge (the same
 $0). Both numbers are reported per arm:
 
   * ``citation_support`` — the JUDGED branch score. This is
-    ``fidelity_to_spine`` as the live row measures it, and the number the G3 bar
-    (>= 0.90) is about.
-  * the DETERMINISTIC FLOOR (judge off) — the comparable of D-6 §7's five
+    ``fidelity_to_spine`` as the live row measures it, and the number the 0.90 bar
+    is about.
+  * the DETERMINISTIC FLOOR (judge off) — the comparable of the five earlier
     numbers (1.0 / 0.80 / 1.0 / 0.75 / 0.545), so this replay can be read
-    against that one.
+    against those.
 
 READ-ONLY, BY CONSTRUCTION. The Postgres connection is opened with
 ``default_transaction_read_only`` and every statement is a SELECT. Nothing is
 written to the database, nothing is registered, nothing is deployed. Credentials
 are read from the checkout's ``.env`` and never logged or written to the output.
 
-THE G3 LANE (2026-09-06), and why it needs a SECOND TREE rather than a second
-prompt. D-6's arms differed by one module constant, so both could be planted in
-one process. G3's arms differ in the GRADER (``provenance.assessment_weighting``,
+THE TREE LANE, and why it needs a SECOND TREE rather than a second
+prompt. The rebind lane's arms differ by one module constant, so both can be planted in
+one process. The tree lane's arms differ in the GRADER (``provenance.assessment_weighting``,
 which does not exist on the base tree), in the EVIDENCE MAP (the declared
 aperture rides into every citation) and in the MARKER SURFACE
 (``aperture_unrostered``) as well as in the prompt. Rebinding four surfaces in
 one process would measure a chimera, so each arm runs the tree it belongs to:
 
-  A (before) : ``PYTHONPATH=<base d5ff79e7 checkout>/src`` — the v2 clause and
-               the old grader, as the tree that produced D-6's own numbers.
+  A (before) : ``PYTHONPATH=<base checkout>/src`` — the v2 clause and
+               the old grader, as the tree that produced the earlier numbers.
   B (after)  : ``PYTHONPATH=src`` in this checkout — v2 clause + the licence +
                the roster.
 
@@ -82,7 +80,7 @@ USAGE
         --spines /tmp/spines.json --arm-a /tmp/arm_a.json --out /tmp/results.json
     python3 scripts/d6_clause_replay.py score --results /tmp/results.json
 
-    # G3 — one arm per tree, then join
+    # Tree lane — one arm per tree, then join
     PYTHONPATH=<base>/src python3 scripts/d6_clause_replay.py g3-arm \\
         --spines /tmp/spines.json --arm A --out /tmp/g3_a.json
     PYTHONPATH=src python3 scripts/d6_clause_replay.py g3-arm \\
@@ -90,7 +88,7 @@ USAGE
     python3 scripts/d6_clause_replay.py g3-score --arm-a /tmp/g3_a.json \\
         --arm-b /tmp/g3_b.json
 
-    # G3 — the non-Assessment half, on both trees, then diff
+    # Tree lane — the non-Assessment half, on both trees, then diff
     PYTHONPATH=<base>/src python3 scripts/d6_clause_replay.py legacy-regrade \\
         --out /tmp/legacy_a.json
     PYTHONPATH=src python3 scripts/d6_clause_replay.py legacy-regrade \\
@@ -272,7 +270,7 @@ async def cmd_spines(args: argparse.Namespace) -> int:
             if not rows:
                 print(f"skip {run_id}: no input heads on the row", file=sys.stderr)
                 continue
-            # D-2's own builder, over the run's own inputs — the same two calls
+            # The production builder, over the run's own inputs — the same two calls
             # the production path makes around it (salience, then the order key
             # that also mints derived_from).
             ap.attach_cited_salience(rows, {})
@@ -426,9 +424,9 @@ async def _one_arm(
 ) -> dict[str, Any]:
     """One arm on one spine: the real channel run, then the real verify pass.
 
-    ``system=None`` is THE G3 LANE: run the tree's own ``ASSESSMENT_SYSTEM``
+    ``system=None`` is the TREE LANE: run the tree's own ``ASSESSMENT_SYSTEM``
     with nothing rebound, because in that lane the arm IS the tree (see the
-    module banner). ``system=<bytes>`` is D-6's lane, where the two arms differ
+    module banner). ``system=<bytes>`` is the REBIND lane, where the two arms differ
     by exactly one module constant and both live in one process.
     """
     from legba.data.analysts import assessment_channel as ac
@@ -450,10 +448,10 @@ async def _one_arm(
     }
     # THE ARM. The one name the run resolves the world voice from, rebound for
     # the duration of this call and restored after it. Nothing else moves. In
-    # the G3 lane nothing is rebound at all — the tree on ``PYTHONPATH`` is the
+    # the tree lane nothing is rebound at all — the tree on ``PYTHONPATH`` is the
     # arm.
     #
-    # P3 LANE A MOVED THIS NAME BY ONE MODULE, and the rebind has to follow it or
+    # THIS NAME MOVED BY ONE MODULE, and the rebind has to follow it or
     # this script silently measures nothing. ``run_assessment`` no longer passes
     # a module constant directly: it asks ``assessment_prompts.system_prompt_for
     # (payload)``, which resolves the voice from the RECORD's tier (the country
@@ -512,7 +510,7 @@ async def _one_arm(
         "prompt_version": getattr(apr_module(), "PROMPT_VERSION", ""),
         "unsupported_version": checked.get("version"),
         "judge_pipeline_version": getattr(vf, "JUDGE_PIPELINE_VERSION", ""),
-        # G3: the licence's own receipts, so the redistribution is a number.
+        # The licence's own receipts, so the redistribution is a number.
         "weighted": {
             k: v for k, v in (judged.counters or {}).items()
             if k.startswith("weighted_comparison")
@@ -601,7 +599,7 @@ async def cmd_replay(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
-# G3 — one arm per tree
+# Tree lane — one arm per tree
 # ---------------------------------------------------------------------------
 
 
@@ -705,7 +703,7 @@ def cmd_g3_score(args: argparse.Namespace) -> int:
         if weighted:
             print(f"        weighted-comparison counters: {weighted}")
 
-    # THE PER-CLASS REDISTRIBUTION, which is what §4.4 of the D-6 report was for.
+    # THE PER-CLASS REDISTRIBUTION, which is what the per-class comparison is for.
     for name, cases in (("A", a_cases), ("B", b_cases)):
         census: dict[str, int] = {}
         for c in cases.values():
@@ -716,7 +714,7 @@ def cmd_g3_score(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
-# G3 — the NON-ASSESSMENT half: the legacy population, re-graded on both trees
+# Tree lane — the NON-ASSESSMENT half: the legacy population, re-graded on both trees
 # ---------------------------------------------------------------------------
 
 _LEGACY_SQL = """

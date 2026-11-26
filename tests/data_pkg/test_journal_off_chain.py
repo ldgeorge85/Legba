@@ -43,11 +43,11 @@ from legba.data.registry.lineage_api import _SUBSTRATE_TABLES, _TABLES_BY_KIND
 
 def test_journal_table_not_in_lineage_catalog():
     """journal_entries is excluded from the downstream fan-out catalog so a
-    derived_from && walk can never surface a journal node (§3.5)."""
+    derived_from && walk can never surface a journal node."""
     tables = {t.table for t in _SUBSTRATE_TABLES}
     assert "journal_entries" not in tables, (
         "journal_entries must NOT be in _SUBSTRATE_TABLES — the downstream "
-        "derived_from fan-out would surface the journal inside the chain (§3.5)"
+        "derived_from fan-out would surface the journal inside the chain"
     )
 
 
@@ -128,5 +128,5 @@ async def test_downstream_walk_never_returns_journal(pg_conn):
         children = await lineage_api._fetch_children_of(pg_conn, [probe])
         ids = {str(r["id"]) for r in children}
         assert str(jout.id) not in ids, (
-            f"journal row leaked into the downstream walk from {probe} (§3.5)"
+            f"journal row leaked into the downstream walk from {probe}"
         )

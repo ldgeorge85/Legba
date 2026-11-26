@@ -239,7 +239,7 @@ async def _sample_dangling_derived_from(pool: Any, *, cap: int) -> list[dict[str
 
 
 # ---------------------------------------------------------------------------
-# P1-T8 — reachable-click-path PROBE (read-only)
+# Reachable-click-path PROBE (read-only)
 # ---------------------------------------------------------------------------
 #
 # The navigable read (P1) lands on a finding and lets the operator click into
@@ -346,7 +346,7 @@ def _summarize_probe(rows: Any, sample: list[dict[str, str]]) -> dict[str, Any]:
 async def probe_reachable_click_path(
     pool: Any, *, cap: int = _PROBE_SAMPLE_CAP
 ) -> dict[str, dict[str, Any]]:
-    """Read-only reachability probe for the navigable finding click path (P1-T8).
+    """Read-only reachability probe for the navigable finding click path.
 
     Returns ``{key: {"count": int, "sample": [...]}, ...}`` for each of the three
     dead-end classes (see the section docstring). Counts are the TRUE full counts
@@ -629,7 +629,7 @@ async def handle(
         dangling_sample = await _sample_dangling_derived_from(
             pool, cap=_DANGLING_SAMPLE_CAP
         )
-    # P1-T8: always run the reachable-click-path probe so the finding CONFIRMS
+    # Always run the reachable-click-path probe so the finding CONFIRMS
     # the navigable read resolves (a clean path returns 0s) — read-only, and it
     # degrades to zeros when the connection cannot multi-row fetch.
     probe = await probe_reachable_click_path(pool, cap=_PROBE_SAMPLE_CAP)

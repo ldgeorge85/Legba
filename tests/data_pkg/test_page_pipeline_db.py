@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane I-2 — the page pipeline on the REAL path against a migrated Postgres
+"""The page pipeline on the REAL path against a migrated Postgres
 (the data_pkg session database; isolated test stack only).
 
 A page requested through the intake is drained, fetched by the ``page`` kind

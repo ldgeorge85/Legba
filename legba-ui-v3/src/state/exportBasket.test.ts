@@ -270,7 +270,7 @@ describe('buildDeskBriefAppendix', () => {
     expect(appendix).toContain('none linked yet')
   })
 
-  it('stops before the size cap and SAYS how many situations it withheld (W11-F78)', () => {
+  it('stops before the size cap and SAYS how many situations it withheld', () => {
     // A G20 desk: 20 situations × 20 events ran to ~23,000 chars and the export
     // route refused the whole brief at 20,000. The composer now stays under
     // DESK_BRIEF_APPENDIX_MAX_CHARS and names the withheld count.

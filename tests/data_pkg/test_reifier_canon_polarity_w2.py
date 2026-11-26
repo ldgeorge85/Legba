@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W2 Agent-B — producer-side defects D3, D14, D15 for ``relationship_reifier``.
+"""Producer-side defects D3, D14, D15 for ``relationship_reifier``.
 
 PURE unit tests (no DB, no LLM) over the VERBATIM live garbage strings the
-Platform Health review (planning/PLATFORM_HEALTH_RESULTS.md) flagged:
+platform health review flagged:
 
   * D3  — demonym endpoints collapse → self-loop drop: "Israel leader of
           Israeli", "Iran supplies weapons to Iranian" can never be reified.

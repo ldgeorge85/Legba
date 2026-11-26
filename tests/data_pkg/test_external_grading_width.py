@@ -681,7 +681,7 @@ def test_the_gates_run_through_the_real_checker_with_only_the_fetch_stubbed():
     g = run(_decisive(window=_WINDOW, produced="2026-04-01T00:00:00+00:00"),
             _Page())
     assert g.verdict == "SUPPORTED"
-    assert len(g.decisive_span_sha256) == 64, "G-2 content-addresses the span"
+    assert len(g.decisive_span_sha256) == 64, "the decisive span is content-addressed"
     assert g.decisive_source_tier == 2
     assert g.archive_ref.startswith("cas:grading/sha256/"), (
         "the grading archive has its OWN scheme — never a signal's cas: ref"
@@ -855,7 +855,7 @@ def test_check_decisive_span_admits_a_source_the_grace_knob_reaches():
         _envelope(), page=page, archive_root=None, grace_before_hours=72.0,
     )
     assert with_grace.verdict == "SUPPORTED"
-    assert len(with_grace.decisive_span_sha256) == 64, "G-2 still content-addresses it"
+    assert len(with_grace.decisive_span_sha256) == 64, "the decisive span is still content-addressed"
     assert with_grace.archive_ref.startswith("cas:grading/sha256/")
     assert with_grace.unchecked_reason == ""
 
@@ -943,7 +943,7 @@ def test_out_of_window_gap_buckets_sorts_by_gap_from_oldest():
 
 
 def test_out_of_window_gap_buckets_excludes_unresolved_spans():
-    """G-2 must have passed — a span that never resolved is a different
+    """Span resolution must have passed — a span that never resolved is a different
     failure, and grace could never have admitted it either way."""
     buckets = width.out_of_window_gap_buckets(
         [_demoted_grade(hours_before_oldest=1, resolved=False)]
@@ -1139,7 +1139,7 @@ async def test_an_allowed_page_is_fetched_and_its_date_extracted(monkeypatch):
     assert page is not None
     assert binding.calls == [("web_fetch", {"url": "https://www.reuters.com/x"})]
     assert "raised its policy rate in March 2026" in page.text
-    assert "<article>" not in page.text, "G-2 compares text, not markup"
+    assert "<article>" not in page.text, "span addressing compares text, not markup"
     assert page.published_at.startswith("2026-03-04")
     assert page.extracted is True
 
@@ -1381,8 +1381,8 @@ def test_the_gateway_grader_descriptor_is_the_registrar_source_of_truth():
     """One body, one place — and the id the fence knows is the id on disk.
 
     Cutover 2026-10-23: the third-family slot moved off OpenRouter Mistral (its
-    credits ran out 10-17) onto Nemotron Lightning on our own box behind the
-    innoai gateway. The retired Mistral descriptor stays on disk as history and
+    credits ran out 10-17) onto a Nemotron model on our own box behind the
+    model gateway. The retired Mistral descriptor stays on disk as history and
     the registrar must NOT load it — a fresh bring-up must not seed a dead paid
     lane.
     """
@@ -1395,7 +1395,7 @@ def test_the_gateway_grader_descriptor_is_the_registrar_source_of_truth():
     from legba.runtime.external_grader_route import GRADER_FAMILY_BY_COMPONENT
 
     repo = Path(__file__).resolve().parents[2]
-    name = "stack_component_llm_grader_innoai_lightning.yaml"
+    name = "stack_component_llm_grader_gateway_third_family.yaml"
     body = yaml.safe_load((repo / "descriptors" / name).read_text())
     model = LLMProvider.model_validate(body)
 
@@ -1404,10 +1404,14 @@ def test_the_gateway_grader_descriptor_is_the_registrar_source_of_truth():
     # the wire shape the gateway speaks.
     assert model.id.endswith(".openai_compat")
     assert model.state.value == "draft", "registering it must activate nothing"
-    assert model.config.model_name.raw == "lightning"
+    # the served alias is deployment data: the descriptor names the variable,
+    # whose value must be the model the calibration table
+    # (_correctness_grade.FAMILIES["F3"]) keys on
+    assert model.config.model_name.raw == "${env:LEGBA_GATEWAY_GRADER_MODEL}"
     # the ONE gateway vault ref every box lane shares.
-    assert model.config.api_key.raw == "llm.innoai.api_key"
-    assert "api.innoai.net" in model.config.api_endpoint.raw
+    assert model.config.api_key.raw == "llm.gateway.api_key"
+    judge = yaml.safe_load((repo / "descriptors" / "stack_component_llm_verify_gateway_judge.yaml").read_text())
+    assert model.config.api_endpoint.raw == judge["config"]["api_endpoint"]["raw"]
     # a $0 lane on our own box: no list price, so the burn gauge reports it
     # ungauged rather than inventing a number.
     assert model.config.price_input_per_m is None
@@ -2112,9 +2116,9 @@ def test_width_heartbeat_block_reports_the_evidence_walk_and_the_stamp():
 
 # ─── Cutover 2026-10-22: the judge, its second family and the grader on the box ─
 
-GATEWAY_JUDGE = "llm.verify.innoai_gemma.openai_compat"
-GATEWAY_JUDGE_RUNG2 = "llm.judge.innoai_lightning_think.openai_compat"
-GATEWAY_GRADER = "llm.grader.innoai_lightning.openai_compat"
+GATEWAY_JUDGE = "llm.verify.gateway_judge.openai_compat"
+GATEWAY_JUDGE_RUNG2 = "llm.judge.gateway_rung2_think.openai_compat"
+GATEWAY_GRADER = "llm.grader.gateway_third_family.openai_compat"
 
 
 def test_the_gateway_grader_passes_the_fence_that_refuses_the_gateway_judge_and_the_core(
@@ -2122,11 +2126,11 @@ def test_the_gateway_grader_passes_the_fence_that_refuses_the_gateway_judge_and_
 ):
     """From the 2026-10-22 cutover every model is behind one gateway, so family
     distinctness is carried by the MAP alone — three ids on one host would all
-    look alike to any substring guess. This pins: the writer (MiMo on the same
-    `llm.primary.openai_compat` id), the judge (Gemma) and the grader (Lightning)
+    look alike to any substring guess. This pins: the writer (the core model on the same
+    `llm.primary.openai_compat` id), the judge (Gemma) and the grader (Nemotron)
     are three DECLARED families; the grader clears the fence; the judge's second
     rung shares the grader's family and is therefore refused as a grader when
-    Lightning leads the judge chain.
+    Nemotron leads the judge chain.
     """
     from legba.runtime import analyst_deps_builder as ab
 
@@ -2135,7 +2139,7 @@ def test_the_gateway_grader_passes_the_fence_that_refuses_the_gateway_judge_and_
     for cid in (GATEWAY_JUDGE, GATEWAY_JUDGE_RUNG2, GATEWAY_GRADER,
                 "llm.primary.openai_compat"):
         assert cid in ab.GRADER_FAMILY_BY_COMPONENT, cid
-    assert ab.grader_family_for_component("llm.primary.openai_compat") == "xiaomi_mimo"
+    assert ab.grader_family_for_component("llm.primary.openai_compat") == "core_writer"
     assert ab.grader_family_for_component(GATEWAY_JUDGE) == "google_gemma"
     assert ab.grader_family_for_component(GATEWAY_JUDGE_RUNG2) == "nvidia"
     assert ab.grader_family_for_component(GATEWAY_GRADER) == "nvidia"
@@ -2147,11 +2151,11 @@ def test_the_gateway_grader_passes_the_fence_that_refuses_the_gateway_judge_and_
             judge_component_id=judge,
         )
 
-    # ACCEPTED — Lightning (think off) is neither the writer's family nor Gemma's.
+    # ACCEPTED — Nemotron (think off) is neither the writer's family nor Gemma's.
     assert refuse(GATEWAY_GRADER) == ""
     # REFUSED — the judge itself, and the writer marking its own homework.
     assert refuse(GATEWAY_JUDGE) == ab.GRADER_REFUSE_JUDGE_FAMILY
     assert refuse("llm.primary.openai_compat") == ab.GRADER_REFUSE_WRITER_FAMILY
-    # If the interlock promotes Lightning to lead the judge chain, the Lightning
+    # If the interlock promotes Nemotron to lead the judge chain, the Nemotron
     # grader is the SAME family as the judge and the fence must say so.
     assert refuse(GATEWAY_GRADER, judge=GATEWAY_JUDGE_RUNG2) == ab.GRADER_REFUSE_JUDGE_FAMILY

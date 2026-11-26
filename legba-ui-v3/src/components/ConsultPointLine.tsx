@@ -14,32 +14,31 @@
  * with (`lib/consultContract.ts`) — so the line names the window actually asked.
  */
 import { useAmbientPin } from '@/lib/consultContext'
-import { humanizeId } from '@/lib/deskNames'
-import { spanPresetFor } from '@/lib/mapTime'
+import { humanizeId, subjectName } from '@/lib/deskNames'
+import { bandWindowWords } from '@/lib/consultContract'
 import { selectionKindLabel } from '@/lib/subjectNoun'
-import { useScope } from '@/state/scope'
+import { clearPoint, useScope } from '@/state/scope'
 import { useWorldState } from '@/v4/world/worldState'
-
-function spanText(ms: number): string {
-  const preset = spanPresetFor(ms)
-  if (preset) return preset.label
-  const h = Math.round(ms / 3_600_000)
-  return h < 48 ? `${h}h` : `${Math.round(h / 24)}d`
-}
 
 export function ConsultPointLine({ pinned, windowWords }: { pinned: number; windowWords?: string }) {
   const ambient = useAmbientPin()
-  const spanMs = useWorldState((s) => s.spanMs)
+  const startMs = useWorldState((s) => s.windowStartMs)
+  const endMs = useWorldState((s) => s.windowEndMs)
   const scope = useScope((s) => s.scope)
   const pin = ambient?.pin ?? null
+  // the point's subject (a scope pin carries it under another kind)
+  const pointId = scope?.kind === 'target' ? scope.id : null
   // A subject is named by what it declares (`humanizeId` reads the roster),
   // never by its machine id; any other record by its label, else its id.
+  // A declared subject always reads as its declared name, as the top bar
+  // names it, whatever label the claim that set it carried.
   const name = pin
-    ? pin.label && pin.label !== pin.id
-      ? pin.label
-      : pin.kind === 'target'
-        ? humanizeId(pin.id)
-        : pin.id
+    ? (subjectName(pin.id) ??
+      (pin.label && pin.label !== pin.id
+        ? pin.label
+        : pin.kind === 'target' || pointId === pin.id
+          ? humanizeId(pin.id)
+          : pin.id))
     : null
   return (
     <div
@@ -61,15 +60,16 @@ export function ConsultPointLine({ pinned, windowWords }: { pinned: number; wind
             everything in view
           </span>
         )}
-        {/* U-8 — the window the turn is SENT with, when Consult chose one;
-            else the time band's span (the line stays true to the request). */}
-        <span className="font-mono" data-testid="consult-point-window"> · window {windowWords ?? spanText(spanMs)}</span>
+        {/* The window the turn is sent with: the time band's, read-only. */}
+        <span className="font-mono" data-testid="consult-point-window" data-window-start={startMs} data-window-end={endMs}>
+          {' '}· window {windowWords ?? bandWindowWords(startMs, endMs)}
+        </span>
         {pinned > 0 && <span className="font-mono"> · {pinned} pinned</span>}
       </span>
       {scope && (
         <button
           type="button"
-          onClick={() => useScope.getState().setScope(null)}
+          onClick={clearPoint}
           className="ml-auto shrink-0 text-ink-3 underline underline-offset-2 hover:text-ink-1"
           data-testid="consult-point-clear"
           title="clear the point: the next question is asked about everything in view"

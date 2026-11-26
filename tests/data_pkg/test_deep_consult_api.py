@@ -155,7 +155,7 @@ def test_submit_returns_202_and_task_id(monkeypatch):
     sent = captured["body"]
     assert sent["inputs"][0]["question"].startswith("What is the state")
     assert sent["options"]["run_id"]
-    # Roll 84: no model chosen ⇒ the core component, threaded EXPLICITLY, so
+    # No model chosen ⇒ the core component, threaded EXPLICITLY, so
     # the default never rides a paid descriptor primary.
     assert sent["inputs"][0]["llm_component_override"] == "llm.primary.openai_compat"
 
@@ -290,7 +290,7 @@ def test_status_completed_with_finding_and_lineage():
 
 
 def test_status_reads_the_stored_finding_shape():
-    """Roll 84: the analyst_outputs.data column holds the whole Finding, so the
+    """The analyst_outputs.data column holds the whole Finding, so the
     synthesize stage's blob is at data.data.deep_consult — the poll must read
     its uncertainty, contract and verdict there (it read data.deep_consult
     only, and every live deep turn was labelled not_judged with no contract)."""

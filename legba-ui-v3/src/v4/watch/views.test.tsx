@@ -10,6 +10,7 @@ import type { ReactElement } from 'react'
 import { useSelection } from '@/state/selection'
 import { applyPanelAction, clearViewUndo, undoView } from '@/lib/panelActions'
 import { useWorldState } from '@/v4/world/worldState'
+import { IDENTITY_QUERY_KEY } from '@/auth/session'
 import AlertLog from './AlertLog'
 import Silences from './Silences'
 import SourceEdits from './SourceEdits'
@@ -116,20 +117,22 @@ describe('the alert log', () => {
     expect(asked()).toEqual(['/v3/system/alerts/log?hours=24'])
     const [first, second] = screen.getAllByTestId('watch-alert-row')
     expect(first).toHaveAttribute('data-group', 'fired')
-    expect(first).toHaveTextContent('Logged only · the page rule has no entry for this kind')
-    expect(second).toHaveTextContent('Paged at high · the page rule pages this kind at high or above · delivered')
+    expect(first).toHaveTextContent('Logged only · no notification is set for this kind')
+    expect(second).toHaveTextContent('Paged at high · this kind sends a notification at high or above · delivered')
     expect(second).toHaveTextContent('raised 2 times')
     expect(screen.getByTestId('watch-alert-open')).toHaveTextContent('3')
     // the system's own kinds are one chip away, never mixed in by default
-    fireEvent.click(screen.getByTestId('watch-filter-group-all'))
+    fireEvent.change(screen.getByTestId('watch-filter-kind'), { target: { value: 'all' } })
     expect(screen.getAllByTestId('watch-alert-row')).toHaveLength(3)
+    fireEvent.click(screen.getByTestId('watch-filters-toggle'))
     fireEvent.click(screen.getByTestId('watch-filter-paged-paged'))
     expect(screen.getAllByTestId('watch-alert-row')).toHaveLength(2)
+    expect(screen.getByTestId('watch-filters-toggle')).toHaveTextContent('Filters · 1')
     // a filter is never another request
     expect(asked()).toHaveLength(1)
   })
 
-  it('says what a filter selected beyond the rows drawn (roll 84: 40 → 40 with 63 paged)', async () => {
+  it('says what a filter selected beyond the rows drawn (40 → 40 with 63 paged)', async () => {
     const base = LOG.open[0]
     const many = Array.from({ length: 70 }, (_, i) => ({
       ...base,
@@ -145,6 +148,7 @@ describe('the alert log', () => {
     const log = screen.getByTestId('watch-alert-log')
     expect(log).toHaveAttribute('data-shown', '70')
     expect(log).toHaveAttribute('data-shown-paged', '50')
+    fireEvent.click(screen.getByTestId('watch-filters-toggle'))
     fireEvent.click(screen.getByTestId('watch-filter-paged-paged'))
     // the drawn rows stay at the page size; the selection is what narrowed
     expect(screen.getAllByTestId('watch-alert-row')).toHaveLength(40)
@@ -152,6 +156,49 @@ describe('the alert log', () => {
     expect(log).toHaveAttribute('data-shown-paged', '50')
     expect(screen.getAllByTestId('watch-alert-row').every((r) => r.getAttribute('data-paged') === '1')).toBe(true)
     expect(asked()).toHaveLength(1)
+  })
+
+  it('a reader sees no page-rule line or statistics; an admin sees them', async () => {
+    const stats = { ...LOG, open: LOG.open.map((o) => ({ ...o, summary: 'level 4.2 against μ 1.1, σ 0.3' })) }
+    const identity = (role: string) => ({
+      state: 'signed_in',
+      identity: { kind: 'user', actor: 'user:x', role, session_rejected: false, signin: true, user: { id: 'x', actor: 'user:x', email: null, display_name: 'X', role, status: 'active', auth_provider: 'password', last_sign_in_at: null } },
+    })
+    const mount = (role: string) => {
+      const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      qc.setQueryData(IDENTITY_QUERY_KEY, identity(role))
+      return render(<QueryClientProvider client={qc}><AlertLog /></QueryClientProvider>)
+    }
+    stub({ '/v3/watch/alerts': stats })
+    mount('reader')
+    await waitFor(() => expect(screen.getAllByTestId('watch-alert-row')).toHaveLength(2))
+    expect(screen.getByTestId('watch-alert-log').textContent).not.toMatch(/notification settings|μ|σ|2026-11-14\/1/)
+    fireEvent.click(screen.getAllByTestId('watch-alert-row')[1])
+    expect(screen.queryByTestId('watch-alert-detail')).toBeNull()
+    cleanup()
+    stub({ '/v3/system/alerts/log': stats })
+    mount('admin')
+    await waitFor(() => expect(screen.getAllByTestId('watch-alert-row')).toHaveLength(2))
+    expect(screen.getByTestId('watch-alert-log').textContent).toMatch(/notification settings 2026-11-14\/1/)
+    expect(screen.getAllByTestId('watch-alert-row')[0].textContent).toMatch(/notification/)
+    fireEvent.click(screen.getAllByTestId('watch-alert-row')[0])
+    expect(screen.getByTestId('watch-alert-detail').textContent).toMatch(/μ 1\.1/)
+  })
+
+  it('shows one kind selector and one severity floor; the show-more link is the last item of the list', async () => {
+    const base = LOG.open[0]
+    const many = Array.from({ length: 60 }, (_, i) => ({ ...base, id: `m${i}`, subject_id: `source.example.feed_${i}` }))
+    stub({ '/v3/system/alerts/log': { ...LOG, open: many, paged: [] } })
+    render(wrap(<AlertLog />))
+    await waitFor(() => expect(screen.getAllByTestId('watch-alert-row')).toHaveLength(40))
+    expect(screen.getByTestId('watch-filter-kind')).toBeInTheDocument()
+    expect(screen.getByTestId('watch-filter-severity')).toBeInTheDocument()
+    expect(screen.queryByTestId('watch-filter-paged-paged')).toBeNull()
+    expect(screen.getByTestId('watch-filters-toggle')).toHaveTextContent(/^Filters$/)
+    const list = screen.getByTestId('watch-alert-list')
+    const more = screen.getByTestId('watch-alert-more')
+    expect(list.contains(more)).toBe(true)
+    expect(list.lastElementChild).toBe(more.closest('li'))
   })
 
   it('prints "–" until the log answered, and says when it could not be read', async () => {
@@ -218,7 +265,7 @@ describe('changed after read', () => {
     render(wrap(<SourceEdits />))
     await waitFor(() => expect(screen.getByTestId('watch-edits-empty')).toBeInTheDocument())
     expect(screen.getByTestId('watch-edits-empty')).toHaveTextContent(/after the first re-fetch of a cited page/)
-    // roll 84: no hard-coded date — the server exposes no re-check schedule
+    // no hard-coded date — the server exposes no re-check schedule
     expect(screen.getByTestId('watch-edits-empty').textContent).not.toMatch(/November|\b20\b/)
     expect(screen.getByTestId('watch-edits-empty')).toHaveTextContent(/never “nothing changed”/)
     expect(screen.getByTestId('watch-edits-open')).toHaveTextContent('0')

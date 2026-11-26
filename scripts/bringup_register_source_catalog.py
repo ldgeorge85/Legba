@@ -187,7 +187,7 @@ class CatalogEntry:
     # and stamped on every signal it writes. Empty (the default) leaves the
     # built descriptor — and its content hash — exactly as before.
     classifications: tuple[str, ...] = ()
-    # Lane N-U — ``cadence.expect_quiet``: a feed quiet by nature, exempt from
+    # ``cadence.expect_quiet``: a feed quiet by nature, exempt from
     # the watchdog's empty-poll streak page. False leaves the body unchanged.
     expect_quiet: bool = False
 
@@ -549,7 +549,7 @@ async def verify_catalog() -> int:
         results = await asyncio.gather(*(bounded(e) for e in CATALOG))
 
     failures = 0
-    print(f"S-1 catalog verify — {len(results)} feeds:")
+    print(f"catalog verify — {len(results)} feeds:")
     for r in results:
         mark = {"ok": "+", "ok-redirect": "~"}.get(r.verdict, "!")
         line = f"  {mark} {r.verdict:>12}  {r.entry_id}"
@@ -574,7 +574,7 @@ async def _amain(verify_only: bool) -> int:
     pg, reg = await open_registry()
     try:
         results = await register_catalog(pg, reg)
-        failures = print_results(f"S-1 source catalog ({len(results)} sources):", results)
+        failures = print_results(f"source catalog ({len(results)} sources):", results)
         inserted, skipped = await seed_credibility(pg)
         print(f"source_credibility seeds: +{inserted} inserted, ={skipped} already present")
     finally:

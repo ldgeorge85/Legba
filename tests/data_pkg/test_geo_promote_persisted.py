@@ -1,9 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Roll 74: secondary country codes reach the PERSISTED ``signals.geo``.
+"""Secondary country codes reach the PERSISTED ``signals.geo``.
 
-Lane N-O changed the host promote step; roll 73 (lane N-L) moved the signal
-write into ``runtime/sinks/signal.py``. This drives the real chain the source
+The signal write lives in ``runtime/sinks/signal.py``. This drives the real chain the source
 actor runs — the geocode handler under an official source's context, the host
 promote step (:func:`promote_payload_columns`, the function ``dapr_host``'s
 enrichment stage calls), then the document sink's ``write_canonical_signal`` —

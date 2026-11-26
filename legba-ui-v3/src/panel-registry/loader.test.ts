@@ -50,7 +50,7 @@ describe('resolvePanel', () => {
     }
   })
 
-  it('UI-B3 — a RETIRED per-subject panel_id resolves onto the subject page, on its tab', () => {
+  it('A RETIRED per-subject panel_id resolves onto the subject page, on its tab', () => {
     const result = resolvePanel(makeReg({ panel_id: 'target_overview' }))
     expect(result.ok).toBe(true)
     if (result.ok) {

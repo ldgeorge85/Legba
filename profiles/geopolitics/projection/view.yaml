@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# THE READ-TIME VIEW of the geopolitics profile (VIEW-1, Review A §2.2d).
+# THE READ-TIME VIEW of the geopolitics profile.
 #
 # One declared shape per profile. The projector
 # (src/legba/data/analysts/deterministic_handlers/profile_projector.py) builds
@@ -18,14 +18,14 @@
 # images carry src/ only); the rest are read off the substrate at build time.
 #
 # What reads it today: the absence route's scope resolution (behind
-# LEGBA_PROFILE_PROJECTION), and the workstation (UI-B2): the Reads rail and
+# LEGBA_PROFILE_PROJECTION), and the workstation: the Reads rail and
 # the phone navigator take `tiers`, the Morning Read takes `bands`, the rail's
 # Subjects take `subject_groups` — each falling back to the packaged profile
 # (or the platform's default) and naming the refusal when the plane refuses.
 
 schema: legba/projection_view/1
 
-# subject_groups — the `frame` family's subtrees under these kinds (FRAME-1):
+# subject_groups — the `frame` family's subtrees under these kinds:
 # each frame with its label, parent, member rule and its resolved member target
 # heads. Read off vocabulary_entries + target_descriptors at build time.
 subject_groups:

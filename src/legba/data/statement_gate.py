@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The statement layer's CODE gates — the rules that keep memory honest,
-as pure functions (plan P1 §3; lane S2).
+as pure functions.
 
 Each gate is a rule code enforces and the failure it stops:
 
@@ -89,11 +89,11 @@ from .statement_shapes import (
 #: A quote shorter than this many words checks nothing ("the" occurs in every
 #: article). Tunable; a refusal leaves the statement a candidate, never lost.
 MIN_QUOTE_WORDS = 3
-#: Plan §2.6 — "At most five premises per statement."
+#: At most five premises per statement.
 MAX_PREMISES = 5
 
 #: Roles whose quote G1 checks. ``contradicts`` is included: a fabricated
-#: contradiction would contest a good statement (plan §2.6).
+#: contradiction would contest a good statement.
 QUOTED_ROLES = frozenset({SupportRole.EVIDENCE.value, SupportRole.CONTRADICTS.value})
 #: Support kinds that are rows a run is handed (G3).
 SLICE_KINDS = frozenset({SupportKind.SIGNAL.value, SupportKind.OBSERVATION.value})
@@ -441,7 +441,7 @@ def check_claim_source(
 
 
 def check_slots(statement: StatementLike) -> CheckResult:
-    """G2 slots (plan §2.1 "slots kind-checked in code"): only the four closed
+    """G2 slots (kind-checked in code): only the four closed
     slot names; a ``level`` carries a ``value``."""
     slots = dict(statement.slots or {})
     unknown = sorted(set(slots) - SLOT_NAMES)

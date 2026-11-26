@@ -292,7 +292,7 @@ describe('Replay', () => {
     expect(useCasePlayer.getState().player!.steps.map((s) => s.state)).toEqual(['executed', 'stopped', 'stopped'])
   })
 
-  it('W10-F10 — a stopped record holding the two steps that ran replays exactly those two', () => {
+  it('A stopped record holding the two steps that ran replays exactly those two', () => {
     casePlayer().replay(
       parseCaseRecord(recordOf([SCOPE, FOCUS], { status: 'stopped', stopped_after_seq: 2 }))!,
       'p1',

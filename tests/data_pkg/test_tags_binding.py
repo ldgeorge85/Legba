@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W7 TAG-1 — namespaced tag binding `<family>:<value>`.
+"""Namespaced tag binding `<family>:<value>`.
 
 * `bind_tag`: bound / unclassified (raw kept) / legacy `src:`; never raises;
   one log line per new unknown, capped.
@@ -678,7 +678,7 @@ async def test_apply_writes_in_batches_and_resumes_from_its_cursor(pg, profile, 
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_w10_f2_apply_unions_with_a_tax2_stamped_rows_declared_entries(pg, profile, tmp_path):
-    """W10-F2 — the reclassify apply no longer SETS the key from tags alone: a
+    """The reclassify apply no longer SETS the key from tags alone: a
     TAX-2-stamped row keeps its source's ``src:`` scope entries (no raw tag
     yields them), its tag-derived entries are re-bound, and a bare-tag row gets
     its ``legacy_src`` entries. A second apply over its own output is a no-op."""

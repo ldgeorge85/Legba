@@ -412,7 +412,7 @@ describe('CHANGED', () => {
   })
 })
 
-describe('CHANGED — W11-F73 guard', () => {
+describe('CHANGED guard', () => {
   it('renders `—` for a since-finding without effective_confidence, and never throws', () => {
     const row = {
       id: 'f-no-ec',
@@ -437,7 +437,7 @@ describe('CHANGED — W11-F73 guard', () => {
   })
 })
 
-describe('CHECKED — the registry\'s unverified state (X4 READPATH)', () => {
+describe('CHECKED — the registry\'s unverified state', () => {
   const PENDING = { score_state: 'pending', since: '2026-09-24T08:59:00+00:00', judge_window_s: 900, reason: 'awaiting_verify' }
   const ABSENT = { ...PENDING, score_state: 'absent', reason: 'no_verdict' }
   const EXEMPT = { ...ABSENT, reason: 'verify_exempt' }
@@ -516,7 +516,7 @@ describe('CHECKED', () => {
     expect(first.findingId).toBe('f-bad')
     expect(first.findingTitle).toBe('Security read for Brazil')
     expect(first.analystId).toBe('security_desk')
-    expect(second.reasonLabel).toBe('contradicted by the verify judge')
+    expect(second.reasonLabel).toBe('contradicted by its sources, by the check')
     expect(second.markers).toEqual([3, 4])
   })
 

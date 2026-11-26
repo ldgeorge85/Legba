@@ -18,6 +18,7 @@
  * dialect via `VerdictBadge`), and every run offers a client-side Download
  * (.md / print→PDF).
  */
+import { PROFILE_UI } from '@/lib/profileUi'
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { formatDistanceToNow } from 'date-fns'
@@ -263,8 +264,7 @@ function EmptyState() {
         <Globe className="h-7 w-7 text-ink-3" aria-hidden />
         <div className="text-sm font-medium text-ink-2">No world assessment yet</div>
         <div className="max-w-md text-xs leading-relaxed text-ink-3">
-          The <span className="font-mono text-ink-2">world_assessor</span> synthesizes one on its
-          daily cadence.
+          One is written each day, drawn from the {PROFILE_UI.subject.plural.toLowerCase()}&rsquo; reads.
         </div>
       </div>
     </div>
@@ -337,10 +337,9 @@ export default function WorldAssessment() {
           )}
         </div>
         <div className="mt-1 text-xs leading-relaxed text-ink-3" data-testid="world-assessment-framing">
-          The composed, verified world view from{' '}
-          <span className="font-mono text-ink-2">world_assessor</span>, synthesized over the
-          per-country compositions. One producer, and always the world &mdash; per-desk detail
-          lives in the Inspector.
+          The checked view of the whole picture, drawn from each{' '}
+          {PROFILE_UI.subject.singular.toLowerCase()}&rsquo;s read. Detail for one{' '}
+          {PROFILE_UI.subject.singular.toLowerCase()} is on its page.
         </div>
         <div className="mt-1 flex items-start justify-between gap-3">
           <h1 className="text-xl font-semibold text-ink-1">{active.title}</h1>

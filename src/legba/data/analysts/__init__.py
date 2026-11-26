@@ -3,8 +3,7 @@
 # kind modules auto-discovered by host
 """legba.data.analysts — first-party analyst-kind handler implementations.
 
-L-170 .. L-178. Each module here registers one analyst kind against the L-102
-analyst-kind contract (see ``plans/design/legba_kind_contracts.md`` §5).
+Each module here registers one analyst kind against the analyst-kind contract.
 
 Kind modules expose three things at minimum:
 
@@ -12,7 +11,7 @@ Kind modules expose three things at minimum:
   * ``run_method(inputs, options, deps) -> AnalystMethodResult`` — the async
     entry point the runtime calls per analyst-actor run.
   * Optional ``build_prompt_module()`` — returns the kind's DSPy module
-    instance (per L-105 §2). Modules that don't use DSPy (e.g. ``deterministic``)
+    instance. Modules that don't use DSPy (e.g. ``deterministic``)
     omit this.
 
 Module-level constants the host uses for dispatch:
@@ -96,19 +95,19 @@ _KIND_MODULE_NAMES: tuple[str, ...] = (
     "critic",
     "optimizer",
     # The 11th OutputKind's producer — Legba's first-person reflective voice
-    # (plan §4.8 leg 1). OUTPUT_KIND = OutputKind.JOURNAL, off-chain.
+    # OUTPUT_KIND = OutputKind.JOURNAL, off-chain.
     "journal_assessor",
-    # Program 5 — the STATEFUL journal voice: a standing investigation with a
+    # The STATEFUL journal voice: a standing investigation with a
     # descriptor-borne brief and a ledger carried across cycles.
     # OUTPUT_KIND = OutputKind.JOURNAL, off-chain, entry_kind='inquiry'.
     "inquiry",
-    # E4 — the entity de-fragmentation analyst (global META, LLM-adjudicated
+    # The entity de-fragmentation analyst (global META, LLM-adjudicated
     # merges). OUTPUT_KIND = TRACE_ONLY; real product = entity_profiles merges.
     "entity_researcher",
-    # S-1 — the per-signal salience scorer (global META sweep, $0-plane LLM).
+    # The per-signal salience scorer (global META sweep, $0-plane LLM).
     # OUTPUT_KIND = TRACE_ONLY; real product = signals.salience writes.
     "signal_salience",
-    # Continuity P2 — the situation TRAJECTORY ledger's one writer.
+    # The situation TRAJECTORY ledger's one writer.
     # OUTPUT_KIND = OutputKind.SITUATION_UPDATE (a first-class GRADED claim, not
     # a receipt); side product = the append-only `situation_events` rows.
     "situation_tracker",
@@ -126,18 +125,18 @@ _KIND_MODULE_NAMES: tuple[str, ...] = (
 from ..schemas.analyst import register_analyst_kind as _register_analyst_kind
 
 _register_analyst_kind("journal_assessor")
-# Program 5 `inquiry` is likewise an EXTENSION kind (not in the closed
+# `inquiry` is likewise an EXTENSION kind (not in the closed
 # AnalystKind enum). Registry-side it needs the matching `vocabulary_entries`
 # row before an inquiry descriptor can be REGISTERED — the registry REPLACES its
 # extension set from that table on every refresh, so in-code registration alone
 # would not survive there (the situation_tracker/migration-0184 precedent).
 _register_analyst_kind("inquiry")
-# E4 entity_researcher is likewise an EXTENSION kind (not in the closed
+# entity_researcher is likewise an EXTENSION kind (not in the closed
 # AnalystKind enum) — register its identity.kind so model_validate accepts it.
 _register_analyst_kind("entity_researcher")
-# S-1 signal_salience is an EXTENSION kind (not in the closed AnalystKind enum).
+# signal_salience is an EXTENSION kind (not in the closed AnalystKind enum).
 _register_analyst_kind("signal_salience")
-# Continuity P2 situation_tracker is an EXTENSION kind. Registry-side, migration
+# situation_tracker is an EXTENSION kind. Registry-side, migration
 # 0184 seeds the matching `vocabulary_entries` row (the registry REPLACES its
 # extension set from that table on every refresh, so in-code registration alone
 # would not survive there).

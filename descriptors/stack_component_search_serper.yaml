@@ -12,7 +12,7 @@
 # WHY THAT NARROW. SearXNG is a metasearch whose upstream engines CAPTCHA and
 # ban it; a zero-result response from it is indistinguishable from "nothing
 # exists" without a liveness probe, and 16-41% of every read was ungradable
-# behind that ambiguity (F-11). serper is a single first-party proxy onto one
+# behind that ambiguity. serper is a single first-party proxy onto one
 # index with no partial-service channel, so a well-formed empty body from it
 # IS a clean empty — which is the one property the absence path needs and the
 # only thing being bought here.
@@ -23,7 +23,7 @@
 # `json` component — see that module's docstring.
 #
 # ⚠ THIS FILE IS THE REVIEWABLE HOME OF THE COMPONENT BODY. It is NOT
-# registered by this lane. The orchestrator registers it.
+# registered here.
 #
 # KEYED — the same activation posture as stack_component_search_brave.yaml:
 #   * config.api_key is a VAULT REF (a vault id, NEVER the plaintext). The key
@@ -61,11 +61,11 @@
 # `allowed_endpoint_hosts` pins the endpoint host, so a mis-pointed or tampered
 # `endpoint` cannot ship the paid API key to some other public host.
 #
-# OPERATOR STEPS (the orchestrator owns all of them; this lane performed none):
+# OPERATOR STEPS:
 #   1. The key is already stored under vault id `search.serper.api_key`.
 #   2. Register the component:
 #        python3 scripts/bringup_register_stack.py   (once this file is added
-#        to its DESCRIPTOR list — the orchestrator's call, not this lane's)
+#        to its DESCRIPTOR list)
 #      or POST {registry}/api/v1/registry/stack with this body.
 #   3. Declare the spend ceiling on the pack — PUT the web_access pack with
 #        governor: {budget_account: web_access, max_cost_usd_per_day: 1.00, ...}
@@ -94,7 +94,7 @@ schema_uri: legba/stack/search_provider/1.0.0
 # Placeholder — the registry stamps the content hash at register time.
 version: "0000000000000000"
 state: active
-owner: lewis@local
+owner: owner@local
 
 config:
   subprovider:

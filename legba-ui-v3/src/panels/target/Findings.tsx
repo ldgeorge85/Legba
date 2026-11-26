@@ -27,6 +27,7 @@ import { selectRow } from '@/state/selection'
 import CitedProse from '@/components/CitedProse'
 import { extractCitations } from '@/lib/citationsModel'
 import { humanizeAnalystId } from '@/lib/analystNames'
+import { utcStamp } from '@/lib/readerVocabulary'
 import { GapStrip } from '@/panels/target/GapStrip'
 
 interface FindingRow {
@@ -230,7 +231,7 @@ function FindingItem({
           )}
 
           <div className="text-label text-slate-500" title={f.analyst_id ?? undefined}>
-            {humanizeAnalystId(f.analyst_id)} · {new Date(f.produced_at).toLocaleString()}
+            {humanizeAnalystId(f.analyst_id)} · {utcStamp(f.produced_at)}
           </div>
 
           <div>

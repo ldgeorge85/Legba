@@ -1,10 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""V3/P4b — the graph projector: whole-rebuild of the cross-layer arc store.
+"""The graph projector: whole-rebuild of the cross-layer arc store.
 
-The judge's verdict (``planning/graph_debate/JUDGE_SYNTHESIS.md``) killed every
-incremental mirror: each dead mirror in this codebase was an incremental
-mirror whose delete path was never written. This handler therefore has NO
+Incremental mirrors are ruled out: each dead mirror in this codebase was an
+incremental mirror whose delete path was never written. This handler therefore has NO
 incremental path — it builds the whole ``graph_arcs`` table from source each
 run into ``graph_arcs_new`` (one ``INSERT ... SELECT`` per source table), then
 swaps the two tables inside a single transaction:

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Roll 84 (E-2's open question): a LIVE observation id that Consult cites
+"""A LIVE observation id that Consult cites
 from ``live_series`` resolves in the cited-refs census as an observation of
 class ``live`` — not ``fabricated``. The census reads ``observations`` by id
 whatever its origin_class, so the bare ``observation_id`` the tool returns

@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Source drift ASSESSMENT — what kind of change a classified page change is
-(lane D-2). Written ONCE per classified change and reused by every unit that
-cites the page. This fills ``CLAIM_JUDGE_SEAM`` (SEAMS row 79).
+"""Source drift ASSESSMENT — what kind of change a classified page change is.
+Written ONCE per classified change and reused by every unit that cites the
+page. This fills ``CLAIM_JUDGE_SEAM`` (SEAMS row 79).
 
-D-1 (:mod:`legba.data.evidence_drift_classify`) says HOW MUCH a page changed
+:mod:`legba.data.evidence_drift_classify` says HOW MUCH a page changed
 (the class). This module says WHAT KIND of change it was, for the four
 flag-writing classes (substantive_edit, title_changed, retracted_or_replaced,
 gone), in code first:
@@ -103,7 +103,7 @@ ASSESS_RULES_VERSION = "drift-assess/2"
 #: Bumped when the auto-close rule changes.
 AUTO_CLOSE_RULE_VERSION = "drift-autoclose/1"
 
-#: The granular types (owner's choice), without the two wrappers.
+#: The granular types without the two wrappers.
 COMPONENT_TYPES: tuple[str, ...] = (
     "spelling_or_name_correction",
     "update_new_facts",

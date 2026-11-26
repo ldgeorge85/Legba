@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""C-3 — the record a prior consult turn compacts to.
+"""The record a prior consult turn compacts to.
 
 The skeleton lane: ``consult_turn_record`` is a pure leaf — a persisted turn
 pair in, a typed :class:`TurnRecord` out, and a deterministic render of the

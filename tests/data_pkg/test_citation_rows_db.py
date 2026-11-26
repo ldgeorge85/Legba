@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane DM-A — citations as rows on the real path (migrated Postgres, the
+"""Citations as rows on the real path (migrated Postgres, the
 isolated test stack only).
 
 * ``write_finding`` writes the finding and its rows in ONE transaction: the
@@ -184,7 +184,7 @@ async def test_a_finding_and_its_rows_land_together(world):
         " SELECT 1 FROM run_handed h WHERE h.run_id = s.run_id AND h.target_kind = s.target_kind"
         " AND coalesce(s.signal_id, s.output_id) = ANY(h.ids))", row.id)
     assert [r["marker"] for r in never_shown] == ["[4]"]  # the missing member; the prior read was handed
-    # Who wrote the rows (lane DM-B): the finding's seat, one principal on every row of the write.
+    # Who wrote the rows: the finding's seat, one principal on every row of the write.
     seat = await c.fetchval("SELECT id FROM principals WHERE handle = $1", f"agent:{ANALYST}@v1")
     assert seat is not None and rec["written_by"] == seat
     for t in _TABLES:
@@ -245,7 +245,7 @@ async def test_a_failure_in_the_rows_never_costs_the_finding(world, monkeypatch)
 
 
 async def test_the_rows_report_counts_a_citation_once_however_many_sentences_use_it(world):
-    # Roll 89 live: 11 findings, 360 support rows, 185 links in the json source.
+    # Live: 11 findings, 360 support rows, 185 links in the json source.
     # A citation used by two sentences is two support rows and ONE link.
     c = world["conn"]
     p = _payload(world)
@@ -280,8 +280,8 @@ async def test_insert_only_and_the_backfill_by_batch(world):
         OLD_AT, uuid4())
     world["findings"].append(str(old))
     # A window no other test writes into: the dry run and the batches count
-    # EVERY row-less finding in it, and the shuffled suite (seed 734222642,
-    # roll 89) ran tests whose findings sat at NOW - 2 h before this one.
+    # EVERY row-less finding in it, and a shuffled suite can run tests whose
+    # findings sat at NOW - 2 h before this one.
     since, until = OLD_AT - timedelta(minutes=1), OLD_AT + timedelta(minutes=1)
     dry = await BF.dry_run(c, since=since, until=until)
     assert dry["tables_present"] and dry["pending_findings"] == 1 and dry["sampled"] == 1
@@ -320,9 +320,9 @@ async def test_insert_only_and_the_backfill_by_batch(world):
 
 
 async def test_written_by_references_principals_and_its_migration_runs_first(migrated_pg: PostgresConfig):
-    # Lane DM-B's convention on DM-A's tables: written_by uuid REFERENCES
+    # Convention on these tables: written_by uuid REFERENCES
     # principals(id), the principals migration (…T1827) applied before this
-    # lane's (…T1828) on a fresh database.
+    # migration (…T1828) on a fresh database.
     c = await asyncpg.connect(migrated_pg.dsn)
     try:
         ledger = {r["name"]: r["applied_at"] for r in await c.fetch(

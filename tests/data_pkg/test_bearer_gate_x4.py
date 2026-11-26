@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """X4 GATE — the bearer stamp moves BEFORE the route-role gate; unstamped is
-refused; two owner checks; the sign-in lockout in Redis (W11-F75, W11-F76).
+refused; two owner checks; the sign-in lockout in Redis.
 
 The lane's DONE test:
 

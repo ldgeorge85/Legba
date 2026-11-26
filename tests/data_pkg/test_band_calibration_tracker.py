@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""P2-3 — the ``band_calibration_tracker`` scorecard calibration harness.
+"""The ``band_calibration_tracker`` scorecard calibration harness.
 
 Pure tests (no DB): registry wiring + verify-exempt drift, the horizon-outcome
 truth table, honest-None rates on empty denominators, and the summary
@@ -259,7 +259,7 @@ async def clean_slate(pg_pool):
     bringup — counted in the receipt, never in this file's row-set asserts.
 
     CLEANS AT BOTH ENDS, unlike every other ``clean_slate`` in this directory
-    (2026-08-30 release-gate train). The usual setup-only idiom is safe because
+    (2026-08-30 release-gate change). The usual setup-only idiom is safe because
     a leftover row is only ever a hazard to a test whose OWN setup can clean
     it. This file's leftovers are different in kind: ``_scorecard_stream_head``
     stamps every card it writes at ``greatest(now(), max(produced_at)) + 1-2
@@ -433,7 +433,7 @@ async def _insert_claim(
     transition_at: datetime,
     outcome_14: str | None = None,
     resolved_by_14: str | None = None,
-    # P3 §5a — the aggregate covers ONE judge pipeline, so a hand-built claim
+    # The aggregate covers ONE judge pipeline, so a hand-built claim
     # defaults to the CURRENT stamp (what the tracker itself would write).
     # Pass an explicit value (or None) to build a cross-population fixture.
     judge_pipeline_version: str | None = bct.JUDGE_PIPELINE_VERSION,
@@ -563,7 +563,7 @@ async def test_non_directional_transitions_are_skipped(pg_pool, clean_slate):
 
 # ---------------------------------------------------------------------------
 # H3-GUARD — semantics-mismatch classification, through the REAL scan path
-# (`_scan_and_log_claims` via `handle()`). The H3 banding train legitimately
+# (`_scan_and_log_claims` via `handle()`). The H3 banding change legitimately
 # moves bands fleet-wide on its first post-deploy sweep, and every one of
 # those moves straddles a banding_semantics/damping_semantics stamp change —
 # this must log as `direction='semantics-migration'` /
@@ -887,7 +887,7 @@ async def test_zero_state_finding_on_empty_substrate(pg_pool, clean_slate):
 
 
 # ---------------------------------------------------------------------------
-# P3 §5a — the judge-pipeline SPLIT KEY finally has a reader here.
+# The judge-pipeline SPLIT KEY finally has a reader here.
 #
 # Bands rest on faithfulness-gated findings, and a claim logged at a transition
 # resolves 14/28 days later — so a claim can be logged under one judge and
@@ -984,7 +984,7 @@ async def test_aggregate_excludes_other_pipelines_and_says_so(pg_pool, clean_sla
     assert "excluded_pre_stamp=1" in r.finding.body
     assert "excluded_other_pipeline=1" in r.finding.body
 
-    # M-2 — the excluded claims come back as ANNOTATED PRIOR POPULATIONS, each
+    # The excluded claims come back as ANNOTATED PRIOR POPULATIONS, each
     # with its own n and its own rates. Refusing to pool must not mean refusing
     # to show: mig 0122 correctly never backfilled the stamp, so on the day the
     # filter went live every existing claim was NULL-stamped and a
@@ -1082,7 +1082,7 @@ async def test_pooled_stamps_enter_the_headline_and_are_disclosed(
 
     The live head pools with nothing (that is the real-lineage finding), so the
     pool is stubbed here to exercise the widened path the moment a
-    score-neutral train ships.
+    score-neutral change ships.
     """
     neighbour = "2026-08-28/9"
     monkeypatch.setattr(
@@ -1152,10 +1152,10 @@ async def test_real_head_pool_is_disclosed_exactly(pg_pool, clean_slate):
     when it is none.
 
     This pin tracks the LIVE lineage head and is expected to move whenever a
-    train changes what the head can pool with; updating it is how that becomes
+    change changes what the head can pool with; updating it is how that becomes
     visible rather than silent.
 
-      * ``2026-08-30/1`` (the [N+1] transparency train) was the lineage's first
+      * ``2026-08-30/1`` (the [N+1] transparency change) was the lineage's first
         all-none entry, so the head pooled ONE step with LRF and the readout
         named both stamps.
       * ``2026-09-03/1`` (D-3, the assembly arms) declares ``moves`` on all three
@@ -1168,7 +1168,7 @@ async def test_real_head_pool_is_disclosed_exactly(pg_pool, clean_slate):
     So the readout had to say "NO widening" about the real head, and say it in
     terms rather than by omission.
 
-    2026-09-25/1 (H3-MEASURE, wave F) declared ``SHIFT_NONE`` on all three
+    2026-09-25/1 declared ``SHIFT_NONE`` on all three
     families — a pure readout addition — so it POOLED with 2026-09-24/1 (H3)
     and the real head was a declared pair, briefly.
 

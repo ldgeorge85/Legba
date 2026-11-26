@@ -3,8 +3,7 @@
 --
 -- 0242_forecast_ledger.sql
 --
--- THE EXOGENOUS FORECAST LEDGER (ST0-A; plan 10 §2.5 / §3.1, decisions D-10,
--- D-11, D-15). 0241 stays reserved for the C-3 consult turn record.
+-- THE EXOGENOUS FORECAST LEDGER. 0241 stays reserved for the consult turn record.
 --
 -- WHY
 -- ---
@@ -14,12 +13,12 @@
 -- ledger holds EXOGENOUS questions — a named authority, document, series or
 -- reported event decides them — and every issuer's number on each one: the
 -- operator, the scheduled tower, the consult, the frontier comparison arm, the
--- Clef arm and, later, the think tank's seats and actor models.
+-- decision-model arm and, later, the think tank's seats and actor models.
 --
 -- WHAT THIS ADDS
 -- --------------
 --   * `forecast_questions` — one row per question: the question text, its
---     resolver kind (the six-kind vocabulary of §3.2, plus the two endogenous
+--     resolver kind (a six-kind vocabulary, plus the two endogenous
 --     kinds stored with exogenous=false), the resolver spec, the window, the
 --     due date and grace, the pre-registered void rules, the subject keys,
 --     `sealed_at`, and `status` (open | resolved | void — the ONE mutable
@@ -30,17 +29,17 @@
 --     never imputed); the as-of of the evidence, the rationale (short text
 --     and/or a reference) and `sealed_at`.
 --   * `forecast_resolution_proposals` — what a resolver job proposes for the
---     operator to accept (ST1-A writes it; `status` is mutable).
+--     operator to accept (`status` is mutable).
 --   * `forecast_resolutions` — the outcome (yes | no | void), who resolved it,
 --     the evidence refs, `early` (resolved before due, evidence required);
 --     ONE active row per question, a correction is a new row plus an
 --     `override_log` row and the old row's `active` flips false.
 --   * `forecast_scores` — the view: every number with a p against the active
 --     yes/no resolution, (p - o)^2.
---   * `scorecard_entries` — the operator scorecard's rows (ST1-D fills it).
---   * `override_log` — every override, with who and a reason (D-15).
+--   * `scorecard_entries` — the operator scorecard's rows.
+--   * `override_log` — every override, with who and a reason.
 --
--- THE SEAL (D-15). A question and each number carry `content_sha256` from
+-- THE SEAL. A question and each number carry `content_sha256` from
 -- insert (the store hashes canonical JSON; a number's hash binds the
 -- question's hash, so it cannot be moved onto other words). `receipt_anchor`
 -- folds every ledger hash into the day's Merkle root, so "issued before the

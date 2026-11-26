@@ -5,9 +5,8 @@
  * Boards") with nothing to say what any of them reads. Each kind now carries a
  * one-line `description` on its registry definition (`PanelKindDefinition.
  * description`, applied in `registry.ts`), and the catalog prints it under the
- * name. Platform words only: no instance's subjects, sources or numbers
- * (planning/PLATFORM_VS_EXEMPLAR_2026-09-29 §1) — a profile renames the tile,
- * never what it is for.
+ * name. Platform words only: no instance's subjects, sources or numbers;
+ * a profile renames the tile, never what it is for.
  *
  * `registry.test.ts`-style guard: `descriptions.test.ts` holds that every
  * catalog kind has one and that no description names a retired kind.

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""X4 / ESC (W11-F52) - the escalation and military_posture units cite what they claim.
+"""X4 / ESC - the escalation and military_posture units cite what they claim.
 
 THE DEFECT (7 d to 2026-10-13, read-only on the live substrate): 50.8 % of
 escalation's and 57.1 % of military_posture's fact-asserting sentences carried no
@@ -145,7 +145,7 @@ def test_the_two_prompts_carry_the_rule_verbatim_and_once(unit: str) -> None:
 def test_each_prompt_carries_it_once_as_its_own_paragraph_ahead_of_the_schema(
     unit: str,
 ) -> None:
-    """W11-F86 - the same paragraph at the same place on all nine: once, whole
+    """the same paragraph at the same place on all nine: once, whole
     (its own blank-line-separated paragraph, which is what lets the voice4 peel
     account for it), immediately ahead of the unit's response-schema paragraph
     and before the HOUSE READ CONTRACT. The seven prompts word their schema

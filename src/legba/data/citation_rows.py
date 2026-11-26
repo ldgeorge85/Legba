@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Citations as rows (lane DM-A): what a finding's sentences rest on, as plain data.
+"""Citations as rows: what a finding's sentences rest on, as plain data.
 
 Pure: no I/O, no model. :func:`plan_citation_rows` turns a finding's body and
 its persisted ``data['citations']`` (plus, for a desk run, the index the run

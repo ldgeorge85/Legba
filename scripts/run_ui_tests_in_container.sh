@@ -3,7 +3,7 @@
 # There is no node on the host; this is the v4 agents' SECOND verify gate, after
 # the container image build (`docker compose build legba-ui-build`). node_modules
 # is the host-mounted dir, refreshed with `npm ci` when missing or older than
-# the lockfile (a stale tree tested the wrong maplibre-gl for a day, roll 81).
+# the lockfile (a stale tree once tested the wrong maplibre-gl for a day).
 set -euo pipefail
 cd "$(dirname "$0")/../legba-ui-v3"
 docker run --rm -v "$PWD":/app -w /app node:20-slim sh -c \

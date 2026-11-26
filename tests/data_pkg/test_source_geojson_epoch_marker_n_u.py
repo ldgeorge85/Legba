@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane N-U — a geojson update marker in EPOCH form parses.
+"""A geojson update marker in EPOCH form parses.
 
 USGS ``properties.updated`` is epoch MILLISECONDS (live 11-13: 1794282147855),
 so ``_parse_marker_datetime`` returned None, ``newest_entry_ts`` was always

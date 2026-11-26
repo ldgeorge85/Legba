@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Integration tests for L-124 — NATSClusterHandler.
+"""Integration tests for NATSClusterHandler.
 
 Real NATS JetStream container per `tests/data_pkg/conftest.py` (started
 by `_ensure_containers_up`). Test resources use a unique per-session

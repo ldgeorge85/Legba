@@ -63,7 +63,7 @@ from 09-08 15:37Z on hard-failed with the identical string::
     model returned a finding contract with no readable body
     (title='Assessment for target')
 
-REPRODUCED on the live core plane (gpt-oss-120b, the endpoint the runtime
+REPRODUCED on the live core plane (the core model, the endpoint the runtime
 uses), rebuilding the 09-09 03:37Z synthesis prompt through the same
 composition path — ``with_grounding_clause(with_preamble_if_absent(...))``,
 verified BYTE-IDENTICAL against the last successful run's persisted

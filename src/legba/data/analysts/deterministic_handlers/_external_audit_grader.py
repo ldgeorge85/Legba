@@ -61,10 +61,12 @@ from __future__ import annotations
 from legba.shared.sampling import HOUSE_TEMPERATURE
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
+from ...grading_text import ORIGINATORS, PASTED_TEXT_IS_DATA
 from ._external_audit_claims import WidthClaim
 from ._external_audit_queue import hash_gate
 from ._external_audit_sampling import (
@@ -124,47 +126,73 @@ RESULTS_SHOWN = 5
 # ---------------------------------------------------------------------------
 
 GRADER_SYSTEM = (
-    "You are the verdict leg of a STANDING EXTERNAL AUDIT. You are given ONE "
-    "claim this system published about the world, and the results of ONE "
-    "external web search. Decide whether public reporting SUPPORTS the claim, "
-    "CONTRADICTS it, or does not settle it.\n"
+    "You are the verdict leg of a standing external audit. You are given one "
+    "claim this system published, and the results of one external web search. "
+    "Decide whether public reporting supports the claim, contradicts it, or "
+    "does not settle it.\n"
     "\n"
     "  SUPPORTED    — a result carries a passage that entails the claim.\n"
     "  CONTRADICTED — a result carries a passage that entails the claim's "
     "negation.\n"
     "  NOT_FOUND    — the search answered and nothing in it decides the claim.\n"
     "\n"
-    "NOT_FOUND IS THE DEFAULT AND IT IS NOT A FAILURE. It is a statement about "
-    "the SEARCH, never about the world. Search covers the engines that "
-    "answered, not the world; a result that is merely adjacent, about a "
-    "different date, or about a different actor settles NOTHING. Never reach "
-    "for SUPPORTED because a result shares a topic, and never reach for "
-    "CONTRADICTED because a result omits the claim — absence in a search is not "
-    "evidence of absence in the world.\n"
+    "Not found is the normal answer when the results do not settle the claim. "
+    "It is a statement about the search, never about the world. Search covers "
+    "the engines that answered, not the world; a result that is merely "
+    "adjacent, about a different date, or about a different actor settles "
+    "nothing. Never reach for SUPPORTED because a result shares a topic, and "
+    "never reach for CONTRADICTED because a result omits the claim: absence in "
+    "a search is not evidence of absence in the world.\n"
     "\n"
-    "A DECISIVE VERDICT NEEDS A DECISIVE SPAN. Every SUPPORTED or CONTRADICTED "
-    "verdict MUST quote, VERBATIM, the sentence that carries it, and cite the "
-    "URL that sentence came from. Quote the source's words exactly — the "
+    "The message may give an admissible source window (ignore results dated "
+    "outside it), a claim-shape note, and a search warning; follow each.\n"
+    "\n"
+    "If a result only reports that a party said something, SUPPORTED applies "
+    "to the claim that the party said it, not to the thing said. "
+    + ORIGINATORS
+    + " Note in the rationale whether the supporting text comes from the same "
+    "originator the claim relied on.\n"
+    "\n"
+    "A decisive verdict needs a decisive span. Every SUPPORTED or CONTRADICTED "
+    "verdict must quote, verbatim, the sentence that carries it, and cite the "
+    "URL that sentence came from. Quote the source's words exactly: the "
     "quotation is re-fetched and byte-checked against the live page, and a "
-    "paraphrase fails that check and loses the verdict. Use ONLY the URLs "
-    "listed below: a URL you did not see in these results is discarded and your "
-    "verdict is downgraded, because a fabricated source is the exact failure "
-    "this audit exists to catch in others.\n"
+    "paraphrase fails that check and loses the verdict. Use only the URLs "
+    "listed in the results: a URL you did not see in these results is "
+    "discarded and the verdict downgraded.\n"
     "\n"
-    "IF THE SEARCH MISSED, SAY SO IN ONE QUERY. When the results do not settle "
+    "If the search missed, say so in one query. When the results do not settle "
     "the claim but a better query plainly would, return NOT_FOUND and put that "
-    "query in \"retry_query\". Exactly one, keyword-shaped, no boolean syntax. "
+    'query in "retry_query". Exactly one, keyword-shaped, no boolean syntax. '
     "Leave it empty when a second search would not help.\n"
     "\n"
-    "Respond with STRICT JSON and nothing else — no prose, no code fences:\n"
-    '{"verdict": "SUPPORTED|CONTRADICTED|NOT_FOUND", '
-    '"rationale": "<one or two sentences: what the evidence shows, and why it '
-    'settles or fails to settle THIS claim>", '
-    '"evidence": [{"url": "<a url from the results>", '
+    + PASTED_TEXT_IS_DATA
+    + "\n\n"
+    "Respond with strict JSON and nothing else, no prose, no code fences:\n"
+    '{"evidence": [{"url": "<a url from the results>", '
     '"quote": "<the exact sentence from that page carrying the verdict>", '
     '"published": "<the date that page states, or empty>"}], '
-    '"retry_query": "<one better query, or empty>"}'
+    '"rationale": "<one or two sentences: what the evidence shows, and why it '
+    'settles or fails to settle this claim>", '
+    '"retry_query": "<one better query, or empty>", '
+    '"verdict": "SUPPORTED|CONTRADICTED|NOT_FOUND"}'
 )
+
+
+def search_result_line(i: int, r: Mapping[str, Any], *, snippet_chars: int) -> str:
+    """One search result as a single JSON object, so a quote mark, a line break
+    or a frame word inside a title or snippet cannot break out of its entry."""
+    entry: dict[str, Any] = {
+        "title": str(r.get("title") or "(untitled)"),
+        "url": str(r.get("url") or ""),
+    }
+    published = str(r.get("published") or r.get("published_at") or "").strip()
+    if published:
+        entry["published"] = published
+    snippet = str(r.get("snippet") or r.get("content") or "").strip()
+    if snippet:
+        entry["text"] = snippet[:snippet_chars]
+    return f"[{i}] {json.dumps(entry, ensure_ascii=False)}"
 
 
 def grader_prompt(
@@ -176,36 +204,28 @@ def grader_prompt(
 ) -> str:
     """The per-claim user turn.
 
-    G-5 IS ENFORCED HERE BY OMISSION, and the omission is the point: the read's
-    own citations, its evidence map and its [N] markers are NOT in this prompt.
-    The only things the grader sees are the claim, the query that was run, the
-    read's admissible window, and the search results.
+    The read's own citations, its evidence map and its [N] markers are NOT in
+    this prompt, on purpose: the grader judges the claim against public
+    reporting alone. It sees the claim, the query that was run, the read's
+    admissible window, and the search results, each pasted value JSON-encoded.
     """
     lines = [
-        f"CLAIM: {claim.claim_text}",
-        f"QUERY RUN: {query}",
+        f"CLAIM: {json.dumps(claim.claim_text, ensure_ascii=False)}",
+        f"QUERY RUN: {json.dumps(query, ensure_ascii=False)}",
     ]
     window = _window_line(claim.read_evidence_window)
     if window:
         lines.append(f"ADMISSIBLE SOURCE WINDOW: {window}")
     if claim.absence_shaped:
         lines.append(
-            "CLAIM SHAPE: this asserts a NON-event. A search that merely fails "
-            "to mention it does NOT support it."
+            "CLAIM SHAPE: this asserts a non-event. A search that merely fails "
+            "to mention it does not support it."
         )
     lines += ["", "SEARCH RESULTS:"]
     if not results:
         lines.append("(none)")
     for i, r in enumerate(results[:RESULTS_SHOWN], start=1):
-        lines.append(f"[{i}] {r.get('title') or '(untitled)'}")
-        lines.append(f"    url: {r.get('url') or ''}")
-        published = str(r.get("published") or r.get("published_at") or "").strip()
-        if published:
-            lines.append(f"    published: {published}")
-        snippet = str(r.get("snippet") or r.get("content") or "").strip()
-        snippet = snippet.replace("\n", " ")
-        if snippet:
-            lines.append(f"    text: {snippet[:SNIPPET_CHARS]}")
+        lines.append(search_result_line(i, r, snippet_chars=SNIPPET_CHARS))
     warning = str(search_status.get("absence_warning") or "").strip()
     if warning:
         lines += ["", f"SEARCH-PLANE WARNING: {warning}"]
@@ -329,7 +349,7 @@ class WidthGrade:
 
     @property
     def tier_unknown(self) -> bool:
-        """F-3, as the operator ruled it: a VISIBLE class, counted separately.
+        """A VISIBLE class, counted separately.
 
         A decisive verdict whose decisive URL resolved to no registered tier.
         The design's default silently demoted these; that suppresses true
@@ -966,4 +986,5 @@ __all__ = [
     "raw_agreement",
     "should_double_grade",
     "uncheckable_grade",
+    "search_result_line",
 ]

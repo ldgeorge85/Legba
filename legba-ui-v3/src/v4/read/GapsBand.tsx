@@ -296,12 +296,12 @@ function DeskGaps({ view }: { view: DeskGapView }) {
       <DeskHead label={view.label} note={note} />
       {view.state === 'loading' && (
         <StateLine testid="morning-read-gaps-desk-loading">
-          Reading this desk&rsquo;s typed absence…
+          Reading this {SUBJECT}&rsquo;s gaps…
         </StateLine>
       )}
       {view.state === 'error' && (
         <StateLine testid="morning-read-gaps-desk-error">
-          The typed-absence read did not answer for this desk, so nothing here is
+          The gaps for this {SUBJECT} could not be read, so nothing here is
           described as covered.
         </StateLine>
       )}
@@ -309,7 +309,7 @@ function DeskGaps({ view }: { view: DeskGapView }) {
         view.kinds.map((g) => <KindGroup key={g.kind} scope={view.targetId} group={g} />)}
       {view.state === 'ready' && view.absenceCount === 0 && (
         <StateLine testid="morning-read-gaps-desk-empty">
-          No typed absence is recorded for this desk as of{' '}
+          No gap is recorded for this {SUBJECT} as of{' '}
           {utcStamp(view.readAt) ?? view.readAt ?? 'the read above'}.
         </StateLine>
       )}
@@ -348,7 +348,7 @@ function DeskGaps({ view }: { view: DeskGapView }) {
           data-testid="morning-read-gaps-deduped"
         >
           {view.coveredByKind} card row{view.coveredByKind === 1 ? '' : 's'} not repeated
-          here — a typed absence above already names the same subject, with its proof.
+          here — a gap above already names the same thing, with its proof.
         </p>
       )}
       {view.state === 'ready' && clear.length > 0 && (
@@ -399,15 +399,15 @@ export default function GapsBand({
       )}
       {state === 'error' && (
         <StateLine testid="morning-read-gaps-error">
-          The scorecard read did not answer, so this band has no desk set to read
-          absence for and no desk is described as covered.
+          The {SUBJECT} cards could not be read, so this band has no {SUBJECT} set to read
+          gaps for and no {SUBJECT} is described as covered.
         </StateLine>
       )}
       {state === 'ready' && deskCount === 0 && (
         <StateLine testid="morning-read-gaps-empty">
-          No {SUBJECT} has a card on file, so there is no {SUBJECT} set to read typed
-          absence for. This band is empty because nothing was read, not because
-          nothing is missing.
+          No {SUBJECT} has a card on file, so there is no {SUBJECT} set to read gaps
+          for. This band is empty because nothing was read, not because nothing is
+          missing.
         </StateLine>
       )}
       {views.map((v) => (
@@ -415,30 +415,29 @@ export default function GapsBand({
       ))}
       {state === 'ready' && views.length === 0 && clean.length > 0 && (
         <StateLine testid="morning-read-gaps-all-clear">
-          No typed absence is recorded on any desk read here.
+          No gap is recorded on any {SUBJECT} read here.
         </StateLine>
       )}
       {clean.length > 0 && (
         <p className="mt-1 text-label text-ink-3" data-testid="morning-read-gaps-clean">
-          Read clean, nothing typed absent:{' '}
+          Read, and no gap recorded:{' '}
           {clean.map((v) => v.label).join(', ')}.
         </p>
       )}
-      <HeldBack n={heldBackDesks} noun="desk" />
+      <HeldBack n={heldBackDesks} noun={SUBJECT} />
       {state === 'ready' && deskCount > 0 && (
         <p className="mt-1 text-label leading-relaxed text-ink-3">
-          Each desk read once from{' '}
-          <span className="font-mono">/v3/absence</span> —{' '}
+          Each {SUBJECT} is read once for its{' '}
           <span
             className="cursor-help underline decoration-dotted underline-offset-2"
             title={TYPED_ABSENCE_GLOSSARY_NOTE}
             data-testid="morning-read-gaps-glossary"
           >
-            typed absence
+            gaps
           </span>
-          , seven kinds, each item with its proof and its clock. A kind the route
-          could not read here says so; a kind it read and found nothing under is
-          named as read. The card rows below each desk are the ones no kind already
+          , seven kinds, each with its proof and its clock. A kind that could not
+          be read here says so; a kind read with nothing under it is named as
+          read. The card rows below each {SUBJECT} are the ones no kind already
           names.
         </p>
       )}

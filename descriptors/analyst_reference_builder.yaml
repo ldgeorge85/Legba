@@ -1,27 +1,26 @@
-# R2 — THE REFERENCE UNIT (LEDGER_RESET_2026-09-16 §3, Program 2).
+# THE REFERENCE UNIT.
 #
-# THE SEAM THIS CLOSES. G1 shipped the correctness instrument whole — migration
-# 0196, the three-family protocol under ANNEX C v4, the calibration interlock —
-# and deliberately did NOT ship the thing it grades AGAINST (docs/SEAMS.md #55).
-# `unit_references` was populated by hand, once, for Israel. This analyst is
-# that seam closed: one independent reference per country per 14-day window,
+# THE SEAM THIS CLOSES. The correctness grader ships whole — migration 0196,
+# the three-family protocol under ANNEX C v4, the calibration interlock — but
+# not the thing it grades AGAINST (docs/SEAMS.md #55); `unit_references` was
+# populated by hand. This analyst closes that seam: one independent reference per country per 14-day window,
 # built on the $0 core plane from the open web, span-anchored, date-gated, and
 # honest about where it is thin.
 #
 # WHY A REFERENCE MUST BE BUILT BLIND, and why that shapes this file. The whole
 # value of a correctness number is that the reference was built WITHOUT reading
 # our substrate. A reference derived from the reads it grades is a
-# self-consistency check wearing the wrong label — which is precisely the ~84%
-# of this fleet's LLM calls that Program 1 exists because of. So: no
+# self-consistency check wearing the wrong label — which is precisely the
+# self-grading the correctness grader exists to get past. So: no
 # `search_corpus`, no substrate slice, no registry read in this analyst's path.
 # `subscription.substrate.direct_queries` is true ONLY so the handler can read
 # its own ROSTER and CADENCE (which targets exist, when each was last built) —
 # it never reads a signal, a fact or a head, and the materialized input slice
 # the cadence actor hands every META analyst is IGNORED.
 #
-# WHAT R1 MEASURED, and why this is a HYBRID rather than a free lane.
-# The experiment ran the same model on the same instruction twice
-# (planning/PROGRAM2_2026-09-16/R1/COMPARISON.md). Run 1, no fences: 13
+# WHAT AN EARLIER EXPERIMENT MEASURED, and why this is a HYBRID rather than a
+# free lane. It ran the same model on the same instruction twice.
+# Run 1, no fences: 13
 # developments, 1 of 13 spans verified, 11 cited URLs never fetched (several
 # invented outright), 12 of 17 fetches burned on one host that 401'd every time.
 # Run 2, with three fences: 19 developments, 15 of 19 spans verified, 8 of 8
@@ -50,8 +49,8 @@
 #     it, and no LLM call in this analyst's path ever leaves the core plane.
 #
 # THE STAGGER IS DERIVED, NOT SCHEDULED, and that is why the cadence below is
-# HOURLY for a FORTNIGHTLY product. R1 measured one reference at ~1-1.7M
-# core-plane prompt tokens and ~8 minutes of ai1. A 33-target roster on a 14-day
+# HOURLY for a FORTNIGHTLY product. One reference measured at ~1-1.7M
+# core-plane prompt tokens and ~8 minutes of the models host. A 33-target roster on a 14-day
 # cadence is ~4-5 hours of owned hardware per cycle, affordable only if at most
 # one build runs at a time. So the tick fires often, the handler takes the
 # SINGLE most overdue target (max_targets_per_run: 1), and the roster staggers
@@ -87,9 +86,9 @@
 # it off the handler searches nothing, fetches nothing, calls no model and
 # writes nothing at all.
 # DEPLOY ORDER (all operator steps, none of them this file's):
-#   1. migration 0196 already applied (unit_references — G1's, and this analyst
-#      is the only writer to it). NO new migration: the row shape G1 defined was
-#      the right one, and `thin_dimensions` / `span_verified_rate` are used for
+#   1. migration 0196 already applied (unit_references — the grader's, and this
+#      analyst is the only writer to it). NO new migration: the row shape
+#      already fits, and `thin_dimensions` / `span_verified_rate` are used for
 #      exactly what their comments say;
 #   2. REGISTRY IMAGE REBUILT — a NEW deterministic sub-handler is compiled into
 #      the image and the registry validates descriptors against it; then the
@@ -111,7 +110,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: draft
-  owner: r2_reference_unit
+  owner: owner@local
 
 subscription:
   # No `targets` block => META analyst: ONE global tick per cadence. The handler
@@ -130,7 +129,7 @@ method:
   kind: deterministic
   impl: legba.data.analysts.deterministic:run_method
   sub_handler: reference_builder
-  # X-1 declared knobs (handler_options.HANDLER_OPTIONS['reference_builder']).
+  # Declared knobs (handler_options.HANDLER_OPTIONS['reference_builder']).
   # Values below are the in-source defaults, stated explicitly so this file
   # documents the shipped volume rather than implying it. NOTE WHAT IS NOT HERE:
   # no fence is settable from a descriptor. The fetched-URL manifest, the date
@@ -152,48 +151,46 @@ method:
     # THE STAGGER. See the banner. Raising this puts several ~8-minute builds
     # on the box at once.
     max_targets_per_run: 1
-    # R1's measured budget: 80 calls produced 19 developments across 8
-    # dimensions at 78.9% span verification in ~8 minutes of ai1.
-    tool_call_cap: 200        # 2026-09-20 operator: was 80 — yield
-    # The token lever. R1 measured 2.57M prompt against 73k completion over two
+    # Measured budget: 80 calls produced 19 developments across 8
+    # dimensions at 78.9% span verification in ~8 minutes of the models host.
+    tool_call_cap: 200        # was 80 — yield
+    # The token lever. Measured: 2.57M prompt against 73k completion over two
     # runs — a tool loop over fetched pages is almost entirely prompt-side.
-    page_chars_to_model: 16000   # 2026-09-20 operator: was 7000
+    page_chars_to_model: 16000   # was 7000
     # The model must have NOTED this many developments before it may commit;
     # below it the loop pushes back and names the thin dimensions.
-    min_developments: 5      # 2026-09-20 operator: was 20 — unreachable, only delayed the commit
+    min_developments: 5      # was 20 — unreachable, only delayed the commit
     # A dimension with fewer than this many SURVIVING verified developments is
-    # written to thin_dimensions. Two is the number G1's loader uses.
+    # written to thin_dimensions. Two is the number the loader uses.
     thin_below: 2
     # How recently a dimension desk must have produced for its target to count
     # as on the live roster. The roster is DERIVED from what the fleet actually
     # reads rather than listed anywhere.
     roster_window_days: 30
-    # THE TWO WALLS (D3/D4, ops 2026-09-17). The 00:43Z autonomous tick picked
-    # Argentina, ran 927.9 s for 4,510,885 prompt tokens over 67 tool calls and
-    # committed NOTHING — the web_access governor was already over its
-    # max_invocations_per_hour when the tick fired, so 63 of those calls came
-    # back "not admitted" and the loop had no exit toward a commit except the
-    # tool cap running out. 4.5 M tokens then exhausted budget_tokens_per_day
-    # below, whose pause_until_next_window strategy stamped a ONE-HOUR GLOBAL
-    # COOLDOWN on the actor; the 02:43 tick no-op'd on it and the liveness
-    # watchdog raised cadence_stall. Both numbers below are hard: at ~70% of
+    # THE TWO WALLS. An unbounded build once ran 927.9 s for 4.5 M prompt
+    # tokens and committed NOTHING: the web_access governor was already over its
+    # max_invocations_per_hour, so most tool calls came back "not admitted" and
+    # the loop had no exit toward a commit except the tool cap running out. The
+    # tokens then exhausted budget_tokens_per_day below, whose
+    # pause_until_next_window strategy stamped a ONE-HOUR GLOBAL COOLDOWN on the
+    # actor; the next tick no-op'd on it and the liveness watchdog raised
+    # cadence_stall. Both numbers below are hard: at ~70% of
     # either the loop stops offering tools and asks for the reference from the
     # notes it has; past 100% of the wall clock it stops, committed or not, and
     # the receipt reads `no_commit`.
     #
-    # 420 s sits ABOVE the 294 s the one good live build needed (Ukraine) and
+    # 420 s sits ABOVE the 294 s the one good live build needed (one country) and
     # BELOW both cooldown_seconds (3000) and the hourly tick period, so a build
     # can never still hold the actor's turn when the next reminder fires.
-    build_max_seconds: 900   # 2026-09-20 operator: was 420
+    build_max_seconds: 900   # was 420
     # 1.2 M is under a third of budget_tokens_per_day, so three builds fit a
     # day's bucket with headroom and ONE build can never exhaust it.
     build_max_tokens: 1200000
-    # THE RETRY FENCE (R2-FIX(2), ops 2026-09-17). The scheduler used to order
+    # THE RETRY FENCE. The scheduler used to order
     # the roster by each target's newest SUCCESSFUL reference, and a failed
     # build writes no row — so a target that cannot be built stayed permanently
-    # the most overdue one. Argentina (3 of 16 pages usable to this lane) took
-    # two consecutive builds and would have taken every hourly tick after that,
-    # while 29 other due targets were never built at all.
+    # the most overdue one. A target with few usable pages could take
+    # every hourly tick while other due targets were never built at all.
     #
     # The order is now by last ATTEMPT, read off this lane's own receipts
     # (data.attempts — no table, no migration), and a failure buys the target a
@@ -214,8 +211,8 @@ method:
     # it is right here and wrong there:
     #
     #   1. THE REFERENCE MUST BE FREE. One reference is ~1-1.7M prompt tokens.
-    #      A 33-target fortnightly roster on a paid plane is the cost question
-    #      Program 2 exists to answer NO to; on ai1 it is ~4-5 hours and $0.
+    #      A 33-target fortnightly roster on a paid plane is a cost the grader
+    #      exists to avoid; on the models host it is ~4-5 hours and $0.
     #   2. THE INDEPENDENCE PROPERTY IS NOT "a different family". It is "built
     #      without reading our substrate", which this lane satisfies by
     #      construction — its only inputs are the open web and its own roster.
@@ -233,9 +230,8 @@ method:
       raw: llm.primary.openai_compat
       expected_family: llm_provider
   # Per-day token cap (24h bucket). SIZED TO THE CADENCE, and that is the whole
-  # point of the number (ops 2026-09-17). The old 4,000,000 was sized for "a
-  # handful of builds" before the cadence was halved to 7 days, and it is what
-  # the 00:43Z run exhausted — after which the budget precheck stamped a
+  # point of the number. An earlier 4,000,000 was sized for "a handful of
+  # builds"; once exhausted, the budget precheck stamped a
   # ONE-HOUR GLOBAL COOLDOWN on the actor with no log line, the next tick
   # no-op'd on it and the liveness watchdog reported a cadence stall.
   #
@@ -243,7 +239,7 @@ method:
   # cadence needs ceil(32/7) = 5 builds a day, and build_max_tokens caps a build
   # at 1.2M. 5 x 1.2M = 6M, which 4M cannot hold — the lane was STRUCTURALLY
   # guaranteed to cool down roughly daily, whatever else was fixed. 8M carries
-  # it with a third to spare; on the $0 core plane the only real cost is ai1
+  # it with a third to spare; on the $0 core plane the only real cost is models-host
   # wall time (~5 x 5.5 min/day). tests/runtime/test_reference_builder_wiring.py
   # asserts builds/day x build_max_tokens <= this number, so a cadence change or
   # a roster that outgrows it is a red test rather than a cooldown in the logs.

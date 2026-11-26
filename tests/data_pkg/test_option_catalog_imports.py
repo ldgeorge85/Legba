@@ -3,7 +3,7 @@
 """W4b-F4 — nothing imports the option catalog through its deprecated alias path.
 
 ``legba.data.analysts.handler_options*`` are ``sys.modules``-replacing aliases of
-``legba.data.option_catalog.handler_options*`` (W3-F17). Importing through the
+``legba.data.option_catalog.handler_options*``. Importing through the
 alias first runs ``analysts/__init__``, which walks the runtime-only dependency
 stack the slim registry image lacks, so every importer uses the leaf path. This
 guard scans ``src/``, ``tests/`` and ``scripts/`` (Python) for any import of the

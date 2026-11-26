@@ -13,7 +13,7 @@ boundaries):
     (private rows only on explicit ``include_private`` opt-in);
   * the example-YAML loader round-trip (idempotent re-run) against the
     tracked schema doc ``seeds/source_ratings.example.yaml``;
-  * the additive ``assurance_grade`` projection on the P-05 ``/sources``
+  * the additive ``assurance_grade`` projection on the ``/sources``
     list + detail read views.
 """
 
@@ -69,7 +69,7 @@ def _fixed_identity() -> SigningIdentity:
 
 
 def _source_body(descriptor_id: str) -> dict[str, Any]:
-    """Minimal P-05 source descriptor body (the registry REST register shape)."""
+    """Minimal source descriptor body (the registry REST register shape)."""
     return {
         "identity": {
             "id": descriptor_id,
@@ -79,7 +79,7 @@ def _source_body(descriptor_id: str) -> dict[str, Any]:
             "version": "0" * 16,
             "abstraction_level": "L1",
             "state": "draft",
-            "owner": "lewis@local",
+            "owner": "owner@local",
             "created": "2026-07-24T10:00:00+00:00",
         },
         "scope": {
@@ -383,7 +383,7 @@ async def test_example_yaml_loader_round_trip(api_app):
 
 
 # ---------------------------------------------------------------------------
-# P-05 projection — additive assurance_grade on /sources
+# Projection — additive assurance_grade on /sources
 # ---------------------------------------------------------------------------
 
 

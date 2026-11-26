@@ -30,7 +30,7 @@ export const WORLD_EVENTS_KEY = ['world-events'] as const
 /**
  * The one events read the map's events layer and the time band's events lane
  * share (one GET answers both): the newest 500 at the LIGHT weight, asked by
- * name (roll 87: the whole row was 0.42 MB live, the Watch page's largest
+ * name (the whole row was 0.42 MB live, the Watch page's largest
  * read, 2.01 MB against its 2 MB budget). `registry/event_list_weight.py`
  * `EventSummaryRow` keeps every field either reader draws.
  */

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""P1-1 alert-sink plane — registry, payload anatomy, receipt links.
+"""Alert-sink plane — registry, payload anatomy, receipt links.
 
 Unit tests at the :mod:`legba.data.alerts.sinks` seam: the sink registry
 (keyed by sink_kind, fail-loud duplicates), the converged

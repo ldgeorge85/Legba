@@ -1,21 +1,21 @@
-# journal_assessor — Legba's first-person reflective voice (plan §4.6).
+# journal_assessor — Legba's first-person reflective voice.
 #
 # The 11th OutputKind's producer: the ONE analyst pointed at the whole organism,
 # including itself. It reads what the other analysts concluded and narrates a
 # coherent point of view OVER all of it, emitting exactly one JournalPayload
 # (entry) into the dedicated journal_entries table — OFF the fact/finding/nexus
-# chain (§3.1). It must NEVER write a fact/nexus/finding.
+# chain. It must NEVER write a fact/nexus/finding.
 #
 # ── kind = journal_assessor (NEW; NOT inline_target) ──────────────────────
 # A NEW kind because its method narrates a voice-bearing continuity entry rather
 # than synthesizing a finding. Reusing inline_target is rejected: it hardcodes
-# OUTPUT_KIND = FINDING / emits FindingPayload, violating §3.1. The kind module
+# OUTPUT_KIND = FINDING / emits FindingPayload, violating the kind contract. The kind module
 # (legba.data.analysts.journal_assessor) sets OUTPUT_KIND = OutputKind.JOURNAL.
 #
-# ── ENGINE = in-actor llm_planner, NOT deep_consult (§4.1) ─────────────────
+# ── ENGINE = in-actor llm_planner, NOT deep_consult ─────────────────
 # method.kind = llm_planner (the in-actor GATHER envelope), NOT the deep_consult
-# Dapr workflow — that path rides the known-broken long-activity round-trip (task
-# #86) and hardcodes a FINDING output.
+# Dapr workflow — that path rides the known-broken long-activity round-trip
+# and hardcodes a FINDING output.
 #
 # ── single GLOBAL run (META, target_filter=None) ──────────────────────────
 # No `subscription.targets` block → ONE global run per cadence tick (mirrors
@@ -23,9 +23,9 @@
 # reflection; the agent investigates the platform's own findings via the
 # journal_read GATHER pack.
 #
-# ── Wave 0 ────────────────────────────────────────────────────────────────
+# ── Entry tier ────────────────────────────────────────────────────────────────
 # ENTRY tier only (no consolidation yet — that is the journal_consolidator
-# descriptor, Wave 2). action_pack = journal_read (ONE reused tool, list_findings).
+# descriptor). action_pack = journal_read (ONE reused tool, list_findings).
 
 identity:
   id: journal_assessor
@@ -38,7 +38,7 @@ identity:
     output_type: legba.runtime.Journal
     deps_type: legba.runtime.deps.StandardDeps
   state: active
-  owner: journal_revival
+  owner: owner@local
 
 subscription:
   # No `targets` block → META analyst: ONE global run per cadence tick
@@ -56,22 +56,22 @@ method:
   # COLON form ('module:ATTR') — the runtime resolver only resolves 'module:attr';
   # a dotted 'pkg.mod.v1' form silently falls back to the kind default system
   # prompt (losing the entire persona). The journal builder also loads this
-  # module itself as a belt-and-braces guard (§4.2).
+  # module itself as a belt-and-braces guard.
   prompt_module: "legba.prompts.journal_assessor:JOURNAL_SYSTEM"   # persona + MAP + voice
-  # PER-PHASE LLM SPLIT (§4.1): the heavy GATHER investigation loop runs on
-  # the gpt-oss / vLLM plane (Reasoning:high — injected into the gather system
+  # PER-PHASE LLM SPLIT: the heavy GATHER investigation loop runs on
+  # the core-model / vLLM plane (Reasoning:high — injected into the gather system
   # prompt) while the VOICE (the field-notes seam + NARRATE) runs on Opus 4.8.
-  # gather = gpt-oss-high (cheap, deep tool-call rounds); voice = Opus (the deep
+  # gather = core-model-high (cheap, deep tool-call rounds); voice = Opus (the deep
   # meta narration). The deps builder reads method.llm.narrate.raw (optional —
   # method.llm is an open dict, no schema change) and resolves a SECOND handler.
   llm:
-    # Model-card sampling (gpt-oss ships generation_config temperature=1.0; the vLLM
+    # Model-card sampling (the core model ships generation_config temperature=1.0; the vLLM
     # client always sends temperature, so the card default can never apply on its own).
     # Fleet-wide per the 2026-07-24 sampling audit + A/B (+0.055 faith at 1.0).
     temperature: 1.0
     primary:
       factory_kind: stack_ref
-      raw: llm.primary.openai_compat  # the gpt-oss / vLLM plane — the GATHER plane
+      raw: llm.primary.openai_compat  # the core-model / vLLM plane — the GATHER plane
       expected_family: llm_provider
     verify:
       # V1 (journal verify profile, 2026-07-16): the chronicle-gate judge —
@@ -82,36 +82,32 @@ method:
       raw: llm.primary.openai_compat
       expected_family: llm_provider
     narrate:
-      thinking: "on"   # T-2: the VOICE thinks; GATHER and PROPOSE stay on the plain alias
+      thinking: "on"   # the VOICE thinks; GATHER and PROPOSE stay on the plain alias
       factory_kind: stack_ref
-      # Operator decision 2026-07-06: the journal runs FULLY on the core
+      # The journal runs FULLY on the core
       # plane — Anthropic is reserved for the on-demand consult/deep_consult
       # features only. Voice now shares the GATHER plane (no second plane).
       raw: llm.primary.openai_compat  # core plane — the meta VOICE (was Opus)
       expected_family: llm_provider
     # Opus 4.8 deprecates temperature → the handler drops it for the
     # claude-opus-4-8 prefix; we still declare a default for non-Opus stacks.
-    # max_tokens now governs ONLY the Opus narrate output (the gpt-oss / vLLM
-    # gather plane serves its own vLLM budget — max_tokens is never sent to it).
-    max_tokens: 16384                 # the entry body, on the Opus voice plane
-  budget_tokens_per_day: 0     # §11 — a twice-daily deep meta agent is costly
+  budget_tokens_per_day: 0     # a twice-daily deep meta agent is costly
   gather:
     max_rounds: 6                     # the in-actor GATHER ReAct cap (HARD ceiling = 6;
-                                      # a higher request is silently clamped — §11)
+                                      # a higher request is silently clamped)
   retry:
     budget:
       strategy: pause_until_next_window
 
 cadence:
-  # UNFROZEN 2026-07-01 (operator decision): the journal STAYS RUNNING. It was
-  # integral to the original vision — the first-person reflective voice over the
+  # The journal STAYS RUNNING. It is
+  # integral to the design — the first-person reflective voice over the
   # organism (writes ONLY journal_entries, off the fact/finding/nexus chain, so
-  # it cannot pollute product output). The earlier P0-T6 SUBTRACT froze this
-  # entry-tier cadence; that freeze is REVERSED. The 12h entry tick fires again
+  # it cannot pollute product output). The 12h entry tick fires
   # alongside the daily consolidator. (Future, not now: route its reflections
   # back via the human-gated journal_propose queue — never a direct fact write.)
-  fallback_schedule: "10 0,12 * * *"   # T-2 stagger: off country_assessment's :00 burst (10 targets) (was 0 0,12 * * *)
-  cooldown_seconds: 42000            # 11h40m — below the 12h interval (the §11 trap)
+  fallback_schedule: "10 0,12 * * *"   # Staggered off country_assessment's :00 burst
+  cooldown_seconds: 42000            # 11h40m — below the 12h interval (the trap)
 
 grounding:
   enabled: true
@@ -121,13 +117,13 @@ grounding:
   max_facts: 30
 
 # The journal is granted ONLY the journal_read pack + the journal_propose pack
-# (§7.6 grant invariant) — the grant-layer backstop for the never-write-a-fact
+# (the grant invariant) — the grant-layer backstop for the never-write-a-fact
 # invariant: BOTH packs are non-write-fact (read tools, and propose tools that
 # write ONLY a pending journal_proposals row), so the analyst stays structurally
 # NOT effective for any pack whose tools call write_fact / write_nexus /
-# write_hypothesis. journal_propose (Wave 4) is the PROPOSE-AND-GATE write surface:
+# write_hypothesis. journal_propose is the PROPOSE-AND-GATE write surface:
 # the journal SUGGESTS a correction/change/self-revision into the human-gated
-# queue; a human CAUSES the change (§7.1 / §7.5).
+# queue; a human CAUSES the change.
 action_packs:
   - pack_id: journal_read
   - pack_id: journal_propose

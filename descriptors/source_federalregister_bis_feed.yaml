@@ -1,9 +1,8 @@
-# sources_2026_11_13 — draft SourceDescriptor. Ships DRAFT (operator activates).
+# Draft SourceDescriptor. Ships DRAFT (operator activates).
 #
 # Federal Register — Bureau of Industry and Security (Commerce) documents:
-# Entity List and EAR rules, denial orders, export-control notices. Closes the
-# loss-funnel S0 row "Federal Register / BIS listings" (bake-off run 1, SC07;
-# planning/reviews/DESIGN_2026-11-13/04_LOSS_FUNNEL.md §4 S0).
+# Entity List and EAR rules, denial orders, export-control notices. Covers
+# the "Federal Register / BIS listings" gap.
 # Federal Register agency feeds publish on business days (documents go out
 # ~06:00 ET); the feed holds the last ~30 days, newest first, at most 20
 # items, with the document abstract as the description (empty on some
@@ -23,7 +22,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: sources_2026_11_13
+  owner: owner@local
   created: "2026-11-13T00:00:00Z"
 
 scope:

@@ -160,7 +160,7 @@ def _is_instrument_row(row: Mapping[str, Any]) -> bool:
 #     OR descriptor_id LIKE '%.press'
 #     OR descriptor_id LIKE '%press_release%')
 #
-# 11 source_ids, each justified below (one line, why it's a SCHEDULED
+# the source_ids below, each justified (one line, why it's a SCHEDULED
 # product rather than event-driven reporting):
 ROUTINE_PRODUCT_SOURCES: frozenset[str] = frozenset({
     # the floor named by the task — scheduled US weather hazard alerts.
@@ -169,6 +169,11 @@ ROUTINE_PRODUCT_SOURCES: frozenset[str] = frozenset({
     # a periodic statistical product, not a report someone filed.
     "source.usgs.earthquakes_m45",
     "source.emsc.seismic",
+    "source.emsc.earthquakes",
+    # scheduled disaster-alert and space-weather catalogs (hazard-tagged
+    # geojson / json_api): an agency's periodic alert product.
+    "source.gdacs.events",
+    "source.swpc.alerts",
     # scheduled multi-hazard event catalog (fires/storms/floods/volcanoes).
     "source.nasa.eonet_events",
     # scheduled disease-surveillance bulletin (WHO), a structured health
@@ -182,6 +187,7 @@ ROUTINE_PRODUCT_SOURCES: frozenset[str] = frozenset({
     "source.rbi.press_releases",           # the task's own example
     "source.stategov.press_releases",
     "source.un.press",
+    "source.consilium.press_releases",
 })
 
 

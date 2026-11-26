@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""What CODE knows about a desk run's handed slice (lane D-1).
+"""What CODE knows about a desk run's handed slice.
 
 Three things, all computed from the slice object the run already holds — no
 read of its own:
@@ -271,7 +271,7 @@ def named_in_rows(
     match of each candidate's usable names (the profile's canonical name and
     aliases, under the G2 names rule, homonym exclusions honoured) against
     every handed row. Bounded and in memory: the candidates are the entities
-    linked somewhere in the slice (D-2 §1a); a cheap substring pre-filter on
+    linked somewhere in the slice; a cheap substring pre-filter on
     the folded text precedes the exact rule."""
     rows = [(ev.ref_id, t, normalize_for_match(t)) for ev in evidence.values() if (t := quotable_text(ev))]
     out: dict[str, frozenset[str]] = {}

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The administrative audit-log hash chain (migration 0248; audit A-06/A-07).
+"""The administrative audit-log hash chain (migration 0248).
 
 Two subcommands:
 
@@ -23,7 +23,7 @@ Rows whose signature does not verify under the current key (two June rows
 on live) are chained AS THEY ARE and reported ``signature not verified`` —
 never dropped, never re-signed.
 
-Run (one-off container, the bringup idiom — after the roll that ships 0248):
+Run (one-off container, the bringup idiom — after the release that ships migration 0248):
 
   docker run --rm --network host --env-file .env \\
       -e LEGBA_DATA_PG_DB=legba -e LEGBA_DATA_PG_HOST=127.0.0.1 \\

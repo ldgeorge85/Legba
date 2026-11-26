@@ -1,6 +1,6 @@
 /**
- * Legba UI v3 root — THE FRAME (U-6; 02_UI_TARGET_BRIEF §12, which replaced
- * the U-2 shell's fixed Consult column after the owner saw it live).
+ * Legba UI v3 root — THE FRAME (replacing the earlier shell's fixed
+ * Consult column).
  *
  *  ┌──────────────────────────────── top bar ──────────────────────────────────┐
  *  │ Legba │ Board Subject Ledger Watch │ [subject ▾] │ ⌘K ＋ ↶ ↺ 🔗 │ Operator ▸ │
@@ -32,20 +32,24 @@
 
 import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
+  DockviewDefaultTab,
   DockviewReact,
   type DockviewReadyEvent,
   type DockviewApi,
   type IDockviewPanel,
   type IDockviewPanelProps,
   type IDockviewHeaderActionsProps,
+  type IDockviewPanelHeaderProps,
   type SerializedDockview,
 } from 'dockview-react'
-import { ExternalLink, PanelTop, PanelLeftOpen } from 'lucide-react'
+import { PanelTop, PanelLeftOpen } from 'lucide-react'
 import { StatusBar } from '@/components/StatusBar'
 import { CommandPalette } from '@/components/CommandPalette'
 import { SurfaceBar } from '@/components/SurfaceBar'
 import { ConsultDock } from '@/components/ConsultDock'
 import { RecordSheet } from '@/components/RecordSheet'
+import { RegionAsOf } from '@/components/AsOfStrip'
+import { RegionPoint } from '@/components/PointFilter'
 import { FrameRail } from '@/components/FrameRail'
 import { Stage } from '@/components/Stage'
 import { Splitter } from '@/components/Splitter'
@@ -108,7 +112,7 @@ import {
   sizeSurface,
   type ViewPosition,
 } from '@/lib/surfaceDock'
-import { columnsFor, frameGrid, rootPxFor, ASK_BAR_REM, CHAT_MAX_SHARE, PANEL_COLUMN_MIN_REM } from '@/lib/frameGrid'
+import { columnsFor, frameGrid, rootPxFor, ASK_BAR_REM, CHAT_MAX_SHARE, PANEL_COLUMN_MIN_REM, RAIL_OPEN_FROM } from '@/lib/frameGrid'
 import { registerFramePort, pushViewUndo, undoView, useViewUndo, type ViewOnScreen } from '@/lib/panelActions'
 import { legacyPresetSurface } from '@/lib/layoutPresets'
 import { legacyMission } from '@/lib/missions'
@@ -117,7 +121,7 @@ import { useSelection } from '@/state/selection'
 import { emitRead, installReadTelemetryLifecycle, setTelemetryWorkspace } from '@/lib/readTelemetry'
 import { useShareState, writeMissionHash, writeWorkspaceHash } from '@/lib/shareState'
 import { installDeskScopeBridge } from '@/lib/scopeFromReport'
-import { useScope } from '@/state/scope'
+import { clearPoint, pointSubjectOf, readLastSubject, rememberLastSubject, useScope } from '@/state/scope'
 import { useWorldState } from '@/v4/world/worldState'
 import { isCasePlaying, useCasePlayer } from '@/state/casePlayer'
 import {
@@ -127,19 +131,23 @@ import {
   type ChatPlacement,
   type PageFrame,
   type StageEntry,
+  type StageReturn,
   type StageState,
 } from '@/state/frame'
 import { useActiveSurface } from '@/state/activeSurface'
 // The map's contract wired to the globe's actions (U-7), kept while the map is hidden.
 import '@/v4/globe/contract'
 import '@/v4/watch/register'
+// The admin's Users page (operator side; offered to admins only).
+import '@/panels/users/register'
+import '@/v4/read/register'
 
 type Mode = ReturnType<typeof currentMode>
 
 const INSPECTOR_KIND = 'system.inspector'
 const CONSULT_KIND = 'system.consult'
 /** Where the last subject the reader looked at is kept, so Subject never opens empty. */
-export const LAST_SUBJECT_KEY = 'legba_last_subject'
+export { LAST_SUBJECT_KEY } from '@/state/scope'
 
 interface LegbaPanelParams {
   registration: PanelRegistration | null
@@ -165,7 +173,11 @@ function LegbaPanelComponent(props: IDockviewPanelProps<LegbaPanelParams>) {
   return (
     <DockviewPanelApiProvider value={props.api}>
       <TileQueryRegion>
-        <LegbaPanelBody {...props} />
+        <RegionAsOf viewId={props.api.id}>
+          <RegionPoint viewId={props.api.id}>
+            <LegbaPanelBody {...props} />
+          </RegionPoint>
+        </RegionAsOf>
       </TileQueryRegion>
     </DockviewPanelApiProvider>
   )
@@ -257,7 +269,9 @@ export const COMPONENTS = { default: LegbaPanelComponent, slot: SlotPanel }
 
 /**
  * A region's header actions: SEND TO THE STAGE (the view in front becomes the
- * stage's), and POP OUT (a floating group over the panels) or DOCK BACK.
+ * stage's; Back on the stage puts it back here). A docked region has no
+ * pop-out: one stray click took a region off the grid. A region that is
+ * floating (a case's restore can leave one) keeps its way back.
  */
 function RegionActions(props: IDockviewHeaderActionsProps) {
   const floating = props.api.location.type === 'floating'
@@ -276,29 +290,39 @@ function RegionActions(props: IDockviewHeaderActionsProps) {
       >
         <PanelLeftOpen size={13} aria-hidden />
       </button>
-      <button
-        type="button"
-        data-testid={floating ? 'region-dock' : 'region-popout'}
-        title={floating ? 'Dock this region back' : 'Pop this region out over the panels'}
-        aria-label={floating ? 'Dock this region back' : 'Pop this region out'}
-        onClick={() => {
-          try {
-            if (floating) {
+      {floating && (
+        <button
+          type="button"
+          data-testid="region-dock"
+          title="Dock this region back"
+          aria-label="Dock this region back"
+          onClick={() => {
+            try {
               const target = props.containerApi.groups.find((g) => g.api.location.type === 'grid')
               if (target) props.api.moveTo({ group: target, position: 'center' })
-            } else {
-              props.containerApi.addFloatingGroup(props.group, { width: 640, height: 440 })
+            } catch {
+              // a refused move leaves the region where it was
             }
-          } catch {
-            // a refused move leaves the region where it was
-          }
-        }}
-        className="flex h-6 w-6 items-center justify-center rounded-control text-ink-3 hover:bg-surf-3 hover:text-ink-1"
-      >
-        {floating ? <PanelTop size={13} aria-hidden /> : <ExternalLink size={13} aria-hidden />}
-      </button>
+          }}
+          className="flex h-6 w-6 items-center justify-center rounded-control text-ink-3 hover:bg-surf-3 hover:text-ink-1"
+        >
+          <PanelTop size={13} aria-hidden />
+        </button>
+      )}
     </div>
   )
+}
+
+/**
+ * A region's tab. A view the page seeds has no close: one misclick removed
+ * the map, and only Reset brought it back. Its region's tab strip is how the
+ * reader swaps what is in front. A view opened into the region (the one
+ * marked transient) keeps its close, since closing it just shows the seeded
+ * view again.
+ */
+export function RegionTab(props: IDockviewPanelHeaderProps) {
+  const transient = !!(props.params as Record<string, unknown> | undefined)?.[TRANSIENT_PARAM]
+  return <DockviewDefaultTab {...props} hideClose={!transient} />
 }
 
 /** Every opener resolves retired ids through the alias table. */
@@ -405,13 +429,40 @@ function addBound(
   })
 }
 
-function readLastSubject(): string | null {
-  try {
-    return localStorage.getItem(LAST_SUBJECT_KEY)
-  } catch {
-    return null
+/**
+ * Where a docked view sits, said so it can be put back after a stay on the
+ * stage: beside a view of its own region when it has one, else beside the
+ * nearest other region, on the side it was on.
+ */
+function dockPlaceOf(api: DockviewApi, panel: IDockviewPanel): StageReturn {
+  const seeded = !(panel.params as Record<string, unknown> | undefined)?.[TRANSIENT_PARAM]
+  const base: StageReturn = { id: panel.id, seeded }
+  const sibling = panel.group.panels.find((p) => p.id !== panel.id)
+  if (sibling) return { ...base, within: sibling.id }
+  const others = api.groups.filter((g) => g !== panel.group && g.api.location.type === 'grid' && g.panels.length > 0)
+  if (others.length === 0) return base
+  const r = panel.group.element.getBoundingClientRect()
+  const centre = (b: DOMRect) => [(b.left + b.right) / 2, (b.top + b.bottom) / 2]
+  const [cx, cy] = centre(r)
+  const near = [...others].sort((a, b) => {
+    const [ax, ay] = centre(a.element.getBoundingClientRect())
+    const [bx, by] = centre(b.element.getBoundingClientRect())
+    return Math.hypot(ax - cx, ay - cy) - Math.hypot(bx - cx, by - cy)
+  })[0]
+  const n = near.element.getBoundingClientRect()
+  // No layout (a test's DOM): the region was the lead, on the left.
+  let direction: 'left' | 'right' | 'above' | 'below' = 'left'
+  if (r.width > 0 || n.width > 0) {
+    if (r.right <= n.left + 1) direction = 'left'
+    else if (r.left >= n.right - 1) direction = 'right'
+    else if (r.bottom <= n.top + 1) direction = 'above'
+    else direction = 'below'
   }
+  return { ...base, beside: { ref: near.panels[0].id, direction } }
 }
+
+/** The reader tab a subject lives on. */
+const SUBJECT_SURFACE: SurfaceId = 'subject'
 
 /** The stage entry a page opens on. */
 function defaultStageEntry(def: SurfaceDef): StageEntry {
@@ -475,6 +526,8 @@ export function App() {
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [sheetOpen, setSheetOpen] = useState(false)
+  const sheetOpenRef = useRef(false)
+  sheetOpenRef.current = sheetOpen
   const [notice, setNotice] = useState<string | null>(null)
   // The overlay host every `src/ui/` primitive portals into (`ui/portal.tsx`).
   const [portalHost, setPortalHost] = useState<HTMLElement | null>(null)
@@ -523,7 +576,7 @@ export function App() {
   const railPref = useFrame((s) => s.railOpen)
   const vw = useViewportWidth()
   const grid = frameGrid(vw, railPref ?? undefined)
-  const railOpen = railPref ?? vw >= 1600
+  const railOpen = railPref ?? vw >= RAIL_OPEN_FROM
   const rootPx = rootPxFor(vw)
   const setPage = useCallback(
     (patch: Partial<PageFrame>) => useFrame.getState().setPage(surfaceRef.current, patch, findSurface(surfaceRef.current)?.chat),
@@ -746,31 +799,32 @@ export function App() {
     // A link that names a record (`#rec=`) is opened by the sheet's own
     // effect, which runs BEFORE this one (a child's effects run first): its
     // selection landed before this subscription existed and was never seen,
-    // so a shared Record link opened nothing (roll 87, found behind the live
-    // walk's Board-row fallback). Open the sheet for it here.
+    // so a shared Record link opened nothing (found behind the Board-row
+    // fallback). Open the sheet for it here.
     if (useSelection.getState().selection?.origin === 'link') setSheetOpen(true)
     return useSelection.subscribe((s, prev) => {
       if (s.selection === prev.selection || !s.selection) return
-      if (s.selection.kind === 'target') {
-        try {
-          localStorage.setItem(LAST_SUBJECT_KEY, s.selection.id)
-        } catch {
-          // per-viewer convenience
-        }
-        return
-      }
+      if (s.selection.kind === 'target') return
       if (s.selection.origin === 'stage' || s.selection.origin === 'case') return
       setSheetOpen(true)
     })
   }, [])
 
-  // SUBJECT NEVER OPENS EMPTY (brief §2): standing on Subject with no subject
-  // in view, the last one the reader looked at becomes the point.
+  // The point's subject is remembered as the last one looked at.
+  useEffect(
+    () =>
+      useScope.subscribe((s, prev) => {
+        if (s.scope !== prev.scope && s.scope?.kind === 'target' && s.scope.id) rememberLastSubject(s.scope.id)
+      }),
+    [],
+  )
+
+  // SUBJECT NEVER OPENS EMPTY: standing on Subject with no point, the last
+  // subject the reader looked at becomes the point (the page itself falls
+  // back to the most-changed subject when there is no last one).
   useEffect(() => {
-    if (surface !== 'subject') return
-    const sel = useSelection.getState().selection
-    const scope = useScope.getState().scope
-    if (sel?.kind === 'target' || scope?.kind === 'target') return
+    if (surface !== SUBJECT_SURFACE) return
+    if (pointSubjectOf(useScope.getState().scope)) return
     const last = readLastSubject()
     if (last) useSelection.getState().select({ kind: 'target', id: last, origin: 'shell' })
   }, [surface])
@@ -851,9 +905,19 @@ export function App() {
             ? boundTileTitle(view as PanelKind, kindDef.defaultTitle, opts.recordId, opts.axis ?? 'target')
             : `${frameTitle(view)} · ${opts.recordId}`
           : (contractOf(view)?.name ?? frameTitle(view))
-        // The same view somewhere in the dock leaves it (one place per view).
+        // The same view somewhere in the dock leaves it (one place per view),
+        // and the stage entry remembers where it was, so Back restores it.
         const docked = dockApi.getPanel(instance)
-        if (docked) docked.api.close()
+        const returnTo = docked ? dockPlaceOf(dockApi, docked) : undefined
+        if (docked) {
+          // not the reader closing a seeded view: it is on the stage, and back after
+          layingRef.current = true
+          try {
+            docked.api.close()
+          } finally {
+            layingRef.current = false
+          }
+        }
         // A crumb already in the trail is gone back to (and asked for its tab);
         // a new one mounts on its tab.
         const known = (useFrame.getState().stages[here]?.stack ?? []).some((e) => stageInstanceId(e) === instance)
@@ -864,6 +928,7 @@ export function App() {
           tab,
           title,
           origin,
+          ...(returnTo ? { returnTo } : {}),
         })
         if (tab && known) requestPanelTab(instance, tab)
         return true
@@ -883,6 +948,40 @@ export function App() {
     },
     [dockApi, mode, switchSurface, findOpen, setPage],
   )
+
+  // BACK PUTS IT BACK. A view sent from a region to the stage leaves the
+  // dock (one place per view); when the stage goes back past it, it returns
+  // to where it was, so "to the stage" then Back leaves the panels as they
+  // were. Going forward past it (another view pulled up after it) keeps it in
+  // the trail, as before.
+  useEffect(() => {
+    if (!dockApi) return
+    return useFrame.subscribe((s, prev) => {
+      const here = surfaceRef.current
+      const a = prev.stages[here]
+      const b = s.stages[here]
+      if (!a || !b || a === b || b.index >= a.index) return
+      const left = currentStage(a)
+      const back = left?.returnTo
+      if (!left || !back || currentStage(b) === left) return
+      if (dockApi.getPanel(back.id)) return
+      let position: ViewPosition | undefined
+      if (back.within && dockApi.getPanel(back.within)) position = { referencePanel: back.within, direction: 'within' }
+      else if (back.beside && dockApi.getPanel(back.beside.ref)) position = { referencePanel: back.beside.ref, direction: back.beside.direction }
+      const kindDef = PANEL_REGISTRY[left.view as PanelKind]?.definition
+      try {
+        if (left.recordId && kindDef) {
+          addBound(dockApi, left.view as PanelKind, left.recordId, mode, left.axis ?? 'target', position, left.tab)
+        } else if (isFrameView(left.view) || frameViewComponent(left.view)) {
+          addSlot(dockApi, left.view, position, false, { seeded: back.seeded, recordId: left.recordId })
+        } else {
+          addSingleton(dockApi, left.view as PanelKind, mode, position, left.tab, { seeded: back.seeded })
+        }
+      } catch {
+        // a refused placement leaves the panels as they are; Reset lays the default
+      }
+    })
+  }, [dockApi, mode])
 
   // A region's "show on the stage" button.
   useEffect(() => {
@@ -979,7 +1078,19 @@ export function App() {
         }
         return
       }
-      if (e.key === 'Escape' && !paletteOpen) setSheetOpen(false)
+      if (e.key === 'Escape' && !paletteOpen && !e.defaultPrevented) {
+        // ESCAPE, ONE LAYER AT A TIME: an open Record sheet closes first;
+        // with nothing open over the page, Escape clears the point
+        // everywhere (the top bar, the regions that follow it, Consult).
+        // Typing in a box keeps the point.
+        if (sheetOpenRef.current) {
+          setSheetOpen(false)
+          return
+        }
+        const t = e.target as HTMLElement | null
+        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return
+        clearPoint()
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -1414,6 +1525,7 @@ export function App() {
             <div className="relative min-h-0 min-w-0 flex-1" data-testid="panel-side">
               <DockviewReact
                 components={COMPONENTS}
+                defaultTabComponent={RegionTab}
                 rightHeaderActionsComponent={RegionActions}
                 onReady={onDockReady}
                 theme={legbaDark}
@@ -1444,6 +1556,7 @@ export function App() {
         )}
         <StatusBar
           mode={mode}
+          side={side}
           authenticated={getToken() != null}
           lastRefresh={lastRefresh}
           errorText={errorText}

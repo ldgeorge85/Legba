@@ -1,9 +1,9 @@
-# X-1 source expansion (2026-11-14) — the EU consolidated list of persons,
+# The EU consolidated list of persons,
 # groups and entities subject to financial sanctions (the Commission's
 # Financial Sanctions Files, FSF), as the INSTRUMENT itself (kind
 # instrument_snapshot: fetch, hash, archive, diff). Ships DRAFT; the reference
 # host walks it to CONFIGURED (descriptors/LIFECYCLE.md), never active —
-# activation is the owner's call, and the kind refuses activation without a
+# activation is the operator's call, and the kind refuses activation without a
 # writable evidence archive.
 #
 # WHY: the first sanctions register held as data on this instance (the
@@ -11,21 +11,19 @@
 #
 # THE ENDPOINT. The FSF "full sanctions list" XML 1.1 download. The `token`
 # query value is the PUBLIC constant in the Commission's own published link —
-# not a credential, not registered by anyone. Checked 2026-11-14 by the
-# source-expansion review (one GET, generic client identity): HTTP 200,
+# not a credential, not registered by anyone. Checked 2026-11-14
+# (one GET, generic client identity): HTTP 200,
 # application/xml, 25.9 MB (under this kind's 64 MB cap); root
 # <export xmlns="http://eu.europa.ec/fpi/fsd/export" generationDate=...>,
 # 6,269 <sanctionEntity> entries in that file. robots.txt returned 404.
 #
 # DIFFER: xml_records keyed on the list's OWN identifier, the attribute
-# sanctionEntity/@logicalId (I-5 taught the record differ attribute keys;
-# X-1 had to fall back to a text diff). A change names the entries added,
+# sanctionEntity/@logicalId (the record differ takes attribute keys). A change names the entries added,
 # removed and changed by logicalId, each changed entry naming the fields that
 # moved (`@` = the entry's own attributes, e.g. its EU reference number).
 # Label: the first nameAlias/@wholeName; summary: the EU reference number,
-# the regulation programme(s) and the subject type. Checked against the
-# review's own 2026-11-14 download (kept in its scratchpad, not fetched
-# again): 6,269 entries, 6,269 distinct logicalIds, none without one, parse
+# the regulation programme(s) and the subject type. Checked against a
+# 2026-11-14 download: 6,269 entries, 6,269 distinct logicalIds, none without one, parse
 # ~5 s. The root's generationDate changes with every regeneration; with this
 # differ a regenerated-but-identical list is a change of zero entries, said
 # as such. Re-checked every six hours (an act lands without notice);
@@ -42,7 +40,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: x1_source_expansion
+  owner: owner@local
   created: "2026-11-14T00:00:00Z"
 
 scope:

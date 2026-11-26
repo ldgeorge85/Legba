@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The consult turn's COVERAGE BY DAY (lane Q-1, rule A) — computed, never paraphrased.
+"""The consult turn's COVERAGE BY DAY — computed, never paraphrased.
 
 Every consult turn under the contract runs this deterministic read over the
 window in force BEFORE the model drills, hands the result to the model as data,
@@ -236,22 +236,51 @@ def render_coverage_block(coverage: Mapping[str, Any] | None) -> str:
     return "\n".join(lines)
 
 
+#: Most per-day rows the prompt's coverage table prints; a longer window is
+#: printed as weekly totals instead, so a 90-day window is 13 rows, not 90.
+MAX_COVERAGE_DAY_ROWS = 31
+
+
+def _coverage_rows(days: Sequence[Mapping[str, Any]]) -> list[str]:
+    """``day | signals | sources | findings | events`` rows, daily or weekly."""
+    if len(days) <= MAX_COVERAGE_DAY_ROWS:
+        return [
+            f"  {r['day']} | {r['signals']} | {r['sources']} | {r['findings']} | {r['events']}"
+            for r in days
+        ]
+    out: list[str] = []
+    for i in range(0, len(days), 7):
+        week = days[i:i + 7]
+        span = f"{week[0]['day']}..{week[-1]['day']}"
+        total = {k: sum(int(r.get(k) or 0) for r in week) for k in ("signals", "findings", "events")}
+        top = max(int(r.get("sources") or 0) for r in week)
+        out.append(
+            f"  {span} | {total['signals']} | up to {top} a day | {total['findings']} | {total['events']}"
+        )
+    return out
+
+
 def render_coverage_for_prompt(coverage: Mapping[str, Any] | None) -> str:
     """A compact copy of the same result for the model's first turn."""
     if not coverage or coverage.get("state") != "measured":
         return "coverage: not measured (" + str((coverage or {}).get("reason")) + ")"
-    days = "; ".join(
-        f"{r['day']}: signals {r['signals']} from {r['sources']} sources, "
-        f"findings {r['findings']}, events {r['events']}"
-        for r in coverage.get("days") or []
-    )
+    days = list(coverage.get("days") or [])
+    weekly = len(days) > MAX_COVERAGE_DAY_ROWS
     gaps = coverage.get("gaps") or {}
-    return (
-        f"coverage by day — {days}. zero days: {', '.join(coverage.get('zero_days') or []) or 'none'}; "
+    head = (
+        "coverage by week (day | signals | sources | findings | events; totals per week):"
+        if weekly else
+        "coverage by day (day | signals | sources | findings | events):"
+    )
+    return "\n".join([
+        head,
+        *_coverage_rows(days),
+        f"  zero days: {', '.join(coverage.get('zero_days') or []) or 'none'}; "
         f"sparse days: {', '.join(coverage.get('sparse_days') or []) or 'none'}; "
         f"paused sources: {len(gaps.get('paused_sources') or [])}; "
-        f"sources with poll errors in the window: {len(gaps.get('error_sources') or [])}."
-    )
+        f"sources with poll errors in the window: {len(gaps.get('error_sources') or [])}. "
+        "A day with many signals from one source is thin.",
+    ])
 
 
 # ---------------------------------------------------------------------------

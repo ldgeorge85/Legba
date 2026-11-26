@@ -1,5 +1,5 @@
 /**
- * Layer-divergence model (Program 6 L2, 7b-v) — the arithmetic behind the
+ * Layer-divergence model — the arithmetic behind the
  * divergence map, kept pure so the honesty rules can be pinned without a DOM.
  *
  * The unit this reads measures the CHANGE in a country's own layer-to-layer
@@ -16,7 +16,7 @@
  *      across such days instead of bridging them with a straight line, because
  *      a bridge is a drawn claim about days that were never scored.
  *   3. **An excluded layer keeps its reason.** `aperture_excluded` is never
- *      shown on its own: the layer AND the operator's sentence travel with it,
+ *      shown on its own: the layer AND the declared sentence travel with it,
  *      because the whole point of the aperture declaration is that a missing
  *      layer must not read as agreement.
  *

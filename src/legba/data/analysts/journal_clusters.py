@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""T2.2 (JOURNAL_CONNECTIVE_AUDIT_PROPOSAL_2026-09-09 §3 P5 / §6) — CLUSTER-FIRST
-selection for the journal's priming window, plus the context-only desk roster.
+"""CLUSTER-FIRST selection for the journal's priming window, plus the
+context-only desk roster.
 
-THE DEFECT THIS ADDRESSES, in the audit's own words (§1.4): *"A cluster of many
+THE DEFECT THIS ADDRESSES, as an audit put it: *"A cluster of many
 moderate-magnitude rows about one event is fragmented by that sort; the voice got
 Burnham and Turkey as two fragments and never the object."* The journal's window
 is ``journal_slice._select_journal_slice`` — a pure (magnitude, authority) sort
@@ -62,7 +62,7 @@ every US-only row lands in one enormous ``(United States, {US})`` bucket whose
 mass wins the ranking and whose members share nothing. An anchor naming
 ``_JOURNAL_CLUSTER_MAX_UBIQUITY`` or more of the pool is dropped from the KEY
 (never from the row — the row is still selected the way it always was). Measured
-on the two live windows in ``planning/JOURNAL_CLUSTER_FIRST_SLICE_REPORT.md``.
+on two live windows.
 
 FLAG OFF is byte-identical and structurally so, not merely asserted: nothing here
 runs. ``journal_slice._journal_window`` calls ``_select_journal_slice`` directly,
@@ -77,7 +77,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 #: The env flag. Default OFF — the orchestrator flips it after the replay reads
-#: clean (the reversal is one env var, exactly as the proposal's §4 names it).
+#: clean (the reversal is one env var).
 CLUSTER_FIRST_ENV = "LEGBA_JOURNAL_CLUSTER_FIRST"
 
 #: How many clusters lead the window. SIX, and the number is a budget rather than
@@ -667,8 +667,8 @@ def coverage_roster_block(body: str) -> str:
     CONTEXT, not evidence — the block says so in its own header and carries no
     ``[[ref:]]`` anywhere, which is the whole point: the journal may say what the
     desks carried and what they dropped without laundering a desk's voice into
-    its own citations (the audit's §2 "do not double-count one voice through
-    another")."""
+    its own citations (do not double-count one voice through
+    another)."""
     coverage, dropped = _coverage_sections(body)
     if not coverage and not dropped:
         return ""

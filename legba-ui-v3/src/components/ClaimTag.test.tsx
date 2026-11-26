@@ -137,7 +137,7 @@ describe('CitedProse — the source tag beside a claim', () => {
     ])
     // Each chip states its reason in ONE sentence, taken from the data.
     expect(chips[0].getAttribute('title')).toBe(
-      'verdict: unsupported by the verify judge, confidence lowered',
+      'verdict: not supported by its sources, by the check, confidence lowered',
     )
     expect(chips[1].getAttribute('title')).toBe('cited signals fold to one outlet')
     expect(chips[2].getAttribute('title')).toBe('2 wire copies folded into one outlet')

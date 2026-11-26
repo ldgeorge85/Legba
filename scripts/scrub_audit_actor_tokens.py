@@ -27,7 +27,7 @@ from_version, to_version, change_summary}`` (``events.audit_payload``) —
 ``GET /audit`` re-verifies (``signature_verified``).
 
 SINCE MIGRATION 0248 (audit A-07) the log is a hash chain and this script no
-longer re-signs anything: the first run (W3-F3) re-signed rows in place, which
+longer re-signs anything: the first run re-signed rows in place, which
 made history rewritable by design. Now each audit row whose actor is the token
 is REDACTED through ``audit_chain.redact_row``: a signed, chained ``redact``
 event naming the row and its row_hash (with the reason) is appended, then the
@@ -56,7 +56,7 @@ REQUIRES the registry's own identity, from the environment:
 audit-log key). It REFUSES to run on the ephemeral fallback key — those
 signatures would never verify against the registry.
 
-Run (one-off container, the bringup idiom — after the roll that ships this):
+Run (one-off container, the bringup idiom — after the release that ships this):
 
   docker run --rm --network host --env-file .env \\
       -e LEGBA_DATA_PG_DB=legba -e LEGBA_DATA_PG_HOST=127.0.0.1 \\

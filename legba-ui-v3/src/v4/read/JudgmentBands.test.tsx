@@ -153,15 +153,17 @@ describe('the surface', () => {
     expect(order).toEqual(['changed', 'checked', 'gaps', 'due'])
   })
 
-  it('carries the reading-order rail and the read timer, and emits nothing', async () => {
+  it('carries the reading-order rail, no reading timer, and emits nothing', async () => {
     await renderBands()
     const rail = screen.getByTestId('morning-read-rail')
     expect(within(rail).getByTestId('morning-read-rail-changed')).toBeTruthy()
     expect(within(rail).getByTestId('morning-read-rail-due')).toBeTruthy()
-    expect(within(rail).getByTestId('morning-read-timer').textContent).toContain('/ 20:00')
+    // The reading timer is gone: a clock running against twenty minutes that
+    // nothing on the page explained.
+    expect(within(rail).queryByTestId('morning-read-timer')).toBeNull()
     // A first visit says which window it is showing.
     expect(screen.getByTestId('morning-read-first-visit')).toBeTruthy()
-    // Rule 4: the timer never inflates the wager's own metric.
+    // Rule 4: the rail never inflates the wager's own metric.
     expect(__pendingReadEvents()).toHaveLength(0)
   })
 
@@ -361,26 +363,26 @@ describe('CHECKED', () => {
     // The SOURCE travels with the sentence.
     expect(claims[0].textContent).toContain('security_desk')
     expect(claims[0].textContent).toContain('Security read for Brazil')
-    expect(claims[1].textContent).toContain('contradicted by the verify judge')
+    expect(claims[1].textContent).toContain('contradicted by its sources, by the check')
     expect(claims[1].textContent).toContain('cited [3]')
 
     // The desk line separates verified from flagged from UNCHECKED (rule 2).
     const desk = within(checked).getByTestId('morning-read-checked-desk')
-    expect(desk.textContent).toContain('1 verified')
+    expect(desk.textContent).toContain('1 checked')
     expect(desk.textContent).toContain('1 with a flagged claim')
     // X4 READPATH — the unchecked finding is split by the registry's state (a
     // null block from an older registry reads `not judged`) and LISTED with
     // its mark, never left as a plain count.
-    expect(desk.textContent).toContain('unverified: 0 judge pending, 1 not judged')
+    expect(desk.textContent).toContain('0 not yet checked, 1 not checked')
     const unverified = within(desk).getAllByTestId('morning-read-checked-unverified-row')
     expect(unverified).toHaveLength(1)
     expect(unverified[0].textContent).toContain('Unverified note')
     expect(within(unverified[0]).getByTestId('unverified-state').textContent).toBe(
-      'unverified · not judged',
+      'not checked',
     )
   })
 
-  it('X4 READPATH — a just-written finding reads `judge pending`, a lost one `not judged`; never plain, never 0', async () => {
+  it('a just-written finding reads `judge pending`, a lost one `not judged`; never plain, never 0', async () => {
     const base = {
       kind: 'finding',
       analyst_version: null,
@@ -426,15 +428,15 @@ describe('CHECKED', () => {
     const checked = screen.getByTestId('morning-read-checked')
     // Nothing verified, nothing flagged — and the band does not call that a pass.
     expect(screen.getByTestId('morning-read-checked-note').textContent).toBe(
-      '0 verified · 0 claims flagged · unverified: 1 judge pending, 1 not judged',
+      '0 checked · 0 claims flagged · 1 not yet checked, 1 not checked',
     )
     const desk = within(checked).getByTestId('morning-read-checked-desk')
-    expect(desk.textContent).not.toContain('Nothing flagged on this desk.')
-    expect(desk.textContent).toContain('Nothing on this desk carries a verify verdict, so nothing is claimed as held.')
+    expect(desk.textContent).not.toContain('Nothing flagged here.')
+    expect(desk.textContent).toContain('Nothing here has been checked yet, so nothing is claimed as held.')
     const marks = within(desk).getAllByTestId('unverified-state')
     expect(marks.map((m) => [m.getAttribute('data-state'), m.textContent])).toEqual([
-      ['pending', 'unverified · judge pending'],
-      ['absent', 'unverified · not judged'],
+      ['pending', 'not yet checked'],
+      ['absent', 'not checked'],
     ])
     // The mark explains itself, with its clock.
     expect(marks[0].getAttribute('title')).toContain('within 15 minutes')
@@ -515,7 +517,7 @@ describe('DUE', () => {
 // X1/D1 — nothing prints before it is read
 // ---------------------------------------------------------------------------
 
-describe('a count before its band has been read (X1/D1)', () => {
+describe('a count before its band has been read', () => {
   it('prints — on every band head and the rail while the routes are in flight, never 0', async () => {
     // Every route hangs: the landing's first seconds, frozen.
     vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})))
@@ -553,7 +555,7 @@ describe('a count before its band has been read (X1/D1)', () => {
 // Brazil scoped the feed while the bands kept listing Ukraine and Iran)
 // ---------------------------------------------------------------------------
 
-describe('a subject scope (X3/D3)', () => {
+describe('a subject scope', () => {
   afterEach(() => resetScope())
 
   const twoDesks = () => ({

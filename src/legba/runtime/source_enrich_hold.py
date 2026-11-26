@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The per-poll enrichment HOLD: a transient skip never advances the cursor
-past itself (W11-F103), in a stdlib-only leaf beside ``source_actor``.
+past itself, in a stdlib-only leaf beside ``source_actor``.
 
 INCIDENT 2026-10-23: the hosted NLP service died and every per-entry
 enrichment call hung until ``_ENRICH_TIMEOUT_S``. ``SourceCore._process_one``

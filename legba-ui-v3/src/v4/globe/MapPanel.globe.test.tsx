@@ -4,7 +4,7 @@
  * been read says so, and the flag can turn the globe off.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactElement } from 'react'
 
@@ -46,7 +46,15 @@ describe('the map panel under the globe flag', () => {
     const map = await screen.findByTestId('globe-map')
     expect(map.dataset.renderer).toBe('svg')
     expect(screen.getByTestId('globe-fallback-note').textContent).toMatch(/WebGL2/)
+    // the legend rests folded and opens on its button
+    expect(screen.queryByTestId('globe-legend')).toBeNull()
+    fireEvent.click(screen.getByTestId('globe-legend-button'))
     expect(screen.getByTestId('globe-legend').textContent).toMatch(/no read yet/)
+    // with the layer card folded the legend has the map's height to scroll in
+    expect(screen.getByTestId('globe-legend')).toHaveAttribute('data-room', 'alone')
+    expect(screen.getByTestId('globe-legend').className).toMatch(/overflow-y-auto/)
+    // the Board's map carries its coverage strip, which waits for its reads
+    expect(screen.getByTestId('coverage-strip')).toHaveAttribute('data-state', 'unread')
     // never a measured zero before anything answered
     expect(screen.getByTestId('globe-legend').textContent).not.toMatch(/\b0 (subjects|places|rings)\b/)
     expect(screen.queryByTestId('stub-flat-map')).toBeNull()

@@ -67,7 +67,7 @@ RUN pip install --prefix=/install \
         # loud-warn no-op (rate limiting INERT), so it MUST be listed here
         # (the explicit list, not pyproject, is what the registry installs).
         "slowapi>=0.1.9" \
-        # pycountry: the 2026-08-04 outage, and the reason this list is
+        # pycountry: once caused an outage, and the reason this list is
         # dangerous. It is in pyproject.toml and in Dockerfile.runtime, and it
         # was NOT here — so the registry process alone could not import
         # `legba.data.filters.geocode`, which `legba.data.analysts.

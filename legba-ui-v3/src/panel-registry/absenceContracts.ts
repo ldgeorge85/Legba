@@ -80,7 +80,7 @@ export const ABSENCE_CONTRACTS: Record<SurvivorKind | typeof PALETTE_SEARCH, str
   'system.timeline': 'valid time and record time both shown; a history citation keeps its tense marker verbatim',
   'system.alerts_watches': 'no deliveries in window → stated, not 0%',
   'system.inspector': 'uncited prose under an explicit *uncited* marker',
-  'system.consult': 'census classes *not measured*; *writes: none*; replay notice (C-1a §3)',
+  'system.consult': 'census classes *not measured*; *writes: none*; replay notice',
   'system.entities': 'the disclosure strip states what is withheld',
   'system.graph_walk': 'withheld edges counted',
   'system.provenance': 'a hop with no receipt says so',

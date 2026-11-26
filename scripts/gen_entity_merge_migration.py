@@ -184,7 +184,7 @@ class Row:
     created_at: str  # ISO string — sorts lexicographically (oldest = smallest)
     links: int
     # Geo carried so a hard-deleted geo-bearing loser can backfill a NULL-geo
-    # survivor (DQ P4 r3 / C1). All optional — absent columns parse to None.
+    # survivor. All optional — absent columns parse to None.
     geo_lat: float | None = None
     geo_lon: float | None = None
     geo_country: str | None = None
@@ -249,7 +249,7 @@ def _survivor_is_junk(survivor_name: str) -> bool:
     """True when the ELECTED survivor's display name is INHERENT non-referent junk
     (sports scaffolding / quantifier / clock / numeral / bare number-word /
     stopword), so the whole fold must route to JUNK rather than keep a junk
-    survivor with consolidated links (DQ P4 r3 / B1). Article variants ("The World
+    survivor with consolidated links. Article variants ("The World
     Cup" / "A World Cup") defeat the pre-election all-junk gate, so a leading
     article is stripped and the check re-run.
 
@@ -279,11 +279,11 @@ def _survivor_is_junk(survivor_name: str) -> bool:
 
 def _pick_geo_donor(expected_iso: str | None, losers: list[Row]) -> Row | None:
     """Pick the geo-bearing loser to backfill the survivor's geo, gated on the
-    survivor's NAME-derived country (DQ P4 r4).
+    survivor's NAME-derived country.
 
     A hard-deleted loser can carry the referent's coordinates that the most-links
-    survivor lacks (DQ P4 r3 / C1) — but we must NEVER stamp a country/coords that
-    disagree with the survivor's OWN NAME (the round-3 defect: 'the Democratic
+    survivor lacks — but we must NEVER stamp a country/coords that
+    disagree with the survivor's OWN NAME (an earlier defect: 'the Democratic
     Republic of Congo' inherited Congo-Brazzaville, 'Evian' inherited India).
     ``expected_iso`` is the ISO-2 the survivor's canonical name resolves to
     offline (via :func:`_name_country_iso2`), or ``None`` when the name does NOT

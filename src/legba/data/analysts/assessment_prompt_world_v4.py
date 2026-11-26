@@ -123,7 +123,11 @@ PROMPT_VERSION_V5: str = "assessment_prompt.v5"
 #: when the record dates it. Phrased as perspective ("the cap I read as
 #: weakest"), never as a rank of the world, so it stays clear of
 #: ``assessment_unsupported._RANK_TERMS``. v5 is kept, byte-identical.
-PROMPT_VERSION_V6: str = "assessment_prompt.v6"
+#: v6.1 — the shared assessment standards' calibrate item changed under this
+#: voice as under the others; its sections are unchanged. v4 and v5 read the
+#: same standards but no row is stamped with them any more, so they keep their
+#: strings.
+PROMPT_VERSION_V6: str = "assessment_prompt.v6.1"
 
 #: The header the world tier's context section is rendered under — the
 #: ``CONTEXT_SECTION_HEADER`` twin. A module constant for the same reason: the

@@ -1,10 +1,9 @@
 /**
- * caseModel — "consult presents a case", the PURE half (C-1b/ui).
+ * caseModel — "consult presents a case", the PURE half.
  *
  * A case is an ordered list of governed workstation actions one consult turn
  * presents: open a panel, arrange the wall, set the scope, focus a record, move
- * the map, move the clock, run a mission, narrate, done. The design note is
- * `planning/v2/design/C-1a_CONSULT_PRESENTS_A_CASE.md`; this module owns
+ * the map, move the clock, run a mission, narrate, done. This module owns
  * everything about a case that needs no store and no DOM:
  *
  *   * the WIRE SHAPES — the canonical action, the persisted case record
@@ -32,10 +31,10 @@ import type { WorldLayer } from '@/v4/world/worldState'
 import vocabularyJson from '@/lib/workstationVocabulary.json'
 
 // ---------------------------------------------------------------------------
-// The closed vocabulary — one file, two readers (note §6).
+// The closed vocabulary — one file, two readers.
 // ---------------------------------------------------------------------------
 
-/** The nine actions (note §2). Closed: anything else is refused. */
+/** The nine actions. Closed: anything else is refused. */
 export const CASE_ACTIONS = [
   'open_panel',
   'arrange',
@@ -187,7 +186,7 @@ export interface CaseRestsOn {
   tool: string
 }
 
-/** One canonical, gate-admitted action (note §3). */
+/** One canonical, gate-admitted action. */
 export interface CaseAction {
   seq: number
   action: DriveActionName
@@ -201,7 +200,7 @@ export interface CaseAction {
 
 export type CaseStatus = 'sealed' | 'unsealed' | 'stopped'
 
-/** The persisted record — `response.case` on the turn (note §3). */
+/** The persisted record — `response.case` on the turn. */
 export interface CaseRecord {
   version: string
   request_id: string | null
@@ -344,7 +343,7 @@ export function replayCeiling(rec: CaseRecord): number {
 }
 
 // ---------------------------------------------------------------------------
-// Frames — the four new step kinds on the existing stream (note §4).
+// Frames — the four new step kinds on the existing stream.
 // ---------------------------------------------------------------------------
 
 export const CASE_FRAME_KINDS = ['case_action', 'case_refused', 'case_sealed', 'case_stopped'] as const
@@ -837,7 +836,7 @@ export function stepCounter(s: PlayerState): string {
   return `step ${s.executedThrough} of ${total}`
 }
 
-/** The replay caption (note §3) — what replaying a case does and does not show. */
+/** The replay caption — what replaying a case does and does not show. */
 export function replayCaption(rec: CaseRecord): string {
   return `Replaying a case recorded ${rec.as_of ?? '(as-of not recorded)'}; panels show the record as it stands now. A record no longer on record renders as absent, never skipped silently.`
 }

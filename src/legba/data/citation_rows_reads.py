@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""What a finding's sentences rest on, for the Record sheet (lane DM-A).
+"""What a finding's sentences rest on, for the Record sheet.
 
 :func:`finding_support` answers ``GET /v3/record/finding/{id}/support``. It
 PREFERS the rows (``finding_sentences`` / ``citation_support`` /

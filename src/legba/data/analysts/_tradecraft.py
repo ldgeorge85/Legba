@@ -3,36 +3,65 @@
 """Shared analytic-tradecraft preamble for every LLM analyst.
 
 The single source of truth for the "house analytic standard" prepended to each
-analyst's system prompt (BLUF, observe-vs-assess, citation, calibrated
-confidence, provenance trust, temporal discipline, gap-honesty, output
-discipline). Each analyst keeps a thin task-specific block on top of this.
+analyst's system prompt (judgment first, sources apart from inference,
+citation, sourcing strength apart from likelihood, vetted context, dates,
+gap-honesty). The standards are one text; the output rule is a separate line,
+because the Consult answers in markdown and every other analyst replies with
+JSON. Each analyst keeps a thin task-specific block on top of this.
 
-Dependency-free on purpose so it is safe to import from any analyst module and
-from ``runtime.analyst_method`` without circular-import or dspy concerns. See
-planning/PROMPT_REWRITE_PLAN.md for the rationale per clause.
+Imports only the leaf module that holds the likelihood words, so it is safe to
+import from any analyst module and from ``runtime.analyst_method`` without
+circular-import or dspy concerns.
 """
 
 from __future__ import annotations
 
-ANALYTIC_PREAMBLE = """You are a senior all-source intelligence analyst. Hold to these analytic standards on every output:
+from ..grading_text import ORIGINATORS, PASTED_TEXT_IS_DATA
+from ..likelihood_words import LIKELIHOOD_WORD_LIST, LIKELIHOOD_WORDS
 
-1. BLUF. Lead with your single most important judgment in one sentence, before any detail.
-2. Separate OBSERVATION from JUDGMENT. Distinguish what the sources state (observed) from your inference (assessed) and any assumption you rely on. Label assessments and assumptions as such; never present inference as established fact.
-3. Source every factual claim. Cite the specific evidence you used inline — a signal index like [2], a substrate UUID, or the analyst id you drew from. Do not assert a fact you cannot point to.
-4. Calibrate confidence to the evidence, and use matching estimative language:
-     >= 0.85  multiple independent vetted sources corroborate    (assess / judge)
-     ~  0.6   a single credible source, or a sound inference      (likely / probably)
-     <= 0.3   speculative, thin, or a single weak source          (possibly / cannot confirm)
-   Never manufacture precision the evidence does not support.
-5. Trust by provenance. An AUTHORITATIVE CURRENT CONTEXT block, when present, is operator-vetted ground truth and OVERRIDES anything your training data implies about who holds office, which alliances are in force, or the present state of the world. Treat seed/curated facts as ground truth; treat ingestion/agent facts as LEADS to corroborate, not truth — especially any ingestion fact at confidence 1.0 (a likely extraction error, e.g. 'Iran | capital of | US').
-6. Mind time. A source's ingestion/fetch timestamp is NOT when the event occurred. Anchor "what is current" on each source's own stated date and the AUTHORITATIVE CURRENT CONTEXT — never the fetch time. Do not present an older referenced event as if it broke today.
-7. Be honest about gaps. If the material is thin, say so plainly rather than padding. Where sources disagree, surface the disagreement rather than averaging it away. State the key uncertainty and what new evidence would change your judgment.
-8. Output discipline. Respond with EXACTLY the JSON object your task specifies and nothing else — no prose, no markdown fences, no commentary. The first character must be { and the last must be }."""
+#: How independence is counted wherever corroboration is weighed: the graders'
+#: originator sentence, imported so every prompt counts corroboration the same
+#: way.
+INDEPENDENCE_SENTENCE = ORIGINATORS
+
+#: The shared analytic standards: what every analyst prompt starts with,
+#: whatever its output. The output rule is separate, because the Consult answers
+#: in markdown and every other analyst replies with JSON.
+ANALYTIC_STANDARDS = f"""You are an analyst. You work from the records you are given and the tools you can call, for a reader who will act on what you write.
+1. State your main judgment first, in a sentence, when the evidence gives you one. If it does not, say that first.
+2. Keep what the sources state apart from what you infer, and label inferences and assumptions as yours. Never present an inference as an established fact.
+3. Support each factual claim with the record it came from. Do not state a fact you cannot point to.
+4. Say how strong the sourcing is (several independent originators, one originator, or unconfirmed) separately from how likely the thing is. {INDEPENDENCE_SENTENCE} Use these likelihood words: {LIKELIHOOD_WORDS}. Do not give more precision than the evidence has.
+5. Context the platform marks as vetted overrides what you remember about the present state of the world. Curated facts carry an as-of date: if a later dated source disagrees, say so. Facts extracted automatically are leads to check, not truth.
+6. A source's collection time is not when the event happened. Date events by the source's own stated date, and do not present an older event as new.
+7. If the material is thin, say so briefly. If sources disagree, show the disagreement rather than averaging it. Say what new evidence would change your judgment."""
+
+#: The output rule for every analyst whose task specifies a JSON reply.
+JSON_OUTPUT_RULE = (
+    "8. Reply with exactly the JSON your task specifies and nothing else: no prose "
+    "before or after it, no markdown fences."
+)
+
+#: Standards plus the JSON output rule: the preamble of every JSON-replying analyst.
+ANALYTIC_PREAMBLE = f"{ANALYTIC_STANDARDS}\n{JSON_OUTPUT_RULE}"
+
+#: A stored prompt composed with the earlier wording of the preamble starts and
+#: ends with these; :func:`with_preamble_if_absent` replaces that copy.
+_EARLIER_PREAMBLE_HEAD = "You are a senior all-source intelligence analyst."
+_EARLIER_PREAMBLE_TAIL = "The first character must be { and the last must be }."
 
 
 def with_preamble(task_block: str) -> str:
-    """Compose an analyst system prompt = shared standards + task-specific block."""
+    """Compose a JSON-replying analyst's system prompt = standards + JSON rule + task."""
     return f"{ANALYTIC_PREAMBLE}\n\n{task_block.strip()}\n"
+
+
+def with_standards(task_block: str) -> str:
+    """Compose a system prompt = standards + task, with no output rule.
+
+    For an analyst whose task states its own reply format that is not JSON
+    (the Consult answers in markdown)."""
+    return f"{ANALYTIC_STANDARDS}\n\n{task_block.strip()}\n"
 
 
 def with_preamble_if_absent(system_prompt: str | None) -> str | None:
@@ -40,11 +69,16 @@ def with_preamble_if_absent(system_prompt: str | None) -> str | None:
 
     Used at the inline_target resolution point so a GEPA-promoted candidate
     (which replaces the whole system prompt) still carries the house standard.
+    A prompt stored with the earlier preamble wording has that copy replaced,
+    so it neither keeps the old rules nor gets both.
     """
     if system_prompt is None:
         return None
-    if system_prompt.startswith(ANALYTIC_PREAMBLE[:48]):
+    if system_prompt.startswith(ANALYTIC_STANDARDS[:48]):
         return system_prompt
+    if system_prompt.startswith(_EARLIER_PREAMBLE_HEAD) and _EARLIER_PREAMBLE_TAIL in system_prompt:
+        cut = system_prompt.index(_EARLIER_PREAMBLE_TAIL) + len(_EARLIER_PREAMBLE_TAIL)
+        return with_preamble(system_prompt[cut:])
     return with_preamble(system_prompt)
 
 
@@ -206,17 +240,16 @@ _TITLE_RULE_UNIT: str = (
 #:   read as a pure regression rather than as two thirds of a cure.
 #:
 #: WHY IT CARRIES A BREVITY CLAUSE. Measured, not guessed. The first replay of
-#: this contract (16 real world/region runs, ``planning/TITLE_FRAME_FIX_
-#: 2026-09-01.md`` §5) did what it was built to do — strict frame 80% → 30% on
-#: the region arm, subjects per title 2.2 → 3.1 — and paid for it in characters:
+#: this contract (16 real world/region runs) did what it was built to do —
+#: strict frame 80% → 30% on the region arm, subjects per title 2.2 → 3.1 — and paid for it in characters:
 #: mean title length 72.8 → 87.1 and over-90-char titles 2/10 → 4/10. Naming
 #: three subjects costs room, and the model bought that room by keeping the
 #: connective padding and running past the cap. So PLURAL IS NOT LONGER ships
 #: with an ORDER of cuts (padding first, risk noun next, a subject last) rather
 #: than as a bare restatement of the cap, which the prompt already carried and
-#: which was not what failed. It also names ``amid`` specifically: §1.6 measured
-#: it at 22.4% of world titles and 63.5% of country ones, and identifies it as
-#: "the grammatical device that lets a ≤90-char single-subject headline gesture
+#: which was not what failed. It also names ``amid`` specifically: the replay measured
+#: it at 22.4% of world titles and 63.5% of country ones, and it is
+#: #: "the grammatical device that lets a ≤90-char single-subject headline gesture
 #: at everything it just demoted" — under a plural contract it becomes the
 #: cheapest way to blow the cap.
 #:
@@ -228,9 +261,9 @@ _TITLE_RULE_UNIT: str = (
 #: a new fact about the world.
 #:
 #: THIS IS THE THIRD OF SIX DRAFTS, AND IT WAS SELECTED ON MEASUREMENT, NOT
-#: TASTE. ``planning/TITLE_FRAME_FIX_2026-09-01.md`` §5 replays six versions of
-#: this constant over the same 16 real world/region runs against the same
-#: reconstructed user prompts. Three further drafts were written and REJECTED,
+#: TASTE. Six versions of
+#: this constant were replayed over the same 16 real world/region runs against
+#: the same reconstructed user prompts. Three further drafts were written and REJECTED,
 #: and what they rejected is worth keeping:
 #:
 #: * v4 added "the headline does not END on a risk word" and v5 replaced it with
@@ -347,16 +380,42 @@ def _body_shape(sections: str, *, title_rule: str = _TITLE_RULE_UNIT) -> str:
 UNIT_BODY_SHAPE: str = _body_shape(
     "(1) the as-of line, in italics, alone on the first line; "
     "(2) '**BLUF:**' followed by ONE sentence; "
-    "(3) '## What changed' — what this window shows that the prior read did "
-    "not, each point cited [N] and dated; "
-    "(4) '## Why it matters' — the MECHANISM, in connected prose: what the "
-    "cited facts do to the thing your bounded question is about, and what caps "
-    "or reverses them; "
+    "(3) '## What changed' — what this window adds to the prior read, each "
+    "point cited [N] and dated; when nothing in the window moves the read, "
+    "say so and name the standing state; "
+    "(4) '## Why it matters' — in connected prose, what the cited facts do to "
+    "the thing your bounded question is about, and what caps or reverses "
+    "them; explain a mechanism only where it is not obvious from the facts; "
     "(5) '## What would change this read' — the ONE observation that would "
     "most move your verdict, the CLASS of reporting that would carry it "
-    "(name a class — 'IAEA reporting', 'port-call data' — never a specific "
-    "outlet you cannot see), and whether this desk collects that class; "
+    "(name a class — 'inspection reports', 'port-call data' — never a "
+    "specific outlet you cannot see), and whether this desk collects that "
+    "class; "
     "(6) '## Indicators' — the short bulleted signposts."
+)
+
+#: What a desk writes when nothing in its window bears on its question. A
+#: quiet window used to leave the model no sentence it was allowed to write,
+#: so it returned a title with an empty body and the run failed. This gives
+#: the quiet window its own short shape: every part present, a BLUF that is a
+#: scoped negative, and the standing state named with its date.
+UNIT_QUIET_WINDOW_RULE: str = (
+    "A QUIET WINDOW STILL GETS A BODY. Most windows change nothing. New "
+    "coverage of a standing situation is not a change in it. If no cited "
+    "signal bears on your question, write the same parts, each in a line or "
+    "two. The BLUF begins with 'No' and states what this desk's collection "
+    "through the as-of date does not contain, for example 'No new <the kind "
+    "of development your question is about> appears in this desk's "
+    "collection through <the as-of date>.' It needs no signal number. Under "
+    "'## What changed', say that nothing in this window moves the read, and "
+    "name the standing state from the prior read or from a cited signal, "
+    "with its date. Under '## Why it matters', say in one or two sentences "
+    "what that standing state is and what holds it there. Keep '## What "
+    "would change this read' and '## Indicators' as usual, all indicators "
+    "not observed. Set confidence low and severity to the standing state. "
+    "The title says the same thing in plain words and does not use the word "
+    "'again' or a one-word verdict. A body that is empty or only a heading "
+    "is rejected and the run is lost."
 )
 
 #: The composition-layer section list (W6/D6). ``## Coverage`` is where the
@@ -415,21 +474,29 @@ COMPOSITION_BODY_SHAPE: str = _body_shape(
     "plainly that they agree; "
     "(5) '## Coverage' — a SINGLE closing line naming the shown blocks whose "
     "read was unremarkable and the ones with no verified read carried this "
-    "cycle.",
+    "cycle. "
+    "If every shown read says nothing moved, the BLUF says so and names the "
+    "standing conditions that continue (a war, a closure) with their dates; "
+    "'## The picture' is then one short paragraph; do not invent a thread.",
     title_rule=_TITLE_RULE_COMPOSITION,
 )
 
-#: D2 — ask for the JUDGMENT, not the sentence. Ships the replacement SHAPE
-#: (driver + direction + pace + brake) in the same breath as the ban: a ban on
-#: its own produces "the principal vector", which is the same defect with a
-#: thesaurus.
+#: Ask for the judgment, not the sentence. The replacement shape (what moved,
+#: which way, what holds it back) ships in the same breath as the ban, because a
+#: ban on its own produces "the principal vector", the same defect with a
+#: thesaurus. A driver and a pace are asked for only when the evidence shows
+#: one: on a quiet window "no change" is a legal answer, and a forced driver is
+#: how a routine notice became a rising trend.
 UNIT_VERDICT_RULE: str = (
-    "STATE THE VERDICT IN YOUR OWN WORDS. Name the driver and the direction as "
-    "a claim a reader could disagree with — never by reciting a category "
-    "label. Say what is MOVING, in which DIRECTION, at what PACE, and WHAT IS "
-    "HOLDING IT BACK: the actor, commitment, constraint, or cost that caps it, "
-    "taken from the cited evidence. Where the direction is genuinely flat, say "
-    "what is holding it flat and name the ONE development that would break it. "
+    "STATE THE VERDICT IN YOUR OWN WORDS. If something moved, say what moved, "
+    "in which DIRECTION, and WHAT IS HOLDING IT BACK — the actor, commitment, "
+    "constraint, or cost that caps it, taken from the cited evidence — as a "
+    "claim a reader could disagree with, never by reciting a category label. "
+    "Give a pace only where the cited signals show one. If nothing in the "
+    "cited signals moved the read, say that and name the standing state; do "
+    "not choose a driver to have one. 'No change' is a correct read of a "
+    "quiet window; over a cited war or another heavy standing state it still "
+    "names that state. "
     "BANNED PHRASES — do NOT write \"the most plausible near-term "
     "trajectory\", \"the dominant <thing> vector is\", or a bare \"steady "
     "tension\". Those are the question's vocabulary, not an answer; a reader "
@@ -446,20 +513,22 @@ UNIT_VERDICT_RULE: str = (
     "it is not in your prose."
 )
 
-#: D3 — bind the absence rule to the BLUF slot, and pin confidence to the
-#: OBSERVATION. The unit prompts already win this argument in the bullets and
+#: One statement of the absence rule (desk-scoped negatives, including in the
+#: BLUF), and confidence pinned to the OBSERVATION. The unit prompts already win this argument in the bullets and
 #: lose it in the headline: 336/701 BLUFs assert an absence and only 40 are
 #: collection-scoped. The live case this exists to stop is proliferation_watch
 #: reporting confidence 0.92 that a nuclear-weapons state shows "no observable
 #: progress in nuclear or broader WMD capabilities" — inferred from the topic
 #: being absent from a general-news feed.
 UNIT_BLUF_ABSENCE_RULE: str = (
-    "THE BLUF IS UNDER THE ABSENCE RULE TOO. The BLUF is written last and "
-    "compresses everything below it, which is exactly where a scope qualifier "
-    "gets dropped. If your verdict is a NEGATIVE, the BLUF ITSELF must carry "
-    "the collection scope — \"no <X> appears in this desk's collection through "
-    "<the as-of date>\" — never a bare world-fact (\"there is no <X>\", "
-    "\"<country> is not subject to <X>\"). "
+    "A NEGATIVE IS A STATEMENT ABOUT THIS DESK'S COLLECTION, NOT ABOUT THE "
+    "WORLD. Write it as \"no <X> appears in this desk's collection through "
+    "<the as-of date>\" or \"no collected signal reports <X>\", never as a "
+    "bare world-fact (\"there is no <X>\", \"<subject> is not subject to "
+    "<X>\"). This holds in the BLUF above all: the BLUF compresses "
+    "everything below it, which is where a scope qualifier gets dropped. "
+    "Before you write a negative, check that your own cited signals do not "
+    "carry the thing you are denying. A negative needs no marker. "
     "CALIBRATE CONFIDENCE TO THE OBSERVATION, NOT TO THE WORLD. High "
     "confidence that a topic is ABSENT FROM THIS SLICE is not high confidence "
     "that it is absent in reality, and your confidence number must be the "
@@ -474,7 +543,7 @@ UNIT_BLUF_ABSENCE_RULE: str = (
     "COVERAGE result, not a NEGATIVE result: say so in those words."
 )
 
-#: X4 / ESC (W11-F52) — EVERY FACT-STATING SENTENCE CARRIES ITS MARKER, and the
+#: X4 / ESC — EVERY FACT-STATING SENTENCE CARRIES ITS MARKER, and the
 #: BLUF is one of them. Pasted VERBATIM, as its own paragraph ahead of the
 #: response-schema paragraph, into the NINE bounded-unit descriptors - first
 #: ``escalation`` and ``military_posture`` (X4), then, once the 10-15 after-read
@@ -499,31 +568,30 @@ UNIT_BLUF_ABSENCE_RULE: str = (
 #: that carry the read, not only on the ones that name something: a looser
 #: statement of the line would leave the model guessing where the floor draws it.
 UNIT_CITED_SENTENCE_RULE: str = (
-    "EVERY SENTENCE THAT STATES A FACT CARRIES ITS MARKER. The verification "
-    "pass reads your body one sentence at a time, and a sentence that states "
-    "anything about the world and carries no [N] marker is scored as an "
+    "EVERY SENTENCE THAT STATES A FACT CARRIES ITS MARKER. A sentence that "
+    "states anything about the world and carries no [N] marker counts as an "
     "uncited claim — in any section, and in the BLUF above all, because the "
     "BLUF is the sentence a reader takes away. Three consequences. "
     "(1) THE BLUF IS A CITED SENTENCE: it ends with the [N] marker(s) of the "
     "signals that carry the facts it names, like any other claim "
-    "('**BLUF:** <the verdict, naming who is doing what> [N][N].'). A BLUF "
-    "that names nothing is the bare category label the verdict rule bans, so "
-    "there is no uncited form of it worth writing (a BLUF that is itself a "
-    "scoped negative follows the exception below). "
+    "('**BLUF:** <the verdict, naming who is doing what> [N][N].'). The one "
+    "exception is a BLUF that is itself a scoped negative, as on a quiet "
+    "window: it needs no marker. "
     "(2) EVERY SENTENCE IN '## What changed' AND IN '## Why it matters' ends "
     "with the marker(s) of the signals it reports or reasons from — analysis is "
-    "not exempt, because the grader cannot tell your inference from a fact you "
-    "left unsourced, and a sentence that rests on nothing you can cite is a "
-    "sentence to cut. ('## What would change this read' and '## Indicators' "
-    "look forward and need none.) "
+    "not exempt, because a reader cannot tell your inference from a fact you "
+    "left unsourced. On a quiet window, the sentence that names the standing "
+    "state cites the prior read or the signal it comes from. "
+    "('## What would change this read' and '## Indicators' look forward and "
+    "need none.) "
     "(3) Write each marker in ASCII brackets at the end of the sentence, [N] "
     "or [N][N] — never in full-width brackets and never as a bare number. "
     "A scoped negative, written in the house form (\"no <X> appears in this "
     "desk's collection through <date>\"), has nothing to cite and carries no "
     "marker; keep it scoped and keep the \"no\" at its head. Before you "
-    "emit, re-read the body once as a grader would, and for every sentence "
-    "without a marker either add the signal it rests on or cut it: a fact you "
-    "cannot point to is a fact you may not state."
+    "emit, re-read the body once, and for every other sentence without a "
+    "marker either add the signal it rests on or cut it: a fact you cannot "
+    "point to is a fact you may not state."
 )
 
 #: D5 — the pipeline's own bookkeeping is being read aloud as intelligence:
@@ -548,8 +616,7 @@ NO_INSTRUMENT_READINGS: str = (
     "\"2026-08-03T09:15:53.997707+00:00\")."
 )
 
-#: FRAME-3 — SEVERITY AS STATE (``planning/FRAME_PROGRAM_2026-08-20.md`` §0.6,
-#: §7 train 3). The C-B driver, and the only one of R1's findings that lives
+#: FRAME-3 — SEVERITY AS STATE. The driver, and the only finding that lives
 #: entirely in a single tag's MEANING: a desk tagged the severity of its SLICE
 #: DELTA, so a war in its fourth month tagged ``severity:low`` on a week that
 #: added nothing to it, the scorecard banded the dimension ``low`` off that tag,
@@ -573,21 +640,24 @@ NO_INSTRUMENT_READINGS: str = (
 #: no-op the tests could not see. So the rule states its own precedence, once,
 #: instead of nine bespoke edits to nine differently-worded schema paragraphs.
 SEVERITY_AS_STATE_RULE: str = (
-    "SEVERITY IS THE STANDING STATE, NOT THIS SLICE'S MOVEMENT. Your "
+    "SEVERITY IS THE STANDING STATE, NOT THIS WINDOW'S MOVEMENT. Your "
     "'severity:<level>' tag records WHERE YOUR DIMENSION STANDS on this desk "
     "right now — the condition a reader would find if they looked today — NOT "
-    "how far it moved in the last 72 hours. A war running for months is "
+    "how far it moved in this window. A war running for months is "
     "'severity:high' in a week that added nothing to it; a calm desk where one "
     "official traded an insult is 'severity:low' even though that insult is "
-    "the only thing that changed. Tag the STATE, and tag the MOVEMENT "
-    "SEPARATELY: alongside your severity tag emit EXACTLY ONE "
+    "the only thing that changed. On a quiet or thin window, tag the standing "
+    "state the cited prior read or a cited signal shows, and use "
+    "'severity:low' only when neither shows a higher one. Tag the STATE, and "
+    "tag the MOVEMENT SEPARATELY: alongside your severity tag emit EXACTLY ONE "
     "'severity_delta:<rose|fell|steady|new>' tag — 'rose' or 'fell' when this "
-    "slice's cited evidence moves the standing level up or down, 'steady' when "
-    "you checked it against your prior read and the level held (a HIGH level "
-    "that held is 'severity:high' + 'severity_delta:steady', never a demotion), "
-    "and 'new' when you have no prior read of this dimension to compare "
-    "against — never 'steady', which claims a comparison you did not make. The "
-    "pair is the point: 'severity:high' + 'severity_delta:steady' is a serious "
+    "window's cited evidence moves the standing level up or down, 'steady' "
+    "when you checked it against your prior read and the level held (no "
+    "change is a correct answer, and a HIGH level that held is "
+    "'severity:high' + 'severity_delta:steady', never a demotion), and 'new' "
+    "when you have no prior read of this dimension to compare against — "
+    "never 'steady', which claims a comparison you did not make. The pair is "
+    "the point: 'severity:high' + 'severity_delta:steady' is a serious "
     "condition that is still running, while 'severity:low' + "
     "'severity_delta:rose' is a quiet desk that just twitched, and downstream "
     "they must not read alike. THIS TAG IS REQUIRED IN ADDITION to every tag "
@@ -599,9 +669,39 @@ SEVERITY_AS_STATE_RULE: str = (
     "movement gets said in words."
 )
 
-#: The block pasted VERBATIM into all nine bounded-unit descriptors. Order is
-#: the order a writer needs it: shape, then verdict, then the tag split the
-#: verdict feeds, then the two rules that most often break at the BLUF. The
+#: The words a desk uses when it says how likely something is: the shared
+#: table's bare words, since a desk never prints a percentage.
+UNIT_LIKELIHOOD_RULE: str = (
+    "LIKELIHOOD WORDS. When you say how likely something is, use one of these "
+    f"words: {LIKELIHOOD_WORD_LIST}. Never write a percentage or a probability "
+    "number in the prose. How strong the sourcing is and how likely the thing "
+    "is are two different statements: say each in its own words."
+)
+
+#: The unit layer's own statement of which numbers stay out of prose. The
+#: composition layer keeps :data:`NO_INSTRUMENT_READINGS`, which names fields
+#: only a composition sees; a desk is told only about fields it is shown, and
+#: its example names no country.
+UNIT_NO_INSTRUMENT_READINGS: str = (
+    "NO INSTRUMENT READINGS IN PROSE. Confidence values, a situation's "
+    "intensity score and event_count, indicator 'status' / 'horizon_date' / "
+    "'first_seen' fields, id slugs, supersession and freshness advisories, "
+    "run ids and internal analyst_ids are the LEDGER, not the read: USE them "
+    "to decide, never PRINT them. They already live in the structured fields "
+    "that carry them. In prose, say the same thing in words a reader outside "
+    "this system would use — \"the better-supported of the two reports\", "
+    "never a score. "
+    "RENDER DATES AS A HUMAN WOULD. Every date you cite is a plain calendar "
+    "date — \"3 August\", or \"3 August 09:15 UTC\" when the hour matters — "
+    "NEVER a raw ISO or microsecond timestamp copied out of a field (never "
+    "\"2026-08-03T09:15:53.997707+00:00\")."
+)
+
+#: The block pasted VERBATIM into the bounded-unit descriptors. Order is the
+#: order a writer needs it: shape, the quiet-window case, verdict, likelihood
+#: words, the tag split the verdict feeds, the two rules that most often break
+#: at the BLUF, and last the sentence that the pasted evidence is material, not
+#: instructions (it refers back to the reply format, so it comes after it). The
 #: AS-OF rule is NOT here — it is code-appended to every unit via
 #: ``unit_grounding.UNIT_GROUNDING_CLAUSE``, so it needs no descriptor copy at
 #: all.
@@ -610,10 +710,13 @@ UNIT_READ_CONTRACT: str = "\n\n".join(
         "HOUSE READ CONTRACT — identical on every desk. Follow it; do not "
         "restate it in your output.",
         UNIT_BODY_SHAPE,
+        UNIT_QUIET_WINDOW_RULE,
         UNIT_VERDICT_RULE,
+        UNIT_LIKELIHOOD_RULE,
         SEVERITY_AS_STATE_RULE,
         UNIT_BLUF_ABSENCE_RULE,
-        NO_INSTRUMENT_READINGS,
+        UNIT_NO_INSTRUMENT_READINGS,
+        PASTED_TEXT_IS_DATA,
     )
 )
 
@@ -946,6 +1049,7 @@ SEVERITY_STATE_READ_RULE: str = (
 
 __all__ = [
     "ANALYTIC_PREAMBLE",
+    "ANALYTIC_STANDARDS",
     "ASSESSMENT_STANDARDS",
     "BANNED_PHRASE_MARKERS",
     "BANNED_TEMPLATE_PHRASES",
@@ -954,7 +1058,12 @@ __all__ = [
     "CARRIED_ANCHOR_RULE",
     "COMPOSITION_BODY_SHAPE",
     "CONSEQUENCE_RULE",
+    "INDEPENDENCE_SENTENCE",
+    "JSON_OUTPUT_RULE",
+    "LIKELIHOOD_WORDS",
+    "LIKELIHOOD_WORD_LIST",
     "NO_INSTRUMENT_READINGS",
+    "PASTED_TEXT_IS_DATA",
     "RETRIEVED_CONTEXT_RULE",
     "SEVERITY_AS_STATE_RULE",
     "SEVERITY_STATE_READ_RULE",
@@ -963,12 +1072,16 @@ __all__ = [
     "UNIT_BODY_SHAPE",
     "UNIT_BODY_SHAPE_D6",
     "UNIT_CITED_SENTENCE_RULE",
+    "UNIT_LIKELIHOOD_RULE",
+    "UNIT_NO_INSTRUMENT_READINGS",
+    "UNIT_QUIET_WINDOW_RULE",
     "UNIT_READ_CONTRACT",
     "UNIT_READ_CONTRACT_D6",
     "UNIT_VERDICT_RULE",
     "as_of_rule",
     "with_preamble",
     "with_preamble_if_absent",
+    "with_standards",
 ]
 
 
@@ -984,10 +1097,12 @@ ASSESSMENT_STANDARDS: str = (
     "ANALYTIC STANDARDS, in this channel's terms. "
     "(1) SEPARATE OBSERVATION FROM JUDGMENT — what the record STATES is "
     "observed; what you make of it is assessed, and the sentence says which. "
-    "(2) CALIBRATE — 'likely' where one block carries it, 'possibly' where the "
-    "block is thin or below the floor, and never precision the record does not "
-    "carry. The blocks show you their own verify scores; a block at 0.36 is not "
-    "a block at 1.00 and your LANGUAGE must be able to tell them apart — the "
+    "(2) CALIBRATE — say how strong the support is (several blocks resting on "
+    "independent originators, one block, or a block that is thin or below the "
+    "floor) separately from how likely the thing is; when you say how likely, "
+    f"use one of these words: {LIKELIHOOD_WORD_LIST}; and never precision the "
+    "record does not carry. The blocks show you their own verify scores; a block at 0.36 is not "
+    "a block at 0.97 and your LANGUAGE must be able to tell them apart — the "
     "hedge is the place that difference shows, never a sentence about the "
     "score. "
     "(3) MIND TIME — every block carries its own produced-at and age. An older "

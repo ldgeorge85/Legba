@@ -10,10 +10,12 @@ A sentence does NOT hold when:
 - it adds a cause, a motive or an intent the quote does not state (adds_cause_or_intent);
 - it adds a forecast or a consequence the quote does not state (adds_forecast);
 - the quote attributes it to a party ("X claimed that …", "a spokesman said …") and the sentence states it as fact (claim_as_fact);
+- the quote hedges it ("may", "reportedly", "plans to") or reports it as a party's plan, and the sentence states it as done or certain (certainty_raised);
+- the quote stops before the row's own correction, denial or qualification (selective_quote);
 - the quote says the opposite, or denies it (contradicts_quote);
 - the quote is about something else (quote_does_not_say_it);
 - it cites no quote at all (no_quote).
 
 Judge only against the quotes shown. What you know about the world does not count, for or against.
 
-A candidate falls if ANY of its sentences does not hold. Gate only: a candidate that falls here is removed before the vote.
+A candidate falls if ANY of its sentences does not hold. Set outcome to falls when any sentence does not hold. Gate only: a candidate that falls here is removed before the vote.

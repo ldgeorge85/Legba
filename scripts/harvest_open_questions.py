@@ -11,7 +11,7 @@ faucet exists but has never been opened by a model, so the open-question set
 is empty even though the substrate ALREADY records plenty of question-shaped
 state. This script seeds the set deterministically from five source classes:
 
-  * ``scorecard_disagreement`` — a scorecard↔composition contradiction (B0-5):
+  * ``scorecard_disagreement`` — a scorecard↔composition contradiction:
     a dimension the scorecard banded ``insufficient-evidence`` while the live
     composition head cites / derives from a finding of that same dimension.
     Recomputed with the SAME pure reducers both read surfaces use

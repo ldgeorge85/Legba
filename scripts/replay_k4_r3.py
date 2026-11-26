@@ -6,7 +6,7 @@
 THE PRE-REGISTERED ACCEPTANCE TEST for the CW train. K-4 round 3 labeled 120
 (signal, open-question) pairs sampled off the LIVE gated stream and measured
 the population-weighted precision of what ``claim_watch/3.3.0`` wrote at
-**0.267** (planning/K4_LABELS_R3.csv, planning/K4_R3_README.md). This script
+**0.267**. This script
 re-runs those same 120 rows through the guards 4.0.0 added and reports what
 each one does to precision AND to true-positive retention, per stratum and per
 failure class.
@@ -76,7 +76,7 @@ from legba.data.analysts.question_text import is_deictic  # noqa: E402
 
 DEFAULT_WORKSHEET = REPO / "planning" / "K4_R3_WORKSHEET_LABELED.csv"
 
-#: The R3 population, from planning/K4_R3_README.md §2a. The SAMPLE
+#: The R3 population, from the labelling README. The SAMPLE
 #: over-represents confirm_yes 47.5% vs 28.0% by design, so an unweighted
 #: pooled number off this sheet is a sampler artifact (the README calls it a
 #: trap, and the 0.400 it produces is 1.5x the true 0.267). Every headline
@@ -281,7 +281,7 @@ def _line(name: str, rows: list[Row], kept: list[Row]) -> str:
 
 
 def report(rows: list[Row], cw4_blocked: set[str], *, db: bool) -> bool:
-    print("K-4 R3 REPLAY — the CW precision train against the 120 gold labels")
+    print("Match-filter REPLAY — the CW precision train against the 120 gold labels")
     print(f"  worksheet rows : {len(rows)}   correct_match: "
           f"{sum(1 for r in rows if r.correct)}")
     surface = (
@@ -292,9 +292,9 @@ def report(rows: list[Row], cw4_blocked: set[str], *, db: bool) -> bool:
     print()
 
     guards = [
-        ("CW-1 confirm blocking", cw1_blocked),
-        ("CW-3 deictic guard", cw3_blocked),
-        ("CW-5 contention subject anchor", cw5_blocked),
+        ("confirm blocking", cw1_blocked),
+        ("deictic guard", cw3_blocked),
+        ("contention subject anchor", cw5_blocked),
     ]
 
     print("BASELINE (what claim_watch/3.3.0 wrote)")
@@ -305,19 +305,19 @@ def report(rows: list[Row], cw4_blocked: set[str], *, db: bool) -> bool:
     for name, pred in guards:
         print(_line(name, rows, [r for r in rows if not pred(r)]))
     print(_line(
-        "CW-4 contention liveness",
+        "contention liveness",
         rows,
         [r for r in rows if r.pair_id not in cw4_blocked],
     ))
     print()
 
-    print("CUMULATIVE (the shipped 4.0.0 pipeline, CW-2 scored as a no-op)")
+    print("CUMULATIVE (the shipped 4.0.0 pipeline, one step scored as a no-op)")
     kept = list(rows)
     for name, pred in guards:
         kept = [r for r in kept if not pred(r)]
         print(_line(f"+ {name}", rows, kept))
     kept = [r for r in kept if r.pair_id not in cw4_blocked]
-    print(_line("+ CW-4 contention liveness", rows, kept))
+    print(_line("+ contention liveness", rows, kept))
     print()
 
     print("BY STRATUM (population share -> what survives)")
@@ -348,7 +348,7 @@ def report(rows: list[Row], cw4_blocked: set[str], *, db: bool) -> bool:
     print()
 
     print("WATCH-HIT STREAM (data.bearing_watch='confirmed' only — what a "
-          "K-5 closer would act on)")
+          "the closer would act on)")
     confirmed = [r for r in kept if r.confirm == "yes"]
     print(_line("confirmed band", rows, confirmed))
     print()
@@ -379,7 +379,7 @@ def main() -> int:
 
     if not args.worksheet.exists():
         print(f"worksheet not found: {args.worksheet}", file=sys.stderr)
-        print("(planning/ is gitignored — this file is evidence, not code)",
+        print("(the replay outputs are evidence, not code)",
               file=sys.stderr)
         return 2
 

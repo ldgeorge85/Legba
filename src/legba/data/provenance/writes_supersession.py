@@ -6,11 +6,11 @@ Extracted from ``writes.py`` (2026-09, the module-size gate — the port-file
 rule is honoured by SPLITTING, never by raising a ceiling). This module is
 the cohesive unit the file's own section banners already named: the
 source-tier precedence table (Holes-A A1), the contested-claims coexistence
-flag (Holes-B Wave 4), and the four close-the-prior-open-row writers for
+flag, and the four close-the-prior-open-row writers for
 ``facts`` and ``nexuses`` — ``supersede_prior_facts``,
 ``_supersede_prior_facts_coexist``, ``supersede_prior_functional_role_facts``,
-``collapse_open_triple`` and ``supersede_prior_nexuses`` — plus (W11
-C-2b-2/facts) the operator's exact-id writers the consult write plane uses:
+``collapse_open_triple`` and ``supersede_prior_nexuses`` — plus the
+operator's exact-id writers the consult write plane uses:
 ``read_open_fact_set``, ``close_facts_by_id``, ``reopen_facts_by_id``,
 ``open_set_digest`` and ``lock_fact_pair``. ``supersede_prior_facts`` returns
 a :class:`ClosedFacts` — the count every caller compared, plus the closed ids
@@ -87,7 +87,7 @@ def _source_tier_rank(source_type: str | None) -> int:
     return _SOURCE_TIER_RANK.get(source_type.strip().lower(), _DEFAULT_SOURCE_TIER_RANK)
 
 # ---------------------------------------------------------------------------
-# Contested-claims coexistence (Holes-B Wave 4 — #101, decision #1)
+# Contested-claims coexistence
 # ---------------------------------------------------------------------------
 #
 # The ONE behavioral change of the contested-claims feature, gated OFF by
@@ -184,7 +184,7 @@ async def supersede_prior_facts(
         insert on the same ``conn`` so the close + open are one logical step
         (the dapr write path acquires one connection per output).
 
-    **Contested-claims coexistence (Holes-B Wave 4, ``LEGBA_FACT_CONTENTION``).**
+    **Contested-claims coexistence (``LEGBA_FACT_CONTENTION``).**
     When the flag is ON one extra rule joins the close set: a SAME-TIER prior
     open row whose value is FUZZY-DISTINCT from the incoming value is NOT closed
     — both rows COEXIST open so the detect-only ``fact_contention_arbiter`` opens
@@ -279,7 +279,7 @@ async def _supersede_prior_facts_coexist(
 
     Replaces the single blind UPDATE with a FETCH → decide-per-row → close-set
     UPDATE so a same-tier fuzzy-distinct prior can COEXIST instead of being
-    closed (Holes-B Wave 4, decision #1). The close set is computed in Python:
+    closed. The close set is computed in Python:
     a differing-value open prior closes iff it passes the A1 source-tier guard
     AND is NOT (same-tier AND fuzzy-distinct from the incoming value). Lower-tier
     priors still close (the incoming outranks them); higher-tier priors are
@@ -291,7 +291,7 @@ async def _supersede_prior_facts_coexist(
     replay re-fetches an already-closed prior as gone. Returns the number of
     prior rows actually closed.
     """
-    # Lazy import — the fuzzy clusterer is a sibling module (Wave 2); importing
+    # Lazy import — the fuzzy clusterer is a sibling module; importing
     # it only inside the ON branch keeps the OFF hot path and module import free
     # of the dependency, and lets a test substitute it via monkeypatch.
     from .value_clustering import cluster_values

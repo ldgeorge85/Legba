@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """THE INDEPENDENCE COUNT — how many sources are actually behind a quoted claim.
 
-Program 7 piece 7d. Two sentences, and the whole module is their machinery:
+Two sentences, and the whole module is their machinery:
 
   * **A claim quoted upward with ONE source behind it must say so.** The record
     already prints ``N sources`` on every attribution line, and until this

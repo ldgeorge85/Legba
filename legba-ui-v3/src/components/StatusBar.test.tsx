@@ -174,6 +174,21 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
+describe('the reader side states no judge or grader figure', () => {
+  it('shows sources and gaps only, and never asks the judge or grader routes', async () => {
+    stubFetch()
+    scopeToDesk()
+    render(bar({ side: 'reader' }))
+    await waitFor(() => expect(screen.getByTestId('coverage-sources')).toHaveTextContent('1/2 firing'))
+    await waitFor(() => expect(screen.getByTestId('coverage-absence')).toHaveTextContent('1 recorded'))
+    expect(screen.queryByTestId('coverage-judge')).toBeNull()
+    expect(screen.queryByTestId('coverage-grader')).toBeNull()
+    const urls = (fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((c) => String(c[0]))
+    expect(urls.some((u) => u.includes('/v3/system/judge-stats'))).toBe(false)
+    expect(urls.some((u) => u.includes('/v3/eval/grader_roster'))).toBe(false)
+  })
+})
+
 describe('the honesty footer — all four routes answering', () => {
   it('states four figures, each with its unit and its own as-of', async () => {
     stubFetch()
@@ -186,8 +201,8 @@ describe('the honesty footer — all four routes answering', () => {
       expect(screen.getByTestId('coverage-judge')).toHaveTextContent('faithfulness'),
     )
     expect(screen.getByTestId('coverage-grader')).toHaveTextContent('44/187 desks graded')
-    await waitFor(() => expect(screen.getByTestId('coverage-absence')).toHaveTextContent('typed'))
-    expect(screen.getByTestId('coverage-absence')).toHaveTextContent('1 typed')
+    await waitFor(() => expect(screen.getByTestId('coverage-absence')).toHaveTextContent('recorded'))
+    expect(screen.getByTestId('coverage-absence')).toHaveTextContent('1 recorded')
 
     // Every figure carries an as-of beside the value, not only in the tooltip.
     for (const id of ['sources', 'judge', 'grader', 'absence']) {
@@ -261,7 +276,7 @@ describe('the honesty footer — a scope with no absence read', () => {
     await waitFor(() =>
       expect(screen.getByTestId('coverage-absence')).toHaveAttribute('data-unmeasured', 'false'),
     )
-    expect(screen.getByTestId('coverage-absence')).toHaveTextContent('1 typed')
+    expect(screen.getByTestId('coverage-absence')).toHaveTextContent('1 recorded')
   })
 })
 

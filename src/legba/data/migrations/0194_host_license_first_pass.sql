@@ -3,31 +3,19 @@
 --
 -- 0194_host_license_first_pass.sql
 --
--- The operator's first-pass ratification of
--- `planning/HOST_LICENSE_CLASSIFICATION_PROPOSAL_2026-09-05.md` §2 (CLEARED)
--- and §3 (FORBIDDEN) against the `source_credibility.license_class` column
--- migration 0192 added (still NULL on all 119 rows, live, as of 2026-09-06 —
--- `select coalesce(license_class,'NULL'), count(*) from source_credibility
--- group by 1` returns exactly one row, `NULL | 119`).
+-- First-pass licence classification of source hosts, written to the
+-- `source_credibility.license_class` column that migration 0192 added (NULL
+-- on every row until now).
 --
--- SCOPE — exactly §2 and §3, nothing else
--- ----------------------------------------
--- The operator took the proposal's own recommended posture, verbatim: apply
--- §2 (10 hosts, settled public-domain doctrine or a live-verified licence)
--- and §3 (0 hosts — every do-not-register host in the LIC-1 ledger was never
--- onboarded as a source, so there is nothing live to retroactively forbid;
--- §3's own template is reproduced below, commented out, for the day a
--- forbidden host IS registered). §4's 24 genuinely-ambiguous hosts (the
--- personal-use bloc, the Al Jazeera anti-automated-analysis pair, the hard-
--- paywall bloc, and 9 unverified-terms singles) are a deliberate policy call
--- this migration does NOT make — they stay exactly as they are, NULL, i.e.
--- TEASER depth. §5's 85-host TEASER stamp table is likewise NOT applied here
--- — it is optional ledger-honesty bookkeeping the proposal itself marks
--- "recommended, not mandatory," and behaviour is IDENTICAL whether those rows
--- carry an explicit `permissive_feed_unreviewed`/`unknown` stamp or stay
--- NULL. This migration's only job is to move the 10 §2 hosts off NULL.
+-- SCOPE
+-- -----
+-- Ten hosts whose licence is settled (public-domain doctrine or a published
+-- open licence) are stamped with a cleared class. No host is stamped
+-- forbidden: no host that would need it is registered as a source; the
+-- template for that case is reproduced below, commented out. Every other
+-- host stays NULL, which behaves as teaser depth.
 --
--- VOCABULARY — enforced in code, asserted by this train's own test
+-- VOCABULARY — enforced in code, asserted by this migration's test
 -- ------------------------------------------------------------------
 -- `license_class` carries no DB CHECK constraint (migration 0192's own
 -- discipline — "the vocabulary grows with the ledger's review passes, and a
@@ -41,7 +29,7 @@
 -- `legba.data.analysts.deterministic_handlers.evidence_archiver.
 -- FORBID_RETENTION_CLASSES` (reused verbatim by
 -- `research_evidence.forbidden_license_classes()`) — this migration writes
--- ZERO forbidding verdicts, matching §3's live count of 0.
+-- ZERO forbidding verdicts.
 -- `tests/data_pkg/test_migration_0194_host_license_first_pass.py` asserts
 -- both memberships directly against the code, not against this comment.
 --
@@ -53,8 +41,8 @@
 -- who has ALREADY hand-classified one of these 10 hosts to something else
 -- since this file was written keeps their own verdict — this migration will
 -- never overwrite it. `scored_by` is stamped `'migration.0194'` (the 0080
--- convention) so the ledger shows these 10 rows were operator-ratified via
--- this ratification pass, not a live ad-hoc ledger review.
+-- convention) so the ledger shows these 10 rows came from this
+-- migration, not from a later manual review.
 --
 -- CONSUMPTION — what changes, and when
 -- ---------------------------------------

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""A3 — seed the global budget envelope (the system-wide daily ceiling).
+"""Seed the global budget envelope (the system-wide daily ceiling).
 
 The per-analyst caps (`method.budget_tokens_per_day` in each descriptor) bound
 each analyst individually. The global envelope (migration 0022,
@@ -9,14 +9,14 @@ analyst's `budget_ledger.tokens_used` for the bucket crosses `tokens_cap`,
 `BudgetEnforcer.precall_check` returns `global_exhausted` and the runtime flips
 the process-global demote/pause flag for EVERY actor for the rest of the day.
 
-Why this matters under A2 concurrency
--------------------------------------
-A2 made the per-(analyst, target) cadence runs concurrent (the country_assessor
+Why this matters under concurrency
+----------------------------------
+The per-(analyst, target) cadence runs are concurrent (the country_assessor
 fans out to 19 country workers, bounded at _FANOUT_CHUNK=5). Concurrent LLM
 calls all land in the same daily bucket; the per-analyst cap protects each
 analyst, but only the GLOBAL envelope protects the aggregate daily ceiling when
 several analysts burn concurrently. Seeding it is what keeps "demote-on-
-exhaustion still protects the daily ceiling under concurrency" (A3 requirement).
+exhaustion still protects the daily ceiling under concurrency".
 
 Chosen cap — math
 -----------------
@@ -31,11 +31,11 @@ zero tokens and carry no cap):
     -----------------------------
     sum of caps        750 000   tok/day
 
-The post-A3 cadences are each individually budget-safe (see the descriptor
+The cadences are each individually budget-safe (see the descriptor
 headers), so the EXPECTED aggregate daily burn is well under the sum of caps.
 We set the global envelope to 800 000 tok/day — the sum of caps plus ~7%
 headroom for consult bursts. It only fires if multiple analysts simultaneously
-approach their individual ceilings (the concurrency overrun A3 guards against),
+approach their individual ceilings (the concurrency overrun the envelope guards against),
 at which point `on_exceeded='demote_all'` halts paid spend for the rest of the
 UTC day. NULL `usd_cap` — the dollar ceiling is governed by the per-provider
 price tables + the assessor's self-hosted (zero-priced) primary; tokens are the

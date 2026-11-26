@@ -1,8 +1,8 @@
 /**
- * Unit tests for the contrary-evidence reading model (Program 7a).
+ * Unit tests for the contrary-evidence reading model.
  *
- * Three things are locked here, and the first is the one the whole lane rests
- * on: NOTHING ON THIS SURFACE MAY READ A STANCE AS A VERDICT. `contradicts`
+ * Three things are locked here, and the first is the one the whole surface
+ * rests on: NOTHING ON THIS SURFACE MAY READ A STANCE AS A VERDICT. `contradicts`
  * means a page this platform fetched and holds states the opposite of a claim
  * we published; it does not mean the claim is false, and the sentence a chip
  * shows has to stop where the retrieval stopped.

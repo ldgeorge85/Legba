@@ -86,13 +86,12 @@ from .assembly_payload import (
     assembly_enabled,
 )
 from .assessment_prompts import (
-    # RE-EXPORTS, and they are now INERT for dispatch. P3 Lane A moved the voice
-    # selection into ``system_prompt_for`` / ``prompt_version_for``, which
+    # RE-EXPORTS, and they are now INERT for dispatch. The voice
+    # selection moved into ``system_prompt_for`` / ``prompt_version_for``, which
     # resolve from the RECORD's tier and read those two names in their own
     # module at call time. They stay importable here because this module's name
-    # has been the public handle on the channel's voice since D-6 — but a caller
-    # that REBINDS ``assessment_channel.ASSESSMENT_SYSTEM`` now changes nothing
-    # (``scripts/d6_clause_replay.py`` was repointed in the same commit).
+    # has been the public handle on the channel's voice for a long time — but a caller
+    # that REBINDS ``assessment_channel.ASSESSMENT_SYSTEM`` now changes nothing.
     ASSESSMENT_SYSTEM,  # noqa: F401 — re-exported surface
     PROMPT_VERSION,  # noqa: F401 — re-exported surface
     build_assessment_prompt,

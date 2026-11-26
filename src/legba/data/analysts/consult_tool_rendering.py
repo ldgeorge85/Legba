@@ -37,6 +37,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from ..display_policy import OPERATOR, READER, display_payload, principal_class
+from ..outside_text import inert_frames_deep
 
 
 def _trim_args(args: Mapping[str, Any]) -> dict[str, Any]:
@@ -132,7 +133,11 @@ def _bounded_tool_json(tool_result: Any, limit: int) -> str:
     a degenerate limit smaller than the envelope itself still returns the
     minimal envelope). Non-serializable input degrades to an honest error
     envelope rather than raising.
+
+    Frame tokens inside the result's text (an answer marker, a fence, a judge
+    header) are made inert first, so outside text cannot pose as the frame.
     """
+    tool_result = inert_frames_deep(tool_result)
     try:
         full = json.dumps(tool_result)
     except (TypeError, ValueError):

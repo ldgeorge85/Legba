@@ -1,5 +1,5 @@
 /**
- * Casework store (v4 Wave 3) — orchestrator-owned contract + persistence.
+ * Casework store — orchestrator-owned contract + persistence.
  *
  * The /case room is a freeform Excalidraw board where the analyst pins typed
  * cards (signal / finding / entity / situation / source / target / analyst) and

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """legba.prompts.lens_common — the shared scaffolding for the VOICES faculty
-lenses (planning/VOICES_PLAN_2026-07-21.md, DL-1/DL-3; PRIOR_SPEC §5).
+lenses.
 
 The four v1 faculties (lens_trend / lens_baserate / lens_capability /
 lens_intent) are the SAME analyst kind (``identity.kind: journal_assessor``) as

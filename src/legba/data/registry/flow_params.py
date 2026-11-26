@@ -3,8 +3,9 @@
 """Sampling parameters — CONFIGURED (the descriptor) vs SENT (the wire).
 
 The Flow inspector shows both, because they differ: a descriptor's
-``method.llm.max_tokens`` is configured on most LLM analysts and is not sent
-on any OpenAI-compatible route; several call sites hard-code ``temperature``.
+``method.llm.max_tokens`` (on the consult kinds, an output estimate) is never
+sent on any route — the wire carries the alias's own declared maximum, or
+nothing; several call sites hard-code ``temperature``.
 Nothing here is guessed from documentation: every rule is a CODE FACT with the
 file it lives in, and ``tests/data_pkg/test_flow_api.py`` pins each one
 against the code it mirrors (the subprovider rule against
@@ -13,12 +14,11 @@ the Anthropic temperature-drop prefixes, every hard-coded site's literal).
 
 What this module CANNOT see, and says so on every answer:
 
-* the runtime container's ``LEGBA_LLM_SEND_MAX_TOKENS`` (it lives in another
-  process; the registry's environment is not the runtime's);
-* the gateway's own behaviour (default output tokens, fixed sampling on some
-  aliases) — that is the far side of the wire, recorded in
-  ``planning/reviews/DESIGN_2026-11-13/05_MODEL_PARAMS_TRACE.md`` §1.1(6),
-  not in code;
+* the runtime container's ``LEGBA_LLM_SEND_MAX_TOKENS`` off switch (it lives in
+  another process; the registry's environment is not the runtime's);
+* the gateway's own behaviour (its default output tokens for an alias whose
+  maximum the component does not declare, fixed sampling on some aliases) —
+  that is the far side of the wire, not in code;
 * the temperature actually sent on a given call: ``analyst_traces.llm_calls``
   does not record it. What a trace does record (model, finish reason, token
   counts) is returned beside this, labelled observed.
@@ -60,7 +60,7 @@ HARD_CODED_TEMPERATURE: dict[str, list[tuple[str, float, str]]] = {
 }
 
 #: The faithfulness judge leg every LLM finding gets (``verify`` role).
-VERIFY_JUDGE_TEMPERATURE = (HOUSE_TEMPERATURE, "data/provenance/judge_transport.py (judge call temperature=HOUSE_TEMPERATURE, the house rule since 2026-11-13)")
+VERIFY_JUDGE_TEMPERATURE = (HOUSE_TEMPERATURE, "data/provenance/judge_transport.py (judge call temperature=HOUSE_TEMPERATURE, the house rule)")
 
 
 def infer_subprovider(component_id: str | None) -> str:
@@ -106,7 +106,6 @@ def _sent_for_route(
         temp, tbasis = VERIFY_JUDGE_TEMPERATURE
     out: dict[str, Any] = {
         "role": role, "component_id": component_id, "subprovider": sub, "model": model,
-        "component_max_tokens": comp.get("max_tokens"),
     }
     if sub in ("vllm", "openai"):
         sent_t = temp if temp is not None else VLLM_DEFAULT_TEMPERATURE
@@ -114,13 +113,13 @@ def _sent_for_route(
         out["temperature_basis"] = (
             tbasis if temp is not None
             else "caller passed none → handler default 1.0 (data/stack/llm/vllm.py _DEFAULT_TEMPERATURE)")
-        out["max_tokens_sent"] = None
-        out["max_tokens_basis"] = (
-            "NOT SENT: data/stack/llm/vllm.py sends max_tokens only with send_max_tokens=True "
-            "(no call site passes it) or LEGBA_LLM_SEND_MAX_TOKENS set in the RUNTIME container "
-            "(not visible from the registry). The gateway then applies its own per-alias default. "
-            "When sent, the value is the component's max_tokens (the model's declared maximum), "
-            "never the call's.")
+        if sub == "vllm":
+            out.update(openai_compat_limits(comp))
+        else:
+            out["max_tokens_sent"] = None
+            out["max_tokens_basis"] = (
+                "NOT SENT on the OpenAI route (data/stack/llm/openai.py): the API's own default, "
+                "the model's maximum, applies; never the call's or the descriptor's value")
     elif sub == "anthropic":
         dropped = isinstance(model, str) and model.startswith(ANTHROPIC_TEMPERATURE_DROPPED_PREFIXES)
         out["temperature_sent"] = None if dropped else temp
@@ -144,6 +143,69 @@ def _sent_for_route(
     out["thinking_basis"] = ("no caller passes reasoning_effort; vllm.py ignores it; the alias "
                              "decides thinking on the gateway side")
     return out
+
+
+def _alias_limit_line(alias: Any, value: int | None, unresolved: str | None) -> str:
+    if value is not None:
+        return f"{alias}: SENT {value:,} (the alias's declared maximum output)"
+    if unresolved is not None:
+        return (f"{alias}: declared as {unresolved}, unset in the registry's environment — "
+                "the runtime resolves it, and fails loudly if it is unset there too")
+    return (f"{alias}: NOT SENT — the component declares no maximum for this alias, so the call "
+            "relies on the endpoint's default for it")
+
+
+def openai_compat_limits(comp: Mapping[str, Any]) -> dict[str, Any]:
+    """The output and input limits a call on an OpenAI-compatible component runs
+    under, per alias, from the component's declared values (``vllm.py``)."""
+    model, thinking = comp.get("model"), comp.get("thinking_model")
+    unresolved = comp.get("limits_unresolved") or {}
+    plain = _num(comp.get("max_output_tokens"))
+    deep = _num(comp.get("thinking_max_output_tokens")) if thinking else None
+    window = _num(comp.get("context_window_tokens"))
+    lines = [_alias_limit_line(model, plain, unresolved.get("max_output_tokens"))]
+    if thinking:
+        lines.append(_alias_limit_line(
+            thinking, deep, unresolved.get("thinking_max_output_tokens")))
+    lines.append(
+        "never the call's or the descriptor's value; less than the maximum only when the "
+        "counted input leaves less room in the context window (the call's receipt then "
+        "records max_tokens_sent and max_tokens_limited_by); LEGBA_LLM_SEND_MAX_TOKENS=0 in "
+        "the runtime container turns sending off (data/stack/llm/vllm.py)")
+    out: dict[str, Any] = {
+        "max_tokens_sent": plain,
+        "max_tokens_sent_thinking": deep,
+        "thinking_model": thinking,
+        "max_tokens_basis": "; ".join(lines),
+        "context_window_tokens": window,
+    }
+    budget, basis = derived_input_budget(window, [v for v in (plain, deep) if v])
+    out["input_budget_tokens"] = budget
+    out["input_budget_basis"] = basis
+    return out
+
+
+#: ``analysts/_llm_budget`` constants, mirrored (this module is registry-slim);
+#: ``tests/data_pkg/test_flow_api.py`` pins them equal.
+INPUT_BUDGET_DEFAULT = 32000
+INPUT_BUDGET_OUTPUT_RESERVE_MAX_SHARE = 0.5
+INPUT_BUDGET_MARGIN = 4096
+
+
+def derived_input_budget(window: int | None, maxima: list[int]) -> tuple[int | None, str]:
+    """The input budget the runtime derives for this route when
+    ``LEGBA_LLM_INPUT_TOKEN_BUDGET`` is unset in its container (that override
+    is not visible from here)."""
+    if not window:
+        return None, ("no context window declared: the runtime uses the window the endpoint "
+                      "lists, else LEGBA_LLM_INPUT_TOKEN_BUDGET, else "
+                      f"{INPUT_BUDGET_DEFAULT:,} (analysts/_llm_budget.py)")
+    share = int(window * INPUT_BUDGET_OUTPUT_RESERVE_MAX_SHARE)
+    reserve = min(max(maxima), share) if maxima else share
+    budget = window - reserve - INPUT_BUDGET_MARGIN
+    return budget, (f"window {window:,} - output reserve {reserve:,} - margin "
+                    f"{INPUT_BUDGET_MARGIN:,} (analysts/_llm_budget.py); "
+                    "LEGBA_LLM_INPUT_TOKEN_BUDGET in the runtime container overrides it")
 
 
 def sampling_params(
@@ -191,8 +253,10 @@ def sampling_params(
         "sent": sent,
         "hard_coded": hard,
         "cannot_see": [
-            "LEGBA_LLM_SEND_MAX_TOKENS in the runtime container (another process)",
-            "the gateway's per-alias defaults and fixed sampling (far side of the wire)",
+            "LEGBA_LLM_SEND_MAX_TOKENS (off switch) and LEGBA_LLM_INPUT_TOKEN_BUDGET "
+            "(override) in the runtime container (another process)",
+            "the gateway's per-alias defaults (used where no maximum is declared) and fixed "
+            "sampling (far side of the wire)",
             "the temperature actually sent per call (analyst_traces.llm_calls does not record it)",
         ],
     }
@@ -200,9 +264,14 @@ def sampling_params(
 
 __all__ = [
     "ANTHROPIC_TEMPERATURE_DROPPED_PREFIXES",
+    "INPUT_BUDGET_DEFAULT",
+    "INPUT_BUDGET_MARGIN",
+    "INPUT_BUDGET_OUTPUT_RESERVE_MAX_SHARE",
     "HARD_CODED_TEMPERATURE",
     "KIND_TEMPERATURE_DEFAULTS",
     "VLLM_DEFAULT_TEMPERATURE",
+    "derived_input_budget",
     "infer_subprovider",
+    "openai_compat_limits",
     "sampling_params",
 ]

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W11-F105 — a stack PUT whose content equals an EARLIER version re-heads it;
+"""A stack PUT whose content equals an EARLIER version re-heads it;
 `StackRegistry.rollback` + `POST /registry/stack/{component_id}/rollback`.
 
 Live 2026-10-23: `PUT /registry/stack/{id}` with a body whose content hash

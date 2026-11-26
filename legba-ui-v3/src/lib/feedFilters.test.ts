@@ -157,7 +157,7 @@ describe('verification facet', () => {
     expect(serializeFilter(p)).toBe('judge:unsampled')
   })
 
-  it('P0-4 — deriveRowVerdict flags verify-exempt structural rows', () => {
+  it('deriveRowVerdict flags verify-exempt structural rows', () => {
     // Via the analyst_id registry mirror (live-tail rows carry no stamp)…
     const tail = finding({
       analyst_id: 'graph_mining',

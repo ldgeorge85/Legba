@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""How each source kind's signals get a receipt (lane B-1) — declared, tested.
+"""How each source kind's signals get a receipt — declared, tested.
 
 Every registered kind (``legba.runtime.source_factory.discover_source_kinds``)
 must appear here, keyed by its ``handler.kind``; ``tests/runtime/

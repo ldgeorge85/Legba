@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane E0 — the run 1b harness on main: temperature, record format, the as-of arm.
+"""The bake-off harness: temperature, record format, the as-of arm.
 
 Fakes only: a scripted LLM, a recording pool, no registry, no gateway, no
 database. NO model is called. Pinned here:

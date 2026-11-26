@@ -39,6 +39,7 @@ import { FRAME_STORE_KEY, resetFrameState } from '@/state/frame'
 import { clearViewUndo } from '@/lib/panelActions'
 import { C1B_FIXTURE_CASE, C1B_FIXTURE_SESSION } from '@/test/caseFixture'
 import { dockIds, dockLayout, dockRegions, stageView } from '@/test/frameProbe'
+import { openConsultMenu } from '@/test/consultMenu'
 
 vi.mock('@/panels/v4/MapPanel', () => ({
   default: () => <div data-testid="stub-world-map" />,
@@ -101,7 +102,7 @@ async function boot(firstDock = 'v4.map') {
 }
 
 describe('the frame', () => {
-  it("lands on the Board: today's read on the stage, Consult under it, the map leading the panels", async () => {
+  it('lands on the Board: the ranked list on the stage, Consult under it, the map leading the panels', async () => {
     await boot()
     expect(surface()).toBe('board')
     for (const id of ['board', 'subject', 'ledger', 'watch']) {
@@ -111,7 +112,7 @@ describe('the frame', () => {
       expect(screen.queryByTestId(`surface-tab-${id}`)).toBeNull()
     }
     expect(screen.getByTestId('to-operator-side')).toBeInTheDocument()
-    expect(stageView()).toBe('v4.morning_read')
+    expect(stageView()).toBe('view:board_changed')
     // Consult is in the centre, under the stage, open — not a fixed column.
     expect(dockEl()).toHaveAttribute('data-placement', 'bottom')
     expect(dockEl()).toHaveAttribute('data-collapsed', 'false')
@@ -188,12 +189,15 @@ describe('pages switch by tab, by key and by link', () => {
 
   it('Reset lays the default back down and says so', async () => {
     await boot()
+    // the instrument views are the operator side's: opened there, on the Engine page
+    fireEvent.keyDown(window, { key: '5', altKey: true })
+    await waitFor(() => expect(surface()).toBe('engine'))
     act(() => {
-      drive(actionOf('open_panel', { kind: 'system.source_health', params: {} }))
+      drive(actionOf('open_panel', { kind: 'system.judge_stats', params: {} }))
     })
-    await waitFor(() => expect(dockIds()).toContain('system.source_health'))
+    await waitFor(() => expect(dockIds()).toContain('system.judge_stats'))
     fireEvent.click(screen.getByTestId('surface-reset'))
-    await waitFor(() => expect(dockIds()).not.toContain('system.source_health'))
+    await waitFor(() => expect(dockIds()).not.toContain('system.judge_stats'))
     expect(screen.getByTestId('surface-notice')).toHaveTextContent(/back to its default/)
   })
 })
@@ -203,7 +207,7 @@ describe('an open lands on the stage or in its home region, and never adds a col
     await boot()
     const before = dockRegions().length
     act(() => {
-      drive(actionOf('open_panel', { kind: 'system.wall', params: {} }))
+      drive(actionOf('open_panel', { kind: 'v4.map', params: {} }))
     })
     expect(surface()).toBe('board')
     expect(dockRegions().length).toBe(before)
@@ -220,23 +224,26 @@ describe('an open lands on the stage or in its home region, and never adds a col
 
   it("a panel-sized view REPLACES its region's previous opened view", async () => {
     await boot()
+    // the instrument views are the operator side's: opened there, on the Engine page
+    fireEvent.keyDown(window, { key: '5', altKey: true })
+    await waitFor(() => expect(surface()).toBe('engine'))
     act(() => {
-      drive(actionOf('open_panel', { kind: 'system.source_health', params: {} }))
+      drive(actionOf('open_panel', { kind: 'system.judge_stats', params: {} }))
     })
-    await waitFor(() => expect(dockIds()).toContain('system.source_health'))
+    await waitFor(() => expect(dockIds()).toContain('system.judge_stats'))
     const count = dockRegions().length
     act(() => {
-      drive(actionOf('open_panel', { kind: 'system.eval_scorecard', params: {} }))
+      drive(actionOf('open_panel', { kind: 'system.goldset', params: {} }))
     })
-    await waitFor(() => expect(dockIds()).toContain('system.eval_scorecard'))
-    expect(surface()).toBe('board')
-    expect(dockIds()).not.toContain('system.source_health')
+    await waitFor(() => expect(dockIds()).toContain('system.goldset'))
+    expect(surface()).toBe('engine')
+    expect(dockIds()).not.toContain('system.judge_stats')
     expect(dockRegions().length).toBe(count)
     const transient = Object.entries(dockLayout().panels ?? {}).filter(([, p]) => p.params?.transient)
-    expect(transient.map(([id]) => id)).toEqual(['system.eval_scorecard'])
+    expect(transient.map(([id]) => id)).toEqual(['system.goldset'])
   })
 
-  it("a subject's read lands on THIS page's stage, on its tab, with a crumb back to today's read", async () => {
+  it("a subject's read lands on THIS page's stage, on its tab, with a crumb back to the page's list", async () => {
     await boot()
     act(() => {
       drive(actionOf('open_panel', { kind: 'target.findings', params: { subject: { kind: 'target', id: 'country_g20_br' } } }))
@@ -259,12 +266,12 @@ describe('an open lands on the stage or in its home region, and never adds a col
     })
     await waitFor(() => expect(stageView()).toBe('subject.page:lane_hormuz'))
     expect(dockRegions().length).toBe(regions)
-    expect(screen.getByTestId('stage-crumb-0')).toHaveTextContent("Today's read")
+    expect(screen.getByTestId('stage-crumb-0')).toHaveTextContent('What changed')
     // Back goes back; the first crumb is always the page's own read.
     fireEvent.click(screen.getByTestId('stage-back'))
     await waitFor(() => expect(stageView()).toBe('subject.page:country_g20_br'))
     fireEvent.click(screen.getByTestId('stage-crumb-0'))
-    await waitFor(() => expect(stageView()).toBe('v4.morning_read'))
+    await waitFor(() => expect(stageView()).toBe('view:board_changed'))
   }, 30000)
 
   it('a view on the stage can go to the panels, and a panel can come to the stage', async () => {
@@ -275,12 +282,34 @@ describe('an open lands on the stage or in its home region, and never adds a col
     await waitFor(() => expect(stageView()).toBe('subject.page:lane_hormuz'))
     fireEvent.click(screen.getByTestId('stage-to-panels'))
     await waitFor(() => expect(dockIds()).toContain('subject.page:lane_hormuz'))
-    expect(stageView()).toBe('v4.morning_read')
+    expect(stageView()).toBe('view:board_changed')
     act(() => {
-      window.dispatchEvent(new CustomEvent('legba:frame-to-stage', { detail: 'system.wall' }))
+      window.dispatchEvent(new CustomEvent('legba:frame-to-stage', { detail: 'v4.map' }))
     })
-    await waitFor(() => expect(stageView()).toBe('system.wall'))
-    expect(dockIds()).not.toContain('system.wall')
+    await waitFor(() => expect(stageView()).toBe('v4.map'))
+    expect(dockIds()).not.toContain('v4.map')
+  })
+
+  it('"to the stage" then Back puts the view back in its region, as it was', async () => {
+    await boot()
+    const before = dockRegions()
+    expect(before).toEqual([['v4.map']])
+    act(() => {
+      window.dispatchEvent(new CustomEvent('legba:frame-to-stage', { detail: 'v4.map' }))
+    })
+    await waitFor(() => expect(stageView()).toBe('v4.map'))
+    expect(dockIds()).not.toContain('v4.map')
+    fireEvent.click(screen.getByTestId('stage-back'))
+    await waitFor(() => expect(stageView()).toBe('view:board_changed'))
+    await waitFor(() => expect(dockRegions()).toEqual(before))
+    // still the page's own view (closeless), not an opened one
+    expect(dockLayout().panels?.['v4.map']?.params?.transient).toBeFalsy()
+    // and the page stores no "closed" map: a reload lays it down again
+    fireEvent.click(screen.getByTestId('surface-tab-ledger'))
+    await waitFor(() => expect(surface()).toBe('ledger'))
+    fireEvent.click(screen.getByTestId('surface-tab-board'))
+    await waitFor(() => expect(surface()).toBe('board'))
+    await waitFor(() => expect(dockIds()).toContain('v4.map'))
   })
 })
 
@@ -290,7 +319,7 @@ describe('Consult in the layout: moved, resized, collapsed — remembered per pa
     fireEvent.click(screen.getByTestId('consult-move-right'))
     await waitFor(() => expect(dockEl()).toHaveAttribute('data-placement', 'right'))
     expect(screen.getByTestId('consult-side-right')).toContainElement(dockEl())
-    expect(stageView()).toBe('v4.morning_read') // the page stays usable
+    expect(stageView()).toBe('view:board_changed') // the page stays usable
     fireEvent.click(screen.getByTestId('consult-move-left'))
     await waitFor(() => expect(screen.getByTestId('consult-side-left')).toContainElement(dockEl()))
     fireEvent.click(screen.getByTestId('consult-full'))
@@ -299,7 +328,7 @@ describe('Consult in the layout: moved, resized, collapsed — remembered per pa
     expect(screen.getByTestId('stage-peek')).toBeInTheDocument()
     fireEvent.click(screen.getByTestId('stage-peek'))
     await waitFor(() => expect(dockEl()).toHaveAttribute('data-placement', 'bottom'))
-    expect(stageView()).toBe('v4.morning_read')
+    expect(stageView()).toBe('view:board_changed')
     // The question box is there in every placement.
     await waitFor(() => expect(dockEl().querySelector('[data-testid="consult-question"]'), dockEl().innerHTML.slice(0, 600)).not.toBeNull(), { timeout: 4000 })
   })
@@ -311,10 +340,15 @@ describe('Consult in the layout: moved, resized, collapsed — remembered per pa
     await waitFor(() => expect(dockEl()).toHaveAttribute('data-collapsed', 'true'))
     expect(await screen.findByTestId('consult-question')).toBeInTheDocument()
     expect(screen.getByTestId('consult-point-line')).toBeInTheDocument()
+    // folded: the point and the menu stay (the drive switch is inside the menu)
+    openConsultMenu()
     expect(screen.getByTestId('consult-drive-toggle')).toBeInTheDocument()
     expect(screen.queryByTestId('consult-history-toggle')).toBeNull()
+    expect(screen.queryByTestId('consult-deep-toggle')).toBeNull()
     fireEvent.click(screen.getByTestId('consult-expand'))
     await waitFor(() => expect(dockEl()).toHaveAttribute('data-collapsed', 'false'))
+    expect(screen.getByTestId('consult-deep-toggle')).toBeInTheDocument()
+    openConsultMenu()
     expect(screen.getByTestId('consult-history-toggle')).toBeInTheDocument()
   })
 
@@ -365,7 +399,7 @@ describe('the Record', () => {
     await waitFor(() => expect(screen.queryByTestId('record-sheet')).toBeNull())
   })
 
-  it('a link naming a record (#rec=) opens the sheet on that record when the shell loads (roll 87: it opened nothing)', async () => {
+  it('a link naming a record (#rec=) opens the sheet on that record when the shell loads (it opened nothing)', async () => {
     window.location.hash = '#ws=board&rec=finding%3Af-link'
     // The sheet stays open past the assertion and reads the record's lineage;
     // answer it in the wire's shape (the catch-all list body has no `root`, and
@@ -388,7 +422,7 @@ describe('the Record', () => {
     expect(screen.queryByTestId('record-sheet')).toBeNull()
     expect(useSelection.getState().selection).toMatchObject({ kind: 'finding', id: 'f-9' })
     fireEvent.click(screen.getByTestId('stage-back'))
-    await waitFor(() => expect(stageView()).toBe('v4.morning_read'))
+    await waitFor(() => expect(stageView()).toBe('view:board_changed'))
   })
 })
 
@@ -441,7 +475,7 @@ describe('A BROWSER HOLDING THE PREVIOUS SHELLS\' STATE lands on the new default
     try {
       expect(surface()).toBe('board')
       for (const v of surfaceViews(findSurface('board')!)) expect(dockIds()).toContain(v)
-      expect(stageView()).toBe('v4.morning_read')
+      expect(stageView()).toBe('view:board_changed')
       expect(dockIds()).not.toContain('system.optimizer')
       expect(dockEl()).toBeInTheDocument()
       expect(JSON.parse(localStorage.getItem('legba_ws')!).morning_read.personal.layout.panels).toHaveProperty('system.optimizer')
@@ -482,10 +516,68 @@ describe('A BROWSER HOLDING THE PREVIOUS SHELLS\' STATE lands on the new default
     await boot()
     for (const v of surfaceViews(findSurface('board')!)) expect(dockIds()).toContain(v)
     expect(dockIds()).not.toContain('v4.morning_read')
-    expect(stageView()).toBe('v4.morning_read')
+    expect(stageView()).toBe('view:board_changed')
     expect(dockEl()).toHaveAttribute('data-placement', 'bottom')
     expect(screen.getByTestId('surface-notice')).toHaveTextContent('Board was reset to its new default')
     expect(JSON.parse(localStorage.getItem(SURFACE_STORE_KEY)!).board).toBeUndefined()
+  })
+
+  it("a Board stored under the previous default (the Wall beside the map) is laid down new once, with a one-line notice", async () => {
+    const { surfaceLayoutVersion } = await import('@/lib/surfaces')
+    const previous = {
+      ...findSurface('board')!,
+      stage: 'v4.morning_read' as const,
+      regions: [
+        { id: 'a' as const, views: ['v4.map' as const], weight: 3 },
+        { id: 'b' as const, views: ['system.wall' as const, 'slot:coverage' as const], weight: 2 },
+      ],
+      openRegion: 'b' as const,
+    }
+    const layout = {
+      grid: {
+        root: {
+          type: 'branch',
+          data: [
+            { type: 'leaf', data: { views: ['v4.map'], activeView: 'v4.map', id: '1' }, size: 700 },
+            { type: 'leaf', data: { views: ['system.wall', 'slot:coverage'], activeView: 'system.wall', id: '2' }, size: 500 },
+          ],
+          size: 800,
+        },
+        width: 1200,
+        height: 800,
+        orientation: 'HORIZONTAL',
+      },
+      panels: {
+        'v4.map': { id: 'v4.map', contentComponent: 'default', title: 'Map', params: { registration: null, singletonKind: 'v4.map', mode: 'personal' } },
+        'system.wall': { id: 'system.wall', contentComponent: 'default', title: 'At a glance', params: { registration: null, singletonKind: 'system.wall', mode: 'personal' } },
+        'slot:coverage': { id: 'slot:coverage', contentComponent: 'slot', title: 'Coverage', params: { slot: 'slot:coverage' } },
+      },
+      activeGroup: '1',
+    }
+    expect(surfaceLayoutVersion(previous)).not.toBe(surfaceLayoutVersion(findSurface('board')!))
+    localStorage.setItem(SURFACE_STORE_KEY, JSON.stringify({ board: { personal: { version: surfaceLayoutVersion(previous), layout } } }))
+    await boot()
+    expect(dockRegions()).toEqual([['v4.map']])
+    expect(dockIds()).not.toContain('system.wall')
+    expect(stageView()).toBe('view:board_changed')
+    expect(screen.getByTestId('surface-notice')).toHaveTextContent('Board was reset to its new default')
+  })
+
+  it('no seeded region has a close or a pop-out; the stage button stays', async () => {
+    await boot()
+    // the instrument views are the operator side's: opened there, on the Engine page
+    fireEvent.keyDown(window, { key: '5', altKey: true })
+    await waitFor(() => expect(surface()).toBe('engine'))
+    await waitFor(() => expect(document.querySelectorAll('.dv-tab').length).toBeGreaterThan(0))
+    expect(document.querySelectorAll('.dv-tab .dv-default-tab-action').length).toBe(0)
+    expect(screen.queryByTestId('region-popout')).toBeNull()
+    expect(screen.getAllByTestId('region-to-stage').length).toBeGreaterThan(0)
+    // an opened view keeps its close: closing it shows the seeded view again
+    act(() => {
+      drive(actionOf('open_panel', { kind: 'system.judge_stats', params: {} }))
+    })
+    await waitFor(() => expect(dockIds()).toContain('system.judge_stats'))
+    await waitFor(() => expect(document.querySelectorAll('.dv-tab .dv-default-tab-action').length).toBe(1))
   })
 
   it('a stored arrangement that HIDES a seeded view the reader did not close is discarded, never restored', async () => {

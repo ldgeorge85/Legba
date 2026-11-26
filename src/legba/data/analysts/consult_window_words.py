@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Windows stated in WORDS — the phrasings an asker actually types (lane Q-1) — pure.
+"""Windows stated in WORDS — the phrasings an asker actually types — pure.
 
 ``consult_window`` reads ISO dates and "last N hours/days". Most askers write
 dates as words, so this leaf reads, in UTC:

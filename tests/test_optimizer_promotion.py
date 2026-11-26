@@ -97,7 +97,7 @@ def test_db_error_returns_default_never_raises():
 
 
 # ===========================================================================
-# P4-T6 — the MEASURED bounded-unit GEPA return. A candidate can NEVER promote
+# The MEASURED bounded-unit GEPA return. A candidate can NEVER promote
 # (via a hand-edited promotion_gate='promoted') without a positive,
 # non-degenerate, judge-scored, sufficiently-paired MEASURED faithfulness delta.
 # These tests falsify a violation of that contract. The LIVE gate is
@@ -135,7 +135,7 @@ class _GuardAwareConn:
         self._promotable = promotable
 
     async def fetchrow(self, query, *args):  # noqa: ANN001
-        assert "promotable" in query, "P4-T6 promotable guard missing from SQL"
+        assert "promotable" in query, "promotable guard missing from SQL"
         if self._has_eval and not self._promotable:
             return None  # the DB filters the non-promotable measured candidate
         return {"text": self._text}

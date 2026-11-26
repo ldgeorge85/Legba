@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""JUDGE-2 (W11b) — the FLOOR-ONLY critiques an outage left behind: list them,
-and (W11-F102) re-judge them.
+"""The FLOOR-ONLY critiques an outage left behind: list them,
+and re-judge them.
 
 When every judge route is down, the faithfulness verify pass falls to the
 deterministic floor: it checks citation structure, not whether the cited text
@@ -26,7 +26,7 @@ This script is the operator's inventory of that debt, and its repayment:
 
 READ-ONLY, and the default.
 
-``--apply --limit N`` (W11-F102, SEAMS #69 resolved) re-judges: for each of the
+``--apply --limit N`` (SEAMS #69 resolved) re-judges: for each of the
 oldest N still-floor-only critiques, the SAME verify pass the critic runs, over
 the finding's STORED body and citations (and the retained input slice of its own
 run — nothing is re-fetched), against the analyzed analyst's CURRENT judge chain.
@@ -39,7 +39,7 @@ published scores: an explicit ``--limit`` (at most 500) is required, and
 ``LEGBA_VERIFY_LLM_JUDGE`` must be on. The finding itself is never written.
 The machinery is ``legba.runtime.rejudge_floor``.
 
-``--missing`` (W11-F84) is the SECOND selection mode, exclusive with the floor
+``--missing`` is the SECOND selection mode, exclusive with the floor
 mode above: cited findings whose verify leg NEVER RAN — a rolling deploy
 recreated the runtime between the finding's write and its critique's — so they
 stand published with no faithfulness critique at all. Selected: ``kind='finding'``
@@ -359,7 +359,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help="with --apply: stop after K judge failures in a row "
                     "(default 5; 0 = never stop)")
     ap.add_argument("--missing", action="store_true",
-                    help="W11-F84: select cited findings with NO faithfulness critique "
+                    help="Select cited findings with NO faithfulness critique "
                     "(their verify leg never ran) instead of floor critiques; "
                     "--apply writes the critique the critic would have written")
     ap.add_argument("--min-age-minutes", type=int, default=None, metavar="M",

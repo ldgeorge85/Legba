@@ -1,5 +1,5 @@
 # crossroads — the one FIXED-MANDATE descriptor on the `inquiry` kind
-# (Program 5 lane 3; planning/PROGRAM5_INQUIRY_DESIGN_2026-09-24.md §5, §7 lane 3).
+# (a standing investigation).
 #
 # WHAT IT IS. Every other producer on this platform is bounded by construction — a
 # desk reads one target, a unit one dimension, a composition one country, a lens
@@ -20,7 +20,7 @@
 # the mandate requires every such claim to name the block's own ordinal. The block
 # degrades to an explicit line and NEVER raises; it distinguishes "the detectors
 # ran and nothing fired" from "the detectors did not run", which are different
-# answers and are never collapsed (the B-8 lesson).
+# answers and are never collapsed.
 #
 # THE BRIEF IS FIXED AND LIVES IN CODE. Every other inquiry carries a PUT-able
 # `method.options.brief`; this one does not. Its mandate is the persona module
@@ -28,7 +28,7 @@
 # — the same DL-2 discipline the lens priors carry. Re-authoring the mandate is a
 # descriptor PUT with a visible hash change, not a silent DB edit.
 #
-# GRANTS (design §2): journal_read + substrate_read + inquiry_state. Wider than a
+# GRANTS: journal_read + substrate_read + inquiry_state. Wider than a
 # lens (which is journal_read only) because the crossroads must reach the roster
 # and the targets to name a silence honestly; still NO web pack, by construction.
 # NO journal_propose: the contradiction rows name the propose_correction dispatch
@@ -43,25 +43,25 @@
 # identity.state: draft — the orchestrator promotes. Registration and promotion
 # are not an agent's act.
 #
-# INTEGRATION NOTE (lane p5_kind owns these, not this lane): the `inquiry` analyst
+# INTEGRATION NOTE: the `inquiry` analyst
 # kind must be registered in src/legba/data/analysts/__init__.py (the in-code
 # extension-kind registration every non-enum kind needs for model_validate), and
 # ANALYST_KIND_OPTIONS must carry an `inquiry` entry declaring `pre_pass_module`
 # alongside `brief` — without the catalog key, AnalystDescriptor refuses any
-# method.options block as structurally inert (X-1/QW1-B).
+# method.options block as structurally inert.
 
 identity:
   id: crossroads
   name: "Crossroads — the cross-desk inquiry"
   schema_uri: legba/analyst/1.0.0
   version: "0000000000000000"        # placeholder — registry stamps content hash
-  kind: inquiry                      # the Program 5 kind module (lane p5_kind)
+  kind: inquiry                      # the inquiry kind module
   type_signature:
     input_type: legba.runtime.SignalList
     output_type: legba.runtime.Journal
     deps_type: legba.runtime.deps.StandardDeps
   state: draft
-  owner: program5_inquiry
+  owner: owner@local
 
 subscription:
   # No `targets` block → META analyst: ONE global run per cadence tick. The
@@ -88,7 +88,7 @@ method:
     # block to the user prompt. Same COLON form and same reason as prompt_module.
     pre_pass_module: "legba.data.analysts.crossroads_detectors:pre_pass_block"
   llm:
-    # Model-card sampling (gpt-oss ships generation_config temperature=1.0; the
+    # Model-card sampling (the core model ships generation_config temperature=1.0; the
     # vLLM client always sends temperature, so the card default can never apply
     # on its own). Fleet-wide per the 2026-07-24 sampling audit + A/B.
     temperature: 1.0
@@ -105,7 +105,7 @@ method:
       raw: llm.primary.openai_compat
       expected_family: llm_provider
     narrate:
-      thinking: "on"   # T-2: the VOICE thinks; GATHER and PROPOSE stay on the plain alias
+      thinking: "on"   # the VOICE thinks; GATHER and PROPOSE stay on the plain alias
       factory_kind: stack_ref
       raw: llm.primary.openai_compat  # core plane — the crossroads VOICE
       expected_family: llm_provider
@@ -120,17 +120,17 @@ method:
       strategy: pause_until_next_window
 
 cadence:
-  fallback_schedule: "15 12 * * *"   # T-2 stagger: off country_assessment's 12:00 burst (was 0 12 * * *)
+  fallback_schedule: "15 12 * * *"   # Staggered off country_assessment's 12:00 burst
   cooldown_seconds: 79200             # 22h — below the 24h interval (below-interval guard)
 
 grounding:
-  enabled: false                      # OFF by default (§4.3) — the crossroads
+  enabled: false                      # OFF by default — the crossroads
                                       # reads tower conclusions that were already
                                       # grounding-corrected upstream
 
-# Grant invariant (§2 of the design): the tower-top read surface (journal_read),
+# Grant invariant: the tower-top read surface (journal_read),
 # the roster + target reads a silence claim needs (substrate_read), and the
-# inquiry's own continuity ledger (inquiry_state, lane p5_state). NO web_access,
+# inquiry's own continuity ledger (inquiry_state). NO web_access,
 # NO research pack, NO journal_propose, NO publish sink.
 action_packs:
   - pack_id: journal_read

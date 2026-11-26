@@ -58,7 +58,7 @@ def test_provider_lm_drives_handler_records_usage_no_litellm():
         handler = _FakeHandler()
         lm = make_provider_lm(
             handler, bridge, model="legba/test-model",
-            max_tokens=256, temperature=0.0,
+            temperature=0.0,
         )
 
         # dspy calls the LM synchronously with OpenAI-shaped messages.
@@ -74,7 +74,8 @@ def test_provider_lm_drives_handler_records_usage_no_litellm():
 
         # System message was hoisted into the handler's `system=` slot.
         assert handler.calls[0]["system"] == "SYSTEM PROMPT"
-        assert handler.calls[0]["max_tokens"] == 256
+        # No output limit of ours reaches the handler: it sends the alias's own.
+        assert handler.calls[0]["max_tokens"] is None
 
         # History recorded → the optimizer's G5 usage-delta sees real tokens.
         assert lm.history, "BaseLM must record a history entry per call"
@@ -124,7 +125,7 @@ def test_provider_lm_call_timeout_returns_empty_not_hang(monkeypatch):
         handler = _HangingHandler()
         lm = make_provider_lm(
             handler, bridge, model="legba/test-model",
-            max_tokens=256, temperature=0.0,
+            temperature=0.0,
         )
         outputs = lm(messages=[{"role": "user", "content": "evolve this"}])
         # dspy returns a list; the timed-out call yields an empty completion.

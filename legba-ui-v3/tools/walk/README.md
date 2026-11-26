@@ -83,6 +83,16 @@ measures it, and fails with a plain list when a budget breaks.
    proposal) and an opened proposal shows its evidence, the rule and the
    decision controls; the walk never decides (every write is refused and
    counted).
+8b. The reader side AS A READER (fixtures and the bearer; with an account
+   signed in the whole walk is already that account's role). The identity
+   answers an invented reader, and the four reader pages, the Record sheet
+   opened from the Board's first change with its Details and its "How this
+   was produced" opened, a subject's page from the switcher, and the ⌘K list
+   with a query are measured again (`W16-reader-*.png`). Every engine word
+   there fails the walk. The engine words are ONE list,
+   `src/lib/engineWords.json`, each term with the reader words that replace
+   it; the console (`lib/readerVocabulary.ts`), the source lint
+   (`tools/lint-engine-words.mjs`) and the phone checks read the same file.
 9. The Flow panel: the default overview, one small expansion that must draw,
    and expansions of the largest groups until the budget refuses one (it must
    say so and draw nothing).
@@ -165,6 +175,7 @@ measures it, and fails with a plain list when a budget breaks.
 | Longest main-thread task, per step | ≤ 1,000 ms | yes |
 | Phone shell, per screen and width: API requests and bytes (fixture), duplicates, the longest task (≤ 200 ms), text under 12 px, controls under 44 × 44 px (inline text links and citation chips exempt), sideways scroll, the bottom bar on screen, engine words | see `budgets.mjs` `phoneScreens` | yes |
 | Phone JS (gzip): the initial entry; everything loaded before any tap; no map library before "Open the globe" | ≤ 260 kB; ≤ 365 kB; none | yes |
+| Engine words on a reader surface walked as a reader or contributor (the reader pass, or an account of that role); seen as an admin they are reported | 0 | yes |
 | Page answers within 10 s at every step | — | yes |
 | Landing ready | ≤ 8 s on fixtures, ≤ 20 s live (`--ready-ms`) | yes |
 | Horizontal page overflow at 1680, 1366, 1920, 2560, 3840, 390 | none | yes |

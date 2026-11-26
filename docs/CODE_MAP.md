@@ -430,7 +430,7 @@ for.
 | Generators | `gen_release_state_matrix.py`, `gen_descriptor_prompt_manifest.py`, `gen_not_published.py`, `gen_api_roles_doc.py`, `gen_profile_*.py` | Each writes a committed file, and a test fails when that file is stale |
 | Host cron | `host_search_canary.sh`, `host_stall_watchdog.sh`, `host_llm_heartbeat.sh`, `host_log_collector.sh`, `host_nightly_suite.sh`, `models_host_vllm_watchdog.sh` | Watchdogs and probes installed from `deploy/cron.d/` |
 | Evaluation and replay | `measure_*.py`, `*_replay.py` and the evaluation folders | Offline evaluation and replay scripts; not part of the run path |
-| Reports | `report_written_by.py`, `report_origin_groups.py`, `citation_rows_report.py`, `held_record_verify.py`, `held_record_replay.py`, `audit_chain.py` | Reports on writers, origin groups and citation rows; held-record and audit-chain checks |
+| Reports | `report_written_by.py`, `report_origin_groups.py`, `derive_owner_groups.py`, `citation_rows_report.py`, `held_record_verify.py`, `held_record_replay.py`, `audit_chain.py` | Reports on writers, origin groups and citation rows; held-record and audit-chain checks |
 | Ops | `fleet_stop.sh`, `fleet_start.sh`, `sweep_orphan_actors.py`, `diagnose_stale_leaders.py`, `ops_pause_*.py`, `correctness_grade_now.py`, `reference_build_now.py` | Routine admin tasks; the procedures are in [RUNBOOK.md](RUNBOOK.md) |
 | Tests | `run_tests.sh`, `run_tests_in_container.sh`, `run_ui_tests_in_container.sh`, `deploy_smoke_cold_activation.sh` | Test suite entry points |
 

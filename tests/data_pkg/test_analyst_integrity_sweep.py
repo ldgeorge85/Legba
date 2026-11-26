@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for the ``integrity_sweep`` deterministic sub-handler (DIRECTION §9).
+"""Tests for the ``integrity_sweep`` deterministic sub-handler.
 
 Covers the two properties that distinguish it from the 2.4-deleted
 ``integrity_verification`` predecessor: it **refuses loud** (a missing relation
@@ -33,10 +33,10 @@ class _FakeConn:
         self._values = list(values)
         self.calls = 0
         self._sample_rows = sample_rows
-        # P1-T8: per-probe rows, routed by the SQL comment marker so the dangling
+        # Per-probe rows, routed by the SQL comment marker so the dangling
         # C5 sample and the three reachable-click-path probes never cross-feed.
         self._probe_rows = probe_rows or {}
-        # W1-T3: delivery-failure canary rows, routed by their own marker.
+        # Delivery-failure canary rows, routed by their own marker.
         self._delivery_rows = delivery_rows
         self.fetch_calls: list[tuple[str, tuple[Any, ...]]] = []
 
@@ -182,7 +182,7 @@ def test_missing_relation_refuses_loud() -> None:
 
 
 # ---------------------------------------------------------------------------
-# P0-T5: dangling derived_from capped SAMPLE (read-only) + prune migration
+# Dangling derived_from capped SAMPLE (read-only) + prune migration
 # ---------------------------------------------------------------------------
 
 
@@ -229,7 +229,7 @@ def test_sample_probe_passes_cap_as_limit_param() -> None:
     pool = _FakePool(_FakeConn([0, 0, 0, 0, 0, 0, 3], sample_rows=rows))
     deps = _FakeDeps(pool)
     asyncio.run(integrity_sweep.handle([], {}, deps))
-    # Filter to the C5 dangling SAMPLE call (the P1-T8 probe also fetches).
+    # Filter to the C5 dangling SAMPLE call (the probe also fetches).
     c5_calls = [c for c in pool.conn.fetch_calls if "sample_output_id" in c[0]]
     assert len(c5_calls) == 1
     sql, args = c5_calls[0]
@@ -252,7 +252,7 @@ def test_sample_degrades_to_empty_when_fetch_unavailable() -> None:
 
 
 # ---------------------------------------------------------------------------
-# P1-T8: reachable-click-path PROBE — confirm zero dead-ends on the click path
+# Reachable-click-path PROBE — confirm zero dead-ends on the click path
 # ---------------------------------------------------------------------------
 
 _PROBE_KEYS = (
@@ -554,7 +554,7 @@ def test_dangling_sample_sql_casts_uuid_for_min() -> None:
 
 
 # ---------------------------------------------------------------------------
-# W1-T3: delivery-failure CANARY — goes LOUD when alert deliveries fail, stays
+# Delivery-failure CANARY — goes LOUD when alert deliveries fail, stays
 # silent (no false positive) when the 24h window is clean.
 # ---------------------------------------------------------------------------
 

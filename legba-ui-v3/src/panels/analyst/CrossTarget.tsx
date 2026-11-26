@@ -18,6 +18,7 @@
  * deep-link to Lineage.
  */
 
+import { useAsOf, withAt } from '@/lib/asOf'
 import { useQuery } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 import { PanelChrome } from '@/components/PanelChrome'
@@ -78,12 +79,14 @@ export default function CrossTargetPanel({ registration, scope }: PanelProps) {
   const bound = analyst_id !== '(unbound)'
   const [tab, setTab] = useState<'targets' | 'correlations'>('targets')
 
+  // AS RECORDED: the instant rides the read (`lib/asOf.ts`); a past read is not polled.
+  const asOfMs = useAsOf()
   const { data, isLoading, error, refetch } = useQuery<FindingsResponse>({
-    queryKey: ['cross-target-feed', analyst_id],
+    queryKey: ['cross-target-feed', analyst_id, asOfMs],
     enabled: bound,
-    refetchInterval: 30_000,
+    refetchInterval: asOfMs === null ? 30_000 : false,
     queryFn: () =>
-      apiGet<FindingsResponse>(`/findings?analyst_id=${encodeURIComponent(analyst_id)}&limit=200&fields=full`),
+      apiGet<FindingsResponse>(withAt(`/findings?analyst_id=${encodeURIComponent(analyst_id)}&limit=200&fields=full`, asOfMs)),
   })
 
   const rows = data?.data ?? []

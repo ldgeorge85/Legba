@@ -6,7 +6,7 @@
  * model is writing and no step frame is due until it returns. The relay kept
  * the connection warm with an SSE COMMENT, which an `EventSource` never hands
  * to script — so the panel showed nothing, and a run that was working looked
- * exactly like one that had hung (2026-09-28, "hung at round 8").
+ * exactly like one that had hung.
  *
  * The relay now sends a NAMED `keepalive` event (`consult_stream_api.py`):
  * `event: keepalive` + `data: {"type":"keepalive","idle_s":N}`. A keepalive

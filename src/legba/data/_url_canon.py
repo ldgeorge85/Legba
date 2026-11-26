@@ -66,8 +66,8 @@ def strip_www(host: str) -> str:
 # treat the trailing slug as decoration — Dawn's ``/news/2020547/<slug>``
 # serves the same article under every headline the story has ever had, so a
 # re-headlined developing story re-ingests as a "new" URL and every canonical-
-# URL dedupe surface is defeated (K-4 R4 §9 F3: 258 population signals → 245
-# distinct URLs; two of the round's 71 sampled pairs were one Dawn article at
+# URL dedupe surface is defeated (measured: 258 population signals → 245
+# distinct URLs; two of 71 sampled pairs were one Dawn article at
 # two slugs). The document identity is the id, not the slug.
 #
 # The rule is deliberately narrow, and MEASURED before it shipped (2026-08-10,
@@ -138,7 +138,7 @@ def _strip_article_slug(path: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Valueless IDENTIFIER query keys (lane N-U)
+# Valueless IDENTIFIER query keys
 # ---------------------------------------------------------------------------
 #
 # ``parse_qsl(keep_blank_values=False)`` drops a key with no value, which is
@@ -191,7 +191,7 @@ def canonical_url(url: str) -> str:
       * Sort query params lexicographically by name; preserve duplicate keys
         via stable order on (name, value).
       * Drop empty query params — except a valueless IDENTIFIER key
-        (``spip.php?article123``, lane N-U), kept bare; see above.
+        (``spip.php?article123``), kept bare; see above.
       * Strip default ports (``:80`` http, ``:443`` https).
       * Preserve path case (paths are case-sensitive per RFC 3986).
       * Truncate the path after a publisher ARTICLE-ID segment (K-4 R4 F3),

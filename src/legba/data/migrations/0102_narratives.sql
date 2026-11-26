@@ -3,9 +3,8 @@
 --
 -- 0102_narratives.sql
 --
--- P4-1 (reified narrative objects) + P4-2 (source-echo propagation graph);
--- planning/PROGRAM_RECOMMENDATIONS_2026-07-24.md §A11 — the substrate-native
--- narrative analysis the operator amended in (NOT account-level platform
+-- Reified narrative objects + a source-echo propagation graph: the
+-- substrate-native narrative analysis (NOT account-level platform
 -- forensics, which is blocked on firehose data we do not hold). We already run
 -- network analysis over a reified structure (signed nexuses, structural_balance
 -- triads, the contention arbiter); this reifies NARRATIVES the same way.

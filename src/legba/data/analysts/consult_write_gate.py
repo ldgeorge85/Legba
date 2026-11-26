@@ -80,8 +80,9 @@ def write_prompt_block(binding: Any) -> str:
         if entry != "built" and word not in seams.get(int(entry[1]), []):
             seams.setdefault(int(entry[1]), []).append(word)
     lines.append(
-        "Writable classes: " + ", ".join(W.BUILT_CLASSES) + ". Not built (tell the operator): "
-        + "; ".join(f"{', '.join(c)} — SEAMS #{n}" for n, c in sorted(seams.items())) + "."
+        "Writable classes: " + ", ".join(W.BUILT_CLASSES) + ". Not built (tell the person asking): "
+        + "; ".join(", ".join(c) for _n, c in sorted(seams.items()))
+        + " — not available in this version."
     )
     return "\n\n" + "\n".join(lines)
 
@@ -110,8 +111,8 @@ async def _ledger_block(binding: Any, tool: str, cause: str, detail: str) -> Non
 async def refuse_unarmed_writes(binding: Any, tool: str) -> tuple[dict[str, Any], dict[str, Any]]:
     """A write tool called on a turn the operator did not arm."""
     detail = (
-        f"{tool} changes the platform and the operator did not allow changes on this "
-        "turn; answer, and tell the operator to switch on 'Allow changes this turn'."
+        f"{tool} changes the platform and the person asking did not allow changes on this "
+        "turn; answer, and tell them to switch on 'Allow changes this turn'."
     )
     await _ledger_block(binding, tool, "writes_not_armed", detail)
     return (
@@ -263,9 +264,9 @@ class WriteGate:
             await self._frame("write_staged", tool, round_no, write_id=wid)
             return (
                 {"write_staged": wid, "detail": (
-                    "confirmation required: nothing has changed. The operator confirms on the "
-                    "card (Confirm, or by typing the code shown there); you cannot confirm it — "
-                    "tell the operator to press Confirm.")},
+                    "confirmation required: nothing has changed. Someone with confirm rights "
+                    "confirms on the card (Confirm, or by typing the code shown there); you "
+                    "cannot confirm it — say that it waits for their Confirm.")},
                 {"governed": True, "admitted": True},
             )
         cause = out.get("cause")

@@ -6,8 +6,8 @@
 # It is a thin layer over the runtime image: same code + substrate deps,
 # plus dspy 3.0 for the GEPA teleprompter. The base runtime image stays
 # dspy-free on purpose — dspy/litellm must NEVER reach the production
-# runtime image or the analyst inference hot path (a project rule;
-# see planning/OPTIMIZER_DSPY_GEPA_PLAN.md). Even here litellm is never
+# runtime image or the analyst inference hot path (a project rule).
+# Even here litellm is never
 # invoked: the GEPA loop drives a custom dspy.BaseLM (LegbaProviderLM)
 # over our own LLMProviderHandler, so litellm is an inert transitive dep.
 #

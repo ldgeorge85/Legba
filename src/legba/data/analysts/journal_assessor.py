@@ -1,15 +1,15 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""journal_assessor — Legba's first-person reflective voice (plan §4).
+"""journal_assessor — Legba's first-person reflective voice.
 
 The 11th OutputKind's producer. The ONE analyst pointed at the whole organism,
 including itself: it reads what the other analysts concluded and narrates a
 coherent point of view OVER all of it, in its own voice. It emits exactly one
 ``JournalPayload`` (entry | consolidation) into the dedicated ``journal_entries``
-table — OFF the fact/finding/nexus chain (§3.1). It must NEVER write a fact,
+table — OFF the fact/finding/nexus chain. It must NEVER write a fact,
 nexus, finding, situation, or hypothesis.
 
-ENGINE (plan §4.1, a hard commitment): the in-actor ``llm_planner`` /
+ENGINE (a hard commitment): the in-actor ``llm_planner`` /
 ``inline_target``-family envelope — NOT the ``deep_consult`` Dapr workflow (which
 hardcodes OUTPUT_KIND = FINDING and rides the known-broken long-activity
 round-trip, task #86). This module reuses inline_target's proven GATHER + reason
@@ -17,23 +17,23 @@ building blocks (``_gather`` / ``_reason_via_llm``) but:
 
   * threads the JOURNAL persona (legba.prompts.journal_assessor:JOURNAL_SYSTEM)
     as the system prompt on EVERY LLM call — and authors it WITHOUT the stock
-    ``with_preamble`` JSON-only / BLUF anti-voice (§4.2, the headline fix);
+    ``with_preamble`` JSON-only / BLUF anti-voice (the headline fix);
   * emits a ``JournalPayload`` (parsing inline [[ref:<uuid>]] citation markers
     into the per-claim ``claims`` binding + the flat ``cited_substrate_refs``);
-  * returns ``derived_from=[]`` — the direction-asymmetric off-chain node (§3.5).
+  * returns ``derived_from=[]`` — the direction-asymmetric off-chain node.
 
-WAVE 1 (plan §5 / §4.3 / §4.4 / §10 / §12). The staged arc is now full:
+The staged arc:
 
   PLAN ──► GATHER (deep ReAct over the journal_read pack — the WHOLE ANIMAL +
-           its OWN instruments, §5) ──► FIELD-NOTES SEAM (§4.3, the ONE
+           its OWN instruments) ──► FIELD-NOTES SEAM (the ONE
            separation: still in persona, rewrite the gathered observations into
            rich, cited prose — dropping ONLY the raw tool JSON — so NARRATE sees
            the whole system, not a thin summary; this REPLACES deep_consult's
-           ``_evidence_brief``) ──► NARRATE (§4.4, tools stay LIVE: a small ReAct
+           ``_evidence_brief``) ──► NARRATE (tools stay LIVE: a small ReAct
            loop around the narrate call lets the agent pull ONE more thread
-           mid-entry) ──► REFLECT (§10, permissive per-claim citation flag —
+           mid-entry) ──► REFLECT (permissive per-claim citation flag —
            flag/speculation-mark an uncited factual span, NEVER strip; a
-           perspective sentence is exempt) ──► HONESTY (§10, the DETERMINISTIC
+           perspective sentence is exempt) ──► HONESTY (the DETERMINISTIC
            ``honesty_flags`` post-step forced from the actual calibration metrics
            in the substrate, regardless of what the model wrote).
 
@@ -41,10 +41,9 @@ READ_SLICE stays ``None`` — the default META global signal slice primes the ru
 and ``get_journal_delta`` (in GATHER) tells the agent what changed since the last
 entry. The delta-priming READ_SLICE is a later refinement.
 
-T1.0 (JOURNAL_CONNECTIVE_AUDIT_PROPOSAL_2026-09-09 §6): the REFLECT claim
+The REFLECT claim
 machinery (``_reflect_claims`` and its private helpers) moved out to
-``journal_reflect.py`` and is re-exported here unchanged. B0 (the T2.2 seam
-taken early): ``_select_journal_slice`` and its selection helpers moved to
+``journal_reflect.py`` and is re-exported here unchanged. ``_select_journal_slice`` and its selection helpers moved to
 ``journal_slice.py`` and are re-exported here unchanged; the per-row RENDER
 helpers (``_salience_tag`` / ``_untranslated_tag`` / row title/lang/payload)
 and the four ``_render_*_user_prompt`` functions stay in THIS module.
@@ -144,7 +143,7 @@ from .inline_target import (
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Host-discovered constants (plan §4.8 leg 1)
+# Host-discovered constants
 # ---------------------------------------------------------------------------
 
 KIND_NAME = "journal_assessor"
@@ -152,7 +151,7 @@ SCHEMA_VERSION = "legba/analyst.journal_assessor/1-0-0"
 HANDLER_VERSION = "0.3.0"
 PROMPT_MODULE_PATH = "legba.prompts.journal_assessor:JOURNAL_SYSTEM"
 
-# Wave 2 (plan §4.7 / §12): the consolidation tier is the SAME kind
+# The consolidation tier is the SAME kind
 # (``identity.kind: journal_assessor``) with a DISTINCT ``identity.id``
 # (``journal_consolidator``). "There is no ``mode=consolidation`` option on a
 # single descriptor — the tier is the descriptor." So this one ``run_method``
@@ -164,7 +163,7 @@ CONSOLIDATOR_PROMPT_MODULE_PATH = (
     "legba.prompts.journal_consolidator:CONSOLIDATOR_SYSTEM"
 )
 
-# Chronicle tier (2026-07-21, planning/CHRONICLE_BUILD_2026-07-21.md): the
+# Chronicle tier: the
 # public-record tier — The Legba Report produced inside the platform. THIRD
 # analyst id on the same kind: detached third-person cited prose over the
 # verified tower top, weekly beat, append-only (never supersedes), V1 verify
@@ -175,7 +174,7 @@ CHRONICLE_PROMPT_MODULE_PATH = (
     "legba.prompts.chronicle_assessor:CHRONICLE_SYSTEM"
 )
 
-# VOICES LV-1 (2026-07-21, planning/VOICES_PLAN_2026-07-21.md, DL-1/DL-3): the
+# VOICES: the
 # faculty-lens tier. FOUR function-typed analyst ids on the SAME journal_assessor
 # kind — each reads the VERIFIED tower top through ONE declared falsifiable prior
 # (living in its persona module; the descriptor content hash IS the prior version,
@@ -188,14 +187,13 @@ LENS_FACULTY_ANALYST_IDS: tuple[str, ...] = (
     "lens_trend", "lens_baserate", "lens_capability", "lens_intent",
 )
 
-# VOICES LEANS (2026-09-21, planning/VOICES_LEAN_PRIORS_2026-09-21.md; operator
-# decision D-4 accepted the six priors as DRAFTS): SIX stance-typed ids on the
+# VOICES LEANS: SIX stance-typed ids on the
 # same kind, same machinery — same entry_kind='lens', same V1 verify, same
 # journal_read-only grant, same one-declared-prior-per-module rule. Where the
 # four above are typed by FUNCTION (what cognitive move the read makes), these
 # six are typed by STANCE (which way of weighing the tower the read commits to).
 # They run DAILY in the 09:00–11:30 UTC band, off the burst window.
-# W9 SPLIT-2 (DEC-14): they are the geopolitics exemplar's, not the platform's —
+# They are the geopolitics exemplar's, not the platform's —
 # their prose lives in the profile (legba_geopolitics.lens_*) and their ids are
 # the `geopolitics.lens` vocabulary family, read here with the six-id literal
 # (lens_family.LEAN_LENS_FALLBACK) as the documented fallback. Built at import:
@@ -220,9 +218,9 @@ LENS_DIFF_ROSTER_IDS: tuple[str, ...] = LENS_FACULTY_ANALYST_IDS
 # Each faculty module exports the SAME three names (LENS_SYSTEM / LENS_PRIOR_BLOCK
 # / LENS_ID), so the descriptor's prompt_module string alone selects the persona
 # — no per-faculty branch. The prior block is imported directly by run_method
-# (persona-module-only wiring, §2.4 — NO options-contract / dapr_actors change).
+# (persona-module-only wiring — NO options-contract / dapr_actors change).
 # The faculties live in the platform package; the leans in the profile's
-# (W9 SPLIT-2: legba_geopolitics.<id>, lens_family.lean_prompt_module).
+# (legba_geopolitics.<id>, lens_family.lean_prompt_module).
 LENS_PROMPT_MODULE_PATHS: dict[str, str] = {
     **{aid: f"legba.prompts.{aid}:LENS_SYSTEM" for aid in LENS_FACULTY_ANALYST_IDS},
     **{aid: f"{lean_prompt_module(aid)}:LENS_SYSTEM" for aid in LENS_LEAN_ANALYST_IDS},
@@ -232,7 +230,7 @@ LENS_DIFF_PROMPT_MODULE_PATH = "legba.prompts.lens_diff:LENS_DIFF_SYSTEM"
 
 
 def _lens_prior_block_for(analyst_id: str | None) -> str:
-    """Resolve a faculty's declared prior block from its persona module (§2.4).
+    """Resolve a faculty's declared prior block from its persona module.
 
     The prior lives in the descriptor body via the persona module (DL-2); this
     imports the module's ``LENS_PRIOR_BLOCK`` so ``run_method`` can echo it into
@@ -259,7 +257,7 @@ def _lens_prior_block_for(analyst_id: str | None) -> str:
 
 
 def _entry_kind_for_analyst(analyst_id: str | None) -> str:
-    """Select the journal ``entry_kind`` from the running analyst id (plan §4.7).
+    """Select the journal ``entry_kind`` from the running analyst id.
 
     The tiers share the kind module; the discriminator is the descriptor id,
     NOT a per-descriptor mode flag. The consolidator id distills into a
@@ -285,7 +283,7 @@ def _entry_kind_for_analyst(analyst_id: str | None) -> str:
 # ``journal_entries`` row (NOT a finding). This is what makes the kind off-chain.
 OUTPUT_KIND: OutputKind = OutputKind.JOURNAL
 
-# READ_SLICE = None (Wave 1) — the host's default META reader yields the global
+# READ_SLICE = None — the host's default META reader yields the global
 # 24h signal slice that primes the reflection; deep investigation (incl.
 # get_journal_delta "what changed since last entry") is in GATHER. The delta
 # priming reader is a later refinement; if a custom reader is built, init all
@@ -293,7 +291,7 @@ OUTPUT_KIND: OutputKind = OutputKind.JOURNAL
 # target_filter=None — the 5c scope_predicate UnboundLocalError class).
 READ_SLICE = None
 
-# The hard ceiling on the tools-live NARRATE ReAct loop (§4.4). One extra thread
+# The hard ceiling on the tools-live NARRATE ReAct loop. One extra thread
 # is the design intent ("pull ONE more thread mid-entry"); the cap bounds it so a
 # runaway narrate can't grind the cadence tick. The GATHER round cap
 # (method.gather.max_rounds, clamped ≤6) governs the deep investigation loop
@@ -323,7 +321,7 @@ def build_prompt_module() -> Any:
 
 
 # ---------------------------------------------------------------------------
-# V4 — the GATHER [N] → journal [[ref:uuid]] bridge (MASTER_PLAN 2026-07-10)
+# The GATHER [N] → journal [[ref:uuid]] bridge
 # ---------------------------------------------------------------------------
 # A bare ordinal citation marker ``[N]`` (1-3 digits). The journal narrates in
 # [[ref:<uuid>]] and never renders a slice-[N], so an [N] the model wrote can
@@ -395,7 +393,7 @@ _SPAN_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 
 
 def _cited_sentences_only(span: str) -> str:
-    """§10 BY CONSTRUCTION — keep only the sentences of a ``fact`` span that
+    """BY CONSTRUCTION — keep only the sentences of a ``fact`` span that
     carry a ``[[ref:…]]`` marker.
 
     The narrator labels its own claims, and its ``fact`` spans routinely
@@ -422,7 +420,7 @@ def build_journal_verify_inputs(payload: Any) -> tuple[str, list[str]]:
     """V1 — build the CITED-FACT-ONLY verify document for a journal entry.
 
     From the entry's ``claims`` sidecar keep only ``kind='fact'`` claims that
-    carry >=1 ref. The §10 contract holds by construction: ``perspective``
+    carry >=1 ref. The contract holds by construction: ``perspective``
     claims are EXEMPT (never judged, never stripped — they simply do not enter
     the document), and an UNCITED fact claim is already ``[needs_citation]``-
     flagged by REFLECT, so it is not double-tried here. Each kept claim's
@@ -462,7 +460,7 @@ def build_journal_verify_inputs(payload: Any) -> tuple[str, list[str]]:
         if kept >= _JOURNAL_VERIFY_MAX_CLAIMS:
             break
         kept += 1
-        # Lane N-D: a re-verify of a published entry grades the writer's words,
+        # A re-verify of a published entry grades the writer's words,
         # not the pre-publish marks (``journal_prepublish``) laid over them.
         span = _cited_sentences_only(
             strip_verify_marks(str(getattr(claim, "text_span", "") or ""))
@@ -580,8 +578,7 @@ def _untranslated_tag(row: Mapping[str, Any]) -> str:
     return ""
 
 
-# B1/B2 (T1.2/T1.4, JOURNAL_CONNECTIVE_AUDIT_PROPOSAL_2026-09-09 §3/§6) — the
-# provenance-class tag for a row ``_labeled_journal_slice`` stamped
+# The provenance-class tag for a row ``_labeled_journal_slice`` stamped
 # ``journal_label`` onto: ``'instrument'`` (event-coded substrate output,
 # never a report) or ``'routine'`` (a scheduled statistical product, a signal
 # of change only against its baseline). Rendered the same way the salience
@@ -672,7 +669,7 @@ def _render_chronicle_user_prompt(inputs: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-# E-1 (2026-07-27 sweep §"Track lens_capability empties") — the lens EMPTY-SLICE
+# The lens EMPTY-SLICE
 # priming fallback. When the period's slice renders NO rows, the faculty must
 # not read the blank as "nothing to do": its material was never the slice — it
 # is the VERIFIED TOWER TOP, exactly what the chronicle/consolidation kept
@@ -691,7 +688,7 @@ _LENS_EMPTY_SLICE_FALLBACK_LINE = (
 def _render_lens_user_prompt(
     inputs: list[dict[str, Any]], *, prior_block: str
 ) -> str:
-    """The VOICES faculty tier's priming prompt (LV-1, VOICES_BUILD_DESIGN §2.3).
+    """The VOICES faculty tier's priming prompt (VOICES).
 
     Shares the salience-ordered, citable slice with every tier. Contents, in
     order: the priming slice header; the faculty's DECLARED PRIOR verbatim FIRST
@@ -706,7 +703,7 @@ def _render_lens_user_prompt(
     inputs = _labeled_journal_slice(inputs)
     lines: list[str] = []
     if prior_block:
-        # The declared prior FIRST — before any reading instruction (§2.3.2).
+        # The declared prior FIRST — before any reading instruction.
         lines.append(prior_block)
         lines.append("")
     lines += [
@@ -801,7 +798,7 @@ def _render_lens_user_prompt(
 
 
 def _render_lens_diff_user_prompt(inputs: list[dict[str, Any]]) -> str:
-    """The chorus DIFF pass's priming prompt (LV-1, §3). It refereeS the four
+    """The chorus DIFF pass's priming prompt (VOICES). It referees the four
     faculty reads (pulled in GATHER via get_lens_reads), so its priming slice is
     the same citable, salience-ordered header; the load-bearing collection-health
     and convergence-guard disciplines live in the persona (lens_diff module) and
@@ -887,8 +884,8 @@ def _render_user_prompt(
     ``'lens_diff'`` to the VOICES faculty/diff variants — the diary disciplines
     below (feed denominators, instruments, apparatus-postscript) are the
     FIRST-PERSON tiers' contract and must never leak into those tiers. The
-    ``lens_prior_block`` is resolved by the caller (run_method, §2.6) from the
-    analyst id and threaded here — NOT through ``options`` (§2.4).
+    ``lens_prior_block`` is resolved by the caller (run_method) from the
+    analyst id and threaded here — NOT through ``options``.
 
     ``coverage_roster`` (T2.2) is the pre-rendered, NON-CITABLE "Desks today"
     block. It is threaded the same way and for the same reason: this function
@@ -950,8 +947,7 @@ def _render_user_prompt(
         "and the verify judge will floor the whole entry for it. An honest "
         "[[instrument]] mark always beats a wrong ref.",
         "",
-        # B1 (T1.2, JOURNAL_CONNECTIVE_AUDIT_PROPOSAL_2026-09-09 §3 P4 / §6): a
-        # DIFFERENT use of the SAME marker — not a self-read this time, but a
+        # A DIFFERENT use of the SAME marker — not a self-read this time, but a
         # SUBSTRATE row the slice below tags '[instrument]' (GDELT's CAMEO
         # pseudo-titles, an event coder's output, not a report someone wrote).
         "SUBSTRATE INSTRUMENT ROWS — a slice row tagged '[instrument]' is the "
@@ -959,15 +955,14 @@ def _render_user_prompt(
         "saw 5 coercion events across four polities') but never quoted or "
         "narrated as reporting; if you cite one, mark the sentence "
         "[[instrument]].",
-        # B2 (T1.4, JOURNAL_CONNECTIVE_AUDIT_PROPOSAL_2026-09-09 §3 P6 / §6): a
-        # scheduled-product row (weather/seismic/hazard feed, a press-release
+        # A scheduled-product row (weather/seismic/hazard feed, a press-release
         # wire) is a baseline, not a headline — the number moving IS the
         # story only if it moved FROM something.
         "ROUTINE PRODUCT ROWS — a slice row tagged '[routine]' is a scheduled "
         "product; it is a signal of change only when its number departs from "
         "baseline — say the baseline or don't draw the inference.",
         "",
-        # B0-8 (MASTER_PLAN 2026-07-10) — instruments before speculation: j4
+        # Instruments before speculation: j4
         # hypothesized "state information-denial" about a paused feed while
         # HOLDING the instrument (get_source_health) that answers it.
         "DISCIPLINE — instruments before speculation: before hypothesizing "
@@ -997,7 +992,7 @@ def _render_user_prompt(
         "least one concrete example (which desk, which product excluded what "
         "the other cites). Two top products disagreeing in silence is exactly "
         "the dishonesty this journal exists to surface.",
-        # B-8 (2026-08-03): the entry that day claimed "the assessment engine
+        # B-8: the entry that day claimed "the assessment engine
         # produced no country-level rows and identified no disagreements in the
         # last 48 hours" on a day with 1,562 successful runs and 131 fresh
         # country_composition findings. Nothing lied to it — it asked for a
@@ -1025,7 +1020,7 @@ def _render_user_prompt(
         "off it inverts polarity and mislabels the office. Without a stored "
         "translation, report the claim UNATTRIBUTED (\"a report in <lang> "
         "describes …\", still cited) or drop it entirely.",
-        # S-2a (2026-07-14): a live entry MISREAD the denominator — it wrote "no
+        # S-2a: a live entry MISREAD the denominator — it wrote "no
         # other source appears active" (naming only the stalled cursor-poison
         # trio) when 48 of 58 wired feeds were active. The `rows` array is capped
         # and can be the silent-only slice; the TRUTH is the summary aggregate.
@@ -1113,7 +1108,7 @@ def _render_user_prompt(
 
 
 # ---------------------------------------------------------------------------
-# §4.3 The field-notes seam — rich, in-voice, CITED handoff (NET-NEW; REPLACES
+# The field-notes seam — rich, in-voice, CITED handoff (NET-NEW; REPLACES
 # deep_consult's thin ``_evidence_brief``). Between GATHER and NARRATE, the agent
 # — still in persona — rewrites its gathered observations into cited prose,
 # dropping ONLY the raw tool JSON. The narrative must see the WHOLE system; a thin
@@ -1176,7 +1171,7 @@ _NARRATE_INSTRUCTION_CHRONICLE = (
 # VOICES LV-1 seam strings — the lens tier's memory/field-notes/narrate seams.
 # A faculty has no diary "inner landscape" and no chronicle "account so far";
 # its continuity is where the ARGUMENT stands. lens_diff carries its own narrate
-# seam (name absent faculties; never fabricate a fourth voice; §3.4).
+# seam (name absent faculties; never fabricate a fourth voice).
 # ---------------------------------------------------------------------------
 
 _MEMORY_ORIENTATION_LENS = (
@@ -1323,7 +1318,7 @@ _LENS_EMPTY_FALLBACK_INSTRUCTION = (
     "exactly that in one honest sentence."
 )
 
-# P3 finding (2026-07-31 sweep) — the SAME empty-read gap recurred on the
+# The SAME empty-read gap recurred on the
 # lens_diff (chorus diff) tier: a healthy roster (all four faculties ran)
 # still shipped "(empty chorus diff)" because the E-1 fallback above was
 # wired to entry_kind == "lens" only. lens_diff has no live SLICE to fall
@@ -1362,12 +1357,12 @@ async def _field_notes(
     instruction: str | None = None,
     orientation: str | None = None,
 ) -> tuple[str, dict[str, int]]:
-    """The §4.3 seam: an in-persona LLM step that rewrites the gathered context
+    """The seam: an in-persona LLM step that rewrites the gathered context
     into rich, cited field notes (dropping raw tool JSON). Returns
     ``(field_notes_text, usage)``. Degrade-not-drop: an LLM error here falls back
     to the gathered context verbatim so NARRATE still has the material.
 
-    ``instruction`` (Program 5) lets a SIBLING KIND on this seam supply its own
+    ``instruction`` lets a SIBLING KIND on this seam supply its own
     handoff text instead of the per-tier map lookup — the ``inquiry`` kind reuses
     this function rather than copying it, and its voice belongs in its own
     module. ``None`` (every journal tier) keeps the map lookup byte-identical.
@@ -1386,7 +1381,7 @@ async def _field_notes(
         base_prompt, instruction, (orientation, *_MEMORY_ORIENTATION_FOR.values()),
     )
     try:
-        # PER-PHASE LLM SPLIT (§4.1): the VOICE seam runs on the narrate handler
+        # PER-PHASE LLM SPLIT: the VOICE seam runs on the narrate handler
         # (Opus when the descriptor sets method.llm.narrate; falls back to the
         # primary handler otherwise). max_tokens IS the Anthropic output cap.
         notes, usage = await _reason_via_llm(
@@ -1416,7 +1411,7 @@ async def _field_notes(
 
 
 # ---------------------------------------------------------------------------
-# §4.4 Tools-live NARRATE — the narrate stage keeps tool access so the agent can
+# Tools-live NARRATE — the narrate stage keeps tool access so the agent can
 # pull ONE more thread mid-entry. A small ReAct loop around the narrate call.
 # ---------------------------------------------------------------------------
 
@@ -1563,17 +1558,17 @@ async def _narrate_with_tools(
     instruction: str | None = None,
     tool_names: tuple[str, ...] | None = None,
 ) -> tuple[str, dict[str, int]]:
-    """Run the narrate stage with tools LIVE (§4.4). The agent writes the entry;
+    """Run the narrate stage with tools LIVE. The agent writes the entry;
     if it emits a tool call instead, we run it (through the SAME governed
     journal_read binding), fold the result back, and ask again for the entry —
     capped at ``_NARRATE_MAX_TOOL_ROUNDS``. When tools aren't bound (no binding),
     or the cap is hit, this is a closed-book narrate over the field notes (the
-    §4.4 fallback). Every completion that is about to become the returned
+    fallback). Every completion that is about to become the returned
     entry body first clears :func:`_guard_against_tool_call_leak` (task #236)
     — a completion that IS a legitimate, recognized tool call never reaches
     that guard; it is executed instead. Returns ``(entry_body, usage)``.
 
-    ``instruction`` / ``tool_names`` (Program 5) let a SIBLING KIND on this seam
+    ``instruction`` / ``tool_names`` let a SIBLING KIND on this seam
     supply its own narrate text and its own mid-entry tool surface — the
     ``inquiry`` kind narrates in its own voice over the substrate_read tools its
     binding actually owns. ``None`` (every journal tier) keeps the per-tier map
@@ -1594,7 +1589,7 @@ async def _narrate_with_tools(
     last_content = ""
     for round_idx in range(_NARRATE_MAX_TOOL_ROUNDS):
         try:
-            # PER-PHASE LLM SPLIT (§4.1): NARRATE runs on the narrate handler
+            # PER-PHASE LLM SPLIT: NARRATE runs on the narrate handler
             # (Opus when split; primary handler otherwise). The mid-entry tool
             # call still routes through the journal_read GATHER binding below —
             # only the LLM authoring the prose changes, not the tool plane.
@@ -1698,7 +1693,7 @@ async def _narrate_with_tools(
 
 
 # ---------------------------------------------------------------------------
-# §10 The DETERMINISTIC honesty post-step — forced from substrate metrics, NEVER
+# The DETERMINISTIC honesty post-step — forced from substrate metrics, NEVER
 # trusted as agent-self-reported. The agent that over-narrates forecast skill is
 # exactly the agent that would omit ``forecast_unproven``, so a self-reported flag
 # is a circular guard.
@@ -1712,7 +1707,7 @@ async def _forced_honesty_flags(
 ) -> list[str]:
     """Read the live calibration posture from the substrate (via the governed
     ``get_calibration`` instrument) and FORCE the honesty flags it implies,
-    regardless of what the narrative said (§10).
+    regardless of what the narrative said.
 
     The ``get_calibration`` port method computes ``forecast_unproven`` /
     ``calibration_thin`` deterministically from the real Brier / BSS / sample-size
@@ -1824,8 +1819,7 @@ async def _source_health_cross_check(
 
 
 # ---------------------------------------------------------------------------
-# S-1 (2026-07-27 sweep, SWEEP_SYNTHESIS §T1-#1 / SWEEP_SOURCES_SIGNALS §2) — the
-# DETERMINISTIC source-health NUMBER guard. The sibling _source_health_cross_check
+# The DETERMINISTIC source-health NUMBER guard. The sibling _source_health_cross_check
 # validates the INSTRUMENT against the gather slice (total_wired ≥ delivered); it
 # NEVER reads the prose, and it no-ops on the lens tier (whose priming slice
 # carries no real signal rows, so distinct == 0). A faculty lens FABRICATED the
@@ -1916,7 +1910,7 @@ async def _source_health_number_check(
     *,
     steps: list[dict[str, Any]],
 ) -> list[str]:
-    """S-1 — the DETERMINISTIC prose-vs-instrument NUMBER cross-check.
+    """The DETERMINISTIC prose-vs-instrument NUMBER cross-check.
 
     Extract the whole-fleet source-health counts the narrator WROTE and compare
     them against the live ``get_source_health`` ``summary``. On ANY divergence
@@ -1979,14 +1973,14 @@ async def _source_health_number_check(
 
 
 # ---------------------------------------------------------------------------
-# VOICES LV-1 — the chorus DIFF matrix (§3.3). The DETERMINISTIC part: the roster
+# VOICES LV-1 — the chorus DIFF matrix. The DETERMINISTIC part: the roster
 # (which faculties were seen this cycle, which are missing) computed BEFORE
 # narrate and stamped into ``data.matrix``, mirroring _forced_honesty_flags's
 # "compute facts, hand to NARRATE" pattern. Topic ALIGNMENT is deliberately NOT
 # automated in v1 — NARRATE (reading all four bodies) does it as an LLM judgment
-# (the tractable question; §3.3), and the rich per-topic breakdown lives in the
+# (the tractable question), and the rich per-topic breakdown lives in the
 # prose body. The structured roster here lets a reader/UI see the aperture (an
-# absent faculty) join-free, and lets the honest partial-roster contract (§3.4)
+# absent faculty) join-free, and lets the honest partial-roster contract
 # be a fact in the data, not only in the prose.
 # ---------------------------------------------------------------------------
 
@@ -2020,7 +2014,7 @@ def _lens_diff_roster_from_reads(reads: list[dict[str, Any]]) -> dict[str, Any]:
     seen = [aid for aid in LENS_DIFF_ROSTER_IDS if aid in latest]
     missing = [aid for aid in LENS_DIFF_ROSTER_IDS if aid not in latest]
     return {
-        "topics": [],  # NARRATE aligns topics into the prose body (§3.3)
+        "topics": [],  # NARRATE aligns topics into the prose body
         "analyst_ids_seen": seen,
         "analyst_ids_missing": missing,
     }
@@ -2032,7 +2026,7 @@ async def _compute_lens_diff_matrix(
     steps: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """Read this cycle's four faculty reads via the governed ``get_lens_reads``
-    instrument and compute the deterministic roster (§3.3). Degrade-not-drop: no
+    instrument and compute the deterministic roster. Degrade-not-drop: no
     binding / read failure → an all-missing roster (honest: we could not confirm
     any faculty ran), never a crash. Mirrors _forced_honesty_flags's direct
     ``binding.run_tool`` read."""
@@ -2065,8 +2059,7 @@ async def _compute_lens_diff_matrix(
 
 
 # ---------------------------------------------------------------------------
-# V2.2 — the DETERMINISTIC apparatus-lead honesty flag (MASTER_PLAN 2026-07-10
-# §REVIEW 2026-07-23 "JOURNAL R-3 PROOF: MIXED"). The persona already carries the
+# The DETERMINISTIC apparatus-lead honesty flag. The persona already carries the
 # HARD world-first opening rule; when the narrator regresses anyway ("I start by
 # checking the health of my senses…") this ANNOTATES the entry — never blocks,
 # never rewrites (the diary is contain-not-block by design). Mirrors the idempotent
@@ -2148,7 +2141,7 @@ def _apparatus_lead_flag(body: str) -> list[str]:
 
 # ---------------------------------------------------------------------------
 # QW1-D fix 1/2 — the GATHER tool catalog, DERIVED FROM THE GRANT (never
-# hand-listed). planning/prompt_gallery/p3_journal_family.md §1/§8: the journal
+# hand-listed): the journal
 # family used to reuse inline_target's GENERIC ``_gather_system_suffix`` — a
 # catalog of 12 substrate_read-shaped tools (only 5 real for 7 of the 8
 # classes, since the journal is granted ``journal_read``, not
@@ -2332,12 +2325,12 @@ async def run_method(
     options: Mapping[str, Any],
     deps: InlineTargetDeps | LLMHandlerLike,
 ) -> AnalystMethodResult:
-    """Execute one journal-entry run over the substrate (plan §4.2 staged arc).
+    """Execute one journal-entry run over the substrate (staged arc).
 
     PLAN → GATHER (deep ReAct over the journal_read pack — the whole animal + its
-    own instruments) → FIELD-NOTES seam (§4.3, in-voice cited handoff) → NARRATE
-    (§4.4, tools live) → REFLECT (§10, permissive citation flag) → HONESTY (§10,
-    deterministic flags forced from substrate). The persona is loaded in EVERY
+    own instruments) → FIELD-NOTES seam (in-voice cited handoff) → NARRATE
+    (tools live) → REFLECT (permissive citation flag) → HONESTY (deterministic
+    flags forced from substrate). The persona is loaded in EVERY
     phase (the worldview is the attention mechanism). Emits a ``JournalPayload``
     and returns ``derived_from=[]`` (off the chain).
     """
@@ -2345,7 +2338,7 @@ async def run_method(
         deps = InlineTargetDeps(llm=deps)
 
     analyst_id = options.get("analyst_id")
-    # Wave 2 (§4.7): the tier is the descriptor — the consolidator id distills a
+    # The tier is the descriptor — the consolidator id distills a
     # ``consolidation`` (the write path then fires supersede_prior_consolidation);
     # every other id appends an ``entry``. Pure-function of the analyst id; no
     # per-descriptor mode flag.
@@ -2381,7 +2374,7 @@ async def run_method(
     memory_orientation = _MEMORY_ORIENTATION_FOR.get(
         entry_kind, _MEMORY_ORIENTATION
     )
-    # VOICES LV-1 (§2.4/§2.6): a faculty's declared prior is echoed into its user
+    # VOICES LV-1: a faculty's declared prior is echoed into its user
     # prompt VERBATIM (the copy the verify judge/audit points at). Resolved from
     # the analyst id via the persona module — NOT threaded through options ("" for
     # every non-faculty tier, incl. the diff pass which has no prior of its own).
@@ -2438,14 +2431,14 @@ async def run_method(
             user_prompt = f"{preamble}\n{user_prompt}"
             steps.append({"phase": "ground", "kind": "inject_preamble"})
 
-    # --- GATHER (deep ReAct over the journal_read pack — §5 the whole animal) ---
+    # --- GATHER (deep ReAct over the journal_read pack — the whole animal) ---
     # ``active_binding`` was resolved above (T2.2 hoist) — same expression, same
     # object, one assignment.
     # The journal's OWN instrument tool names are NOT in inline_target's
     # _GATHER_READ_TOOLS, so we pass them via ``extra_read_tools`` — they are then
-    # recognized AND routed through the journal_read binding (§4.9).
+    # recognized AND routed through the journal_read binding.
     #
-    # Wave 4 (§7): the journal ALSO grants the journal_propose pack — its
+    # The journal ALSO grants the journal_propose pack — its
     # PROPOSE-AND-GATE write tools. Those names ride ``extra_write_tools`` (NOT
     # extra_read_tools) so they are recognized but route through their per-tool
     # binding in ``gather_tool_bindings`` (carrying the per-run WritebackContext),
@@ -2493,13 +2486,13 @@ async def run_method(
     else:
         steps.append({"phase": "gather", "kind": "no_binding"})
 
-    # --- FIELD-NOTES seam (§4.3) — in-voice cited handoff, NOT a thin summary ---
+    # --- FIELD-NOTES seam — in-voice cited handoff, NOT a thin summary ---
     field_notes, fn_usage = await _field_notes(
         deps, base_prompt=user_prompt, analyst_id=analyst_id, steps=steps,
     )
     _fold(fn_usage)
 
-    # --- NARRATE (§4.4) — write the entry, tools LIVE -------------------
+    # --- NARRATE — write the entry, tools LIVE -------------------
     try:
         body, narrate_usage = await _narrate_with_tools(
             deps,
@@ -2513,8 +2506,7 @@ async def run_method(
     _fold(narrate_usage)
     body = (body or "").strip()
 
-    # --- E-1 lens/lens_diff EMPTY-READ fallback (2026-07-27 sweep + the P3
-    # 2026-07-31 extension) --------------------------------------------------
+    # --- lens/lens_diff EMPTY-READ fallback ---------------------------------
     # A VOICES tier whose NARRATE returned nothing gets ONE more narrate pass
     # with an explicit per-tier redirect (lens: the verified tower corpus, the
     # material chronicle/consolidation reason over when the slice/acquisition
@@ -2631,7 +2623,7 @@ async def run_method(
     # --- B5 (ref-repair) — a hand-copied [[ref:<uuid>]] typo, BEFORE reflect ---
     # The writer copies UUIDs from its gathered window by hand and
     # occasionally transcribes one hex digit wrong (the dde520d3 police-
-    # civilian span's ref, one digit off the real GDELT row — the T1.3
+    # civilian span's ref, one digit off the real GDELT row — the
     # reader lane's live finding). Repair against the SAME window rows the
     # narrator was actually shown this run (_select_journal_slice's ids) —
     # a UNIQUE Hamming-distance<=2 match; ambiguous or too-far is left
@@ -2650,7 +2642,7 @@ async def run_method(
             "phase": "reflect", "kind": "ref_repaired", "repairs": _ref_repairs,
         })
 
-    # --- REFLECT (§10) — permissive per-claim citation flag (flag, don't strip) ---
+    # --- REFLECT — permissive per-claim citation flag (flag, don't strip) ---
     claims, cited_refs, reflect_flags = _reflect_claims(body)
     steps.append({
         "phase": "reflect",
@@ -2660,7 +2652,7 @@ async def run_method(
         "flags": list(reflect_flags),
     })
 
-    # --- PROPOSE (§7 Wave 4) — the human-gated write-back coda ---------------
+    # --- PROPOSE — the human-gated write-back coda ---------------
     # Engaged iff the journal_propose pack is EFFECTIVE for this class (the SAME
     # ``gather_write_prompt_fragments`` signal the GATHER catalog gates on —
     # entry + consolidation today; chronicle/lens grant no propose pack) AND
@@ -2681,13 +2673,12 @@ async def run_method(
     elif write_fragments is None:
         steps.append({"phase": "propose", "kind": "pack_not_effective"})
 
-    # --- HONESTY (§10) — DETERMINISTIC honesty_flags forced from substrate ----
+    # --- HONESTY — DETERMINISTIC honesty_flags forced from substrate ----
     honesty_flags = await _forced_honesty_flags(active_binding, steps=steps)
     honesty_flags += await _source_health_cross_check(
         active_binding, inputs, steps=steps
     )
-    # S-1 (SWEEP_SYNTHESIS §T1-#1) — the prose-vs-instrument NUMBER guard: do the
-    # collection-posture COUNTS the narrator WROTE match the live tool? Runs on
+    # The prose-vs-instrument NUMBER guard: do the collection-posture COUNTS the narrator WROTE match the live tool? Runs on
     # EVERY tier (the sibling cross_check reads the gather slice, so it no-ops on
     # the lens path where the fabrication was found). Flags, never rewrites.
     honesty_flags += await _source_health_number_check(
@@ -2703,7 +2694,7 @@ async def run_method(
             honesty_flags.append(_flag)
             steps.append({"phase": "honesty", "kind": "apparatus_lead"})
 
-    # B1 (T1.2) / B2 (T1.4) — DETERMINISTIC provenance honesty flags. Built
+    # DETERMINISTIC provenance honesty flags. Built
     # from the SAME labelled slice the render prompt showed this run
     # (_labeled_journal_slice is idempotent — it mutates the same row dicts
     # the render call already touched, so this never re-derives a different
@@ -2728,7 +2719,7 @@ async def run_method(
             honesty_flags.append(REF_REPAIRED_FLAG)
             steps.append({"phase": "honesty", "kind": "ref_repaired"})
 
-    # --- VOICES LV-1 data column (§2.9 / §3.3) — per-tier metadata -----------
+    # --- VOICES LV-1 data column — per-tier metadata -----------
     # lens → {"lens_id": <analyst_id>}; lens_diff → {"matrix": {roster}} computed
     # deterministically from get_lens_reads; every other tier → {} (unchanged).
     # prior_version is DELIBERATELY omitted from a lens row — the row's own
@@ -2763,7 +2754,7 @@ async def run_method(
     )
     # ``supersedes`` is NOT decided here — the write path closes the prior open
     # consolidation on the SAME conn immediately before the insert and records the
-    # link via the prior row's superseded_by pointer (§8). We leave it None on the
+    # link via the prior row's superseded_by pointer. We leave it None on the
     # payload (the bootstrap-safe default) for BOTH tiers; supersede_prior_
     # consolidation only fires when entry_kind == 'consolidation'.
     payload = JournalPayload(
@@ -2791,7 +2782,7 @@ async def run_method(
 
     # --- PERSIST -------------------------------------------------------
     # derived_from is EMPTY — the journal is the direction-asymmetric off-chain
-    # node (§3.5). The citations live in claims / cited_substrate_refs only; the
+    # node. The citations live in claims / cited_substrate_refs only; the
     # write path (_insert_journal_entry) also hard-forces the column empty.
     steps.append({"phase": "persist", "kind": "envelope", "derived_from": 0})
 
@@ -2804,7 +2795,7 @@ async def run_method(
     # runtime materializes them into ``output_consumption`` alongside the
     # journal row write (context='journal_slice'), best-effort. This is a
     # SIDECAR index, deliberately NOT ``derived_from`` — the journal stays the
-    # off-chain node (§3.5); the forward index is how "this entry read row F"
+    # off-chain node; the forward index is how "this entry read row F"
     # survives without putting the journal on the lineage chain.
     consumed_edges: list[tuple[UUID, str]] = []
     for _row in journal_window(inputs):
@@ -2832,7 +2823,7 @@ async def run_method(
     return AnalystMethodResult(
         finding=payload,            # the runtime forwards this to write_analyst_output(kind=JOURNAL)
         usage=usage,
-        derived_from=[],            # OFF the chain (§3.5)
+        derived_from=[],            # OFF the chain
         intermediate_steps=steps,
         consumed_edges=consumed_edges,
         # consolidation prose-shape guard — a rejected-after-retry body still

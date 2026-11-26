@@ -1,6 +1,6 @@
-# inquiry_pilot — the FIRST standing investigation (Program 5 archetype 2).
+# inquiry_pilot — the FIRST standing investigation (an archetype of the `inquiry` kind).
 #
-# planning/PROGRAM5_INQUIRY_DESIGN_2026-09-24.md §2 / §7.2. The proof this
+# The proof this
 # descriptor exists to produce is one week of its LEDGER: >= 3 hypotheses each
 # carrying a resolution test, and >= 1 of them resolved by a later read.
 #
@@ -23,13 +23,13 @@
 # reads would make "the record is silent outside my desks" unfalsifiable.
 #
 # ── WHY THESE THREE TARGET IDS ────────────────────────────────────────────
-# The design named UA / RU / DE. The real ids in this tree are country_watch_ua
+# The intended targets were UA / RU / DE. The real ids in this tree are country_watch_ua
 # (the non-G20 watch tier, scripts/bringup_register_watch_country_targets.py),
 # country_g20_ru and country_g20_de (the G20 tier,
 # scripts/bringup_register_g20_country_targets.py) — there is no
 # country_watch_ru, because RU is a G20 member and is materialised there.
 #
-# ── GRANTS (§2) ───────────────────────────────────────────────────────────
+# ── GRANTS ───────────────────────────────────────────────────────────
 #   substrate_read  — the DEFAULT GATHER binding: the raw corpus, the signals,
 #                     the graph walks, the as-of register. 19 tools.
 #   journal_read    — the tower top + the platform's own instruments, reached
@@ -62,7 +62,7 @@ identity:
     output_type: legba.runtime.Journal
     deps_type: legba.runtime.deps.StandardDeps
   state: draft
-  owner: program5_inquiry
+  owner: owner@local
 
 subscription:
   # No `targets` block → META analyst: ONE global run per cadence tick
@@ -94,10 +94,10 @@ method:
       - country_g20_ru
       - country_g20_de
     # pre_pass_module is DELIBERATELY unset here: the deterministic pre-pass is
-    # the crossroads mandate's hook (design §7.3), and an inquiry with a brief
+    # the crossroads mandate's hook, and an inquiry with a brief
     # reasons from the record directly. Absent => no import and no call.
   llm:
-    # Model-card sampling (gpt-oss ships generation_config temperature=1.0; the
+    # Model-card sampling (the core model ships generation_config temperature=1.0; the
     # vLLM client always sends temperature, so the card default can never apply
     # on its own). Fleet-wide per the 2026-07-24 sampling audit + A/B.
     temperature: 1.0
@@ -114,7 +114,7 @@ method:
       raw: llm.primary.openai_compat
       expected_family: llm_provider
     narrate:
-      thinking: "on"   # T-2: the VOICE thinks; GATHER and PROPOSE stay on the plain alias
+      thinking: "on"   # the VOICE thinks; GATHER and PROPOSE stay on the plain alias
       factory_kind: stack_ref
       raw: llm.primary.openai_compat  # core plane — the inquiry VOICE
       expected_family: llm_provider
@@ -132,7 +132,7 @@ cadence:
   cooldown_seconds: 79200             # 22h — below the 24h interval (below-interval guard)
 
 grounding:
-  enabled: false                      # OFF by default (§4.3) — the inquiry cites
+  enabled: false                      # OFF by default — the inquiry cites
                                       # the record's own conclusions or weighs
                                       # them; revisit if live reads show
                                       # stale-fact creep into fact claims

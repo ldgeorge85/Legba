@@ -1,15 +1,14 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Multilingual NER filter handler — HTTP-client variant (L-154, post-reshape).
+"""Multilingual NER filter handler — HTTP-client variant.
 
-Implements the L-102 §3 filter/enrichment contract. Extracts named entities
+Implements the filter/enrichment contract. Extracts named entities
 from a :class:`legba.data.sources.Signal`'s text payload by calling the
 hosted Legba-models ``POST /extract`` endpoint (GLiREL zero-shot relation
 extraction over spaCy NER entities). Triples → entities: each S-P-O triple
 contributes its subject and object as candidate entities. Each candidate is
-mapped to Legba's closed 9-value ``entity_class`` taxonomy (per
-``design/legba_data_mapping.md`` §4.5) using a label-keyword heuristic, since
-the /extract contract returns the relation triples as free-text spans (the
+mapped to Legba's closed 9-value ``entity_class`` taxonomy using a label-keyword
+heuristic, since the /extract contract returns the relation triples as free-text spans (the
 endpoint does not carry the spaCy entity label through to Legba's contract).
 
 Architectural-drift correction (2026-05-22): the pre-reshape Legba ingestion
@@ -35,7 +34,7 @@ Behavior:
     failure in ``_last_error`` + ``_signals_failed`` so health probes
     flip to ``degraded``.
 
-Vocabulary alignment (L-102 §5): the handler takes a
+Vocabulary alignment: the handler takes a
 ``vocabulary_values`` set and filters mapped classes against it. Mapped
 classes outside the registry's closed taxonomy are dropped.
 """
@@ -310,7 +309,7 @@ class NERMultilingualConfig(BaseModel):
         description=(
             "Operator-declared languages this filter is expected to see. "
             "Informative only — the hosted /extract endpoint is language-"
-            "agnostic; downstream language-detect (L-150) sets payload.language."
+            "agnostic; downstream language-detect sets payload.language."
         ),
     )
     default_language: str = Field(
@@ -434,11 +433,11 @@ class NERMultilingualHandler:
         the contractual ``entities`` list.
 
     The ``vocabulary_values`` argument is the live ``entity_class`` set
-    from the registry's :class:`VocabularyCache` (L-102 §5). When ``None``
+    from the registry's :class:`VocabularyCache`. When ``None``
     the handler uses the seed set (:data:`legba.data.vocabulary.ENTITY_CLASSES`).
     """
 
-    # --- L-102 §1 class-vars ------------------------------------------------
+    # --- class-vars ------------------------------------------------
     kind: ClassVar[str] = "ner_multilingual"
     family: ClassVar[str] = "filter"
     schema_version: ClassVar[str] = "legba/filter.ner_multilingual/1-0-0"
@@ -446,7 +445,7 @@ class NERMultilingualHandler:
     handler_version: ClassVar[str] = "0.2.0"  # HTTP-client variant
     idempotent: ClassVar[bool] = True
 
-    # Composition contract (L-102 §3).
+    # Composition contract.
     output_contract: ClassVar[Mapping[str, type]] = {
         "payload.entities": list,
     }
@@ -763,7 +762,7 @@ class NERMultilingualHandler:
         """Resolve the language code for this signal.
 
         Preference order:
-          1. ``signal.payload['language']`` — set by L-150 language_detect.
+          1. ``signal.payload['language']`` — set by language_detect.
           2. ``signal.language_hint`` — set by some source handlers.
           3. ``self._config.default_language``.
 

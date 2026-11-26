@@ -23,7 +23,7 @@ Per answer (axis 1–7, §4.2), as computed here:
     correct = 1 when at least one gold atom (the decline) is stated correctly,
     none is contradicted and no error atom (the specific stated as fact) is
     asserted, else 0. Binary correct = correct ≥ 0.5.
-  * usefulness 0–4, capped at 2 when any gold atom is contradicted (§4.3).
+  * usefulness 0–4, capped at 2 when any gold atom is contradicted.
   * novelty = novel atoms (count); share = novel / stated-correct, pooled.
   * traceability = (supports + 0.5 × partial) / sentences, pooled; temporal =
     right / claims, pooled; stale = answers flagged stale.
@@ -35,10 +35,10 @@ Per answer (axis 1–7, §4.2), as computed here:
     no part addressed) outside INSUFFICIENT.
   * cost per answer: the mean of the records' metered ``cost.usd``.
 
-Primary endpoint (§6.1): per question B − A on correctness over the questions
+Primary endpoint: per question B − A on correctness over the questions
 both arms have graded; two-sided paired sign-flip permutation test (10,000
 seeded permutations; exact enumeration when 2^n ≤ 10,000), mean difference
-with a seeded bootstrap 95 % CI. Secondary S1–S6 (§6.2) descriptive with CIs.
+with a seeded bootstrap 95 % CI. Secondary S1–S6 descriptive with CIs.
 Cohen's κ on binary correct, primary vs operator. §6.4 decision rules, each
 read as met / not met / not evaluable. Stdlib only (``random``,
 ``statistics``): it runs in the slim image.
@@ -339,7 +339,7 @@ def cost_adjusted(rows: list[dict[str, Any]], arm: str, klass: str, seed: int) -
 READINGS = {
     "R1": "On-demand reasoning over the corpus is the product's better reader. The tower's next quarter goes "
           "to what B cannot do (memory, absence, calibration), not to more scheduled prose.",
-    "R2": "The tower holds its own. Its weakness is presentation (§6.3) and coverage, not substance.",
+    "R2": "The tower holds its own. Its weakness is presentation and coverage, not substance.",
     "R3": "Verification earns its place as the reader's diet, not only as a gate.",
     "R4": "The filter removes more truth than error.",
     "R5": "The memory claim falls and is withdrawn from the briefing until it is re-earned.",
@@ -572,11 +572,11 @@ def render_md(rep: dict[str, Any]) -> str:
           f"Observed agreement {_f(k['observed_agreement'])}, expected {_f(k['expected_agreement'])}, "
           f"Cohen's κ {_f(k['kappa'])}."]
     if a["packet_ceiling"]:
-        L += ["", "## Packet ceiling for A (not blind; §6.3)", ""]
+        L += ["", "## Packet ceiling for A (not blind)", ""]
         L += _table(["question", "packet ceiling", "A correct", "reading"],
                     [[c["question_id"], f"{_f(c['packet_ceiling'], 2)} ({c['ceiling']})",
                       f"{_f(c['a_correct'], 2)} ({c['a_score'] or '—'})", c["reading"]] for c in a["packet_ceiling"]])
-    L += ["", "## Decision rules (§6.4)", ""]
+    L += ["", "## Decision rules", ""]
     L += _table(["rule", "outcome", "met", "numbers", "reading"],
                 [[d["rule"], d["outcome"], {True: "yes", False: "no", None: "—"}[d["met"]], d["numbers"], d["reading"]]
                  for d in a["decisions"]])
@@ -591,7 +591,7 @@ def refusal(run: dict[str, Any]) -> str | None:
     if not run.get("grading_closed_at"):
         return "grading is not closed (run.json has no grading_closed_at): the blind key stays sealed"
     if run.get("grader_route_changed"):
-        return f"the grader route changed mid-run — the run is void (§4.4): {run['grader_route_changed']}"
+        return f"the grader route changed mid-run — the run is void: {run['grader_route_changed']}"
     return None
 
 
@@ -639,7 +639,7 @@ def build(run_dir: Path, *, key_path: Path | None = None, grading_dir: Path | No
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="the bake-off §6 analysis")
+    ap = argparse.ArgumentParser(description="the bake-off analysis")
     ap.add_argument("--run-dir", required=True)
     ap.add_argument("--grading-dir", help="default <run-dir>/grading")
     ap.add_argument("--key", help="the sealed blind key (default <run-dir>/sealed/blind_key.json)")

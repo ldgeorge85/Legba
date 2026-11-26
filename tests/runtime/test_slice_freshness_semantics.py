@@ -1,21 +1,21 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""B-2 — the substrate slice's freshness contract, pinned after B-1.
+"""The substrate slice's freshness contract.
 
-THE QUESTION B-2 ASKS. The 08-03 incident put a frozen 07-28 AP snapshot at the
+THE QUESTION. A frozen AP snapshot once sat at the
 top of five country desks' 72h slices for six days. Two things could have been
 at fault: the timestamp (``fetched_at`` was being advanced by unchanged
 re-serves) or the slice (which both WINDOWS and ORDERS on that timestamp,
-``actor_substrate_slice.py:330,377``). B-1 fixed the timestamp. B-2 asks whether
+``actor_substrate_slice.py:330,377``). The timestamp has been fixed. The question is whether
 the slice ALSO needs changing — and the answer, measured against the live
 substrate and pinned by the tests below, is NO.
 
-WHAT THE MEASUREMENT SHOWED (live substrate, 2026-08-03, read-only):
+WHAT THE MEASUREMENT SHOWED (live substrate, read-only):
 
-  * The incident, at the desk: the North Korea desk's 72h slice held 34 rows, and
+  * At the desk: the North Korea desk's 72h slice held 34 rows, and
     21 of them — 62% — were the frozen AP feed. Every one of those 21 carried a
-    ``fetched_at`` advanced by 5d16h-5d18h past its real fetch. B-1 plus the 0141
-    backfill rewinds them to 07-28, at which point they age out of the window on
+    ``fetched_at`` advanced by 5d16h-5d18h past its real fetch. The timestamp fix plus the
+    backfill rewinds them to the real fetch date, at which point they age out of the window on
     their own. Nothing about the slice needed to change for that to happen.
 
   * The residue, bounded: the AP feeds were not the only rows carrying an
@@ -125,7 +125,7 @@ async def _titles(conn) -> list[str]:
 
 @pytest.mark.asyncio
 async def test_a_re_served_frozen_row_ages_out_of_the_window(conn):
-    """The incident's mechanism, inverted.
+    """The mechanism, inverted.
 
     A row fetched six days ago and re-served unchanged ever since carries an OLD
     ``fetched_at`` and a NOW ``last_seen_at``. It must fall outside a 72h window

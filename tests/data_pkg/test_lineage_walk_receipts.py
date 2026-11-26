@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Per-node receipt enrichment across the whole lineage walk (P1-T4, PROVENANCE).
+"""Per-node receipt enrichment across the whole lineage walk (PROVENANCE).
 
-P0-T4 attached the analyst_traces receipt to the ROOT of the lineage walk only.
-P1-T4 extends that to EVERY walk node that maps to an analyst run, so the P1-T5
+The analyst_traces receipt was first attached to the ROOT of the lineage walk
+only. It now extends to EVERY walk node that maps to an analyst run, so the
 UI can drill the DAG one hop at a time. These tests pin the same HONESTY
-contract P0-T4 established, now per WALK node:
+contract, now per WALK node:
 
   * Every ANALYST-produced node carries a receipt whose ``chain_consistent`` is
     RE-COMPUTED (re-hash the trace, compare to the stored ``receipt_hash``) —
@@ -105,6 +105,8 @@ def _make_trace(
         "run_ended_at": run_ended_at,
         "receipt_hash": stored_hash,
         "prev_receipt_hash": prev_hash,
+        "bulk_bundle_id": None,
+        "bulk_columns": None,
     }
 
 
@@ -477,7 +479,7 @@ async def test_walk_carries_receipt_per_analyst_node(walk_receipt_app):
     assert r.status_code == 200, r.text
     body = r.json()
 
-    # Root (the situation) carries its receipt (P0-T4 path, unchanged).
+    # Root (the situation) carries its receipt (unchanged path).
     assert body["root"]["receipt"] is not None
     assert body["root"]["receipt"]["receipt_hash"] == situation_hash
     assert body["root"]["receipt"]["chain_consistent"] is True
@@ -487,7 +489,7 @@ async def test_walk_carries_receipt_per_analyst_node(walk_receipt_app):
     assert str(finding_id) in by_id
     assert str(signal_id) in by_id
 
-    # The walk's finding node now carries its OWN recomputed receipt (P1-T4).
+    # The walk's finding node now carries its OWN recomputed receipt.
     finding_node = by_id[str(finding_id)]
     assert finding_node["receipt"] is not None
     assert finding_node["receipt"]["receipt_hash"] == finding_hash

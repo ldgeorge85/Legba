@@ -3,7 +3,7 @@
 --
 -- 0250_alert_log.sql
 --
--- The single alert path (lane L-1, 2026-11-13): ONE alert record.
+-- The single alert path: ONE alert record.
 --
 -- WHY
 -- ---

@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W11-F97 — the registry's TCP reachability probes dial the port the URL means.
+"""The registry's TCP reachability probes dial the port the URL means.
 
 THE DEFECT. ``EmbeddingChecker`` split its endpoint with a scheme-blind helper
 that fell back to port 80 whenever the URL carried no explicit port, so the
-live embedding component on ``https://api.innoai.net/v1`` reported
-``tcp api.innoai.net:80 reachable=True`` (2026-10-23) — a port the https
+live embedding component on ``https://gateway.example.invalid/v1`` reported
+``tcp gateway.example.invalid:80 reachable=True`` (2026-10-23) — a port the https
 client never dials, and a green light that proved nothing about 443. The LLM
 provider probe had the mirror bug: ``http://host`` without a port probed 443.
 
@@ -38,9 +38,9 @@ from legba.data.schemas.stack import EmbeddingServiceConfig
     "endpoint,default_port,expected",
     [
         # https with no port -> 443, whatever the checker's default
-        ("https://api.innoai.net/v1", 80, ("api.innoai.net", 443)),
-        ("https://api.innoai.net", 8080, ("api.innoai.net", 443)),
-        ("HTTPS://api.innoai.net/v1", 80, ("api.innoai.net", 443)),
+        ("https://gateway.example.invalid/v1", 80, ("gateway.example.invalid", 443)),
+        ("https://gateway.example.invalid", 8080, ("gateway.example.invalid", 443)),
+        ("HTTPS://gateway.example.invalid/v1", 80, ("gateway.example.invalid", 443)),
         # http with no port -> 80, whatever the checker's default
         ("http://tei/embed", 443, ("tei", 80)),
         ("http://tei", 8080, ("tei", 80)),
@@ -94,9 +94,9 @@ class _NoSecrets:
 @pytest.mark.parametrize(
     "endpoint,port",
     [
-        ("https://api.innoai.net/v1", 443),
+        ("https://gateway.example.invalid/v1", 443),
         ("http://tei/embed", 80),
-        ("https://api.innoai.net:8443/v1", 8443),
+        ("https://gateway.example.invalid:8443/v1", 8443),
         ("tei", 80),
     ],
 )
@@ -114,7 +114,7 @@ async def test_embedding_probe_dials_the_scheme_port(dialled, endpoint, port):
 @pytest.mark.parametrize(
     "endpoint,port",
     [
-        ("https://api.innoai.net/v1", 443),
+        ("https://gateway.example.invalid/v1", 443),
         ("http://slm.internal/v1", 80),
         ("http://localhost:8000/v1", 8000),
         ("api.example.com", 443),

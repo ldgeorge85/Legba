@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # searxng_engine_census.sh — a daily read of which SearXNG engines actually
-# answer from THIS host (Program 2 track S2, search hygiene). Runs three
+# answer from THIS host (search hygiene). Runs three
 # fixed, broad current-events queries against the LOCAL instance and reports,
 # per query: the result count, the engines that answered, and the engines
 # SearXNG itself reports as unresponsive (with SearXNG's own reason string).
@@ -34,7 +34,7 @@
 # Cron suggestion (NOT installed by this script — an operator's call; host
 # cron runs in PDT, not UTC — see MEMORY.md "Host cron + bare date -d are
 # PDT, not UTC" before picking a wall-clock time):
-#   7 */6 * * * /usr/local/deployments/active/legba/scripts/searxng_engine_census.sh >>/var/log/legba/searxng_census.cron.log 2>&1
+#   7 */6 * * * <repo>/scripts/searxng_engine_census.sh >>/var/log/legba/searxng_census.cron.log 2>&1
 #
 # Exit codes: 0 = ran (even if every query was fully degraded — that IS the
 # finding); 1 = could not reach the instance at all on any of the 3 queries.

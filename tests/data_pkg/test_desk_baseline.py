@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""P3-7 — the ``desk_baseline`` CAST-recipe per-desk statistical baseline.
+"""The ``desk_baseline`` CAST-recipe per-desk statistical baseline.
 
 Pure tests (no DB): the static land-border adjacency + neighbour-desk mapping,
 the CAST feature recipe (lags / rolling means), the robust estimator (band,
@@ -58,7 +58,7 @@ async def test_refuses_loud_without_pool():
 
 
 def test_floors_are_the_trigger_floors():
-    """The absolute floors are imported from the P1-3 trigger, in lockstep."""
+    """The absolute floors are imported from the trigger, in lockstep."""
     assert db.MIN_CURRENT_SIGNALS is ats.MIN_CURRENT_SIGNALS
     assert db.MIN_CURRENT_FINDINGS is ats.MIN_CURRENT_FINDINGS
     assert db.METRIC_SIGNAL_VOLUME == ats.METRIC_SIGNAL_VOLUME
@@ -157,7 +157,7 @@ def test_estimate_above_requires_the_absolute_floor():
 def test_estimate_quiet_desk_sigma_zero_never_fires():
     """The σ≈0 quiet-desk guard: a 2-vs-0 blip on a zero baseline is
     statistically 'infinitely' above 0 but stays WITHIN — the absolute floor
-    (>=10 signals) is the guard, exactly mirroring the P1-3 trigger."""
+    (>=10 signals) is the guard, exactly mirroring the trigger."""
     est = db.estimate_baseline(
         [0.0] * 28, 2.0, min_current=db.MIN_CURRENT_SIGNALS
     )
@@ -484,7 +484,7 @@ async def clean_slate(pg_pool):
     """A clean desk universe + empty sidecar so each test's compute sees ONLY
     its own desks (the session DB is per-session + disposable).
 
-    ALL signals go, not just this file's ``test_p3_7_src`` rows (W11-F94): a
+    ALL signals go, not just this file's ``test_p3_7_src`` rows: a
     desk's bucket vector counts every live signal whose ``geo`` overlaps its
     scope, whoever inserted it, so a stray row from another module is read as
     this test's evidence. Nightly 2026-10-15 (shuffled): US spillover read 6.0,

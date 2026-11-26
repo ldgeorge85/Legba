@@ -8,7 +8,7 @@ the long tail of read-only HTTP APIs that return a JSON document (or a CSV
 table) containing an array of items — ReliefWeb, GDELT DOC 2.0, CKAN portals,
 status APIs, etc. — without writing a bespoke handler per provider.
 
-Shape (L-102 source-kind contract, mirroring the RSS / GeoJSON handlers):
+Shape (the source-kind contract, mirroring the RSS / GeoJSON handlers):
 
   * ``pull(ctx, since)``: render ``url_template`` against a cursor-driven
     time window (substitutions ``{date_today}`` / ``{date_yesterday}`` /
@@ -17,10 +17,10 @@ Shape (L-102 source-kind contract, mirroring the RSS / GeoJSON handlers):
     (``items_path``), then map each item to a :class:`Signal` through the
     configured field paths (``id_path`` / ``title_path`` / ``url_path`` /
     ``timestamp_path`` / ``body_path`` / ``geo_path``). Two optional,
-    declarative additions (lane N-R, :mod:`.json_api_mapping`): a
+    declarative additions (:mod:`.json_api_mapping`): a
     ``title_template`` over several record fields and a ``geometry`` block
-    taking the record's own coordinates as the signal's point; lane K-1 adds
-    a ``body_template`` in the same grammar.
+    taking the record's own coordinates as the signal's point; a
+    ``body_template`` is also supported in the same grammar.
   * Cursor: ``state_store["json_api_cursor"] = {"last_pulled_at": iso}`` —
     the next window starts where the last successful pull ended. Items whose
     parsed timestamp is **not after** the window start are skipped; items
@@ -38,7 +38,7 @@ but no secrets resolver is wired, the handler **refuses** — ``on_configure``
 ``health_check`` reports ``unhealthy``. There is no literal-secret fallback
 for this kind.
 
-Failure semantics (L-102 §7), mirroring the RSS handler:
+Failure semantics, mirroring the RSS handler:
 
   * Transient network error / 5xx → one retry, then yield nothing; degraded.
   * 4xx → no retry, yield nothing; unhealthy.
@@ -87,7 +87,7 @@ logger = logging.getLogger(__name__)
 
 
 _JSON_API_CURSOR_KEY = "json_api_cursor"
-#: W11-F151 — default cursor look-back (hours); the same value as
+#: Default cursor look-back (hours); the same value as
 #: ``rss.DEFAULT_LOOKBACK_HOURS`` / ``runtime.source_cursor.DEFAULT_LOOKBACK``.
 DEFAULT_LOOKBACK_HOURS = 72.0
 _JSON_API_HEALTH_KEY = "json_api_health"
@@ -287,7 +287,7 @@ class JsonApiConfig(BaseModel):
     #: First-run window: how far back ``window_start`` reaches when there is
     #: no cursor and no ``since``. Default 24h.
     lookback_minutes: int = Field(default=1440, ge=1, le=129_600)
-    #: W11-F151 — the pull cursor's look-back (hours): the source actor hands
+    #: The pull cursor's look-back (hours): the source actor hands
     #: the handler ``since - lookback`` and the window starts there when that
     #: is earlier than the handler's own cursor, so an item dated before the
     #: last poll but published after it is still fetched (the actor's ledger
@@ -296,7 +296,7 @@ class JsonApiConfig(BaseModel):
     #: Defensive per-poll cap. Default matches the source plane's hard
     #: per-poll count bound (``_MAX_ENTRIES_PER_POLL`` in the source actor).
     max_items_per_pull: int = Field(default=100, ge=1, le=10_000)
-    #: W11-F169 — OPTIONAL override of the SOURCE ACTOR's wall-clock budget
+    #: OPTIONAL override of the SOURCE ACTOR's wall-clock budget
     #: for one pull of this source, in seconds (``source_actor.
     #: resolve_poll_bounds``: descriptor config > handler > the generic 30 s).
     #: Declared HERE because the schema is ``extra='forbid'`` and the actor
@@ -379,7 +379,7 @@ class JsonApiAuthNotConfigured(RuntimeError):
 class JsonApiSourceHandler:
     """Generic polled JSON/CSV HTTP API source.
 
-    L-102 conformance:
+    Source-kind conformance:
 
       * ``kind = "json_api"``, ``family = "source"``.
       * Owns its cursor in ``ctx.state_store`` (``last_pulled_at`` window).
@@ -389,7 +389,7 @@ class JsonApiSourceHandler:
         ``on_activate`` refuse when declared auth cannot resolve.
     """
 
-    # --- L-102 §1 class-vars ------------------------------------------------
+    # --- class-vars ------------------------------------------------
     kind: ClassVar[str] = "json_api"
     family: ClassVar[str] = "source"
     schema_version: ClassVar[str] = "legba/source.json_api/1-0-0"
@@ -426,7 +426,7 @@ class JsonApiSourceHandler:
 
     @property
     def cursor_lookback_seconds(self) -> float:
-        """W11-F151 — the look-back this feed's cursor gets (actor reads it)."""
+        """the look-back this feed's cursor gets (actor reads it)."""
         hours = self._config.cursor_lookback_hours
         return (DEFAULT_LOOKBACK_HOURS if hours is None else hours) * 3600.0
 
@@ -861,7 +861,7 @@ def map_json_item(
     """Map one JSON item to a :class:`Signal` through ``cfg``'s field paths.
 
     THE one item mapping: the polled ``json_api`` kind and the subscribed
-    ``stream_json`` kind (``stream_json.py``, lane I-4) both call it, so the
+    ``stream_json`` kind (``stream_json.py``) both call it, so the
     same record reaching Legba by a poll or over a held connection becomes
     the same signal — same payload, same ``content_hash``, same dedupe key.
     Only ``raw_provenance`` (how it arrived) differs, by construction.

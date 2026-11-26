@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Pure-logic (no-DB) tests for the Holes-B Wave 4 write-path COEXISTENCE leg
-(#101, decision #1), the one behavioral change of contested-claims.
+"""Pure-logic (no-DB) tests for the write-path COEXISTENCE leg,
+the one behavioral change of contested-claims.
 
 ``supersede_prior_facts`` gains an opt-in mode behind ``LEGBA_FACT_CONTENTION``
 (default OFF). With the flag OFF it must run the single blind UPDATE byte-for-
@@ -15,8 +15,8 @@ These run WITHOUT a live Postgres: a hand-rolled ``CoexistConn`` records the
 SQL + params and returns scripted ``fetch`` rows, so we assert the control flow
 (one UPDATE OFF; a FETCH + a scoped UPDATE ON) and the close set.
 
-The fuzzy clusterer (``provenance.value_clustering``) is a sibling module built
-by a parallel wave and is absent at this branch point, so we inject a faithful
+The fuzzy clusterer (``provenance.value_clustering``) is a sibling module that
+may be absent, so we inject a faithful
 stub into ``sys.modules`` mirroring its documented two-stage contract (canon-
 fold "Russian" -> "Russia", then a tight close-distance merge) before importing
 the helper — the production import is a lazy ``from .value_clustering import

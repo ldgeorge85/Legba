@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""L-173 per-sub-handler tests for the deterministic analyst kind.
+"""Per-sub-handler tests for the deterministic analyst kind.
 
 One synthetic fixture per handler:
 

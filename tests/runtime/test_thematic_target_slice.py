@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Phase 5c — thematic-target slice focusing.
 
-The operator's "a target predicate CAN be 'iran war'": a non-geo target whose
+A target predicate CAN be 'iran war': a non-geo target whose
 ``scope.predicate`` (free-text ``contains_any``) focuses the analyst slice on a
 cross-country situation. Covers the three new pieces without a live DB:
 

@@ -88,9 +88,9 @@ def country_iso2_for_point(lat: float, lon: float) -> str | None:
     return None
 
 
-# ---- nearest coast (lane N-S) ------------------------------------------------
+# ---- nearest coast ------------------------------------------------
 #
-# An authoritative point in NO country (an incident at sea, lane N-R) is filed
+# An authoritative point in NO country (an incident at sea) is filed
 # under no country; this answers the next question honestly — WHICH coastal
 # states it lies off, and how far — from the same bundled 110m outlines, so
 # nothing is fetched and nothing is added. The distance is to the 110m

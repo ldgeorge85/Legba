@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Register the Source Track Record analyst descriptor (A6 layer 3, P3-3).
+"""Register the Source Track Record analyst descriptor.
 
 Reads ``descriptors/analyst_source_track_record.yaml`` and POSTs it to the
 registry. Idempotent: if a head row is already present we report it and exit 0

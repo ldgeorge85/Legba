@@ -55,7 +55,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L2
   state: draft
-  owner: w1e_built_but_unbound
+  owner: owner@local
   created: "2026-08-03T00:00:00Z"
 
 scope:
@@ -64,7 +64,7 @@ scope:
   languages: [en]
   tags: [discovery, news, template]
   source_class: analysis
-  access_class: restricted          # Wave-E — a discovery TEMPLATE, not a bound source; nothing to classify — fail-closed until a materialised child is reviewed
+  access_class: restricted          # a discovery TEMPLATE, not a bound source; nothing to classify — fail-closed until a materialised child is reviewed
 
 acquisition: poll
 # No cadence: a discovery template's materialised children pull, the

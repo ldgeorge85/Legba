@@ -73,6 +73,13 @@ is a `read` entry in the table.
 | method | path | role | owner check |
 |---|---|---|---|
 | POST | `/api/v1/auth/accept` | `read` | — |
+| POST | `/api/v1/auth/admin/invites` | `operator` | — |
+| DELETE | `/api/v1/auth/admin/invites/{user_id}` | `operator` | — |
+| GET | `/api/v1/auth/admin/users` | `operator` | — |
+| POST | `/api/v1/auth/admin/users/{user_id}/disable` | `operator` | — |
+| POST | `/api/v1/auth/admin/users/{user_id}/enable` | `operator` | — |
+| POST | `/api/v1/auth/admin/users/{user_id}/end-sessions` | `operator` | — |
+| POST | `/api/v1/auth/admin/users/{user_id}/role` | `operator` | — |
 | POST | `/api/v1/auth/invite` | `operator` | — |
 | POST | `/api/v1/auth/sign-in` | `read` | — |
 | POST | `/api/v1/auth/sign-out` | `read` | — |
@@ -139,7 +146,7 @@ is a `read` entry in the table.
 | PUT | `/api/v1/v3/watchlist/{watch_id}` | `reader-own-rows` | `watchlist.created_by` |
 | GET | `/metrics` | `read` | — |
 
-66 entries: 49 `operator`, 10 `reader-own-rows`, 7 `read`.
+73 entries: 56 `operator`, 10 `reader-own-rows`, 7 `read`.
 
 # With sign-in on (`LEGBA_AUTH_SIGNIN=1`)
 
@@ -181,6 +188,13 @@ written before the switch reads as: `read` → `reader`, `reader-own-rows` → `
 | GET | `/api/v1/analysts/{analyst_id}/outputs` | `admin` |
 | GET | `/api/v1/analysts/{analyst_id}/runs` | `admin` |
 | POST | `/api/v1/auth/accept` | `reader` |
+| POST | `/api/v1/auth/admin/invites` | `admin` |
+| DELETE | `/api/v1/auth/admin/invites/{user_id}` | `admin` |
+| GET | `/api/v1/auth/admin/users` | `admin` |
+| POST | `/api/v1/auth/admin/users/{user_id}/disable` | `admin` |
+| POST | `/api/v1/auth/admin/users/{user_id}/enable` | `admin` |
+| POST | `/api/v1/auth/admin/users/{user_id}/end-sessions` | `admin` |
+| POST | `/api/v1/auth/admin/users/{user_id}/role` | `admin` |
 | POST | `/api/v1/auth/invite` | `admin` |
 | GET | `/api/v1/auth/me` | `reader` |
 | POST | `/api/v1/auth/sign-in` | `reader` |
@@ -391,4 +405,4 @@ written before the switch reads as: `read` → `reader`, `reader-own-rows` → `
 | PUT | `/api/v1/v3/watchlist/{watch_id}` | `reader` |
 | GET | `/metrics` | `reader` |
 
-214 routes: 95 `admin`, 16 `contributor`, 103 `reader`.
+221 routes: 102 `admin`, 16 `contributor`, 103 `reader`.

@@ -13,7 +13,7 @@ worked?**
     scripts/fetch_impersonation_probe.py --mode off            # one mode only
     scripts/fetch_impersonation_probe.py --urls-file sample.txt --mode both
 
-THE BAR (review §5), applied at the end and printed as a verdict:
+THE BAR), applied at the end and printed as a verdict:
 
     keep the flag ON only if >= 1/3 of challenge-class URLs become ``ok``,
     with ZERO regressions — no ``ok`` URL becomes non-``ok``, and no robots
@@ -97,8 +97,8 @@ REVIEW_HOSTS: tuple[str, ...] = (
     "https://www.haaretz.com/",
 )
 
-#: Heuristic, and labelled as one. A paywall is not something this lane fixes
-#: (review §3(e)); it is classified only so it stops being counted as a block
+#: Heuristic, and labelled as one. A paywall is not something this probe fixes;
+#: it is classified only so it stops being counted as a block
 #: the fetcher could have done something about.
 _PAYWALL_MARKERS: tuple[str, ...] = (
     "subscribe to continue",
@@ -118,7 +118,7 @@ CLASS_ERROR = "error"
 
 #: ``thin`` is a class of its own and NOT folded into ``error`` on purpose:
 #: "we got bytes and found no article" and "the fetch failed" are the two
-#: things this whole lane exists to stop conflating.
+#: things this whole probe exists to stop conflating.
 CLASSES = (CLASS_OK, CLASS_CHALLENGE, CLASS_ROBOTS, CLASS_PAYWALL,
            CLASS_THIN, CLASS_ERROR)
 
@@ -327,7 +327,7 @@ def _print_mode_table(probes: list[Probe]) -> None:
 def _print_false_absence(probes: list[Probe]) -> None:
     """(a′) — how many of these pages USED to read as "the web had nothing".
 
-    This is the half of the lane that measures as a real defect fixed, and it
+    This is the half of the probe that measures as a real defect fixed, and it
     is measured at the SHIPPED default (flag off), because that is what every
     deployment runs. Two shapes, both previously invisible as blocks:
 
@@ -407,7 +407,7 @@ def _print_delta(off: list[Probe], on: list[Probe]) -> int:
         if by_url_off[u].klass == CLASS_ROBOTS and by_url_on[u].klass != CLASS_ROBOTS
     ]
 
-    print("\n=== VERDICT (review §5 bar) ===")
+    print("\n=== VERDICT ===")
     need = (len(challenged) + 2) // 3
     print(f"  challenge-class URLs (flag off) : {len(challenged)}")
     print(f"  became ok with the flag on      : {len(rescued)} (bar: >= {need})")
@@ -503,7 +503,7 @@ def main() -> int:
     ap.add_argument("--timeout", type=float, default=20.0)
     ap.add_argument("--per-host-delay", type=float, default=2.0)
     ap.add_argument("--settle-seconds", type=float, default=60.0,
-                    help="pause between the two modes (review §5)")
+                    help="pause between the two modes)")
     ap.add_argument("--max-bytes", type=int, default=5_000_000)
     args = ap.parse_args()
     return asyncio.run(_main_async(args))

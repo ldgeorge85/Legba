@@ -1,4 +1,4 @@
-# Profile Projector analyst descriptor — W9 VIEW-1 (Review A §2.2d, DEC-12).
+# Profile Projector analyst descriptor.
 #
 # A `deterministic`-kind META analyst that whole-rebuilds every declared
 # PLANE of `profile_projection` — one plane per profile, built from the
@@ -28,7 +28,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: draft
-  owner: view1_profile_projection
+  owner: owner@local
 
 subscription:
   # META sweep: the handler reads vocabulary_entries, target_descriptors and

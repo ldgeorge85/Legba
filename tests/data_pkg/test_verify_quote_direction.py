@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""V-I (2026-08-05) — the round-4 panel's judge-path defects, pinned by case.
+"""Judge-path defects found by a review panel, pinned by case.
 
-Failure-verdict precision has sat on a ~50% plateau for four acceptance rounds.
-Round 4 is the first measured on a fully healthy judge (337/338 `judge_status=llm`,
+Failure-verdict precision sat on a ~50% plateau across acceptance rounds.
+The latest round was the first measured on a fully healthy judge (337/338 `judge_status=llm`,
 zero `judge_failed` lines) and it finally says WHY: of the 14 hard fails in the
 full census, 8 are wrong, and 5 of those rest on a quote that CONFIRMS, resolves
 or restates the claim rather than refuting it.
@@ -181,9 +181,9 @@ def test_the_same_numbers_about_a_different_subject_do_not_confirm() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 2b. V-I1 guard 5 (2026-08-09) — endpoint binding, the round-5 tightening
+# 2b. V-I1 guard 5 — endpoint binding, a tightening
 # ---------------------------------------------------------------------------
-# Round 5 scored V-I1 0-for-1 on live fires: its one absorption was a CORRECT
+# A later round scored V-I1 0-for-1 on live fires: its one absorption was a CORRECT
 # hard fail. Critique `b14bf715` (journal_assessor, claim idx 15) — the texts
 # below are verbatim from the persisted claim ledger, U+2011 hyphen included.
 # The signal shows a 35-MINUTE warning expiring 6 August; the journal restates
@@ -253,7 +253,7 @@ def test_h9_still_confirms_after_the_tightening() -> None:
 
 
 async def test_the_marine_warning_row_stays_hard_end_to_end() -> None:
-    """Through the real severity chain: the round-5 shape earns and KEEPS the
+    """Through the real severity chain: this shape earns and KEEPS the
     hard class, and the V-I1 counter does not fire."""
     report = await verify_finding_faithfulness(
         body=f"- {_R5_MARINE_CLAIM}\n",
@@ -277,7 +277,7 @@ async def test_the_marine_warning_row_stays_hard_end_to_end() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 2c. V-I1 guard 6 (2026-08-10) — direction binding, the round-5 §10-5 arm
+# 2c. V-I1 guard 6 — direction binding
 # ---------------------------------------------------------------------------
 # Guard 5 closed the NUMERIC half of the divergence class; this is the PROSE
 # half. Critique `037f769f` (region_composition, claim idx 3) — texts verbatim
@@ -521,7 +521,7 @@ def test_the_discriminator_is_the_evidence_text_not_the_source_id() -> None:
     On the V-B route a `source.gdelt.files` row IS a coding, so the source id
     settles it there. On the CITATION path it does not: the same handler supplies
     entries whose TITLE is CAMEO-shaped while their `source_text` is the real
-    article. That entry is `[11]` of the round-4 H1/H7 — "THE US <-> BRAZIL:
+    article. That entry is `[11]` of a review panel's findings — "THE US <-> BRAZIL:
     coerce in Brazil" over "The United States has revoked the visa of Brazil's
     ambassador in Washington…" — and H1/H7 are two of the SIX hard fails the
     panel scored CORRECT. Keying on the source id demoted them both.
@@ -597,7 +597,7 @@ def test_the_judges_evidence_view_caveats_the_coding() -> None:
 
 
 async def test_the_h13_coding_cannot_ground_a_hard_fail() -> None:
-    """The round-4 H13. `absence_slice_machine_rows_excluded`=15 fired on this
+    """A review-panel finding. `absence_slice_machine_rows_excluded`=15 fired on this
     very critique on the V-B path; the judge path had no filter and hard-failed
     the claim on a code label whose underlying article SUPPORTS it."""
     claim = "Indonesia shows no material change since the prior read [1]."
@@ -676,7 +676,7 @@ def test_the_router_answers_the_same_question_on_both_paths() -> None:
 
 
 async def test_a_routed_out_claim_cannot_be_hard_failed_by_the_judge() -> None:
-    """The round-4 §6.3: `absence_slice_route_excluded_continuity_claim` fired
+    """A review-panel finding: `absence_slice_route_excluded_continuity_claim` fired
     on the VERY claim the judge then hard-failed. 08-03 rec #2 shipped and works
     — 115 fires on 114 rows — and was bypassable by the more expensive path."""
     claim = "No material change since the prior read [1]."

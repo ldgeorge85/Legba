@@ -25,7 +25,7 @@ from typing import Any
 API_VERSION = "2023-06-01"
 #: Server-side web tools — the dynamic-filtering variants the Opus 5.5 / 5 /
 #: 4.6+ line takes (re-checked against the claude-api reference for
-#: ``claude-opus-5-5``, lane W11-G1; the older ``web_search_20250305`` /
+#: ``claude-opus-5-5``; the older ``web_search_20250305`` /
 #: ``web_fetch_20250910`` are the basic variants for pre-4.6 models).
 WEB_SEARCH_TOOL = "web_search_20260209"
 WEB_FETCH_TOOL = "web_fetch_20260209"

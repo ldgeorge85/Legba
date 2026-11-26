@@ -42,7 +42,7 @@
 # here reads $PWD.
 #
 # Install (docs/RUNBOOK.md 24.2) — deploy/cron.d/legba-log-collector:
-#   * * * * * root /usr/local/deployments/active/legba/scripts/host_log_collector.sh >> /var/log/legba_log_collector.log 2>&1
+#   * * * * * root <repo>/scripts/host_log_collector.sh >> /var/log/legba_log_collector.log 2>&1
 #
 # Operator surface:
 #   host_log_collector.sh            supervise once (what cron runs)
@@ -107,9 +107,9 @@ SERVICES_FILTER="${LEGBA_LOGSHIP_SERVICES:-}"
 FIRST_RUN_LOOKBACK="${LEGBA_LOGSHIP_FIRST_RUN_LOOKBACK:-1h}"
 DRY_RUN="${DRY_RUN:-0}"
 DISABLE_FLAG="/etc/legba-watchdog.disabled"
-# This script's OWN cron log, rotated by the same copy-truncate. P6 6 item 11
-# is "no logrotate for any /var/log/legba*.log"; a log collector that leaks its
-# own log would be a poor answer to that. Cron holds it O_APPEND, so
+# This script's OWN cron log, rotated by the same copy-truncate: a log
+# collector that leaks its own log would leave /var/log/legba*.log unrotated.
+# Cron holds it O_APPEND, so
 # copy-truncate is valid here for exactly the reason it is for the followers.
 SELF_LOG="${LEGBA_LOGSHIP_SELF_LOG:-/var/log/legba_log_collector.log}"
 

@@ -1,6 +1,5 @@
 /**
- * Unit test for `stripJournalRefMarkers` (T1.3,
- * planning/JOURNAL_CONNECTIVE_AUDIT_PROPOSAL_2026-09-09.md §6) — a journal
+ * Unit test for `stripJournalRefMarkers`: a journal
  * claim cites a raw signal directly as `[[ref:<uuid>]]`, a form disjoint from
  * the ordinal `[[ref:N]]` markers `citationsModel`'s tokenizer resolves into
  * chips (digit-only). Left alone, a uuid-form marker renders as literal

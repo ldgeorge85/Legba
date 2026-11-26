@@ -1,10 +1,9 @@
-# F1 model picker — Claude Fable 5.1, the SELECTABLE, non-default Anthropic
-# plane (kind: llm_provider). The operator wants BOTH available: Opus 5 stays
+# Model picker — Claude Fable 5.1, the SELECTABLE, non-default Anthropic
+# plane (kind: llm_provider). Both are available: Opus 5 stays
 # the default consult plane (`llm.anthropic.opus_4_7`, unchanged), and Fable
 # 5.1 becomes a per-request choice via the consult panel's model picker.
 #
-# Probed 2026-09-16 (see the Anthropic handler's claude-fable-5 line commit,
-# 8d750063): model id `claude-fable-5-1`, same Anthropic key as every other
+# Probed: model id `claude-fable-5-1`, same Anthropic key as every other
 # Anthropic component, `temperature` rejected on the wire (the handler already
 # drops it by id prefix — a dead knob, not a bug), 128k output ceiling, native
 # tool_use OK.
@@ -60,7 +59,7 @@ schema_uri: legba/stack/llm_provider/1.0.0
 # Placeholder — the registry stamps the content hash at register time.
 version: "0000000000000000"
 state: active
-owner: lewis@local
+owner: owner@local
 
 config:
   # Base host only — `_chat_endpoint_path()` prepends `/v1/...`. Identical to
@@ -82,7 +81,8 @@ config:
     factory_kind: text
     raw: claude-fable-5-1
 
-  # Matches the live `llm.anthropic.opus_4_7` component (read 2026-09-16).
+  # Matches the live `llm.anthropic.opus_4_7` component. Read by nothing: the
+  # Anthropic handler sends the model's documented maximum output.
   max_tokens:
     factory_kind: number
     raw: 8192

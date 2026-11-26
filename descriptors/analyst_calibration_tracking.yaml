@@ -3,8 +3,7 @@
 # A `deterministic`-kind META analyst (sub_handler=calibration_tracking) — wires
 # the BUILT-but-unregistered calibration_tracking handler so hypothesis +
 # prediction confidence is Brier-calibrated against OUTCOMES over time. This is
-# the calibration closure loop the deep review names as dormant
-# (DATA_ANALYSIS_DEEP_REVIEW_2026-06-16.md §1.3 / §2 Rank 3).
+# the calibration closure loop that was dormant.
 #
 # Each tick it pulls resolved hypotheses (the ACH competing_hypotheses producer's
 # confirmed/refuted rows) + resolved predictions, computes:
@@ -30,7 +29,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: active
-  owner: piece_c_calibration_activation
+  owner: owner@local
 
 subscription:
   # META analyst: one global sweep per tick over the resolved hypotheses +

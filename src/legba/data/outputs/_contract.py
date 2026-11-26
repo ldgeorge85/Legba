@@ -3,7 +3,7 @@
 """Output-kind handler contract — minimal Protocol surface (L-197).
 
 The output family is the third leaf of the kind taxonomy alongside
-``sources`` (L-102 §2) and ``filters`` (L-102 §3). Where sources ingest
+``sources`` and ``filters``. Where sources ingest
 raw signals and filters transform them in-flight, *outputs* fan analyst-
 emitted payloads to operator-facing surfaces (NATS, Pushover, XMPP,
 Matrix, etc.).

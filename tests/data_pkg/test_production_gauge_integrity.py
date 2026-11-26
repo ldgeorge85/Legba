@@ -452,7 +452,7 @@ def test_manifest_ships_inside_the_package():
     the worst possible arrangement."""
     assert MANIFEST_PATH.is_dir()
     assert MANIFEST_PATH.is_relative_to(REPO_ROOT / "src" / "legba")
-    for part in MANIFEST_PATH.glob("*.json"):  # R-1: one file per descriptor
+    for part in MANIFEST_PATH.glob("*.json"):  # One file per descriptor
         json.loads(part.read_text(encoding="utf-8"))
     assert load_prompt_manifest() and load_state_manifest()
 

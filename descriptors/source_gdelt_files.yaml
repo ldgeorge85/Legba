@@ -50,7 +50,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft                       # NEW acquisition path — operator flips deliberately
-  owner: source_bringup
+  owner: owner@local
   created: "2026-07-23T00:00:00Z"
 
 scope:
@@ -59,7 +59,7 @@ scope:
   languages: [en]
   tags: [news, events, geopolitical, structured, global, conflict]
   source_class: reporting          # news-derived structured event stream (same class as gdelt_query)
-  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
+  access_class: public          # free no-auth feed, no separate reuse agreement
 
 acquisition: poll
 
@@ -104,7 +104,7 @@ config:
   lookback_minutes:
     factory_kind: number
     raw: 15
-  # W11-F169 (roll 64) — the source actor's per-pull wall-clock budget. The
+  # the source actor's per-pull wall-clock budget. The
   # generic 30 s lands ~2-4 items a poll at ~7-15 s of NER each. 180 s: worst
   # case one pull = 180 + one in-flight item (12 s enrichment timeout + ~1 s
   # write/publish) + ~1 s cursor/outcome persist = 194 s, 46 s under the

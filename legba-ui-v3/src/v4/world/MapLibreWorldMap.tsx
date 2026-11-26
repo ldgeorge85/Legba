@@ -718,7 +718,7 @@ export default function MapLibreWorldMap() {
               `<div style="font:12px system-ui;color:#e2e8f0;max-width:220px"><b>${esc(countryLabel(iso2))}</b><br/>` +
                 `confidence: ${esc(cv.verdict.confidence)}` +
                 (cv.verdict.faithfulness != null
-                  ? ` · faithful ${Math.round(cv.verdict.faithfulness * 100)}%`
+                  ? ` · ${Math.round(cv.verdict.faithfulness * 100)}% supported by its sources`
                   : '') +
                 `<div style="margin-top:3px;color:#64748b">${sig} signals · ${finds.length} findings in window</div>` +
                 (movers ? `<div style="margin-top:2px">${movers}</div>` : '') +
@@ -733,7 +733,7 @@ export default function MapLibreWorldMap() {
 
       mapRef.current = map
       // The browser walk reads where the signal layer drew through this
-      // handle, as it does on the globe (roll 86: points at their own place)
+      // handle, as it does on the globe (points at their own place)
       ;(container as HTMLElement & { __legbaMap?: maplibregl.Map }).__legbaMap = map
     })
     return () => {

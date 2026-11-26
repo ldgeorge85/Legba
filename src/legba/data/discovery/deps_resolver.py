@@ -115,7 +115,7 @@ class ResolvedDiscoveryDeps:
                 "`deps: {postgres: true}` to the source/discovery descriptor "
                 "so the actor resolves the substrate pool at activation "
                 "(the old per-target ctx.stack_resolve('postgres') path is "
-                "retired — PIVOT §4 SourceDeps)"
+                "retired; SourceDeps replaced them)"
             )
         return self.postgres
 

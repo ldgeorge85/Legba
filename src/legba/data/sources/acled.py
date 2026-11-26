@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""ACLED (Armed Conflict Location & Event Data) source handler — L-132.
+"""ACLED (Armed Conflict Location & Event Data) source handler.
 
 ACLED is a free / non-commercial dataset of conflict, protest, and political
 violence events covering 230+ countries with weekly updates. The handler
@@ -10,9 +10,6 @@ pulls from the REST API at ``api.acleddata.com/acled/read`` and emits one
 Reference:
   * API docs:                https://acleddata.com/acled-api/
   * License (non-commercial): https://acleddata.com/terms-of-use/
-  * Pillar / phase context:  planning/pillar_legba.md
-  * Source-kind contract:    planning/design/legba_kind_contracts.md §2
-  * Task row:                task_tracker.md §15.3 row L-132
 
 Key API details:
 
@@ -310,7 +307,7 @@ class _HealthCounters:
 class ACLEDSourceHandler:
     """Source handler for the ACLED conflict-event REST API.
 
-    Implements :class:`SourceHandler` (L-102 §2). The handler is stateless
+    Implements :class:`SourceHandler` The handler is stateless
     between calls; cursor state lives in ``ctx.state_store`` under the key
     ``"acled_cursor"``.
 
@@ -343,7 +340,7 @@ class ACLEDSourceHandler:
         self._health = _HealthCounters()
 
     # ------------------------------------------------------------------
-    # Lifecycle hooks — runtime-optional. L-102 §1.
+    # Lifecycle hooks — runtime-optional.
     # ------------------------------------------------------------------
 
     async def on_configure(self, ctx: SourceContext) -> None:  # pragma: no cover - trivial
@@ -543,7 +540,7 @@ class ACLEDSourceHandler:
 
     async def _resolve_secret(self, ctx: SourceContext, vault_id: str) -> str:
         """Resolve a SecretRef vault id to its plaintext via the runtime's
-        ``secrets_resolve`` coroutine (per L-102 §7). Honors a literal
+        ``secrets_resolve`` coroutine. Honors a literal
         pass-through when no resolver is supplied (unit tests / bootstrap);
         real descriptors always carry a vault id.
         """
@@ -651,7 +648,7 @@ class ACLEDSourceHandler:
           * HTTP 429: honor ``Retry-After`` if present (seconds), else 1s + jitter.
             Up to 4 retries (≈30s total worst case).
           * HTTP 5xx: 1 retry with 1s back-off then raise.
-          * Network errors propagate to the caller (transient-failure per L-102 §7).
+          * Network errors propagate to the caller (transient failure).
         """
         max_429_retries = 4
         backoff_seconds = 1.0

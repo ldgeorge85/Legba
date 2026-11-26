@@ -31,8 +31,8 @@ export type UnverifiedState = 'pending' | 'absent'
 
 /** The two render strings — verbatim on every findings surface. */
 export const UNVERIFIED_LABEL: Record<UnverifiedState, string> = {
-  pending: 'unverified · judge pending',
-  absent: 'unverified · not judged',
+  pending: 'not yet checked',
+  absent: 'not checked',
 }
 
 /** The registry's state block (`verification_state.unverified_state`). */

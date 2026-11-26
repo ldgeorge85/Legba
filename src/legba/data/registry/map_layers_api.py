@@ -217,7 +217,8 @@ class SeriesAtPlace(BaseModel):
     #: Mean of the held days in the 30 before ``latest_day`` (None when none).
     baseline_30d: Optional[float] = None
     baseline_days: int = 0
-    #: ``latest`` as a percentage of the baseline (None without a baseline).
+    #: ``latest`` as a percentage of the baseline (None without a baseline, or
+    #: with one too thin to divide by: see ``_baseline_holds``).
     pct_of_baseline: Optional[float] = None
     #: The latest day has more than one vintage.
     revised: bool = False
@@ -296,12 +297,26 @@ def _json(v: Any) -> Any:
     return v
 
 
+def _baseline_holds(values: list[float]) -> bool:
+    """Whether a baseline is one a percentage can stand on: a positive mean
+    with at least half its days above zero. A window of mostly empty days (a
+    seasonal lane, a provider that reports nothing on quiet days) has a mean
+    near zero, so the next ordinary day reads as a thousand per cent and an
+    empty one as zero: noise drawn as data. Such a subject gets no percentage
+    and the map says it has no baseline."""
+    if not values or sum(values) <= 0:
+        return False
+    nonzero = sum(1 for v in values if v > 0)
+    return nonzero * 2 >= len(values)
+
+
 def fold_series(rows: Iterable[Mapping[str, Any]], *, keep_days: int = BASELINE_DAYS) -> list[SeriesAtPlace]:
     """Rows (one per subject and day, oldest first) → one entry per subject.
 
     The baseline is the mean of the held days STRICTLY BEFORE the latest day
     and within :data:`BASELINE_DAYS` of it; a subject with no earlier day has
-    no baseline and no percentage (never a 100 % it did not earn)."""
+    no baseline and no percentage (never a 100 % it did not earn), and neither
+    has one whose earlier days are mostly empty (:func:`_baseline_holds`)."""
     by_subject: dict[str, list[Mapping[str, Any]]] = {}
     for r in rows:
         s = r.get("subject")
@@ -317,7 +332,7 @@ def fold_series(rows: Iterable[Mapping[str, Any]], *, keep_days: int = BASELINE_
         base_vals = [b for b in base if b is not None]
         baseline = sum(base_vals) / len(base_vals) if base_vals else None
         latest = _num(last["value"]) or 0.0
-        pct = (latest / baseline * 100.0) if baseline else None
+        pct = (latest / baseline * 100.0) if baseline and _baseline_holds(base_vals) else None
         prov = _json(last.get("provenance")) or {}
         name = prov.get("portname") or prov.get("name") if isinstance(prov, dict) else None
         out.append(SeriesAtPlace(

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Panel tallies: majority, quorum and Borda (plan P4 §2.4 ``panel``, lane G-3).
+"""Panel tallies: majority, quorum and Borda (the ``panel`` rule).
 
 Rules, all pure:
 

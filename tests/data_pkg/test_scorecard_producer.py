@@ -68,7 +68,7 @@ def test_parse_unit_eval_reads_nested_units_with_honest_null():
 
 
 def test_parse_unit_eval_carries_the_operator_axis_and_its_judge_population():
-    """M-1/M-2 — the operator gold-set axis rides as its OWN keys, and the
+    """The operator gold-set axis rides as its OWN keys, and the
     faithfulness figure names the judge that produced it."""
     data = _scorer_data({
         "escalation": {
@@ -150,7 +150,7 @@ def test_fold_unit_eval_attaches_block_and_flags_low_aggregate_faithfulness():
 
 
 def test_fold_unit_eval_keeps_the_operator_axis_off_the_band():
-    """M-1 — the operator axis is DISPLAYED on the card and never demotes it:
+    """The operator axis is DISPLAYED on the card and never demotes it:
     the band is the T1 banding's verdict, and a human's semantic judgement of a
     different finding must not silently move it."""
     verdict = _verdict_with_dims(

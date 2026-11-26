@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# Sanctions / export-control profile SKELETON (PROFILE-1; DEC-11; Review B §1.2 F1).
+# Sanctions / export-control profile SKELETON.
 # One regime = one authority-and-programme pair. Ships DRAFT: registering it
-# never schedules it. The predicate is a first cut for INST-2 to tune; no
+# never schedules it. The predicate is a first cut for an instance to tune; no
 # unit reads this subject yet (the five questions are in ../profile.yaml).
 
 identity:
@@ -35,7 +35,7 @@ sources:
       owner_tenant: shared
     subscription:
       canonical_only: true
-  - source_id: source.stategov.press_releases            # reused from the exemplar tree (Review B: already live)
+  - source_id: source.stategov.press_releases            # reused from the exemplar tree (already live)
     subscription:
       canonical_only: true
 

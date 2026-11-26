@@ -102,6 +102,21 @@ def test_the_series_fold_baselines_on_the_days_before_the_latest():
     assert cp2.baseline_30d is None and cp2.pct_of_baseline is None and cp2.baseline_days == 0
 
 
+def test_a_baseline_of_mostly_empty_days_gives_no_percentage():
+    # a quiet lane: one vessel in five days, then ten. 10 / 0.2 would print
+    # 5000 %, and an empty latest day against it 0 %: neither is a reading.
+    rows = _day_rows("thin", [0, 0, 1, 0, 0, 10], last=date(2026, 11, 8))
+    rows += _day_rows("thin0", [0, 1, 0, 0, 0, 0], last=date(2026, 11, 8))
+    rows += _day_rows("ok0", [20, 0, 20, 20, 0], last=date(2026, 11, 8))
+    out = {s.subject: s for s in fold_series(rows)}
+    assert out["thin"].baseline_30d == 0.2 and out["thin"].pct_of_baseline is None
+    assert out["thin0"].pct_of_baseline is None
+    # a baseline with most days held still divides, and an empty latest day
+    # against it is a real zero (a closed lane), not noise
+    assert out["ok0"].pct_of_baseline == 0.0
+    assert out["ok0"].latest == 0
+
+
 def test_the_at_sea_fold_drops_rows_without_a_point():
     rows = [
         {"id": "s1", "source_id": "src.a", "fetched_at": NOW, "title": "Attack",

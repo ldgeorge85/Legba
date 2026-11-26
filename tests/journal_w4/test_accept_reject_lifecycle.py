@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The accept/reject lifecycle + idempotent accept-apply worker (plan §7.4 / §7.5
-/ §12 Wave 4).
+"""The accept/reject lifecycle + idempotent accept-apply worker.
 
 Asserts, against the DISPOSABLE container (NEVER live):
   * a proposal lands 'pending';

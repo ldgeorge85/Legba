@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """List the tables, indexes and views in the application schema that NO
-migration creates — READ-ONLY, nightly-runnable (lane P-8, A-64).
+migration creates — READ-ONLY, nightly-runnable.
 
 The migration set is parsed by ``legba.data.schema_hygiene`` (create / rename
 / drop, in file order); the live catalog is read inside a read-only

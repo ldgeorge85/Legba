@@ -147,7 +147,7 @@ class ActorRunOutcome(str, Enum):
     NOOP = "noop"  # nothing to do (no new signals, etc.)
 
 
-# P7-F3 / P7 r2 — trigger classes that are MANUAL/FORCED (a consult_api /
+# Trigger classes that are MANUAL/FORCED (a consult_api /
 # deep_consult_api / ad-hoc proxy.run() default), i.e. NOT an organic schedule
 # fire. Everything else — 'cadence', 'reminder', and the PRODUCTION reactive
 # per-target dispatch 'coalesced_fire' (source_first_runtime._work) — is ORGANIC
@@ -163,7 +163,7 @@ def _is_organic_trigger(trigger_kind: str) -> bool:
     return trigger_kind not in _FORCED_TRIGGERS
 
 
-#: R3 — the SCHEDULE-class trigger kinds: the actor's own cadence reminder
+#: The SCHEDULE-class trigger kinds: the actor's own cadence reminder
 #: ('reminder', :meth:`AnalystActor._cadence_reminder`) and the primary's
 #: per-target fan-out ('cadence'). A cooldown NOOP on one of these means a
 #: SCHEDULED TICK WAS EATEN — the analyst goes dark for a whole cadence period
@@ -196,7 +196,7 @@ def _cadence_cooldown_until(
 ) -> datetime:
     """When the per-(analyst, target) cadence cooldown stamped by a run expires.
 
-    R3 — ANCHORED ON RUN START, not run end. Anchoring on end made the
+    ANCHORED ON RUN START, not run end. Anchoring on end made the
     effective mute window ``cooldown_seconds + run_duration``, so any run slower
     than ``(cadence_period − cooldown_seconds)`` pushed the cooldown past the
     analyst's OWN next scheduled tick and ate it silently: signal_salience's
@@ -668,12 +668,12 @@ class _AnalystDeps(BaseModel):
     # deterministic citation-presence floor labelled 'judge-unavailable' (it
     # NEVER fabricates a judge number). Scoped to the inline_target finding kind.
     verify_judge: Any | None = None
-    # P2-4 — the RESOLVED judge stack-ref (``JudgeRoute.component_id``) behind
+    # The RESOLVED judge stack-ref (``JudgeRoute.component_id``) behind
     # ``verify_judge``. Set iff ``verify_judge`` was wired; stamped into every
     # faithfulness critique row (``judge_llm_ref``) so provenance records which
     # model judged, forever. ``""`` = no judge wired (floor-only).
     verify_judge_ref: str = ""
-    # W-3d — the judge-route CLASS (``JudgeRoute.route_class``) behind
+    # The judge-route CLASS (``JudgeRoute.route_class``) behind
     # ``verify_judge``: ``configured`` (env override / method.llm.judge) |
     # ``fallback_verify`` (method.llm.verify — today's live rung) |
     # ``fallback_primary`` (terminal rung). Stamped alongside
@@ -796,7 +796,7 @@ def _descriptor_declares_verify(descriptor: Any) -> bool:
     ``method.llm.verify`` block; the OLD global ``meta_synthesizer`` does NOT — so
     keying on this predicate (rather than ``bool(target_id)``) fires the
     faithfulness verify for the target-LESS world composition while keeping the
-    old global meta excluded. P2-4: keyed on the judge-route resolver so a future
+    old global meta excluded. Keyed on the judge-route resolver so a future
     descriptor carrying only the new ``method.llm.judge`` key also dispatches
     (today no descriptor does — byte-identical to the old ``method.llm.verify``
     presence test). Lazily imports ``resolve_judge_route`` (runtime-side; the
@@ -982,7 +982,7 @@ async def warn_stale_pack_deps(
     :func:`evict_analyst_deps_for_descriptor` for the ANALYSTS that merely
     *reference* the pack. A cached ``_AnalystDeps`` entry (built once, kept
     forever per :func:`_resolve_analyst_deps`) keeps serving the OLD pack
-    snapshot — the exact live shape that broke ``lens_diff`` on 2026-07-24
+    snapshot — the exact live shape that broke ``lens_diff``
     (``Tool get_lens_reads not found`` until its OWN descriptor head was also
     bumped, which is what incidentally evicted it).
 
@@ -1033,7 +1033,7 @@ async def warn_stale_pack_deps(
                     "pack head.",
                     actor_id, pack_id, cached_version[:16], head_version[:16],
                 )
-    # W11-F161: one line per sweep, so a roll can tell "swept, clean" from
+    # One line per sweep, so a roll can tell "swept, clean" from
     # "not swept yet" (scripts/rolling_deploy.sh --walk waits for it).
     logger.info(
         "dapr_actors.pack_staleness.sweep cached_actors=%d packs=%d stale=%d",
@@ -1208,7 +1208,7 @@ class TargetActor(Actor, TargetActorInterface, Remindable):
         if name.startswith("run_source_"):
             logger.info(
                 "dapr_actors.target.reminder.legacy actor_id=%s reminder=%s "
-                "— unregistering (L-205 retired path)", self.id.id, name,
+                "— unregistering (retired path)", self.id.id, name,
             )
             try:
                 await self.unregister_reminder(name)
@@ -1370,7 +1370,7 @@ class TargetActor(Actor, TargetActorInterface, Remindable):
         if rec["lifecycle"] != ACTIVE:
             return {"outcome": ActorRunOutcome.NOOP.value, "reason": f"lifecycle={rec['lifecycle']}"}
 
-        # Wave D: discovery descriptors invoke the materialiser loop
+        # Discovery descriptors invoke the materialiser loop
         # instead of the normal ingest path. The actor host registers
         # both kinds against TargetActor; the descriptor.discovery field
         # is the discriminator. The materialiser owns its own cycle
@@ -1391,14 +1391,14 @@ class TargetActor(Actor, TargetActorInterface, Remindable):
         await self._state_manager.save_state()
         return {"outcome": ActorRunOutcome.NOOP.value, "reason": "passive_subscriber"}
 
-    # ------------------------------------------------------------------ Discovery branch (Wave D)
+    # ------------------------------------------------------------------ Discovery branch
 
     async def _run_discovery_cycle(
         self,
         deps_bundle: Any,
         rec: dict[str, Any],
     ) -> dict[str, Any]:
-        """Wave D: invoke the discovery materialiser loop in place of
+        """Invoke the discovery materialiser loop in place of
         the normal source ingest path.
 
         Per L-180 / L-200 + the registry-side materialiser at
@@ -1610,7 +1610,7 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
     async def _on_activate(self) -> None:
         actor_id = self.id.id
         logger.info("dapr_actors.analyst.activate actor_id=%s", actor_id)
-        # S-6 — THE 2026-08-01 HANG POINT, BOUNDED. `_resolve_analyst_deps`
+        # THE HANG POINT, BOUNDED. `_resolve_analyst_deps`
         # falls through to a registry fetch on a cache miss, and it caches
         # nothing on failure (no negative caching, no circuit breaker), so a
         # saturated registry turns every activation into an unbounded wait.
@@ -1684,7 +1684,7 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
         if schedule:
             try:
                 due, period = cron_to_reminder_timing(schedule)
-                # S-6: the other unbounded call in this turn — reminder
+                # The other unbounded call in this turn — reminder
                 # registration is an HTTP round-trip to daprd, and daprd talks
                 # to a single dapr-scheduler whose embedded etcd has degraded
                 # before. A wedged sidecar must not convert into a held turn.
@@ -2187,7 +2187,7 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
     async def run(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         payload = payload or {}
         target_filter = payload.get("target_filter")
-        # P7-F3 / P7 r2 — the run's trigger class. EVERY trigger is organic EXCEPT
+        # The run's trigger class. EVERY trigger is organic EXCEPT
         # the manual/forced 'method' path (consult_api / deep_consult_api / an ad-hoc
         # proxy.run() default); see :func:`_is_organic_trigger`. Round-1 used an
         # INCLUDE list {'cadence','reminder'} that OMITTED the PRODUCTION reactive
@@ -2199,7 +2199,7 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
         trigger_kind = str(payload.get("trigger_kind", "method"))
         _is_organic_tick = _is_organic_trigger(trigger_kind)
         actor_id = self.id.id
-        # Durable scoping (review 2026-07-03). The production fan-out ALWAYS passes
+        # Durable scoping. The production fan-out ALWAYS passes
         # target_filter (source_first_runtime._work → proxy.run), but an AD-HOC
         # invocation (a manual force / debug run) can omit it. A WORKER actor_id
         # encodes its target in the third segment (``analyst::<id>::<target_id>``),
@@ -2256,7 +2256,7 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
             else:
                 return {"outcome": ActorRunOutcome.NOOP.value, "reason": "no_state"}
         if rec["lifecycle"] != ACTIVE:
-            # P7-F3(b): make the lifecycle NOOP observable — an organic tick that
+            # Make the lifecycle NOOP observable — an organic tick that
             # silently no-ops (e.g. a paused/suspended analyst) otherwise leaves
             # zero trace and looks like a lost reminder.
             logger.info(
@@ -2272,7 +2272,7 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
         # every target.
         cooldown_raw = rec.get("cooldown_until")
         if cooldown_raw and _as_dt(cooldown_raw) > now:
-            # P7-F3(b): observable global-cooldown suppression (budget pause).
+            # Observable global-cooldown suppression (budget pause).
             logger.info(
                 "dapr_actors.analyst.noop actor_id=%s reason=cooldown scope=global "
                 "cooldown_until=%s trigger=%s target=%s",
@@ -2286,18 +2286,18 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
         cooldown_key = str(target_filter) if target_filter else "_global"
         cooldowns_by_target = rec.get("cooldown_by_target") or {}
         cd_raw = cooldowns_by_target.get(cooldown_key)
-        # R3 — the cadence cooldown is START-anchored and jitter-slacked; see
+        # The cadence cooldown is START-anchored and jitter-slacked; see
         # :func:`_cadence_cooldown_until` for why, and the stamp site below.
         # Applies ONLY to the per-target cadence cooldown — the global budget
         # cooldown (cooldown_until, above) stays strict.
         _cd_seconds = deps_bundle.descriptor.cadence.cooldown_seconds
         if _cadence_cooldown_blocks(cd_raw, now=now, cooldown_seconds=_cd_seconds):
-            # P7-F3(b): make the per-target cadence-cooldown NOOP observable — this
+            # Make the per-target cadence-cooldown NOOP observable — this
             # is the path that silently suppressed the escalation_composition 08:30Z
             # organic tick (a forced 01:04Z run had stamped the '_global' cooldown),
             # leaving no analyst_traces row and only a bare 'reminder.fired' log.
             #
-            # R3 observability: stamp WHICH of the two suppressions this is.
+            # Observability: stamp WHICH of the two suppressions this is.
             #   * missed_cadence=true  — a SCHEDULED tick ('cadence'/'reminder')
             #     was eaten; the analyst just went dark for a full period. Post
             #     start-anchoring this should only happen when a descriptor sets
@@ -2308,8 +2308,8 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
             # ``overshoot_s`` is how much longer the cooldown still has to run,
             # i.e. how far the suppression reaches past this tick.
             #
-            # R4 (2026-07-31, live: 432 missed_cadence WARNINGs/9h, 369 from
-            # cross_source_dedup) — the SCHEDULE-vs-reactive split above is
+            # Live measurement: 432 missed_cadence WARNINGs in 9h, 369 from
+            # cross_source_dedup — the SCHEDULE-vs-reactive split above is
             # right for a PRIMARY/meta actor's own tick, but a PER-TARGET
             # WORKER's fan-out tick carries trigger_kind='cadence' too (see
             # ``_fanout_to_workers``): a busy target whose worker JUST ran off
@@ -2536,7 +2536,7 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                                 "dlq": True,
                             }
                         if strategy == "demote_and_continue":
-                            # F-2 (2026-06-09): the strategy stays in the
+                            # The strategy stays in the
                             # schema, but no production resolver wires a
                             # fallback model — so its behavior is an EXPLICIT
                             # pause until the quota window resets, audited
@@ -2613,7 +2613,7 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                     "slice_window_hours": resolve_slice_window_hours(
                         deps_bundle.descriptor
                     ),
-                    # Lane N-B: a watermark slice's coverage stamp + REAL window.
+                    # A watermark slice's coverage stamp + REAL window.
                     **_slice_coverage_options(inputs),
                 }
                 # Stage 4 (gather_only): thread the descriptor's
@@ -2630,7 +2630,7 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                         or {}
                     ).get("gather_only")
                 )
-                # DQ P6 — a target-LESS verify-declaring COMPOSITION (world_assessor
+                # A target-LESS verify-declaring COMPOSITION (world_assessor
                 # / escalation_composition): a GLOBAL/thematic META run whose
                 # second-order finding describes the whole world (or a cross-desk
                 # theme), NOT the desk that happens to sit at inputs[0]. Computed
@@ -2645,7 +2645,7 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                 if target_filter:
                     options["target_id"] = target_filter
                 elif is_global_meta_composition:
-                    # P3-T5 GLOBAL/world composition: no target_id, so the kind
+                    # GLOBAL/world composition: no target_id, so the kind
                     # needs an explicit flag to turn on the WORLD composition
                     # prompt + the [[ref:uuid]] CITE block (else it falls back to
                     # the legacy un-cited _SYSTEM_PROMPT and can never cite →
@@ -3014,7 +3014,7 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                         "derived_from": [str(d) for d in derived_ids],
                     }
 
-                # DQ P6 — resolve the finding's target_id. A per-target run uses
+                # Resolve the finding's target_id. A per-target run uses
                 # its target_filter; a legacy no-filter per-target run falls back
                 # to inputs[0]. But a GLOBAL/thematic META composition
                 # (world_assessor / escalation_composition) must NOT inherit a
@@ -3092,7 +3092,12 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                     # write_analyst_output returns ``(OutputRow, dlq_entry|None)``.
                     # The DLQ entry is None on the happy path; for the spike we
                     # surface the finding row's id directly.
-                    # Lane N-D: a journal entry is VERIFIED BEFORE IT PUBLISHES
+                    # A call cut at its output limit is marked on the row and
+                    # in the trace, never published as if complete.
+                    _cut_step = mark_truncated_output(output_payload, _current_llm_calls())
+                    if _cut_step is not None and isinstance(getattr(method_result, "intermediate_steps", None), list):
+                        method_result.intermediate_steps.append(_cut_step)
+                    # A journal entry is VERIFIED BEFORE IT PUBLISHES
                     # (marks + flags land on the row); no-op for every other kind.
                     _pre_id, _prepub_block, output_payload = await verify_journal_before_publish(
                         conn, deps=deps_bundle, output_kind=output_kind,
@@ -3409,7 +3414,7 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                             actor_id, run_id, exc,
                         )
 
-                # P0-T2 — MANDATORY faithfulness verify pass. After an
+                # MANDATORY faithfulness verify pass. After an
                 # inline_target FINDING lands (with its P0-T1 ``data['citations']``
                 # bridge), run the deterministic citation-presence floor (+ the
                 # optional flag-gated LLM judge) and persist the verdict as a
@@ -3419,8 +3424,8 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                 # SCOPED to the inline_target finding kind (the helper guards);
                 # best-effort — a verify failure leaves the finding durable +
                 # un-demoted (no regression). TRACE_ONLY runs have no row to grade.
-                # P3-T3 widened the fire condition to the per-country COMPOSITION;
-                # P3-T5 widens it again to the GLOBAL/world composition. Both are
+                # The fire condition covers the per-country COMPOSITION and the
+                # GLOBAL/world composition. Both are
                 # meta_findings_synthesizer findings verified via the SAME
                 # generalized pass (their [[ref:uuid]] sub-claim/country-read
                 # bridge). The discriminator is now the descriptor DECLARING
@@ -3448,10 +3453,10 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                                 )
                             )
                         )
-                        # V1 (journal verify profile): the JOURNAL kind is verified
-                        # BEFORE the write now (verify_journal_before_publish,
-                        # lane N-D) — same pass, moved, so it is absent here.
-                        # Continuity P2 (plan D3): the SITUATION_UPDATE kind goes
+                        # The JOURNAL kind is verified BEFORE the write
+                        # (verify_journal_before_publish) — same pass, moved,
+                        # so it is absent here.
+                        # The SITUATION_UPDATE kind goes
                         # through the FULL gate. Its delta claim ("this escalates
                         # the situation we were watching") is an assertion about
                         # the world resting on cited evidence, so it is graded
@@ -3488,7 +3493,7 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                             "run_id=%s err=%s", actor_id, run_id, exc,
                         )
 
-                # Continuity P2 — the SITUATION TRAJECTORY ledger (migration
+                # The SITUATION TRAJECTORY ledger (migration
                 # 0184). Data-driven, no kind switch (the ``consumed_edges``
                 # contract): a kind that stamps ``situation_events`` gets those
                 # rows materialized with the just-written row as
@@ -3517,7 +3522,7 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                         verification=verification_block,
                     )
 
-                # C2b (P4-6) — the structural_claims verify PROFILE. A
+                # The structural_claims verify PROFILE. A
                 # CLAIM-BEARING structural analyst (STRUCTURAL_CLAIMS_VERIFY_
                 # ANALYSTS: geo_convergence_scan / indicator_tracker /
                 # thematic_proposal / …) emits its FINDING outside the
@@ -3743,13 +3748,13 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                     # Per-(analyst, target) cooldown — keyed by target_filter so
                     # each target throttles independently (a busy country can't
                     # starve a quiet one). "_global" for the meta/global run.
-                    # P7-F3(a) / r2: stamped on every ORGANIC tick — cadence,
+                    # Stamped on every ORGANIC tick — cadence,
                     # reminder, AND the reactive 'coalesced_fire' — but NOT the
                     # manual/forced 'method' run (so a debug force can't consume the
                     # next scheduled organic fire, and a reactive fire still throttles
                     # its own redundant re-runs).
                     #
-                    # R3 — the expiry is anchored on RUN START (``now``), never on
+                    # The expiry is anchored on RUN START (``now``), never on
                     # run end; :func:`_cadence_cooldown_until` carries the full
                     # rationale and what still protects against rapid re-fire.
                     cd_key = str(target_filter) if target_filter else "_global"
@@ -3983,6 +3988,7 @@ from .actor_output_emit import (  # noqa: F401  -- re-export: public API stabili
 
 
 from .actor_payload import (  # noqa: F401  -- re-export: public API stability (#93)
+    mark_truncated_output,
     _invoke_run_method,
     _receipt_output_payload,
     _payload_finding,

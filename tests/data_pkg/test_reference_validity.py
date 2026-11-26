@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""A-3 — the validity harness.
+"""The validity harness.
 
 The permuted control fires on a boilerplate matcher; ``instrument_status``
 degrades to ``unvalidated`` when any arm is missing and to ``stale`` when a

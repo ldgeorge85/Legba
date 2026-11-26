@@ -1,4 +1,4 @@
-# THE OUTLET -> WIRE MAP (Program 7 piece 7d — the independence gate).
+# THE OUTLET -> WIRE MAP (the independence gate).
 #
 # WHAT IT IS FOR. A claim the record quotes upward is marked `[single-source]`
 # when everything behind it comes from ONE source. Counting sources by
@@ -62,7 +62,7 @@ identity:
   name: Outlet to wire syndication map
   schema_uri: legba/source_wire_map/1.0.0
   kind: static_map
-  owner: composition_floor
+  owner: owner@local
 
 wire_map:
   # Bumped when the SHAPE changes (a new section, a changed key meaning),

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""``reenrich_pending`` sub-handler — the sweep over rows written UNENRICHED (W11-F118).
+"""``reenrich_pending`` sub-handler — the sweep over rows written UNENRICHED.
 
 W11-F103 made the source actor write an entry WITHOUT its enrichment chain when
 the NLP plane is degraded for the rest of a poll, or when the same entry has been

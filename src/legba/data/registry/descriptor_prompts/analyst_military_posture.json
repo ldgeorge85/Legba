@@ -1,8 +1,8 @@
 {
   "prompts": {
     "military_posture": {
-      "chars": 28644,
-      "sha256": "a76b17a23b3e0bf9580023f01ed4831e3a1778af81feea3a7edd8f5f987ab953",
+      "chars": 29509,
+      "sha256": "5e30f3ae2a45190a4458e1859e5d7998222a369908421c1c84faf753c58b5a5f",
       "source": "analyst_military_posture.yaml"
     }
   },

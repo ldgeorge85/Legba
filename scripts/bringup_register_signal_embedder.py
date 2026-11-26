@@ -10,8 +10,8 @@ This wires the ``signal_embedder`` deterministic sweep as an ONGOING analyst.
 After this script runs, the runtime's reconciler spins up a deterministic actor
 that, on its cadence, embeds the next batch of un-embedded signals into the
 Qdrant ``legba_signals`` collection — the VECTOR PLANE of the signal-content-depth
-program (a semantic-retrieval substrate that lights up ``vector_search``, which
-no-ops today because the collection holds 0 points). The sweep is idempotent +
+program (a semantic-retrieval substrate that lights up ``vector_search`` over the
+signals the sweep has embedded). The sweep is idempotent +
 forward-progressing (stamps ``signals.embedding_ref`` on every examined row; the
 Qdrant point ``_id`` = the signal id, so a re-embed overwrites in place);
 migration 0084_signal_embedding_marker.sql adds the partial scan index over the

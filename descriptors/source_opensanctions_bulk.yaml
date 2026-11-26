@@ -1,4 +1,4 @@
-# S-2 — KEYLESS SourceDescriptor: source.opensanctions.bulk
+# KEYLESS SourceDescriptor: source.opensanctions.bulk
 # (kind: opensanctions, mode: bulk_csv).
 #
 # OpenSanctions consolidated catalog (sanctions lists, PEPs, wanted /
@@ -27,7 +27,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: active                      # KEYLESS — safe to auto-activate on registration
-  owner: s2_keyed_sources
+  owner: owner@local
   created: "2026-06-09T00:00:00Z"
 
 scope:
@@ -35,8 +35,8 @@ scope:
   geo: []
   languages: [en]
   tags: [sanctions, pep, compliance, entities, structured, global]
-  source_class: official           # S1-T8 — consolidates primary government sanctions/PEP lists
-  access_class: licensed_noncommercial          # Wave-E — OpenSanctions default tier is CC BY-NC — noncommercial reuse only without a paid licence
+  source_class: official           # consolidates primary government sanctions/PEP lists
+  access_class: licensed_noncommercial          # OpenSanctions default tier is CC BY-NC — noncommercial reuse only without a paid licence
 
 acquisition: poll
 

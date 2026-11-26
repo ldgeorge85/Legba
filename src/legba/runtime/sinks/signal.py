@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The DOCUMENT sink — today's signal write path, moved out of the actor.
 
-N-L step 0 (planning/reviews/DESIGN_2026-11-13/09 §D.3): everything that used
+Everything that used
 to sit between "the baseline produced an enriched :class:`Signal`" and "the
 signal is on the bus" lived inside ``runtime/source_actor.py`` — the canonical
-INSERT, the S-4 intra-source collapse, the credibility backfill, the tenant
+INSERT, the intra-source collapse, the credibility backfill, the tenant
 and licence stamps, the ingest-dedupe alias link and the per-signal NATS
 publish. It is moved here VERBATIM (the functions below are the same bytes
 that sat in the actor at ``9a59a0da``; the class methods are the tail of
@@ -64,13 +64,13 @@ logger = logging.getLogger("legba.runtime.source_actor")
 # Default ON — the collapse is provably lossless for an exact hash; set
 # LEGBA_INTRASOURCE_DEDUP=0 to disable (fall back to keep-all + alias-link).
 #
-# B-1 (2026-08-03) — WHAT THE COLLAPSE BUMPS. It used to advance the surviving
+# WHAT THE COLLAPSE BUMPS. It used to advance the surviving
 # row's ``fetched_at``, on the reading "recency stays fresh — we still see this".
-# That reading cost us the 08-03 freshness incident (MASTER_PLAN §32.7): when the
-# 5 rsshub AP-topic feeds froze upstream and re-served the same 39-item snapshot
+# That reading hid a freshness failure: when
+# five rsshub AP-topic feeds froze upstream and re-served the same 39-item snapshot
 # every poll for six days, 201 signals reported ``fetched_at = today`` the whole
 # time, and because the substrate slice WINDOWS + ORDERS on ``fetched_at`` a
-# 07-28 snapshot topped every 72h slice for five country desks and the journal.
+# stale snapshot topped every 72h slice for five country desks and the journal.
 #
 # ``fetched_at`` now means exactly what every reader already assumed: the fetch
 # that first delivered THIS content. An exact content_hash match is, by
@@ -225,7 +225,7 @@ async def lookup_source_credibility(
 ) -> float | None:
     """Resolve a signal's host credibility from the ``source_credibility`` table.
 
-    FIX P2-3: ``signals.source_credibility`` was 100% NULL because the
+    ``signals.source_credibility`` was 100% NULL because the
     ``source_credibility`` PIPELINE FILTER only runs when a source descriptor
     binds the ``"source_credibility"`` kind — and the live descriptors don't.
     The credibility TABLE is scored for ~65 hosts, so we resolve the score at
@@ -308,7 +308,7 @@ async def write_canonical_signal(
     ``classifications`` = those entries + the signal's own namespaced tags,
     bound (``source_classification.signal_data``); nothing to stamp ⇒ NULL.
     """
-    # FIX P2-3: backfill source_credibility from the registry-scored host table
+    # Backfill source_credibility from the registry-scored host table
     # when the in-flight signal doesn't already carry a score (i.e. the
     # source_credibility pipeline filter wasn't bound for this descriptor). The
     # lookup degrades to None (column stays NULL) for unknown hosts.
@@ -455,9 +455,9 @@ class SignalSink:
         # write_canonical_signal's `owner_tenant or signal.owner_tenant` fallback.
         if descriptor.scope.owner_tenant:
             enriched.owner_tenant = descriptor.scope.owner_tenant
-        # LIC-2 stamp (SourceScope → signal): copy the descriptor's declared
+        # License stamp (SourceScope → signal): copy the descriptor's declared
         # license_class onto the payload so the OpenSearch corpus facet + the
-        # P2-2 evidence-archiver retention gate read a per-signal value. A
+        # evidence-archiver retention gate read a per-signal value. A
         # payload that already carries one (manual-batch provenance, a
         # source-handler override) WINS — the scope value is the source-level
         # default, not a clobber. Unset scope → no key (honest absence).
@@ -525,7 +525,7 @@ class SignalSink:
     async def publish(self, signals: list[Signal]) -> None:
         """Fan out each written signal onto the shared raw-pool stream.
 
-        L-205 / PIVOT §6.1: acquisition publishes ONE message per signal to
+        Acquisition publishes ONE message per signal to
         ``legba.signals.<tenant>.<source>.<modality>.<event_class>`` (the
         coarse subject the ``legba_signals`` JetStream stream captures and the
         per-target subscription consumers + trigger engine subject-filter on).

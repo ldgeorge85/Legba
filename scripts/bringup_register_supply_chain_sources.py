@@ -2,10 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Supply-chain domain — register the top-10 first-registration source batch.
 
-Registers the 7 BRAND-NEW draft SourceDescriptors from the 2026-07-29
-supply-chain domain source research
-(planning/SUPPLY_CHAIN_SOURCES_2026-07-29.md, "§5 Top-10 recommended first
-registrations"): 7 verified, keyless RSS feeds. Mirrors
+Registers the 7 BRAND-NEW draft SourceDescriptors from the
+supply-chain domain source research: 7 verified, keyless RSS feeds. Mirrors
 scripts/bringup_register_wave_a_sources.py's structure (idempotent direct-DB
 registration + host-level source_credibility seeds).
 
@@ -19,8 +17,7 @@ DELIBERATELY NOT in this batch — ``descriptors/source_telegram_monitor.yaml``
 (the #1/#9-ranked telegram additions, @Almasirah_En + @ansarollah1, PLUS the
 earlier TankerTrackers addition) to the EXISTING
 ``source.telegram.org_channels`` descriptor. That id's live head is already
-``state: active`` in production (verified via a read-only SELECT on
-2026-07-29) — re-registering it through this idempotent draft-batch registrar
+``state: active`` in production (verified via a read-only SELECT) — re-registering it through this idempotent draft-batch registrar
 would see the file's stale ``draft`` claim, diff it against the live
 ``active`` state, and refuse with "no legal FSM path active -> draft" (this
 registrar's ``register_descriptor`` helper only walks FORWARD legal FSM
@@ -30,8 +27,7 @@ the same care as any other production descriptor change — see the extensive
 header comment in that file for the full reasoning. Run it as its own
 deliberate step, separate from this batch.
 
-2026-07-29 OPERATOR DECISION (supersedes the original plan referenced above):
-a SEPARATE ``source.telegram.ansarallah_channels`` descriptor + a second
+NOTE: a SEPARATE ``source.telegram.ansarallah_channels`` descriptor + a second
 Telegram account/session was rejected — a second concurrent TelegramClient on
 the SAME session as ``source.telegram.org_channels`` triggers Telegram's
 AUTH_KEY_DUPLICATED session-kill, and a second account was also rejected.
@@ -44,7 +40,7 @@ activated DRAFT ``source_descriptors`` row (id
 ``source.telegram.ansarallah_channels``, no vault secrets ever loaded) is
 retired by the operating session via the registry FSM, not by this script.
 
-Source-class notes (S1-T8 taxonomy, docs/DATA_SOURCES.md §2.4):
+Source-class notes (source-class taxonomy, docs/DATA_SOURCES.md §2.4):
   * ``source.pancanal.news`` / ``source.wto.news`` — ``official`` (primary-
     source government/IGO publishers, like EIA/UN/State Dept).
   * ``source.splash247.news`` / ``source.theloadstar.news`` /
@@ -83,9 +79,7 @@ from legba.data.schemas.source import SourceDescriptor  # noqa: E402
 
 DESCRIPTORS_DIR = pathlib.Path(__file__).resolve().parent.parent / "descriptors"
 
-# The 7 new draft descriptors — all keyless RSS. Ranked per
-# planning/SUPPLY_CHAIN_SOURCES_2026-07-29.md §5 (top-10 list); #1/#9
-# (the telegram additions) and TankerTrackers are handled separately — see
+# The 7 new draft descriptors — all keyless RSS. The telegram additions and TankerTrackers are handled separately — see
 # module docstring.
 SOURCE_FILES = [
     "source_pancanal.yaml",              # #2

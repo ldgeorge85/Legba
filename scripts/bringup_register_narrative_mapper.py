@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Register the Narrative Mapper analyst descriptor (P4-1 + P4-2; A11).
+"""Register the Narrative Mapper analyst descriptor.
 
 Reads ``descriptors/analyst_narrative_mapper.yaml`` and POSTs it to the
 registry. Idempotent: if a head row is already present we report it and exit 0

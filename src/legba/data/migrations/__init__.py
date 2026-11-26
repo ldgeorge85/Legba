@@ -18,11 +18,11 @@ Migration list (CREATE-only — see individual files for full DDL):
         hypotheses/predictions/proposed_edges/goals/sources/watchlist/users)
         — all with universal provenance columns; dead columns retired;
         5 zero-row tables omitted.
-  0003  facts (attribute-half only; relationship-half retires to AGE per DM-2)
+  0003  facts (attribute-half only; relationship-half retires to AGE)
   0004  AGE setup (extension, graph, search_path); seed labels per
         `vocabulary.RELATIONSHIP_TYPES` + `ENTITY_CLASSES`.
   0005  runtime tables: analyst_traces, analyst_critiques, budget_ledger,
-        graph_metrics (per L-090 §4.4 and L-107 §3).
+        graph_metrics.
   0006  descriptor registry tables (targets + analysts namespaces; versioning).
   0007  stack registry tables (typed kinds with discriminator).
   0008  conversion webhook registry table.
@@ -32,15 +32,15 @@ Migration list (CREATE-only — see individual files for full DDL):
   0011  stack credentials table.
   0012  analyst output tables (per-kind specializations).
   0013  conversion webhook runtime state.
-  0014  source credibility registry (L-152).
-  0015  cost model — `cost_estimate_usd` column on `budget_ledger` (L-245).
-  0016  Wave B prereq #2 — assert + restate `confidence REAL NOT NULL
+  0014  source credibility registry.
+  0015  cost model — `cost_estimate_usd` column on `budget_ledger`.
+  0016  assert + restate `confidence REAL NOT NULL
         DEFAULT 0.5` on signals/analyst_outputs/predictions.  Defense-in-
         depth at DB level alongside the Pydantic `SignalPayload.confidence
         = 0.5` default.
-  0017  UI panel registrations table (L-192 / L-204 substrate side).
-  0019  ISO 3166-1 country snapshot (L-181 substrate-cached list source).
-  0020  L-200 / Wave D geopolitical vocabulary extension — 8 entity_classes
+  0017  UI panel registrations table.
+  0019  ISO 3166-1 country snapshot (substrate-cached list source).
+  0020  geopolitical vocabulary extension — 8 entity_classes
         + 10 relationship_types referenced by template_country.yaml +
         discovery_geopolitical_countries.yaml. Idempotent on conflict.
   0021+ source-first pivot era (see individual file headers). Note the
@@ -98,8 +98,8 @@ __all__ = [
 # * ``scripts/new_migration.py <slug>`` writes a correctly named file.
 
 #: The last counter number a migration may carry: the highest numbered file
-#: present when time names began (roll 85 merged R-1 after lanes that had
-#: already taken 0263-0268: 0266 one byte path, 0268 the desk-rows shadow).
+#: present when time names began (0263-0268 were already taken: 0266 one
+#: byte path, 0268 the desk-rows shadow).
 #: Anything newer is time-named.
 LAST_NUMBERED = 268
 

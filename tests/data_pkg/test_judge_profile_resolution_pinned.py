@@ -168,10 +168,11 @@ _EXPECTED_FAIL_CLASSES = {
     "stale_leader": "hard_fail",
     "stale_leader_vs_facts": "hard_fail",
     "cross_target_leak": "hard_fail",
-    # B6 (W11-F13) — a desk claim naming only a HOMONYM of its subject.
+    # B6 — a desk claim naming only a HOMONYM of its subject.
     "off_subject": "hard_fail",
     "no_citation": "soft_fail",
     "judge_unsupported": "soft_fail",
+    "judge_unverifiable_excerpt": "soft_fail",
     "hedge_laundering": "soft_fail",
     "unhedged_periphery_citation": "soft_fail",
     # R2/R3 (2026-08-05) — the two INPUT checks: a lead buried under a
@@ -346,7 +347,7 @@ def test_fail_class_constant_values_pinned() -> None:
 # 3. Verify EXEMPTIONS
 # ---------------------------------------------------------------------------
 def test_structural_exempt_set_is_the_declared_finding_emitters() -> None:
-    """R-1: the exempt set is no longer a pinned literal every lane bumps. It
+    """R-1: the exempt set is no longer a pinned literal each change bumps. It
     is DERIVED from the type registry, and the rule it must keep is this:
     exactly the declared deterministic handlers whose one run writes a
     finding — each declaration module carries the reason it does."""
@@ -400,8 +401,10 @@ _EXPECTED_PROFILES = {
     # H3 (2026-09-24/1): both prompted kinds bumped again — the reply contract
     # now asks every verdict entry for its ``claim_index``, and that text rides
     # the shared lead AND the absence rubric.
-    "citation_support": ("citsupp.v6", False),
-    "absence": ("absence.v5", True),
+    # Both again (citsupp.v7, absence.v6): the judges stop leaning toward a
+    # pass, two verdict words are added and each entry writes its span first.
+    "citation_support": ("citsupp.v7", False),
+    "absence": ("absence.v6", True),
     "synthesis": ("synthesis.v0", False),
     "forward_looking": ("fwd.v0", False),
     "structure": ("structure.v0", False),
@@ -471,10 +474,10 @@ def test_claim_kind_is_total() -> None:
 # ---------------------------------------------------------------------------
 #: Only these two kinds may reach the faithfulness verify pass. Widening this is
 #: a deliberate product decision, not an incidental edit.
-# Continuity P2 (2026-08-04): SITUATION_UPDATE joins the gate DELIBERATELY.
+# SITUATION_UPDATE joins the gate DELIBERATELY.
 # It is a first-class claim about the world ("this new event escalates the
 # situation we were already watching") resting on cited verified findings, so
-# plan D3 puts it through the SAME faithfulness pass over the SAME sub-claim
+# it goes through the SAME faithfulness pass over the SAME sub-claim
 # citation bridge a composition uses. Widening the gate is exactly the
 # deliberate act this guard exists to force into the diff.
 _VERIFY_CAPABLE_KINDS = {"FINDING", "JOURNAL", "SITUATION_UPDATE"}
@@ -490,7 +493,7 @@ def _verification_gate_source() -> str:
     src = path.read_text(encoding="utf-8")
     start = src.index("verification_block: dict[str, Any] | None = (")
     end = src.index("verify_inline_target_finding(", start)
-    # Lane N-D (2026-11-11): the JOURNAL arm of the gate MOVED in front of the
+    # The JOURNAL arm of the gate MOVED in front of the
     # write — ``actor_critic.verify_journal_before_publish`` — so the gate is
     # the post-write expression PLUS that function's eligibility test. Same
     # kinds admitted; the journal is verified before it publishes, not after.

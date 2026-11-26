@@ -150,7 +150,7 @@ say "invoke=${INVOKE_URL}"
 #
 # The 2026-08-04 outage was not visible from `escalation`. The registry image's
 # pip list was missing pycountry, so inside the REGISTRY PROCESS ONLY the chain
-#   legba.data.schemas.analyst -> analysts.handler_options (now option_catalog.handler_options, a leaf, W3-F17)
+#   legba.data.schemas.analyst -> analysts.handler_options (now option_catalog.handler_options, a leaf)
 #     -> analysts.deterministic_handlers -> entity_resolution -> filters.geocode
 # raised ModuleNotFoundError. That chain is walked when the registry types a
 # descriptor whose method resolves handler options — i.e. exactly the

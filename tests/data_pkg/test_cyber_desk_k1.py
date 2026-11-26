@@ -250,7 +250,7 @@ def test_lifecycle_rows_name_every_k1_descriptor():
     for name in K1_SOURCES:
         sid = yaml.safe_load((_DESCRIPTORS / name).read_text())["identity"]["id"]
         assert rows.get(("source", sid)) == "active", sid
-    assert rows.get(("target", "theme_cyber")) == "active"  # activated at roll 82 with its readers (K-2)
+    assert rows.get(("target", "theme_cyber")) == "active"  # activated with its readers
 
 
 @pytest.mark.asyncio

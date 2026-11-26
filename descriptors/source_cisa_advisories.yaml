@@ -1,4 +1,4 @@
-# K-1 cyber desk (2026-11-14) — draft SourceDescriptor. Ships DRAFT (operator activates).
+# Draft SourceDescriptor. Ships DRAFT (operator activates).
 #
 # CISA's "All CISA Advisories" feed: cybersecurity advisories, alerts and the
 # industrial-control-systems (ICS) advisories in one feed (the ICS-only feed,
@@ -25,7 +25,7 @@
 # items); the cursor then follows the feed. Every two hours.
 #
 # Desk routing: scope.classifications `geopolitics.topic:cyber` is stamped on
-# every signal (W10 TAX-2) — the cyber desk's tag arm (target_cyber.yaml).
+# every signal — the cyber desk's tag arm (target_theme_cyber.yaml).
 
 identity:
   id: source.cisa.advisories
@@ -35,7 +35,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: cyber_desk_k1
+  owner: owner@local
   created: "2026-11-14T00:00:00Z"
 
 scope:

@@ -1,4 +1,4 @@
-# evidence_drift action pack (lane D-1 — source drift).
+# evidence_drift action pack (source drift).
 #
 # A page the platform read can change afterwards: a death toll revised, a
 # headline rewritten, a story retracted, the page gone. The platform keeps
@@ -26,16 +26,16 @@
 #                                                dependant_withdrawn (the last
 #                                                two also record a re-derive
 #                                                request per output derived
-#                                                from the dependant — D-2)
-#   evidence_drift_assessment(drift_id |      — D-2: what KIND of change it was
+#                                                from the dependant)
+#   evidence_drift_assessment(drift_id |      — what KIND of change it was
 #     flag_id | record_id | address)            (type, acknowledged, scope,
 #                                                timing, summary,
 #                                                history_rewrite) and each
 #                                                flag's claim effect
-#   drift_flags(state?, closed_by?, ...)       — D-2: flags in review order;
+#   drift_flags(state?, closed_by?, ...)       — flags in review order;
 #                                                closed_by=system lists the
 #                                                assessor's tracked auto-closes
-#   reopen_drift_flag(flag_id, note)           — D-2: re-open an auto-closed
+#   reopen_drift_flag(flag_id, note)           — re-open an auto-closed
 #                                                flag (a new open flag row)
 #
 # The principal on every write is the CALLING analyst (analyst::<id>, from the
@@ -49,7 +49,7 @@
 #
 # `pipeline` (request_evidence_reread): the page pipeline the re-read runs
 # under; empty = LEGBA_INTAKE_DRIFT_PIPELINE, else the instance's default page
-# pipeline (source.page.default, I-2).
+# pipeline (source.page.default).
 #
 # Registered via scripts/bringup_register_action_packs.py.
 
@@ -60,7 +60,7 @@ identity:
   version: "<content-hash stamped at register time>"
   abstraction_level: L1
   state: active
-  owner: d1_source_drift
+  owner: owner@local
   created: "2026-11-14T00:00:00Z"
 
 tools:

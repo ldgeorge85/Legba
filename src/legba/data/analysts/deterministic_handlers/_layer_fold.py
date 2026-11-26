@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Program 6 L2 — the COUNT half of ``layer_divergence``: the row shapes and
+"""The COUNT half of ``layer_divergence``: the row shapes and
 the wire fold that turn a day's raw signal rows into a layer's honest count.
 
 Extracted from :mod:`legba.data.analysts.deterministic_handlers

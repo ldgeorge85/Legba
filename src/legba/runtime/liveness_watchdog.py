@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Silent-stall liveness watchdog (resilience-observability W-1b §2).
+"""Silent-stall liveness watchdog (resilience-observability).
 
 A live Legba rig is a pipeline: sources publish signals
 (``legba.signals.>``), the fan-out → trigger path fires analyst runs, and
@@ -31,7 +31,7 @@ B0-12 (durable per-entity alerts + precision): the per-analyst / per-source
 cadence checks and the per-source empty-streak check alert on the
 STATE-TRANSITION EDGE — one durable ``alert_sink_deliveries`` row
 (``sink_kind='liveness_watchdog'``, ``payload_summary.state``
-'entered'/'recovered') plus a P1-1 outward fan-out per transition, silence
+'entered'/'recovered') plus an outward fan-out per transition, silence
 while a condition persists, restart-safe via a ledger-seeded state map. The
 empty-streak check additionally discriminates honest-quiet feeds (newest
 observed upstream entry <= our last ingest → silent below a much higher
@@ -65,7 +65,7 @@ from . import stream_liveness as _stream_watch
 from . import volume_surge_watch as _surge_watch
 from .cadence_staleness import evaluate_cadence_staleness as _evaluate_cadence_staleness
 from .source_first_poll_age import DEFAULT_FIRST_POLL_MAX_AGE  # noqa: F401 — re-exported
-from .source_quiet_evidence import (  # noqa: F401 — re-exported (roll 86 split)
+from .source_quiet_evidence import (  # noqa: F401 — re-exported
     _as_aware_utc,
     _DEFAULT_HONEST_QUIET_STREAK,
     _classify_streak,
@@ -95,7 +95,7 @@ _DEFAULT_STALL_MINUTES = 15.0
 _DEFAULT_REALERT_MINUTES = 30.0
 _DEFAULT_CHECK_SECONDS = 60.0
 
-# OBS — per-analyst cadence-liveness (W-1b §2 extension). The GLOBAL stall
+# OBS — per-analyst cadence-liveness (extension). The GLOBAL stall
 # check above can't see ONE analyst going dark while the aggregate pipeline
 # keeps flowing: the world_assessor (and both grounded assessors) sat dead
 # ~24h behind a registry-deserialize break while cross_source_dedup et al. kept
@@ -188,7 +188,7 @@ _EMPTY_STREAK_WINDOW = 20
 # env-tunable thresholds so a future operator raising either one can't
 # silently reopen this gap. A bounded fetch sized off the configured
 # thresholds (rather than an unbounded per-source scan) is the cheaper of the
-# two structurally-correct fixes DQ_SWEEP_V2 §1 offered: a genuinely dead
+# two structurally-correct fixes: a genuinely dead
 # source polled on a tight cadence (who.news: every ~15 min) can accumulate
 # an unbounded empty run over months, and nothing downstream needs to see
 # past "more rows than the highest configured threshold, plus enough slack to
@@ -231,7 +231,7 @@ _SOURCE_CADENCE_CHECK_ENV = "LEGBA_SOURCE_CADENCE_STALL_CHECK"
 # alerts EVAPORATED (no durable consumer) and a persistently-bad entity was
 # re-escalated on a heartbeat (~1.2k ERROR lines/day across a dozen degraded
 # sources, 2026-07-21 review). Now each check alerts on the STATE-TRANSITION
-# EDGE, not the level: one durable ``state='entered'`` row (+ P1-1 outward
+# EDGE, not the level: one durable ``state='entered'`` row (+ outward
 # fan-out) when an entity enters the bad state, one ``state='recovered'`` row
 # when it leaves it, silence in between. The last-alerted state is re-seeded
 # from the ledger on boot so a restart cannot re-fire an ongoing condition.
@@ -364,7 +364,7 @@ class LivenessWatchdog:
         # is itself not leader-gated.
         self._pg = pg_store
         self._is_leader = is_leader
-        # P1-1 — optional outward alert-sink dispatcher
+        # Optional outward alert-sink dispatcher
         # (:class:`legba.data.alerts.AlertSinkDispatcher`). When wired, a
         # global-stall alert ALSO fans out through the registered sinks
         # (webhook first) so a full-pipeline stall can page an operator
@@ -556,7 +556,7 @@ class LivenessWatchdog:
         # operator-visible escalations panel (D1) + the W1-T3 non-delivery canary
         # both read that table — so a full-pipeline stall is LOUD, not silent.
         await self._record_stall_delivery(title, body, idle_min)
-        # P1-1: outward fan-out (webhook etc.) — a stall alert that only ever
+        # Outward fan-out (webhook etc.) — a stall alert that only ever
         # landed internal rows still needed a human to be LOOKING; when a sink
         # is configured this pages the operator endpoint directly.
         await self._fan_out_alert_sinks(title, body)
@@ -711,7 +711,7 @@ class LivenessWatchdog:
         In-memory FIRST (the edge gate must hold this process even when the
         durable write fails — else a broken DB turns the edge back into a
         60s-level firehose), then the durable ``alert_sink_deliveries`` row,
-        then the P1-1 outward fan-out. Every leg is fail-safe.
+        then the outward fan-out. Every leg is fail-safe.
         """
         states = await self._get_alert_states(channel)
         states[entity_id] = state
@@ -749,7 +749,7 @@ class LivenessWatchdog:
         ``channel`` that is no longer in the bad set — once per episode.
 
         Severity 'info' (a closed episode is information, not a page); no
-        streamless NATS publish — the durable row + P1-1 fan-out are the
+        streamless NATS publish — the durable row + outward fan-out are the
         operator-visible surfaces.
         """
         states = await self._get_alert_states(channel)
@@ -804,7 +804,7 @@ class LivenessWatchdog:
         had a chance to run after a cold start).
 
         B0-12 transition-edge alerting: an analyst entering the stale state
-        fires ONCE (streamless NATS + durable ``entered`` row + P1-1 outward
+        fires ONCE (streamless NATS + durable ``entered`` row + outward
         fan-out, severity high); the CONTINUING condition is silent; leaving
         the stale state fires ONE ``recovered`` row (severity info). The
         last-alerted state survives restarts via the durable ledger.
@@ -911,7 +911,7 @@ class LivenessWatchdog:
                 SELECT d.body->'identity'->>'id'               AS analyst_id,
                        d.body->'cadence'->>'fallback_schedule'  AS cron,
                        max(t.run_started_at)                    AS last_run,
-                       extract(epoch FROM max(t.run_ended_at - t.run_started_at) FILTER (WHERE t.run_started_at > now() - interval '1 day')) AS recent_run_s  -- P-7 in-flight grace (cadence_staleness)
+                       extract(epoch FROM max(t.run_ended_at - t.run_started_at) FILTER (WHERE t.run_started_at > now() - interval '1 day')) AS recent_run_s  -- in-flight grace (cadence_staleness)
                 FROM analyst_descriptors d
                 LEFT JOIN analyst_traces t
                        ON t.analyst_id = d.body->'identity'->>'id'
@@ -1346,7 +1346,7 @@ class LivenessWatchdog:
             # B0-12: the discriminator PROVED the feed carries entries newer
             # than our newest ingested signal while every poll yields 0 — the
             # cursor / since-filter / ingestion filter is eating live content
-            # (the B0-11 stategov cursor-poison class). This is the escalation
+            # (the cursor-poison class). This is the escalation
             # the old check could not distinguish from a slow news day.
             title = (
                 f"Source cursor/filter fault: {source_id} — upstream has newer "
@@ -1358,7 +1358,7 @@ class LivenessWatchdog:
                 "OBSERVED entries in the feed NEWER than this source's newest "
                 "ingested signal — upstream is publishing, but the pipeline is "
                 "discarding it. This is a cursor/filter fault, not a quiet "
-                "feed (the B0-11 stategov cursor-poison class): check the "
+                "feed (the cursor-poison class): check the "
                 "stored cursor timestamp (future-skew poison), the since-"
                 "filter, and the ingestion/dedupe filters for this source."
             )
@@ -1384,7 +1384,7 @@ class LivenessWatchdog:
                 f"honest-quiet escalation threshold of "
                 f"{self._cfg.honest_quiet_streak_threshold}. On every one of "
                 "those polls the handler's own crawl found nothing newer than "
-                "what is already ingested — by the B0-12 discriminator's "
+                "what is already ingested — by the discriminator's "
                 "evidence this is an honestly quiet feed, NOT a cursor/filter "
                 "fault, so do not go looking for one. But a streak this long "
                 "stops reading as an ordinary quiet week: the source may have "

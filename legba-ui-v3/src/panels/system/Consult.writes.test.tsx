@@ -12,6 +12,7 @@ import ConsultPanel from './Consult'
 import { useConsultSessions } from '@/state/consultSession'
 import { resetCasePlayer } from '@/state/casePlayer'
 import type { PanelRegistration } from '@/types'
+import { openConsultMenu } from '@/test/consultMenu'
 
 const PANEL = 'singleton:system.consult'
 
@@ -107,11 +108,12 @@ function ask(text: string) {
 }
 
 describe('"Allow changes this turn" (D2)', () => {
-  it('is off by default, beside Send, and a plain turn sends no allow_writes key', () => {
+  it('is off by default, in the ⋯ menu, and a plain turn sends no allow_writes key', () => {
     render(<ConsultPanel registration={reg()} scope={{}} mode="personal" />)
+    openConsultMenu()
     const toggle = screen.getByTestId('consult-allow-writes')
     expect(toggle.getAttribute('aria-pressed')).toBe('false')
-    expect(toggle.parentElement).toBe(screen.getByTestId('consult-submit').parentElement)
+    expect(screen.getByTestId('consult-more-menu').contains(toggle)).toBe(true)
     ask('what changed overnight?')
     expect(postBodies()).toHaveLength(1)
     expect('allow_writes' in postBodies()[0]).toBe(false)
@@ -119,10 +121,13 @@ describe('"Allow changes this turn" (D2)', () => {
 
   it('arms ONE turn, resets, and the settled turn renders the pending card from the ledger', async () => {
     render(<ConsultPanel registration={reg()} scope={{}} mode="personal" />)
+    openConsultMenu()
     fireEvent.click(screen.getByTestId('consult-allow-writes'))
+    openConsultMenu()
     expect(screen.getByTestId('consult-allow-writes').getAttribute('aria-pressed')).toBe('true')
     ask('pause the feed')
     expect(postBodies()[0].allow_writes).toBe(true)
+    openConsultMenu()
     expect(screen.getByTestId('consult-allow-writes').getAttribute('aria-pressed')).toBe('false')
     await waitFor(() => expect(answer).not.toBeNull())
     answer!()

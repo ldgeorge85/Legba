@@ -11,7 +11,7 @@ an operator can review and register (via
 ``scripts/bringup_register_situation_targets.py``) to give that situation its
 OWN focused signal slice + dedicated analyst.
 
-Capability model (ratified): **analysts PROPOSE, operators ACTIVATE — no
+Capability model: **analysts PROPOSE, operators ACTIVATE — no
 control-plane writes.** This handler therefore NEVER registers a target; it
 emits a single FINDING whose ``data.proposals`` lists the candidate frames. The
 operator promotes by registering the suggested descriptor. Once a thematic

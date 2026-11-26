@@ -3,7 +3,7 @@
 --
 -- 0055_fact_contention.sql
 --
--- Holes-B Wave 1 — the contested-claims SIDECAR (#101). When two credible
+-- The contested-claims SIDECAR. When two credible
 -- sources disagree on a `(subject, predicate)` value, both rows legitimately
 -- coexist OPEN (the open-triple unique index `idx_facts_temporal_triple_open`
 -- keys on `lower(value)`), but the disagreement is invisible at the fact layer.
@@ -33,7 +33,7 @@
 --   * markers on `public.facts` — `contested`, `contention_id`, `surfaced_winner`
 --                                (thin, indexable, no blob).
 --
--- DETECT-ONLY (Wave 2): the arbiter that populates these tables NEVER closes,
+-- DETECT-ONLY: the arbiter that populates these tables NEVER closes,
 --   supersedes, or rewrites a `facts` row (invariant B15). It only sets the three
 --   marker columns + the sidecar rows. No write-path behavior changes here.
 --

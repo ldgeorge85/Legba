@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Repair desk × unit heads left wrong before the head-integrity fix (lane N-A, one-off).
 
-WHY. Until lane N-A two write-path defects left the head chain wrong
+WHY. Until the head-integrity fix two write-path defects left the head chain wrong
 (``legba.data.head_integrity`` has the full account, 2026-11-11):
 
   * a read whose JSON failed to parse (``unstructured``/``coerce_failed``, conf
@@ -38,8 +38,7 @@ the actions on the named 11-11 ids, writes nothing; ``--apply`` writes.
 Idempotent: after an apply every key has exactly one live row, so a second run
 plans nothing (and the backup insert is ``ON CONFLICT DO NOTHING``).
 
-Run inside the live runtime container after the roll that ships lane N-A
-(the merger runs it; never against the live DB from a lane):
+Run inside the live runtime container after the release that ships the fix:
 
     docker exec -i legba-legba-runtime-dapr-1 python3 - < scripts/repair_desk_heads_once.py
     docker exec -i legba-legba-runtime-dapr-1 python3 - --apply < scripts/repair_desk_heads_once.py

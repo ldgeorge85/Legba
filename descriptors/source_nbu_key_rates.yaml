@@ -1,17 +1,16 @@
-# Roll 84 (2026-11-14) — the National Bank of Ukraine's key rates (the policy
+# The National Bank of Ukraine's key rates (the policy
 # rate and the overnight loan and deposit-certificate rates), as a SERIES.
-# Written the way lane I-5 wrote its siblings (source_nbu_exchange_daily.yaml).
+# Written the way its sibling is (source_nbu_exchange_daily.yaml).
 # Ships DRAFT; the reference host walks it to CONFIGURED
-# (descriptors/LIFECYCLE.md), never active — activation is the owner's call.
+# (descriptors/LIFECYCLE.md), never active — activation is the operator's call.
 # Kind: series_api.
 #
-# WHY: war-economy rates (the source-expansion review's row 5, "add"; I-5
-# wrote the FX half and left this one because its field names were never
-# recorded).
+# WHY: war-economy rates (the FX half is source_nbu_exchange_daily.yaml; this
+# is the key-rate half).
 #
 # THE ENDPOINT. NBU open-data API, /NBUStatService/v1/statdirectory/key with
-# the bare `json` switch (the URL the review recorded, kept verbatim). Checked
-# 2026-11-14 for roll 84 by ONE plain GET (generic client): 200,
+# the bare `json` switch (the URL as recorded, kept verbatim). Checked
+# 2026-11-14 by ONE plain GET (generic client): 200,
 # application/json, a TOP-LEVEL array of 23,963 rows, 6.67 MB — the WHOLE
 # history since 1992 of three series, one row per day per series. Every row
 # has exactly the fields dt, txt, txten, id_api, leveli, parent, freq, tzep,
@@ -22,7 +21,7 @@
 #     (6,496), KEY_RateOvernightCD (4,905); `txten` its English name;
 #   * `value` — per cent per year, a JSON number;
 #   * `parent` Key_Rates_NBU, `freq` D, `leveli` 1, `tzep` T90 on every row.
-# THE DATE FILTER the review asked for is NOT declared: no since parameter
+# THE DATE FILTER is NOT declared: no since parameter
 # was verified for this endpoint (one GET was allowed and spent on the shape),
 # so each poll reads the whole history (~6.7 MB, once a day) and the reader
 # keeps only the re-read window (lag + revision days); the observation sink
@@ -42,7 +41,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: roll84_integration
+  owner: owner@local
   created: "2026-11-14T00:00:00Z"
 
 scope:

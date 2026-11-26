@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""S-1 (MASTER_PLAN 2026-07-10, Phase S) — the signal_salience scorer.
+"""The signal_salience scorer.
 
 Covers the pure reducers, the ECHO-BOUND parse (bind by echoed id, drop
 unmatched, degrade unbound), the WRITE-path idempotency (mark every examined row,
-degrade-not-break on an LLM failure), and the S-1c EVAL TRUTH-SET: the ranking
+degrade-not-break on an LLM failure), and the EVAL TRUTH-SET: the ranking
 invariants that the whole salience layer exists to enforce — a head-of-state
 death / kinetic strike outranks a meme or a routine procurement; a Supreme Leader
 outranks an ordinary senator (the Khamenei/Graham failures). Ranking is asserted
@@ -135,7 +135,7 @@ def test_parse_unknown_id_item_is_dropped_not_positionally_bound() -> None:
 
 
 # ---------------------------------------------------------------------------
-# S-1c EVAL TRUTH-SET — the ranking invariants (canned model outputs)
+# EVAL TRUTH-SET — the ranking invariants (canned model outputs)
 # ---------------------------------------------------------------------------
 
 # The worked-example signals, scored as the prompt's anchors dictate.
@@ -260,7 +260,7 @@ async def test_score_signals_dry_run_writes_nothing() -> None:
 # descriptor carry a different class, resolved per-signal by
 # ``_channel_class_override`` keyed off ``payload.channel.username`` and
 # preferred over the descriptor's ``source_class`` column in
-# ``select_salience_candidates`` — reaching the S-1 authority stamp
+# ``select_salience_candidates`` — reaching the authority stamp
 # (``signals.salience.authority``) the SAME way the descriptor-level default
 # always has, not a cosmetic payload tag nothing reads.
 # ---------------------------------------------------------------------------

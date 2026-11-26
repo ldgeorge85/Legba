@@ -465,7 +465,7 @@ async def test_future_published_ts_clamps_cursor_advance():
 
     now = datetime.now(tz=timezone.utc)
     poison = now + timedelta(days=365)          # the year-typo class
-    nearby = now + timedelta(hours=6)           # mislabeled-TZ class: clamped too (W11-F151)
+    nearby = now + timedelta(hours=6)           # mislabeled-TZ class: clamped too
     entries = [_entry(source_id, nearby), _entry(source_id, poison)]
     store = InMemoryStateStore()
     _wire_core(core, store, _StubHandler(entries))

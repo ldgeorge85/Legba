@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane N-I: short-id (8-hex prefix) citations resolve by a UNIQUE prefix match.
+"""Short-id (8-hex prefix) citations resolve by a UNIQUE prefix match.
 
 Crossroads 59fad301 (10-27) cited findings as ``[[ref:d25139d3-0000-0000-0000-
 000000000000]]`` — the first 8 hex chars, zero-padded; 27 of its 28 refs are real.

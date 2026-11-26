@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # host_stall_watchdog.sh — the HOST-SIDE auto-recover actuator for the Dapr
-# actor-plane stall (B0-12 remainder).
+# actor-plane stall.
 #
 # WHY THIS EXISTS: twice (2026-07-14, 2026-07-15) the sidecar's actor plane
 # degraded silently — reminders/invokes stopped, ingestion + every analyst
@@ -20,7 +20,7 @@
 # RUST-4 MOTHBALL (2026-08-21): the dapr-workflow worker used to be the third
 # leg of this recipe (the 2026-07-18..21 soak had credited it as the recovery
 # differentiator, 8/8) — dropped here now that the GEPA optimizer plane is
-# mothballed (docs/SEAMS.md #53, planning/RUST4_EVIDENCE_2026-08-21.md): the
+# mothballed (docs/SEAMS.md #53): the
 # worker container stays deployed (it also hosts deep_consult_workflow — see
 # docker-compose.yml), but "deep" consult mode had 2 sessions in the 6 weeks
 # the evidence was gathered, and the worker's earlier restart-differentiator
@@ -51,7 +51,7 @@
 #
 # Install (documented in docs/RUNBOOK.md):
 #   /etc/cron.d/legba-watchdog:
-#     */5 * * * * root /usr/local/deployments/active/legba/scripts/host_stall_watchdog.sh >> /var/log/legba_host_watchdog.log 2>&1
+#     */5 * * * * root <repo>/scripts/host_stall_watchdog.sh >> /var/log/legba_host_watchdog.log 2>&1
 # Disable during maintenance:  touch /etc/legba-watchdog.disabled
 # Dry run (no restart, no DB write):  DRY_RUN=1 ./host_stall_watchdog.sh
 
@@ -70,7 +70,7 @@ DISABLE_FLAG="/etc/legba-watchdog.disabled"
 PG_CONTAINER="legba-postgres-1"
 SIDECAR_CONTAINER="legba-dapr-sidecar-1"
 RUNTIME_CONTAINER="legba-legba-runtime-dapr-1"
-# WORKER_CONTAINER dropped from the recovery recipe — RUST-4 mothball
+# WORKER_CONTAINER dropped from the recovery recipe — optimizer-plane mothball
 # (2026-08-21), see the header comment.
 PG_USER="legba"
 PG_DB="legba"
@@ -141,7 +141,7 @@ if [ -e "$COOLDOWN_STAMP" ]; then
 fi
 
 # --- rung 7: fire the documented recovery ------------------------------------
-# ORDER IS LOAD-BEARING (B0-13 P2, scheduler-log-proven 12/12 on 2026-07-23):
+# ORDER IS LOAD-BEARING (scheduler-log-proven 12/12 on 2026-07-23):
 # the old sidecar-first order made the sidecar re-report its host to placement
 # BEFORE the slow Python app bound :6090 (cold Init ~19s), so the placement
 # table published with ONLY the workflow-engine actor types — business actors
@@ -150,13 +150,13 @@ fi
 # It was never the delay and never the worker. Fix-2a: restart the RUNTIME
 # first, WAIT for its healthcheck, then the sidecar (which now reports a host
 # that already answers with the full actor set). (The worker was the third
-# leg here; dropped RUST-4 2026-08-21 — see the header comment.)
+# leg here; dropped 2026-08-21 (optimizer-plane mothball) — see the header comment.)
 if [ "$DRY_RUN" = "1" ]; then
     log "DRY_RUN WOULD-RESTART pipeline stalled (freshest signal ${age}s > ${MAX_AGE_SECS}s): $RUNTIME_CONTAINER first (wait healthy), then $SIDECAR_CONTAINER"
     exit 0
 fi
 
-log "FIRE pipeline stalled (freshest signal ${age}s > ${MAX_AGE_SECS}s) — P2 order: $RUNTIME_CONTAINER first (wait healthy), then $SIDECAR_CONTAINER"
+log "FIRE pipeline stalled (freshest signal ${age}s > ${MAX_AGE_SECS}s) — restart order: $RUNTIME_CONTAINER first (wait healthy), then $SIDECAR_CONTAINER"
 docker restart "$RUNTIME_CONTAINER" >/dev/null 2>&1
 # Bounded wait for the app to answer before the sidecar re-reports its host to
 # placement. Timeout proceeds anyway — the verify-recovery rung backstops.

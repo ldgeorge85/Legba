@@ -1,9 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""FRAME-1 — the composition's ADMISSIBILITY WINDOW and its two-tier evidence.
+"""The composition's ADMISSIBILITY WINDOW and its two-tier evidence.
 
-``planning/FRAME_PROGRAM_2026-08-20.md`` §3/§4/§6, ratified 2026-08-21. One
-architecture finding carried most of the CORRECTNESS-R1 mass — **"a 72-hour
+One architecture finding carried most of the correctness defects — **"a 72-hour
 pipeline forgets its own window"** — and one of its mechanisms lives here: the
 composition subscribed to its source heads under a trailing **24h wall-clock
 freshness cliff** while the units beneath it fire on an 11h cooldown that
@@ -30,7 +29,7 @@ decoration: ``_tradecraft.NO_INSTRUMENT_READINGS`` forbids the model printing a
 raw ISO timestamp and the dated-claim rule forbids it COMPUTING a date, so a
 prompt that shows only ``produced_at=2026-08-18T07:00:02+00:00`` is asking for
 a date it also forbids. :func:`head_ages_stamp` records the same accounting on
-the envelope (``data.head_ages``) so the §6 staleness gauge reads a number the
+the envelope (``data.head_ages``) so the staleness gauge reads a number the
 product itself published rather than re-deriving one.
 
 **THE FLOOR'S ACTION, MADE VISIBLE.** The 0.50 verification floor does not
@@ -449,7 +448,7 @@ _MONTHS: tuple[str, ...] = (
 #: (the country composition's fallback cadence is twice daily, ``30 11,23 * * *``)
 #: — i.e. the desk has been silent for a whole compose cycle, and the prose must
 #: say so instead of reading as if it were written today. Deliberately well
-#: under the §6 gauge's 34h alarm: the PROSE should disclose staleness earlier
+#: under the staleness gauge's 34h alarm: the PROSE should disclose staleness earlier
 #: than the OPERATOR is paged for it.
 STALE_HEAD_DISCLOSE_HOURS: float = 24.0
 
@@ -605,12 +604,12 @@ def head_ages_stamp(
     now: datetime | None = None,
     horizon_hours: int | None = None,
 ) -> dict[str, Any] | None:
-    """The ``data.head_ages`` envelope stamp (FRAME_PROGRAM §6.1).
+    """The ``data.head_ages`` envelope stamp.
 
     Per-head hours + the max, derived from rows already in hand at render time
     (zero extra queries). ``None`` when NO row carries a parsable timestamp —
-    an absent stamp and a stamp reading 0.0 are different facts, and the §6
-    gauge keys on the difference (no stamp ⇒ that composition is simply not
+    an absent stamp and a stamp reading 0.0 are different facts, and the
+    staleness gauge keys on the difference (no stamp ⇒ that composition is simply not
     gauged, never gauged as fresh).
     """
     heads: list[dict[str, Any]] = []
@@ -662,8 +661,8 @@ def max_head_age_hours(
 # as_of``) — that the model was, until now, told to DERIVE itself by scanning
 # every rendered block for the newest ``produced_at``. That is arithmetic over
 # a long prompt, and it drifted: an IR read claimed "latest 01:40 UTC" against
-# heads the render actually showed produced at 16-17 UTC
-# (``planning/PROOF_ROUND_2026-08-25/VERDICT_DRAFT.md``). Meanwhile no
+# heads the render actually showed produced at 16-17 UTC.
+# Meanwhile no
 # composition declared its evidence WINDOW at all — only a single as-of
 # instant — so a reader had no way to see that the packet's own
 # ``window_days: 14`` (the FRAME-1 admissibility horizon) coexists with
@@ -799,7 +798,7 @@ def select_floor_fallback(
     18 August" while the periphery shows the newer failing read of 20 August,
     dated and scored — the two halves the ATTRIBUTION table asked for.
 
-    W11-F14 — THE AGE BAR. A promoted read is stamped ``fallback: true`` with
+    THE AGE BAR. A promoted read is stamped ``fallback: true`` with
     its ``age_h``, and a candidate older than N of its unit's own cadence
     windows (``carried_state.fallback_verdict``; the cadence rides the row as
     ``_unit_cadence_h``) is NEVER promoted: it comes back stamped
@@ -884,14 +883,14 @@ def floor_fallback_suffix(row: Mapping[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# FRAME-1 — the COVERAGE LEDGER (§4.2/§4.3: the floor's action, as data)
+# The COVERAGE LEDGER (the floor's action, as data)
 # ---------------------------------------------------------------------------
 
 COVERAGE_IN_BASIS: str = "in_basis"
 COVERAGE_BELOW_FLOOR: str = "below_floor"
 COVERAGE_UNVERIFIED: str = "unverified"
 COVERAGE_NO_HEAD: str = "no_head_in_horizon"
-#: W11-F14 — the unit HAS a head, and what it states is carried, not evidenced
+#: The unit HAS a head, and what it states is carried, not evidenced
 #: (``legba.data.carried_state``). A typed absence: never banded, never a gap.
 COVERAGE_CARRIED: str = _carried.CARRIED_UNSUPPORTED
 
@@ -1025,7 +1024,7 @@ def _coverage_ledger(
 def _carried_entry(
     unit_id: str, row: Mapping[str, Any], *, now: datetime | None
 ) -> dict[str, Any]:
-    """W11-F14 — the ledger entry for a carried, unsupported unit: the head's
+    """the ledger entry for a carried, unsupported unit: the head's
     date and age, and the verdict's proof (the last evidencing read and its age,
     or the refused fallback's age) verbatim."""
     verdict = row[_carried.CARRIED_ROW_KEY]
@@ -1272,7 +1271,7 @@ async def read_periphery_findings(
 
 
 # ---------------------------------------------------------------------------
-# FRAME-1 — the newest floor-PASSING head (§3 floor-interplay, GB-drone class)
+# The newest floor-PASSING head (floor interplay)
 # ---------------------------------------------------------------------------
 
 
@@ -1296,7 +1295,7 @@ async def read_floor_fallback_heads(
     gather requires ``superseded_by IS NULL`` and the failing head had
     superseded it — so the dimension appeared in NEITHER tier and the coverage
     rule then called it an unassessed gap. The alternative (keep newest-only and
-    let the dimension drop) was rejected in §3: it manufactures exactly the
+    let the dimension drop) was rejected: it manufactures exactly the
     false-absence class, and showing BOTH — a dated passing read in the basis, a
     dated newer failing read in the periphery — is strictly more honest than
     showing neither.
@@ -1332,7 +1331,7 @@ async def read_floor_fallback_heads(
             "meta.composition.floor_fallback_failed units=%s err=%s", wanted, exc
         )
         return []
-    # W11-F14 — the age bar reads each candidate's own cadence (one query, and
+    # The age bar reads each candidate's own cadence (one query, and
     # only on the rare run where a unit was withheld at all).
     await stamp_unit_cadence(conn, candidates)
     promoted = select_floor_fallback(candidates, basis_rows, periphery_rows)

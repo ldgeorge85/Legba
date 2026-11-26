@@ -281,13 +281,13 @@ class TelegramChannelSourceConfig(BaseModel):
                     "descriptor + account. Keyed by channel handle (same "
                     "normalization as `channels` — '@' / 'telegram://' "
                     "stripped, see `_strip_channel_prefix`); values are "
-                    "choice-locked to the S1-T8 source_class vocabulary "
+                    "choice-locked to the source_class vocabulary "
                     "(`legba.data.schemas.source.SourceClass`) — an "
                     "off-vocabulary value fails LOUD right here at config "
                     "validation (registration/activation), never silently "
                     "at signal-write time. A channel absent from this map "
                     "keeps the descriptor's `scope.source_class` default. "
-                    "Read at the S-1 authority-stamping path — "
+                    "Read at the authority-stamping path — "
                     "`legba.data.analysts.signal_salience."
                     "_channel_class_override` — which prefers this override "
                     "over the descriptor default per-signal, keyed by the "
@@ -295,7 +295,7 @@ class TelegramChannelSourceConfig(BaseModel):
     )
     claims: dict[str, ClaimDeclaration] = Field(
         default_factory=dict,
-        description="C-2 — the claim declaration of every channel `classes` "
+        description="The claim declaration of every channel `classes` "
                     "marks `claim`: {claimant, claimant_path?, verb, "
                     "claimant_aliases?, sign_off?} (data/schemas/source_claim.py), "
                     "the same block a claim source carries at scope.claim. A "

@@ -43,22 +43,21 @@ after T, so every record carries ``post_t``: how many cited refs entered the
 corpus (signals.created_at / analyst_outputs.created_at / facts.created_at /
 events.created_at) after T. The report reads it.
 
-ON MAIN (lane E0, harness version ``ARM_OPEN_VERSION``). Three changes after
-run 1b, none to a frozen piece (the arm prompts' hashes, the design pin, the
+HARNESS VERSION ``ARM_OPEN_VERSION``. Three changes after run 1b, none to a frozen piece (the arm prompts' hashes, the design pin, the
 normaliser and the record prompt are byte-identical):
 
   * TEMPERATURE has ONE declared place: ``legba.shared.sampling.HOUSE_TEMPERATURE``
     (1.0). The consult actor's route default reads it (B-open), and the
     in-process arms pass :data:`ROUTE_TEMPERATURE`, which IS it. Run 1b ran at a
-    0.2 code default (deviation D13); that is history, not a setting here.
+    0.2 code default ; that is history, not a setting here.
   * ``B-open-asof`` — arm B's tools, pack fragments and frozen prompt, run in
     THIS process (the actor cannot take a cut) with every raw reader cut at the
     run's as-of (``known_at``, ``legba.data.raw_reader_known_at``): nothing
     that entered the record at or after T reaches the model.
   * ``C-record-2`` — an independent second sample of C-record. The series tools
-    now dispatch through the production router (D22 fixed there).
+    now dispatch through the production router.
 
-LANE E2 (harness ``e2.1``). The record arms ``C-record`` / ``C-record-2`` read
+Harness ``e2.1``. The record arms ``C-record`` / ``C-record-2`` read
 the record AS OF T: every record reader is cut at the run's as-of (``known_at``,
 classified in ``legba.data.raw_reader_known_at.RECORD_KNOWN_AT_CUTS``; each
 record carries the classification as ``as_of_cut``). The prompt, tools and
@@ -115,7 +114,7 @@ RECORD_ANALYST = "consult_bakeoff_record"
 #: THE harness temperature — not a number of its own: the house constant, which
 #: is also ``ConsultOnDemandDeps.temperature``'s default, so B-open (inside the
 #: actor) and the in-process arms run at the same declared value. Run 1b's 0.2
-#: was a code default since replaced (D13); a new run cannot reproduce it here.
+#: was a code default since replaced; a new run cannot reproduce it here.
 ROUTE_TEMPERATURE = HOUSE_TEMPERATURE
 TEMPERATURE_SOURCE = "legba.shared.sampling.HOUSE_TEMPERATURE"
 NOMINAL_METER = {"hard_stop_usd": 1000.0,
@@ -404,7 +403,7 @@ class RecordBinding:
     name is refused (``tool_blocked``) exactly as the agency gate refuses a tool
     outside a pack. Dispatch is the production router (``_dispatch_tool``).
 
-    ``known_at`` (lane E2): the run's as-of, set by :func:`arm_c_record` on
+    ``known_at``: the run's as-of, set by :func:`arm_c_record` on
     every record arm, is forwarded to the router as the record-time cut — each
     record reader is classified in ``legba.data.raw_reader_known_at``
     (``RECORD_KNOWN_AT_CUTS``) and an unclassified one is refused by the router
@@ -741,7 +740,10 @@ async def run_main(a: argparse.Namespace) -> int:
     comp = reg.stack_component(CORE_COMPONENT)
     if comp.get("model_name") != CORE_ALIAS:
         raise SystemExit(f"{CORE_COMPONENT} serves {comp.get('model_name')!r}, not {CORE_ALIAS!r} — refusing")
-    if not str(comp.get("api_endpoint") or "").startswith("https://api.innoai.net"):
+    # The gateway host = the host of the .env core endpoint (LEGBA_LLM_API_ENDPOINT).
+    host = lambda url: str(url or "").strip().split("://", 1)[-1].split("/", 1)[0]  # noqa: E731
+    gateway = host(os.environ.get("LEGBA_LLM_API_ENDPOINT"))
+    if not gateway or host(comp.get("api_endpoint")) != gateway:
         raise SystemExit(f"{CORE_COMPONENT} points at {comp.get('api_endpoint')!r} — not the self-hosted gateway")
     if a.practice:
         questions = run_arm.load_practice(Path(a.practice))

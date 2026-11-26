@@ -93,9 +93,12 @@ describe('boot — the Morning Read landing', () => {
 
   it('tags every seeded panel with the stance it belongs to', async () => {
     render(wrap(<App />))
-    // U-2: the Board's views (a slot is not a panel), then the Consult
-    // column, which is frame and opens once with the landing.
-    const seeded = [...surfaceKinds(findSurface(LANDING_WORKSPACE)!), 'system.consult']
+    // U-2: the Board's views (a slot is not a panel) and its stage view, which
+    // counts itself where the stage hosts it (now a registered view, not a
+    // kind), then the Consult column, which is frame and opens once with the
+    // landing.
+    const board = findSurface(LANDING_WORKSPACE)!
+    const seeded = [...new Set([board.stage, ...surfaceKinds(board)]), 'system.consult']
     await waitFor(() =>
       expect(kinds().filter((k) => k === 'panel_open')).toHaveLength(seeded.length),
     )

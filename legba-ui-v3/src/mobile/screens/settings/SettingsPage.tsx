@@ -102,7 +102,7 @@ export default function SettingsPage() {
 
       <SectionHead title="Since you last looked" />
       <p className="ph-body" data-testid="phone-settings-seen">
-        {seen.data ? `Your place is ${seenWhereWords(seen.data)}.` : 'Reading…'}
+        {seen.data ? `${seenWhereWords(seen.data)}.` : 'Reading…'}
       </p>
 
       <SectionHead title="On this phone" />

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W11-F133 — consult 6cd91190: two attempts, 23 minutes, no answer.
+"""consult 6cd91190: two attempts, 23 minutes, no answer.
 
 2026-10-29 21:00Z, request 1f2029f7, the CORE plane (``llm.primary.openai_compat``,
 gateway alias ``fast``, ``VLLMProviderHandler``). Attempt 1 drilled four rounds,
@@ -156,7 +156,7 @@ def _chunk(delta: dict[str, Any] | None = None, *, finish: str | None = None,
            usage: dict[str, Any] | None = None, choices: bool = True) -> dict[str, Any]:
     c: dict[str, Any] = {
         "id": "chatcmpl-1", "object": "chat.completion.chunk", "created": 1,
-        "model": MODEL, "provider": "innoai",
+        "model": MODEL, "provider": "gateway",
         "choices": (
             [{"index": 0, "delta": delta or {}, "finish_reason": finish}]
             if choices else []
@@ -178,7 +178,7 @@ TEXT_STREAM = [
 ]
 TEXT_JSON = {
     "id": "chatcmpl-1", "object": "chat.completion", "created": 1, "model": MODEL,
-    "provider": "innoai",
+    "provider": "gateway",
     "choices": [{"index": 0, "message": {"role": "assistant", "content": "".join(TEXT_PIECES)},
                  "finish_reason": "stop"}],
     "usage": USAGE,
@@ -198,7 +198,7 @@ TOOL_STREAM = [
 ]
 TOOL_JSON = {
     "id": "chatcmpl-1", "object": "chat.completion", "created": 1, "model": MODEL,
-    "provider": "innoai",
+    "provider": "gateway",
     "choices": [{"index": 0, "message": {"role": "assistant", "content": None, "tool_calls": [
         {"id": "call_a", "type": "function",
          "function": {"name": "search_signals", "arguments": '{"query": "iran"}'}},
@@ -402,7 +402,7 @@ def _first(steps: list[dict[str, Any]], kind: str) -> dict[str, Any] | None:
 
 @pytest.mark.asyncio
 async def test_core_forced_final_cut_mid_stream_delivers_the_partial_and_does_not_raise() -> None:
-    """The incident on the real core handler: tool round, then a forced final
+    """The failure on the real core handler: tool round, then a forced final
     whose stream drops after writing — the text is delivered, once."""
     h = _handler()
     wire = _Wire(
@@ -673,22 +673,37 @@ class _Windowed:
         return self._window
 
 
-def test_the_ceiling_derives_from_the_routes_window() -> None:
-    assert cc.derive_ceiling(_Windowed(262144), max_tokens=32768) == (
-        262144 - 32768 - 4096, cc.SOURCE_MODEL_WINDOW,
+class _WindowedWithMaxima(_Windowed):
+    def __init__(self, window: int | None, maxima: dict[str, int]) -> None:
+        super().__init__(window)
+        self._maxima = maxima
+
+    def max_output_tokens_by_alias(self) -> dict[str, int]:
+        return dict(self._maxima)
+
+
+def test_the_ceiling_derives_from_the_routes_window(monkeypatch) -> None:
+    monkeypatch.delenv("LEGBA_LLM_INPUT_TOKEN_BUDGET", raising=False)
+    # No declared maximum output: half the window is kept for the output.
+    assert cc.derive_ceiling(_Windowed(262144)) == (
+        262144 - 131072 - 4096, cc.SOURCE_MODEL_WINDOW,
     )
+    # A thinking alias that may write 131,072 tokens: the same room is kept.
+    both = _WindowedWithMaxima(262144, {"fast": 32768, "deep": 131072})
+    assert cc.derive_ceiling(both) == (262144 - 131072 - 4096, cc.SOURCE_MODEL_WINDOW)
+    # A plain alias whose maximum is smaller leaves the input more of the window.
+    plain = _WindowedWithMaxima(262144, {"fast": 32768})
+    assert cc.derive_ceiling(plain) == (262144 - 32768 - 4096, cc.SOURCE_MODEL_WINDOW)
 
 
 def test_without_a_window_the_ceiling_is_the_input_budget(monkeypatch) -> None:
     monkeypatch.setenv("LEGBA_LLM_INPUT_TOKEN_BUDGET", "65536")
-    assert cc.derive_ceiling(_Windowed(None), max_tokens=32768) == (
-        65536, cc.SOURCE_INPUT_BUDGET_ENV,
-    )
-    assert cc.derive_ceiling(object(), max_tokens=32768) == (
-        65536, cc.SOURCE_INPUT_BUDGET_ENV,
-    )
+    assert cc.derive_ceiling(_Windowed(None)) == (65536, cc.SOURCE_INPUT_BUDGET_ENV)
+    assert cc.derive_ceiling(object()) == (65536, cc.SOURCE_INPUT_BUDGET_ENV)
+    # The explicit override wins over a known window too.
+    assert cc.derive_ceiling(_Windowed(262144)) == (65536, cc.SOURCE_INPUT_BUDGET_ENV)
     monkeypatch.delenv("LEGBA_LLM_INPUT_TOKEN_BUDGET")
-    ceiling, source = cc.derive_ceiling(object(), max_tokens=32768)
+    ceiling, source = cc.derive_ceiling(object())
     assert source == cc.SOURCE_INPUT_BUDGET_DEFAULT and ceiling > 0
 
 
@@ -739,11 +754,15 @@ def _live_compaction_pins(monkeypatch):
     """The host's operator pins (compaction off) — the 6cd91190 configuration."""
     monkeypatch.setenv("LEGBA_CONSULT_KEEP_FULL_ROUNDS", "1000")
     monkeypatch.setenv("LEGBA_CONSULT_ROUND_RESULT_BYTES", "40000")
+    # The input-budget override would win over the window; these runs test the window.
+    monkeypatch.delenv("LEGBA_LLM_INPUT_TOKEN_BUDGET", raising=False)
 
 
 @pytest.mark.asyncio
 async def test_a_derived_ceiling_applies_when_the_option_is_absent(_live_compaction_pins) -> None:
-    llm = _WindowedDrillLLM(window=8000 + 1000 + 4096)
+    # No declared maximum output: half the window is kept for it, so the
+    # derived ceiling is window - window/2 - 4,096 = 8,000.
+    llm = _WindowedDrillLLM(window=2 * (8000 + 4096))
     steps = await _ceiling_run(llm, {})
 
     rp = _first(steps, "render_prompt")

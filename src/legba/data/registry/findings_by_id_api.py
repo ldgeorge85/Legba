@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""``GET /findings/{finding_id}`` — ONE finding at full weight, by id (lane P-8).
+"""``GET /findings/{finding_id}`` — ONE finding at full weight, by id.
 
 The list route (``GET /findings``) answers at a light weight by default
 (``fields=summary``); the full row — ``data``, ``body``, ``derived_from`` and

@@ -42,6 +42,8 @@ import { relativeTime } from '@/lib/findingsViews'
 import { unverifiedFact, unverifiedLine, type VerificationBlock } from '@/lib/verdictModel'
 import { nounTitle, SUBJECT_NOUN, SUBJECT_READ_KIND, SUBJECT_READ_TAB } from '@/lib/subjectNoun'
 import { PROFILE_UI } from '@/lib/profileUi'
+import { useBelowAdminPassive as useBelowAdmin } from '@/auth/roles'
+import { subjectDayTitle } from '@/lib/readerVocabulary'
 
 const PRODUCERS = compositionProducers()
 const NOUN = SUBJECT_NOUN.toLowerCase()
@@ -69,6 +71,17 @@ export function verifyLine(v: Record<string, unknown> | null | undefined): strin
     return `faithfulness ${block.faithfulness_score.toFixed(2)}${status}`
   }
   return 'not judged — the verify block carries no score'
+}
+
+/** The same line in a reader's words: what the check found, never its engine terms. */
+export function plainVerifyLine(v: Record<string, unknown> | null | undefined): string {
+  if (!v || typeof v !== 'object') return 'Not checked'
+  const block = v as VerificationBlock
+  if (unverifiedFact(block)) return 'The check could not run on it'
+  if (typeof block.faithfulness_score === 'number') {
+    return `Checked: ${Math.round(block.faithfulness_score * 100)}% of what it says is supported by its sources`
+  }
+  return 'Not checked yet'
 }
 
 export interface AbsenceSummary {
@@ -101,6 +114,7 @@ export function summarizeAbsences(resp: AbsenceResponse): AbsenceSummary {
 }
 
 export default function SubjectReadState({ targetId, label }: { targetId: string; label: string }) {
+  const belowAdmin = useBelowAdmin()
   const lastRead = useQuery<ReadFindingRow | null>({
     queryKey: ['inspector-subject-last-read', targetId],
     queryFn: () => fetchLastRead(targetId),
@@ -149,14 +163,16 @@ export default function SubjectReadState({ targetId, label }: { targetId: string
           </div>
         ) : (
           <div className="space-y-0.5" data-testid="inspector-subject-last-read">
-            <div className="text-body text-ink-1">{index.headline}</div>
+            <div className="text-body text-ink-1">
+              {belowAdmin ? subjectDayTitle(label, row.produced_at) : index.headline}
+            </div>
             <div className="text-label text-ink-3">
               {/* the producer's name in the profile's noun (one subject word on screen) */}
               {row.analyst_id ? nounTitle(humanizeAnalystId(row.analyst_id)) : 'producer not recorded'} · as of{' '}
               {asOfLabel(row.produced_at) ?? 'not recorded'} ({relativeTime(row.produced_at)})
             </div>
             <div className="text-label text-ink-3" data-testid="inspector-subject-verify">
-              {verifyLine(row.verification)}
+              {belowAdmin ? plainVerifyLine(row.verification) : verifyLine(row.verification)}
             </div>
           </div>
         )}
@@ -164,7 +180,7 @@ export default function SubjectReadState({ targetId, label }: { targetId: string
 
       <section data-testid="inspector-subject-absences">
         <div className="mb-1 text-label font-semibold uppercase tracking-wider text-ink-2">
-          Typed absences
+          Gaps
           {absence.data?.read_at && (
             <span className="ml-2 font-normal normal-case tracking-normal text-ink-3">
               as of {asOfLabel(absence.data.read_at) ?? absence.data.read_at}
@@ -177,7 +193,7 @@ export default function SubjectReadState({ targetId, label }: { targetId: string
           </div>
         ) : absence.isError || !summary ? (
           <div className="text-body text-ink-3" data-testid="inspector-subject-absences-error">
-            unavailable — /v3/absence did not answer for this {NOUN}
+            unavailable — the gaps could not be read for this {NOUN}
           </div>
         ) : (
           <ul className="space-y-0.5 text-body">

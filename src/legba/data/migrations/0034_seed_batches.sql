@@ -4,8 +4,7 @@
 -- (current world leaders, alliance memberships, …) needs the seeded knowledge
 -- to be DISTINGUISHABLE from live ingest/agent output so a seed set is
 -- selectively refreshable + purgeable ("re-pull the leaders seed", "drop the
--- 2024 backfill"). See planning/SEEDING_SKETCH.md §"The cross-cutting
--- primitive". Without a batch marker, seeded rows are indistinguishable from
+-- 2024 backfill"). Without a batch marker, seeded rows are indistinguishable from
 -- live and can never be re-synced.
 --
 -- The two halves of the primitive:

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Holes-B Wave 0 — facts.source_credibility + the two A-leg fixes.
+"""facts.source_credibility + the two A-leg fixes.
 
 Pure-logic (no-DB) tests for the fact-write-path foundation of the
 contested-claims arbiter (#101):
@@ -49,9 +49,9 @@ NOW = datetime(2026, 6, 29, tzinfo=timezone.utc)
 
 @pytest.fixture(autouse=True)
 def _pin_fact_contention_off(monkeypatch: pytest.MonkeyPatch) -> None:
-    """This file tests the Holes-B **Wave 0** A1/A2 contract (tier-nominal
+    """This file tests the A1/A2 contract (tier-nominal
     credibility stamping, noisy-OR merge math, the ingestion rank guard) — a
-    layer that predates and is orthogonal to the Wave 4 contention-coexist
+    layer that predates and is orthogonal to the contention-coexist
     feature. The live deploy's ``.env`` sets ``LEGBA_FACT_CONTENTION=1``
     (loaded eagerly at ``legba.data.config`` import time), which would route
     every ``supersede_prior_facts()`` call here through

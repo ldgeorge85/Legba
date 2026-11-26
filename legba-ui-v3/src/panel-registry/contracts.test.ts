@@ -36,7 +36,7 @@ describe('the reader side is fully declared', () => {
     }
   })
 
-  it('the map has ONE contract, the globe\'s (U-7): its real layer ids, fly-to, home, the window, select', () => {
+  it('the map has ONE contract, the globe\'s: its real layer ids, fly-to, home, the window, select', () => {
     const map = declaredContract('v4.map')!
     expect(map.actions.map((a) => a.id)).toEqual(['set_layer', 'fly_to', 'home', 'set_window', 'select'])
     expect(map.binds).toEqual(expect.arrayContaining(['place', 'subject', 'window']))

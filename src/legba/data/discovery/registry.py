@@ -18,8 +18,8 @@ This module owns the discovery-side equivalent:
     and receive a typed answer pointing at
     :func:`legba.data.discovery.static.materialize_static`.
 
-Wave B's L-181 (``country_list_discovery``) and L-182
-(``file_sd_discovery``) will land as new modules under
+Further first-party kinds (``country_list_discovery``,
+``file_sd_discovery``) land as new modules under
 :mod:`legba.data.discovery` exposing ``KIND_NAME`` + a ``DiscoveryKind``
 class. This walker picks them up automatically — no edits to this file
 required for the two reference kinds. The walker is intentionally
@@ -99,7 +99,7 @@ class DiscoveryHandlerBundle:
 
 
 _KIND_MODULE_NAMES: tuple[str, ...] = (
-    # L-181 (Wave B) — first-party discovery kinds register here as they
+    # First-party discovery kinds register here as they
     # land. The walker is defensive about missing modules; this tuple is
     # the *intended* set, not a guarantee.
     "country_list_discovery",
@@ -116,11 +116,11 @@ def discover_discovery_kinds() -> dict[str, DiscoveryHandlerBundle]:
     registry.
 
     The static-target shortcut (:data:`static_mod.STATIC_KIND_NAME`) is
-    always present. First-party kinds (L-181 / L-182) register as they land.
+    always present. First-party kinds register as they land.
 
-    K-3: the "Wave B modules: not yet present is the expected state"
-    exemption is retired — both declared modules have shipped, and the
-    ``logger.info`` skip it left behind would hide a rename indefinitely
+    A declared module that is missing is an error, not an expected state: both
+    declared modules have shipped, and a ``logger.info`` skip would hide a
+    rename indefinitely
     (a discovery kind that vanishes just stops materializing targets, which
     looks like "no new targets found"). A module named in
     :data:`_KIND_MODULE_NAMES` must import and expose the contract.

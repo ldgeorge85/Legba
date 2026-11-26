@@ -8,8 +8,7 @@ recommendation (temperature=1.0) versus the plane's live client-side pin (0.2)
 by REPLAYING captured real inputs through the SAME prompt-assembly code path at
 both temperatures, with the faithfulness judge held fixed (temperature 0.0 is
 HARDCODED inside ``verify._judge_claim_partition`` — both arms share the same
-yardstick by construction). Spec: ``planning/LLM_SAMPLING_AUDIT_2026-07-24.md``
-§5; the replay machinery is the unit_optimizer's paired MEASURE stage
+yardstick by construction). The replay machinery is the unit_optimizer's paired MEASURE stage
 (``runtime/dapr_workflow/gepa.py::_candidate_faithfulness_for_finding``), which
 this script REUSES rather than reimplements:
 
@@ -543,7 +542,7 @@ async def _eval_unit_arm(
     arm: coerce → normalize brackets → extract [N] citations → verify with the
     LLM judge (judge temperature hardcoded 0.0 inside verify).
 
-    ``judge_profile`` (P2-4) selects the judge PROMPT PROFILE on the judge side
+    ``judge_profile`` selects the judge PROMPT PROFILE on the judge side
     (``current`` = the live calibrated prompt, ``independent`` = the staged
     adversarial-reviewer posture) so a future run can A/B judge profiles the
     same way this script A/B'd temperature."""
@@ -985,7 +984,7 @@ def main() -> int:
     p_run.add_argument("--concurrency", type=int, default=3)
     p_run.add_argument("--gen-timeout", type=float, default=900.0)
     p_run.add_argument("--limit", type=int, default=0)
-    # P2-4: the judge-side prompt profile — lets a future run A/B the staged
+    # The judge-side prompt profile — lets a future run A/B the staged
     # independence-posture judge prompt exactly like temperature was A/B'd
     # (run once with current, once with independent, on the same frozen cases;
     # separate --out files; the report step compares). Default = live behavior.

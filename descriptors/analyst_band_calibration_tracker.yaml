@@ -1,11 +1,11 @@
-# band_calibration_tracker — P2-3 scorecard calibration harness (deterministic META).
+# band_calibration_tracker — scorecard calibration harness (deterministic META).
 #
 # A `deterministic`-kind META analyst (sub_handler=band_calibration_tracker)
 # that turns scorecard band CHANGES into RESOLVABLE claims, auto-resolved and
 # scored over time. Each daily tick:
 #
 #   (a) logs new calibration claims from desk×dimension band transitions since
-#       its watermark (the same ladder→ladder transitions P1-3's
+#       its watermark (the same ladder→ladder transitions the
 #       alert_trigger_scan detects — the comparison SHAPE is reused, its
 #       watermarks are NOT). Each claim pins desk / dimension / from→to band /
 #       direction / T0 + a HARD resolution spec into band_calibration_claims
@@ -37,7 +37,7 @@
 
 identity:
   id: band_calibration_tracker
-  name: Scorecard Band-Calibration Tracker (P2-3 harness)
+  name: Scorecard Band-Calibration Tracker
   schema_uri: legba/analyst/1.0.0
   version: "<content-hash stamped at register time>"
   kind: deterministic
@@ -46,7 +46,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: draft
-  owner: p2_3_calibration
+  owner: owner@local
 
 subscription:
   # META analyst: one global sweep per tick over the scorecard band history +

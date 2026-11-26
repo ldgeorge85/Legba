@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Principals — who wrote a row (data-model lane 9, "who writes").
+"""Principals — who wrote a row.
 
-THREE "WHO"s, kept apart (merged recommendation §1.3 #10): who WROTE the row
+THREE "WHO"s, kept apart: who WROTE the row
 (a principal, this module), where the CONTENT came from (an origin and its
 origin group, :mod:`legba.data.origins`), and who is SPEAKING inside it (the
 claimant). This module is only the first.

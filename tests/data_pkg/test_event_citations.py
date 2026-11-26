@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""V3/P2 — the ``event:<uuid>`` citation ref kind (spec §2.5).
+"""The ``event:<uuid>`` citation ref kind.
 
 Covers the contract end to end, DB-free:
 
@@ -464,11 +464,11 @@ async def test_flag_off_default_and_no_expansion(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# THE OFFER meets THE EXPANSION — the grammar round-trip (wave I, p2_offer)
+# THE OFFER meets THE EXPANSION — the grammar round-trip
 # ---------------------------------------------------------------------------
 #
 # Everything above tests the expansion of a token the test itself typed. The
-# live gap P2 left is that nothing in the tree ever RENDERED an event id into a
+# live gap is that nothing in the tree ever RENDERED an event id into a
 # prompt, so no model had ever typed one: 59 receipts after
 # ``LEGBA_EVENT_CITATIONS=1`` all read ``event_citations: 0``. These tests
 # close the loop at the seam — the token is lifted OUT of the rendered OPEN

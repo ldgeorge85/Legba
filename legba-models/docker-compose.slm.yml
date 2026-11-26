@@ -38,7 +38,7 @@ services:
     volumes:
       - /mnt/data/models/hfcache/llama-3.1-8b-instruct-gguf:/models:ro
     ports:
-      # B-1: loopback-only — published model-serving ports must not bypass
+      # Loopback-only — published model-serving ports must not bypass
       # the TLS perimeter. Same-host consumers use 127.0.0.1:8701 or the
       # fastchat docker network (legba-slm:8080); remote consumers go through
       # the TLS reverse proxy.

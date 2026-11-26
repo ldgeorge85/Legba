@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Model and judge seats: the seat provider that calls a model (plan P4 §3,
-lane G-5).
+"""Model and judge seats: the seat provider that calls a model.
 
 :class:`ModelSeats` is a :data:`~.seats.SeatFn` for ``kind: model`` and
 ``kind: judge`` seats. What it guarantees, per attempt:
@@ -50,6 +49,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 import threading
 import time
 import types
@@ -60,22 +60,73 @@ from typing import Any, Literal, Union
 
 from pydantic import BaseModel
 
+from ..grading_text import PASTED_TEXT_IS_DATA
+from ..statement_gate import MIN_QUOTE_WORDS
 from . import judge_render as jr
-from .rows import ROW_TYPES, VERDICT_REASONS
+from .rows import ROW_TYPES, UNQUOTED_FIELDS, VERDICT_REASONS
 from .seats import SeatCall, SeatFailure, SeatReply
 
-#: The row-type notes a contract adds under the shape (what each common
-#: field means to the gates that will check it).
-_CITATION_RULES = (
-    "Every `support` entry cites one row you were handed (or that a tool returned) "
-    "by its exact `ref_id`; `quote` copies at least three consecutive words of that "
-    "row's text exactly as written; `kind` is the row's kind (`signal` for signal "
-    "rows, `observation` for series rows, `row` for another seat's output); `role` "
-    "is `evidence`, `contradicts` or `context`.",
-    "A sentence states one figure at most, and any number or date it states appears "
-    "in the quote it cites.",
-    "Never invent an id. If the rows do not support a sentence, leave it out.",
+_NUMBER_WORDS = {2: "two", 3: "three", 4: "four", 5: "five", 6: "six"}
+
+
+def _words(n: int) -> str:
+    return _NUMBER_WORDS.get(n, str(n))
+
+
+#: The one statement of the sentence rules, sent once by the engine to every
+#: seat whose row type carries sentences (the cards do not repeat it). The
+#: quote minimum is the gate's own number.
+SENTENCE_RULES = (
+    "Sentences about the record. Each cites at least one row by id in `support` and quotes "
+    f"{_words(MIN_QUOTE_WORDS)} or more consecutive words of it, copied exactly. A sentence states "
+    "at most one measured quantity (a count, amount or percentage), copied as written from its "
+    "quote; never compute one. A date must be in the quote or be the cited row's publication day. "
+    "Never put row ids, links or other digits in the sentence text. Keep a party's claim "
+    "attributed to it, and keep the source's hedges (\"reportedly\", \"plans to\"). If the rows "
+    "do not support a point, leave it out; if the gap matters, say what is missing in `notes` "
+    "(no citations, no figures)."
 )
+
+#: Said to every seat whose prompt embeds rows, tool results or other seats'
+#: text: the shared grading text's sentence.
+PASTED_TEXT_NOTE = PASTED_TEXT_IS_DATA
+
+#: One line per field whose meaning the shape alone does not give; printed
+#: only for fields the row type has.
+FIELD_NOTES: dict[str, str] = {
+    "key": "a short label unique in your reply, in order (S1, S2 ... for sentences; Q1, Q2 ... "
+           "for questions)",
+    "stance": "how the sentence bears on the question's proposition: supports it, opposes it, "
+              "neutral, or unsure",
+    "question": "the key of the lead's question this answers, as the lead wrote it (for example Q2)",
+    "role": "`evidence` (the quote states what the sentence says), `contradicts` (the quote cuts "
+            "against the sentence) or `context` (background the sentence does not rest on)",
+    "ref_id": "the exact id of a row you were handed or a tool returned; never invent one",
+    "row_ids": "the exact id of each row you keep, as handed or as a tool returned it; code "
+               "copies the rows in, so never write a row's text",
+    "concede": "true when the rows no longer support your side; conceding is not a loss",
+    "unsure": "true when the rows do not decide it",
+    "dissent": "the best reading you rejected, as sentences under the same rules; leave it empty "
+               "when no credible alternative fits the rows",
+    "would_prove_dissent": "sentences naming what in the rows would show the dissent right",
+    "notes": "what your card asks you to say without a quote (what is missing, what you looked "
+             "for and did not find); item labels such as Q2 or H3 are fine, but no citations, no "
+             "links, no dates and no other figures",
+    "challenges": "challenges to reasoning (a step that does not follow, something left out); "
+                  "`target` names the sentence or position challenged; no quote, no citations, "
+                  "no figures",
+    "if_wrong": "what the position would conclude if this assumption were false",
+    "working_reading": "one line",
+    "probability": "a probability from 0 to 1, only where your card asks for one",
+}
+
+#: Fields a row type does not show its seats (the seat must not set them).
+HIDDEN_FIELDS: dict[str, frozenset[str]] = {
+    # a ruling weighs rows; it never sets a probability
+    "ruling/1": frozenset({"probability"}),
+    # a context builder names rows by id; code fills the rows in
+    "context_pack/1": frozenset({"rows"}),
+}
 
 
 #: Said to a seat after its last tool round (the next call offers no tools).
@@ -88,26 +139,29 @@ FINAL_ROUND_NOTE = ("The tool rounds are over; no more tool calls will run. Repl
 # ---------------------------------------------------------------------------
 
 
-def _shape(tp: Any, depth: int = 0) -> Any:
+def _shape(tp: Any, depth: int = 0, hide: frozenset[str] = frozenset()) -> Any:
     origin = typing.get_origin(tp)
     args = typing.get_args(tp)
+    if origin is typing.Annotated:
+        return _shape(args[0], depth, hide)
     if origin is Literal:
         return " | ".join(json.dumps(a) for a in args)
     if origin in (Union, types.UnionType):
         inner = [a for a in args if a is not type(None)]
-        shaped = _shape(inner[0], depth) if len(inner) == 1 else " | ".join(
-            str(_shape(a, depth)) for a in inner)
+        shaped = _shape(inner[0], depth, hide) if len(inner) == 1 else " | ".join(
+            str(_shape(a, depth, hide)) for a in inner)
         return shaped if len(inner) == 1 and not isinstance(shaped, str) else f"{shaped} (optional)"
     if origin in (tuple, list):
         item = args[0] if args else Any
-        return [_shape(item, depth + 1)]
+        return [_shape(item, depth + 1, hide)]
     if origin is dict:
         val = args[1] if len(args) > 1 else Any
-        return {"<key>": _shape(val, depth + 1)}
+        return {"<key>": _shape(val, depth + 1, hide)}
     if isinstance(tp, type) and issubclass(tp, BaseModel):
-        if depth > 4:
+        if depth > 6:
             return "{…}"
-        return {name: _shape(f.annotation, depth + 1) for name, f in tp.model_fields.items()}
+        return {name: _shape(f.annotation, depth + 1, hide) for name, f in tp.model_fields.items()
+                if name not in hide}
     if tp is str:
         return "string"
     if tp is bool:
@@ -139,30 +193,63 @@ def _closed_fields(model: Any, out: dict[str, list[str]] | None = None,
     return out
 
 
+def _field_names(shape: Any, out: set[str] | None = None) -> set[str]:
+    """Every field name at any depth of a rendered shape."""
+    out = set() if out is None else out
+    if isinstance(shape, dict):
+        for k, v in shape.items():
+            out.add(k)
+            _field_names(v, out)
+    elif isinstance(shape, list):
+        for v in shape:
+            _field_names(v, out)
+    return out
+
+
+def _has_sentences(shape: Any) -> bool:
+    """True when the shape carries sentence-like items (a ``text`` with a ``support`` list)."""
+    if isinstance(shape, dict):
+        if "text" in shape and "support" in shape:
+            return True
+        return any(_has_sentences(v) for v in shape.values())
+    if isinstance(shape, list):
+        return any(_has_sentences(v) for v in shape)
+    return False
+
+
 def output_contract(row_type: str) -> str:
     """The row type's shape, as a JSON-like skeleton, and the rules the gates
     apply. Pure: depends on the row type only."""
     model = ROW_TYPES.get(row_type)
     if model is None:
         raise SeatFailure(f"row type {row_type!r} is not registered")
+    hide = HIDDEN_FIELDS.get(row_type, frozenset())
+    shape = _shape(model, hide=hide)
     required = sorted(n for n, f in model.model_fields.items() if f.is_required())
     lines = [
         f"## Output: `{row_type}`",
         "Reply with ONE JSON object of this shape and nothing else — no prose before or "
-        "after it, no markdown fence around it. Fields not shown are not allowed. The shape "
-        "says what TYPE each field takes; do not copy its words as values, and leave out an "
-        "optional field you have nothing for.",
+        "after it, no markdown fence around it. Use only the fields shown. Optional fields may "
+        "be left out. The shape says what TYPE each field takes; do not copy its words as values.",
         "```json",
-        json.dumps(_shape(model), indent=1, ensure_ascii=False),
+        json.dumps(shape, indent=1, ensure_ascii=False),
         "```",
         f"Required: {', '.join(required) if required else '(none)'}.",
     ]
-    closed = _closed_fields(model)
+    closed = {k: v for k, v in _closed_fields(model).items() if k not in hide}
     if closed:
         lines.append("Fields with a closed list take exactly one of its values, spelled as shown: "
                      + "; ".join(f"`{k}`: {', '.join(v)}" for k, v in closed.items()) + ".")
-    if "support" in json.dumps(_shape(model)):
-        lines.extend(f"- {r}" for r in _CITATION_RULES)
+    names = _field_names(shape)
+    notes = [f"`{k}`: {v}" for k, v in FIELD_NOTES.items() if k in names]
+    if notes:
+        lines.append("What the fields mean:")
+        lines.extend(f"- {n}" for n in notes)
+    if "support" in names and _has_sentences(shape):
+        lines += ["", SENTENCE_RULES]
+    unquoted = UNQUOTED_FIELDS.get(row_type)
+    if unquoted:
+        lines.append("Written without a quote: " + ", ".join(f"`{f}`" for f in unquoted) + ".")
     if row_type == "verdict/1":
         lines.append(f"- `reason` is one of: {', '.join(VERDICT_REASONS)}. Give one verdict "
                      "per candidate you were asked to rule on, by its exact candidate id.")
@@ -178,21 +265,41 @@ def _json(obj: Any) -> str:
     return json.dumps(obj, ensure_ascii=False, indent=1, sort_keys=True, default=str)
 
 
+def card_body(text: str) -> str:
+    """The part of a card a model reads. A note for the people who maintain
+    the card — an HTML comment anywhere, or a block quote right under the
+    title — is dropped."""
+    body = re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL).strip()
+    lines = body.splitlines()
+    head = 1 if lines and lines[0].startswith("# ") else 0
+    i = head
+    while i < len(lines) and not lines[i].strip():
+        i += 1
+    if i < len(lines) and lines[i].lstrip().startswith(">"):
+        while i < len(lines) and lines[i].lstrip().startswith(">"):
+            i += 1
+        while i < len(lines) and not lines[i].strip():
+            i += 1
+        lines = lines[:head] + ([""] if head else []) + lines[i:]
+    return "\n".join(lines).strip()
+
+
 def render_prompt(call: SeatCall, *, tool_names: Sequence[str] = ()) -> tuple[str, str]:
     """``(system, user)`` for one seat call, from the call alone."""
     if not call.card_text:
         raise SeatFailure(f"seat {call.seat_id!r} has no card text to render")
-    system = [call.card_text.strip(), "", output_contract(call.row_type)]
+    system = [card_body(call.card_text), "", output_contract(call.row_type)]
     if tool_names:
         system += ["", "## Tools",
                    "You may call the read tools offered (" + ", ".join(tool_names) + ") to read "
                    "the record as it stood at the as-of time. Rows a tool returns may be cited "
                    "by their id exactly like handed rows. Call tools first; then reply with the "
                    "JSON object only."]
+    system += ["", PASTED_TEXT_NOTE]
     user = ["# What you were handed"]
     for h in call.inputs:
         if h.read.startswith(("input.", "item.")) or h.ref_id.startswith(("input.", "item.")):
-            user.append(f"\n## {h.ref_id.split('.', 1)[-1]}\n{_json(h.payload)}")
+            user.append(f"\n## {h.ref_id.split('.', 1)[-1]}\n```json\n{_json(h.payload)}\n```")
             continue
         if h.absent:
             user.append(f"\n## {h.read} — absent ({h.absent})")
@@ -200,7 +307,7 @@ def render_prompt(call: SeatCall, *, tool_names: Sequence[str] = ()) -> tuple[st
         head = f"\n## {h.read} (from {h.seat or 'the round'}; row type {h.row_type}; id {h.ref_id})"
         user.append(f"{head}\n```json\n{_json(h.payload)}\n```")
     if call.item is not None:
-        user.append(f"\n## The item you work on\n{_json(call.item)}")
+        user.append(f"\n## The item you work on\n```json\n{_json(call.item)}\n```")
     if call.candidate is not None:
         user.append(f"\n## The candidate you rule on\n{call.candidate}")
     if call.candidates:
@@ -222,6 +329,10 @@ def render_repair(note: Mapping[str, Any]) -> str:
         lines.append(f"It could not be read: {note.get('error')}")
         lines.append("Reply with the ONE JSON object only, every field as the output shape says, "
                      "every closed-list field spelled exactly as listed.")
+        # Show the reply that could not be read, as the gates branch does, so
+        # the retry corrects that reply instead of writing a new one blind.
+        if note.get("raw_head"):
+            lines += ["Your refused reply began:", "```", str(note["raw_head"]), "```"]
         return "\n".join(lines)
     lines.append("The code gates refused these sentences. Fix each one so it passes — quote the "
                  "figure or date from the row, or drop the figure, or drop the sentence — and keep "
@@ -441,7 +552,7 @@ class ModelSeats:
                 + tr.tool_result_messages(wire, got, results)
             if rnd + 1 >= self.max_tool_rounds:
                 # the next call offers no tools: a seat that still tries one
-                # returns nothing readable (lane G-6 runs) — say so
+                # returns nothing readable — say so
                 messages.append({"role": "user", "content": FINAL_ROUND_NOTE})
         content = tr.visible_text(response)
         meta: dict[str, Any] = {

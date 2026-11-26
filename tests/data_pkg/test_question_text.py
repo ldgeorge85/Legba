@@ -3,7 +3,7 @@
 """CW-3 — the deictic detector and the referent inliner.
 
 Every string in the FIRES / DOES-NOT-FIRE tables below is a VERBATIM thesis
-from ``planning/K4_R3_WORKSHEET_LABELED.csv`` with its measured label, so this
+from a labeled worksheet with its measured label, so this
 file is the detector's regression suite AND its evidence. Measured over the
 120 labeled rows the detector fires on 12 — of which **0** were correct
 matches — and on none of the 48 correct matches.

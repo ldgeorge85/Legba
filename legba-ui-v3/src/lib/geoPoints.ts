@@ -255,7 +255,7 @@ export function buildEntityGeoPoints(entities: GeoEntity[]): EntityGeoPoint[] {
 }
 
 // ---------------------------------------------------------------------------
-// Read-scoped geo lens (P1-T7) — place a `/signals` row's evidence on the map.
+// Read-scoped geo lens — place a `/signals` row's evidence on the map.
 // ---------------------------------------------------------------------------
 
 /** A `/signals` row as the read-lens consumes it — the subset we geo-place. The

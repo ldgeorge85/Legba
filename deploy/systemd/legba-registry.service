@@ -1,8 +1,7 @@
-# NOTE (2026-05-23): This unit is retained as an ALTERNATIVE bring-up
+# NOTE: This unit is retained as an ALTERNATIVE bring-up
 # path. The canonical bring-up is now container-mode via
-# `docker compose --profile runtime up -d` (see docs/RUNBOOK.md §2 +
-# §13). Use this systemd unit only when docker daemon access for the
-# legba app images is unavailable on the host.
+# `docker compose --profile runtime up -d` (see docs/RUNBOOK.md). Use this systemd unit only when docker
+# daemon access for the legba app images is unavailable on the host.
 
 [Unit]
 Description=Legba Registry API (host-mode fallback; canonical bring-up is `docker compose --profile runtime up -d`)

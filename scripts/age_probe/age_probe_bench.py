@@ -1,18 +1,17 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""K-G3 · The measured AGE probe — load, then benchmark, against a SCRATCH instance.
+"""The measured AGE probe — load, then benchmark, against a SCRATCH instance.
 
 Every measurement has a **relational twin**: the same synthetic world graph is
 loaded twice into the same Postgres instance — once as an Apache-AGE graph
-(id-keyed vertices, per A_age_commit.md §3.1's design: the vertex business key
-is the entity uuid, never a name) and once as an ``entity_edges``-shaped
-relational table with the indexes JUDGE_SYNTHESIS §4.1 specifies. Three
+(id-keyed vertices: the vertex business key is the entity uuid, never a name)
+and once as an ``entity_edges``-shaped relational table with the usual indexes. Three
 executors answer the same questions:
 
 * ``age``   — Cypher through ``ag_catalog.cypher()``, the production idiom
 * ``sql``   — a recursive CTE / self-join over the relational twin
 * ``nx``    — an in-process ``networkx`` snapshot of the relational twin
-              (this is also the gauge for pre-registered trigger **E4**)
+              (this is also the in-process gauge)
 
 Question shapes, chosen to match what Legba actually asks:
 
@@ -82,7 +81,7 @@ CREATE TABLE {NODES_T} (
 );
 CREATE INDEX idx_probe_nodes_class ON {NODES_T} (entity_class);
 
--- Shape per JUDGE_SYNTHESIS §4.1 "The DDL, reconciled" (0143_entity_edges.sql),
+-- Shape per the reconciled DDL (0143_entity_edges.sql),
 -- trimmed to the columns a traversal plan can see.
 CREATE TABLE {EDGES_T} (
     id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -165,7 +164,7 @@ async def cmd_load(dsn: str, data_dir: Path) -> None:
             f"SELECT ag_catalog._label_id('{GRAPH}'::name, 'Entity'::name)"
         )
         # Vertices: business key is the entity uuid in properties.id — the
-        # id-keyed contract A's §3.1 requires and the readers already assume.
+        # id-keyed contract the readers already assume.
         await conn.execute(
             f"""INSERT INTO {GRAPH}."Entity" (id, properties)
                 SELECT ag_catalog._graphid({vlabel_id}, n.idx + 1),
@@ -315,7 +314,7 @@ def age_ego(uuid_: str, k: int) -> str:
     dropping the twin's temporal filter reproduces AGE's number exactly.
 
     The asymmetry is recorded rather than corrected because the inability to
-    correct it IS the finding — see docs/AGE_PROBE_REPORT.md §3.6.
+    correct it IS the finding.
     """
     return (
         f"""SELECT * FROM cypher('{GRAPH}',

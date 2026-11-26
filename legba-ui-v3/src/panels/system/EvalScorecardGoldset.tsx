@@ -133,7 +133,7 @@ export function ExternalTruth({ truth }: { truth: ExternalTruthBoard | null | un
           finding. Three rules are structural here and none of them is a
           preference:
 
-          - The headline is a PAIR (F-12). The record is the DESKS' sentences,
+          - The headline is a PAIR. The record is the DESKS' sentences,
             quoted verbatim under the assembly; the voice is the Assessment's own.
             They are rendered side by side and never summed.
           - `instrument_limited` renders as a SENTENCE, not a number with a flag.

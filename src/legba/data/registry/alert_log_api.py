@@ -210,7 +210,7 @@ _PAGED_SQL = """
 #: only, never the engine's own health (source stalls, host disk, nightly).
 NEEDS_YOU_READER_TOPIC = "world"
 
-#: Open episodes that PAGED (roll 84, the owner: "needs you" is paged-only —
+#: Open episodes that PAGED ("needs you" is paged-only —
 #: an episode that only sits at medium or above without paging is on the
 #: Watch page's alert log, not here), which OPENED or PAGED after the cursor
 #: ($1). ``$2`` = the kinds the caller may see (NULL =

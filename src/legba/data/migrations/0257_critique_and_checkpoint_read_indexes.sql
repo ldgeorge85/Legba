@@ -3,9 +3,9 @@
 --
 -- 0257_critique_and_checkpoint_read_indexes.sql
 --
--- Three read indexes (lane P-5, the console's remaining slow reads). Each was
+-- Three read indexes (the console's remaining slow reads). Each was
 -- measured before/after with EXPLAIN (ANALYZE, BUFFERS) on a copy of the live
--- analyst_outputs / audit_checkpoints rows (2026-11-14: 200,566 outputs of
+-- analyst_outputs / audit_checkpoints rows (200,566 outputs of
 -- which 87,811 critiques with their real documents; 293,435 checkpoints); the
 -- "before" plans are the live ones.
 --

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { MODALITY_RENDERERS, resolveModalityRenderer } from './modalityRenderers'
 
-describe('modality renderer registry (DESIGN §7.5, UI half)', () => {
+describe('modality renderer registry', () => {
   it('resolves most-specific-first: mime_type > modality > default', () => {
     // exact mime entry wins over the coarse modality
     expect(resolveModalityRenderer('structured', 'application/geo+json').label).toBe('geo+json')

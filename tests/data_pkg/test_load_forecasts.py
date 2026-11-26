@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""ST0-B — ``scripts/load_forecasts.py``: dry run, load, idempotent re-run,
+"""``scripts/load_forecasts.py``: dry run, load, idempotent re-run,
 and the separate ``--seal`` step that seals every question or none.
 
 Fakes only: the store fake answers the store's own SQL

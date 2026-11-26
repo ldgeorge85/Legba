@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Anthropic ``max_tokens`` and the context window (roll 87).
+"""Anthropic ``max_tokens`` and the context window.
 
 The Messages API requires ``max_tokens`` and rejects a request whose input
-plus ``max_tokens`` exceeds the context window. Roll 86's follow-up sends the
+plus ``max_tokens`` exceeds the context window. The handler sends the
 model's maximum (128,000) on every call, so a large prompt would be rejected
 outright. The handler now sends the model's maximum unless the counted input
 leaves less room in the window; then the largest value the window allows, and

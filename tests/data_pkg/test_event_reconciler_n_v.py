@@ -166,7 +166,7 @@ async def test_a_live_sized_pass_never_blocks_the_event_loop(monkeypatch) -> Non
             gaps.append(now - last)
             last = now
 
-    # Roll 86: in the ordered suite the one long gap was a generation-2 GC
+    # In the ordered suite the one long gap was a generation-2 GC
     # pass over the pytest SESSION's heap (~6,900 earlier tests: 0.52 s in one
     # collection, every gen-1 pass ~6 ms), not the reconciler — measured with
     # gc.callbacks. Freezing what exists before the pass moves the session's

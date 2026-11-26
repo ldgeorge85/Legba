@@ -4,7 +4,7 @@
 -- 0056_prune_dangling_derived_from_v2.sql
 --
 -- D23 (v2) — re-prune dangling `analyst_outputs.derived_from` edges so the
--- lineage walk resolves every node (P0-T5).
+-- lineage walk resolves every node.
 --
 -- WHY a v2:
 --   0051 pruned the historical dangling backlog once. But `derived_from`
@@ -13,7 +13,7 @@
 --   producer that writes a non-lineage id (the D10 class) re-seeds dead
 --   pointers. The integrity_sweep `dangling_analyst_output_derived_from` audit
 --   (C5) counts them and now surfaces a capped SAMPLE; the lineage walker
---   (P0-T4) still can't resolve them. A fresh sweep after THIS migration must
+-- still can't resolve them. A fresh sweep after THIS migration must
 --   report 0 dangling so every lineage-walk node resolves to a real row — that
 --   is the P0-T5 acceptance. This migration is the safe, classifier-routed bulk
 --   repair (a raw mass-update trips the safety classifier; the migration runner

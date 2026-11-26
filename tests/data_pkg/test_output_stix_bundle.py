@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for L-195 — `legba.data.outputs.stix_bundle`.
+"""Unit tests for `legba.data.outputs.stix_bundle`.
 
 Pure-python unit tests — no external services. The kind itself is a
 side-effect-free serialiser (with an optional NATS publish + optional

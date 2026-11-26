@@ -63,7 +63,7 @@ LEVEL_INDICATOR_OPTIONS: tuple[OptionSpec, ...] = (
     OptionSpec(
         LEVEL_INDICATORS_OPTION,
         "str_list",
-        "The unit's LEVEL-shaped indicators (W11-F36): one "
+        "The unit's LEVEL-shaped indicators: one "
         "'<indicator-id>=bar:<text>' or '<indicator-id>=series:<series-id>"
         "[ <text>]' per indicator, naming what the level is measured against. "
         "A declared id is stamped shape 'level' with its reference, reads "

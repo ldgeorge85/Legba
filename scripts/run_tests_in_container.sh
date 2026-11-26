@@ -15,7 +15,7 @@
 #   match the bind-mounted host path (the matching `-v`/`-w` mount keeps
 #   REPO_ROOT identical inside and out).
 #
-# THE TEST STACK (X1-A4, 2026-10-08) — ISOLATED BY DEFAULT:
+# THE TEST STACK (2026-10-08) — ISOLATED BY DEFAULT:
 #   The container joins the network namespace of deploy/compose.test.yml's
 #   `pg` service (`--network container:legba-test-pg-1`). In that namespace
 #   127.0.0.1:5432 / :4222 / :6379 / :6333 / :5544 / :3500 are the TEST
@@ -79,7 +79,7 @@ TEST_IMAGE="legba/legba-test:latest"
 #   pytest-asyncio  -- asyncio_mode=auto in pyproject.
 #   pytest-randomly -- the nightly's second, SHUFFLED pass (R7). Ordered runs
 #                      must therefore pass `-p no:randomly` to stay ordered.
-#                      PINNED (W11-F119) to the host's release: the module
+#                      PINNED to the host's release: the module
 #                      order a seed produces is the plugin's own (5.x sorts
 #                      modules by a hash of seed + module name), so a host
 #                      replay of a nightly seed reproduces the nightly's order

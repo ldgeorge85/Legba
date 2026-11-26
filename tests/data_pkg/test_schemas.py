@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for the vendored L-101 pydantic schemas."""
+"""Unit tests for the vendored pydantic schemas."""
 
 from __future__ import annotations
 
@@ -146,7 +146,7 @@ def _draft_target_identity(target_id: str = "india_energy") -> TargetIdentity:
         version="abcd1234ef567890abcd1234ef567890",
         abstraction_level=AbstractionLevel.L1,
         state=LifecycleState.DRAFT,
-        owner="lewis@local",
+        owner="owner@local",
         created=_FIXED_CREATED,
     )
 
@@ -206,7 +206,7 @@ def _draft_analyst(kind: AnalystKind = AnalystKind.INLINE_TARGET) -> AnalystDesc
                 input_type="legba.x.In",
                 output_type="legba.x.Out",
             ),
-            owner="lewis@local",
+            owner="owner@local",
         ),
         subscription=SubscriptionBlock(),
         method=MethodBlock(kind="llm_planner", prompt_module="legba.prompts.x"),
@@ -237,7 +237,7 @@ def test_analyst_critic_requires_llm_method():
                     input_type="x.In",
                     output_type="x.Out",
                 ),
-                owner="lewis@local",
+                owner="owner@local",
             ),
             subscription=SubscriptionBlock(),
             method=MethodBlock(kind="deterministic", impl="legba.det.run"),
@@ -251,7 +251,7 @@ def test_method_block_requires_prompt_for_llm():
 
 
 # ---------------------------------------------------------------------------
-# Wave B prereq: extended MethodBlock.kind Literal set
+# Extended MethodBlock.kind Literal set
 # ---------------------------------------------------------------------------
 
 
@@ -275,7 +275,7 @@ def test_method_block_stat_forecaster_does_not_require_prompt_module():
 
 
 def test_method_block_critic_requires_prompt_module():
-    """``critic`` (L-175) is LLM-bearing — prompt_module required."""
+    """``critic`` is LLM-bearing — prompt_module required."""
     with pytest.raises(ValueError, match="requires prompt_module"):
         MethodBlock(kind="critic")
     m = MethodBlock(kind="critic", prompt_module="legba.prompts.critic.v1")
@@ -283,7 +283,7 @@ def test_method_block_critic_requires_prompt_module():
 
 
 def test_method_block_dspy_compile_does_not_require_prompt_module():
-    """``dspy_compile`` (L-176 optimizer) operates over OTHER kinds' modules.
+    """``dspy_compile`` (optimizer) operates over OTHER kinds' modules.
 
     It carries no prompt_module of its own at the MethodBlock level — the
     optimizer's per-trial prompts live in the candidate dspy.Module being
@@ -300,7 +300,7 @@ def test_method_block_unknown_kind_rejected():
 
 
 def test_analyst_critic_accepts_critic_method_kind():
-    """The L-175 critic kind can declare ``method.kind = 'critic'`` directly."""
+    """The critic kind can declare ``method.kind = 'critic'`` directly."""
     a = AnalystDescriptor(
         identity=AnalystIdentity(
             id="critic_a",
@@ -312,7 +312,7 @@ def test_analyst_critic_accepts_critic_method_kind():
                 input_type="x.In",
                 output_type="x.Out",
             ),
-            owner="lewis@local",
+            owner="owner@local",
         ),
         subscription=SubscriptionBlock(),
         method=MethodBlock(kind="critic", prompt_module="legba.prompts.critic.v1"),
@@ -396,7 +396,7 @@ def test_vocabulary_registry_values():
 
 
 # ---------------------------------------------------------------------------
-# AnalystKind open taxonomy (L-241)
+# AnalystKind open taxonomy
 # ---------------------------------------------------------------------------
 
 
@@ -409,9 +409,9 @@ from legba.data.schemas import (  # noqa: E402  — late import, lines above kee
 
 
 def test_analystkind_enum_has_ten_builtins():
-    """L-241: built-in kinds, including consult_on_demand + the PIECE 4
-    deep_consult submit kind (anchor §5) + the PIECE A relationship_reifier
-    (the reified-typed-Nexus producer) + the PIECE C competing_hypotheses
+    """Built-in kinds, including consult_on_demand + the PIECE 4
+    deep_consult submit kind (anchor §5) + the relationship_reifier
+    (the reified-typed-Nexus producer) + the competing_hypotheses
     (the ACH meta-analyst)."""
     values = {k.value for k in AnalystKind}
     assert values == {
@@ -456,7 +456,7 @@ def test_analyst_kind_unknown_string_rejected():
                 type_signature=TypeSignature(
                     input_type="x.In", output_type="x.Out",
                 ),
-                owner="lewis@local",
+                owner="owner@local",
             )
     finally:
         ANALYST_KIND_REGISTRY.replace_extensions(snapshot)
@@ -475,7 +475,7 @@ def test_analyst_kind_extension_register_then_validates():
             version="a" * 32,
             kind="anomaly_explainer",
             type_signature=TypeSignature(input_type="x.In", output_type="x.Out"),
-            owner="lewis@local",
+            owner="owner@local",
         )
         assert ident.kind == "anomaly_explainer"
     finally:
@@ -608,7 +608,7 @@ def test_warn_on_dead_options_skips_when_catalog_unimportable(monkeypatch):
             type_signature=TypeSignature(
                 input_type="legba.x.In", output_type="legba.x.Out",
             ),
-            owner="lewis@local",
+            owner="owner@local",
         ),
         subscription=SubscriptionBlock(),
         method=MethodBlock(

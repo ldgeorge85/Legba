@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W4 F-3 — ARM 4(c), FLOOR DISCLOSURE (``assembly_floor_arm.floor_disclosure``).
+"""ARM 4(c), FLOOR DISCLOSURE (``assembly_floor_arm.floor_disclosure``).
 
   * each of F1-F4 fires ALONE on a payload tampered in exactly that identity;
   * however many identities break, the read is charged ONE finding

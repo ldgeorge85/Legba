@@ -1,15 +1,15 @@
-# S2-T2 — per-REGION composition over the verified per-COUNTRY reads.
+# Per-REGION composition over the verified per-COUNTRY reads.
 #
 # The 4th composition floor of the tower, BETWEEN the per-country reads and the
 # world read:
 #
 #     unit sub-claim  →  country read  →  REGION read  →  world read
 #
-# A second-order finding per REGION FRAME (mena / europe / … — the five S2-T1
+# A second-order finding per REGION FRAME (mena / europe / … — the five
 # region frames) that reads the verified country_composition HEADS for THAT
 # region's member country desks and synthesizes ONE per-region read. It reuses
 # the EXISTING meta_findings_synthesizer kind (Approach A: CONFIGURE, no new
-# Python kind); the region behavior is descriptor + the S2-T2 READ_SLICE region
+# Python kind); the region behavior is descriptor + the READ_SLICE region
 # branch.
 #
 # ── why this is per-region (a `subscription.targets` block) ─────────────────
@@ -42,7 +42,7 @@
 # finding ids, so the per-region lineage back-walks one hop to the country reads,
 # two hops to the P2 units, three to their cited signals.
 #
-# ── supersession (per S8-T3) ────────────────────────────────────────────────
+# ── supersession ────────────────────────────────────────────────
 # Each region run WRITES its finding with `target_id=region_<slug>` (the actor
 # stamps it from `target_filter`), so the shared composition-supersession machinery
 # keys per-(analyst_id, target_id): a fresh `region_mena` head supersedes the prior
@@ -68,11 +68,11 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: active
-  owner: s2_t2
+  owner: owner@local
 
 subscription:
   # PRESENT `targets` block ⇒ per-REGION analyst. `_cadence_targets` matches the
-  # `region` tag (the five S2-T1 region frames) and fires ONE worker per frame
+  # `region` tag (the five region frames) and fires ONE worker per frame
   # with `target_filter=region_<slug>`. has_tag is valid on the analyst.subscription
   # surface. The member country desks carry the SPECIFIC `region_<slug>` tag (not
   # the common `region` tag), so this selector matches ONLY the frames, never a
@@ -85,7 +85,7 @@ subscription:
   # resolves this set from other_analysts[].id and — because the run is a REGION
   # frame — restricts to the region's MEMBER-country country_composition heads,
   # verify-floored.
-  # FRAME-1 (2026-08-20, ratified): the window on these SOURCES is an
+  # The window on these SOURCES is an
   # ADMISSIBILITY HORIZON, not a freshness cliff. 24h was a wall-clock gate over
   # an 11h-cooldown cadence that HOLDS on a quiet desk: on 2026-08-20 the BF
   # units had last fired 42h earlier, the trailing-24h slice was mechanically
@@ -114,16 +114,16 @@ method:
     # Model-card sampling (fleet-wide 1.0 per the 2026-07-24 audit + A/B). Honored by
     # the meta kind since the W-3 deps-builder fix (descriptor-else-kind-default).
     temperature: 1.0
-    # MODEL POLICY (operator): synthesis on the CORE plane gpt-oss-120B via a
+    # MODEL POLICY (operator): synthesis on the CORE plane model via a
     # stack_ref ($0). NEVER hardcode a model — keeping it a stack_ref makes
     # switching to Opus later a one-line descriptor PUT.
     primary:
       factory_kind: stack_ref
       raw: llm.primary.openai_compat
       expected_family: llm_provider
-    # S2-T2: faithfulness VERIFY judge over the REGION composition itself.
+    # Faithfulness VERIFY judge over the REGION composition itself.
     # Currently the SAME core reasoning model (llm.primary.openai_compat,
-    # gpt-oss-120B) that writes the units + the per-country + world compositions —
+    # the core model) that writes the units + the per-country + world compositions —
     # NOT a cross-family judge (same TEMPORARY limitation the country/world
     # compositions carry; a dedicated reasoning judge is planned). This verify
     # block's PRESENCE (not target_id) is the OPT-IN the dispatch keys on. The
@@ -136,7 +136,6 @@ method:
       factory_kind: stack_ref
       raw: llm.primary.openai_compat
       expected_family: llm_provider
-    max_tokens: 768            # the kind's DEFAULT_MAX_TOKENS (narrower context)
   budget_tokens_per_day: 0
   retry:
     budget:

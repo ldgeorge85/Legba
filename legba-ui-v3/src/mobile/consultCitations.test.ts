@@ -9,7 +9,7 @@ const refs = [
   { kind: 'finding', id: B },
 ]
 
-describe('consultAnswerCitations (M-0a)', () => {
+describe('consultAnswerCitations', () => {
   it('binds every bracketed row reference that names exactly one cited ref, in order of first use', () => {
     const r = consultAnswerCitations(`x [${B}] y [a1b2c3d4] z [b2c3d4e5]`, refs)
     expect(r.text).toBe('x [[ref:1]] y [[ref:2]] z [[ref:1]]')

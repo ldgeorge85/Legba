@@ -3,7 +3,7 @@
 """Shared PROGRAM_FLAG pin table for flags exercised from BOTH
 ``tests/data_pkg`` and ``tests/runtime``.
 
-``planning/TEST_ENV_ISOLATION_REPORT.md`` (2026-09-06) pinned
+An earlier isolation pass pinned
 ``tests/data_pkg/conftest.py``'s ``_PROGRAM_FLAG_DEFAULTS`` to the shipped
 default for every LEGBA_* program flag the live ``.env`` leaks into the test
 process (see that module's docstring for the mechanism — candidate 3 of

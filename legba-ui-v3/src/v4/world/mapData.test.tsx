@@ -111,7 +111,7 @@ describe("signals — the window time is the publisher's, not the fetch", () => 
     expect(Number.isNaN(two.ts)).toBe(true)
   })
 
-  it('reads the light weight by name and places a row at its data.geo point (roll 86 audit)', async () => {
+  it('reads the light weight by name and places a row at its data.geo point', async () => {
     const { result } = renderHook(() => useWorldSignals(), { wrapper })
     await waitFor(() => expect(result.current.read).toBe(true))
     const urls = (fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((c) => String(c[0]))
@@ -122,7 +122,7 @@ describe("signals — the window time is the publisher's, not the fetch", () => 
   })
 })
 
-describe('events — the light row by name (roll 87: the Watch page over its 2 MB budget)', () => {
+describe('events — the light row by name (the Watch page over its 2 MB budget)', () => {
   it('asks fields=summary and places an event from the light row alone', async () => {
     // exactly the light row's columns (registry/event_list_weight.py EventSummaryRow)
     const light = {

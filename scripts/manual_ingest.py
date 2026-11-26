@@ -95,7 +95,7 @@ def main() -> int:
         "--batch",
         required=True,
         metavar="DIR",
-        help="path to the manual-ingest batch directory (batch_manifest.yaml + lane JSONLs)",
+        help="path to the manual-ingest batch directory (batch_manifest.yaml + per-lane JSONL files)",
     )
     parser.add_argument(
         "--mode",

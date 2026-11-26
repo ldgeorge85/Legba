@@ -5,22 +5,22 @@
 #   1. BLOCKS candidate merge pairs over entity_profiles (E3, Postgres-native:
 #      exact block-key + trigram, banded auto_merge/gray, hard-negatives),
 #   2. ADJUDICATES the gray band via the LLM provider plane (the $0 core plane,
-#      gpt-oss-120b — same/not_same/unsure + justification; NEVER Anthropic),
+#      the core model — same/not_same/unsure + justification; NEVER Anthropic),
 #      recording each verdict in entity_judgement (audit + re-adjudication cache),
 #   3. EXECUTES merges (tombstone + redirect via merged_into, folding the loser
 #      surface into the keeper's aliases) for confident 'same' verdicts + the
-#      deterministic auto_merge band — REVERSIBLE, ledgered (MP:DEC-B).
+#      deterministic auto_merge band — REVERSIBLE, ledgered.
 #
 # merge_mode gates the ONLY mutating behavior. It is now 'apply' (LIVE MERGES),
-# flipped 2026-07-12 after the E5 compaction gate + a clean dry-run (32 auto +
-# 37 LLM-'same', all correct) + the E1 write-path proof. 'adjudicate_only' is a
+# flipped after the compaction gate, a clean dry-run (32 auto +
+# 37 LLM-'same', all correct) and a write-path proof. 'adjudicate_only' is a
 # full dry-run (adjudicates + reports, mutates nothing) to revert to if needed.
 # The per-run summary is a cadence receipt (TRACE_ONLY, in analyst_traces.
 # output_payload); the tombstone+redirect merges are the real product, drained
-# by entity_gc's compaction sweep (E5) which re-points the graph edges.
+# by entity_gc's compaction sweep which re-points the graph edges.
 #
-# Also runs the E6c reclassify pass (LLM-corrects a mis-typed 'person' row into
-# its true class) and, since #219 (2026-07-23, SHIPPED OFF), the SAME pass over
+# Also runs the reclassify pass (LLM-corrects a mis-typed 'person' row into
+# its true class) and, since a later change (SHIPPED OFF), the SAME pass over
 # the generic 'entity' bucket — the two share reclassify_max (split, not added
 # to); see reclass_entity_share below.
 
@@ -35,7 +35,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: active
-  owner: phase_e_entity_program
+  owner: owner@local
 
 subscription:
   # No `targets` block => META analyst (single global sweep; _cadence_targets
@@ -72,7 +72,6 @@ method:
       factory_kind: stack_ref
       raw: llm.primary.openai_compat
       expected_family: llm_provider
-    max_tokens: 1400           # one batched verdict array per ~10 pairs
     temperature: 1.0           # deterministic adjudication
     # --- kind-specific options (read by _build_entity_researcher) ------------
     merge_mode: apply             # LIVE MERGES (flipped 2026-07-12 after E5 gate + clean dry-run + E1 proof)
@@ -84,7 +83,7 @@ method:
                                   # Raise it (a PUT, no rebuild) to drain the
                                   # collision backlog faster — the cost is ~1 LLM
                                   # batch per 10 extra gray pairs.
-    # R-tail (2026-08-04) — VERDICT: BIND. Values stay 0/0 here because the
+    # VERDICT: BIND. Values stay 0/0 here because the
     # flip is an OPERATOR gate, not a code change; the evidence is recorded so
     # the flip is one edit away rather than another investigation.
     #
@@ -140,11 +139,11 @@ method:
                                   # it if a run gets slow, lower to buy recall.
     same_min_confidence: 0.75     # a 'same' verdict below this is not merged
     batch_size: 10                # pairs per LLM adjudication call
-    # --- E6c reclassify pass (the person-skew fix) --------------------------
+    # --- reclassify pass (the person-skew fix) --------------------------
     reclassify_max: 150           # suspect person-rows LLM-reclassified per tick.
-                                  # LIVE at 150 (2026-07-12) after a controlled
+                                  # LIVE at 150 after a controlled
                                   # reclassify_max=10 first run scored 8/8 correct
-                                  # on the live gpt-oss classifier; drains the
+                                  # on the live core-model classifier; drains the
                                   # ~1,552 suspect pool over ~5 days. Respects the
                                   # SAME apply flag as merges. Reversible via
                                   # data.reclass (UPDATE entity_class =

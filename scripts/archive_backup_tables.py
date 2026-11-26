@@ -4,9 +4,8 @@
 """Dump the nine hand-made repair backup tables, prove the dumps restore, and
 (only in the same run, when told) drop the tables. DRY RUN by default.
 
-Owner decision 2026-11-15 (data-model lane DM-G, design note
-DATA_LAYERS_2026-11-14 section 6 item 5 and question 4): permanent deletion is
-allowed for these nine tables, each dumped to a file first. Never anything that
+Permanent deletion is allowed for these nine tables, each dumped to a file
+first. Never anything that
 was fetched, anything a published sentence rested on, or any published
 judgement - these tables are the pre-images of one-off live repairs, nothing
 more. No migration creates them (``scripts/report_schema_drift.py`` lists
@@ -65,28 +64,28 @@ BACKUP_TABLES: dict[str, str] = {
         "replaced by their distilled_body; verified the same day (full-text "
         "search over signals runs again)",
     "signals_corpus_gap_bak_20261106":
-        "W11-F163: indexed_at cleared on 652 signals the corpus indexer had "
+        "indexed_at cleared on 652 signals the corpus indexer had "
         "falsely stamped during the 11-05/06 flood stage; verified 652/652 "
         "re-indexed (PG 992 = OS 992)",
     "signals_salience_relift_bak_20261107":
-        "W11-F172: institutional_change salience re-lift on 129 rows (backup "
+        "institutional_change salience re-lift on 129 rows (backup "
         "of 11,696 id+salience); confirmed at the 11-07 19:07Z tick",
     "signal_alias_backup_n_u":
-        "lane N-U (11-13): un-alias of 1,505 lefaso.net rows folded into one "
+        "un-alias of 1,505 lefaso.net rows folded into one "
         "by the old URL canon (scripts/unalias_valueless_id_urls_once.py)",
     "signals_geo_backup_n_o":
-        "W11-F236 lane N-O (11-13): 7-day geo re-tag, 953 rows changed; "
+        "7-day geo re-tag, 953 rows changed; "
         "sampled review 27 better / 2 neutral / 1 worse "
         "(scripts/regeocode_recent_once.py)",
     "actor_filter_state_cursor_bak_20261023":
         "10-23 ingestion recovery: 54 source cursors rewound (371-row pre-image)",
     "actor_filter_state_isw_cursor_bak_20261106":
-        "W11-F165: ISW head cursor rewound to 10-30 (open check after the next "
+        "ISW head cursor rewound to 10-30 (open check after the next "
         "polls was recorded, not closed in the tracker)",
     "actor_filter_state_cursor_bak_f151_20261105":
-        "W11-F151: State travel advisories + ICG cursor rewinds (2-row pre-image)",
+        "State travel advisories + ICG cursor rewinds (2-row pre-image)",
     "source_descriptors_bak_roll64_20261107":
-        "roll 64 (W11-F169): hand source walk of gdelt.files + isw "
+        "hand source walk of gdelt.files + isw "
         "(poll_budget_seconds); new heads active 11-07 20:33Z",
 }
 

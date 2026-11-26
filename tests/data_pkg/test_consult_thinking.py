@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""T-1 — Consult thinks on the core plane.
+"""Consult thinks on the core plane.
 
 The consult descriptors declare ``method.llm.thinking: "on"``; which calls
 think is ``consult_thinking``'s table (rounds, forced final, recovery, deep
@@ -313,7 +313,7 @@ def test_a_nested_or_misspelt_thinking_choice_is_refused_at_registration() -> No
     body["method"]["llm"]["verify"] = {"thinking": "on"}
     with pytest.raises(ValueError, match="not a thinking block"):
         AnalystDescriptor.model_validate(body)
-    # T-2: narrate IS a thinking block — but consult has no narrate calls.
+    # Narrate IS a thinking block — but consult has no narrate calls.
     del body["method"]["llm"]["verify"]
     body["method"]["llm"]["narrate"] = {"thinking": "on"}
     with pytest.raises(ValueError, match="read only by the kinds"):
@@ -410,7 +410,7 @@ async def test_deep_consult_submit_stamps_the_thinking_choice(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("override", "expected"), [
-    # roll 84: the front door threads core for a request naming no model
+    # The front door threads core for a request naming no model
     ("llm.primary.openai_compat", "llm.primary.openai_compat"),
     # a paid plane only when the request picked it
     ("llm.anthropic.opus_4_7", "llm.anthropic.opus_4_7"),

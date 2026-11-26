@@ -95,7 +95,7 @@ describe('every retired id lands on its survivor at the right tab — the execut
     expect(resolveRetiredPanelId(id.replace(/[.]/g, '_'))).toEqual(tab ? { kind: survivor, tab } : { kind: survivor })
   })
 
-  it('a recorded CASE naming a drive-pack id that retired still opens its survivor (C-1b replay)', () => {
+  it('a recorded CASE naming a drive-pack id that retired still opens its survivor', () => {
     // The drive pack's allowlist lists ids as recorded; `v4.kpi` and
     // `system.navigator` were drivable before they retired.
     for (const [id, survivor, tab] of LANDINGS) {

@@ -1,11 +1,11 @@
 /**
  * The registry's light list weights, applied to a fixture recorded at full
- * weight (roll 86).
+ * weight.
  *
  * The fixtures were recorded before the list routes grew `fields=summary`,
  * and `nearestFixture` never lets the weight decide which recording stands in
  * — so a reader that asks `fields=summary` was answered the WHOLE row, and the
- * fixture walk could not see what the light row drops. Roll 86's live walk
+ * fixture walk could not see what the light row drops. A live walk
  * failed on exactly that: the subject roster at summary weight dropped
  * `body.sources`, the map read every subject as declaring no source and
  * hatched every place "not covered" — the fixture walk passed.
@@ -15,7 +15,7 @@
  *   - `lightSignalData` / `SIGNAL_SUMMARY_COLUMNS` = `legba.data.registry.signal_list_weight`
  *     (`light_data`, `SignalSummaryRow`'s fields)
  *   - `summaryEventRow` / `EVENT_SUMMARY_COLUMNS` = `legba.data.registry.event_list_weight`
- *     (`summary_row`, `EventSummaryRow`'s fields; roll 87)
+ *     (`summary_row`, `EventSummaryRow`'s fields)
  * and `fixtures/weights_golden.json` holds the cases both sides are tested
  * against (`walk.test.ts` here, `tests/data_pkg/test_list_weight_projections.py`
  * there), so the mirror cannot drift silently.

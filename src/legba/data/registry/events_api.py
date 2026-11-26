@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""V3/P6 — the event read API (spec §6.2).
+"""The event read API.
 
 Three read-only GET endpoints mounted under ``/api/v1/v3`` beside the
 timeline + graph-arcs routers (the SAME ``RegistryAPIDeps`` bundle +
@@ -24,7 +24,7 @@ timeline + graph-arcs routers (the SAME ``RegistryAPIDeps`` bundle +
     OLDEST→NEWEST (the ``opened`` row first).
 
 The default (no ``as_of``) read is the OPEN gate — the 0032 pair plus the
-P7 ``origin_class`` leg — so a backfilled event can never read as live.
+``origin_class`` leg — so a backfilled event can never read as live.
 ``as_of`` swaps to the validity predicate; only there does
 ``include_origin`` widen the class set (default ``LIVE_CLASSES`` — history
 must be asked for). An unknown ``lifecycle_state`` or origin class is a
@@ -315,7 +315,7 @@ _LIFECYCLE_SQL = """
 
 def build_events_router(deps: RegistryAPIDeps) -> APIRouter:
     """``GET /events``, ``/events/{id}``, ``/events/{id}/lifecycle`` —
-    the V3 event read surface (P6)."""
+    the V3 event read surface."""
     router = APIRouter(tags=["events"])
 
     @router.get("/events", response_model=EventsPage)
@@ -342,7 +342,7 @@ def build_events_router(deps: RegistryAPIDeps) -> APIRouter:
             default=None,
             description="origin classes to include on the as_of read "
             "(repeatable/csv; default live/web_retrieval/seed)"),
-        # Roll 87: the map and the time band ask ``fields=summary`` by name
+        # The map and the time band ask ``fields=summary`` by name
         # (``event_list_weight``); omitted, the whole row as before.
         fields: EventsFields = Query(default=EVENTS_DEFAULT_FIELDS),
         limit: int = Query(default=DEFAULT_LIMIT),

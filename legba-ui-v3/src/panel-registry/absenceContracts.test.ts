@@ -53,7 +53,7 @@ describe('absence contracts — the per-kind absence column', () => {
     for (const k of REGISTERED) expect(resolveKind(k)?.kind).toBe(k)
   })
 
-  it('every RETIRED id answers to its survivor\'s contract through the alias table (UI-B1/merges)', () => {
+  it('every RETIRED id answers to its survivor\'s contract through the alias table', () => {
     for (const [retired, alias] of Object.entries(KIND_ALIASES)) {
       expect(KIND_SURVIVOR[retired as PanelKind], `${retired} still keyed`).toBeUndefined()
       expect(absenceContractForId(retired), retired).toBe(absenceContractFor(alias.kind))

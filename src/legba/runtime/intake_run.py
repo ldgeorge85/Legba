@@ -192,7 +192,7 @@ async def _version_after(
     FROM (its final URL — the receipt says what that address answered). When
     nothing landed under the requested address, the version under ``final``
     whose body is exactly the page's (``sha256``) is the request's receipt:
-    linked whether the page was landed or refused (W11-F259: the Federal
+    linked whether the page was landed or refused (the Federal
     Register wall left ``result_version_id`` null)."""
     async with pool.acquire() as conn:
         vid = await conn.fetchval(

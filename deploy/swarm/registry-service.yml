@@ -5,8 +5,8 @@
 #
 # ############################################################################
 # ##  DRAFT — NOT DEPLOYABLE YET. Phase-1 validation pending.               ##
-# ##  See deploy/swarm/README.md + planning/SWARM_CONVERSION_ASSESSMENT_    ##
-# ##  2026-07-25.md before touching this with `docker stack deploy`.        ##
+# ##  See deploy/swarm/README.md before touching this with                 ##
+# ##  `docker stack deploy`.                                                ##
 # ############################################################################
 #
 # WHY: `docker stack deploy` IGNORES `build:` — swarm nodes only PULL. The

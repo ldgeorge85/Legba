@@ -117,7 +117,7 @@ def test_a_zero_rate_is_a_real_measurement_not_a_missing_one():
 
 
 # ---------------------------------------------------------------------------
-# NOVELTY (§4.1) — including F-9's over-reporting caveat
+# NOVELTY (§4.1) — including the over-reporting caveat
 # ---------------------------------------------------------------------------
 
 
@@ -189,11 +189,11 @@ def test_novelty_v1b_is_the_stricter_arm_and_has_its_own_denominator():
     v1b = block["v1b"]
     assert v1b["n"] == 12            # the unstamped-host row is excluded
     assert v1b["count"] == 6
-    assert v1b["rate"] == 0.5        # v1's 1.0 was an over-report (F-9)
+    assert v1b["rate"] == 0.5        # v1's 1.0 was an over-report
 
 
 def test_novelty_publishes_the_near_dup_companion_and_never_merges_it():
-    """F-9: v1 over-reports. The conservative companion is the share the dedup
+    """v1 over-reports. The conservative companion is the share the dedup
     plane later folded onto a PRE-EXISTING non-research row. Both numbers are
     published; the truth is between them, and the caveat says so."""
     rows = [_nrow(signal_id=f"a{i}", novel=True) for i in range(10)]
@@ -211,7 +211,7 @@ def test_novelty_publishes_the_near_dup_companion_and_never_merges_it():
 
 
 def test_novelty_ignores_self_selected_runs_and_says_how_many():
-    """§1.3 / F-8: a self-selected run has no dispatching target, so it has no
+    """§1.3: a self-selected run has no dispatching target, so it has no
     slice to be novel against. Those rows leave the denominator and are
     counted, not silently dropped."""
     rows = [_nrow(signal_id=f"a{i}", novel=True) for i in range(11)]
@@ -535,7 +535,7 @@ def test_the_il_shaped_case_fires_all_three_counters():
     non-research wire item carrying the same observation lands two days later
     and folds onto it.
 
-    Each counter is under G9 on its own — which is exactly F-10's point, and
+    Each counter is under G9 on its own — which is exactly the point, and
     the reason all three rates are null here while their COUNTS are real. This
     test pins that combination: the events happened, and the rates still refuse
     to be quoted.
@@ -583,7 +583,7 @@ def test_the_il_shaped_case_fires_all_three_counters():
     assert corroboration["by_anchor"]["fold"] == 1
     assert consequence["c3_quoted_head"] == 1
 
-    # ...and NOT ONE of the three rates is quotable at n=1 (gate G9 / F-10).
+    # ...and NOT ONE of the three rates is quotable at n=1 (gate G9).
     assert novelty["rate"] is None
     assert corroboration["rate"] is None
     assert consequence["c2"]["rate"] is None

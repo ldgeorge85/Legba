@@ -1,11 +1,10 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Roll 65 — ``scripts/rolling_deploy.sh`` caps the build cache after a roll.
+"""``scripts/rolling_deploy.sh`` caps the build cache after a roll.
 
-Each roll left ~8 GB of build cache behind (``--keep-storage 8GB``; disk 85% ->
-91% in the day after roll 64). The cap is now ``BUILD_CACHE_KEEP_GB`` (default
+Each roll left ~8 GB of build cache behind (``--keep-storage 8GB``). The cap is now ``BUILD_CACHE_KEEP_GB`` (default
 4, env ``LEGBA_BUILD_CACHE_KEEP_GB``), spelled ``--max-used-space`` (the
-ceiling; roll 87: ``--reserved-space`` is a floor and reclaimed 0 B).
+ceiling; ``--reserved-space`` is a floor and reclaimed 0 B).
 Driven under ``--dry-run --skip-build`` with ``docker`` and ``git`` STUBS on
 PATH: no container, repository or daemon is touched.
 """

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit + opt-in integration tests for the L-135 generic-scraper handler.
+"""Unit + opt-in integration tests for the generic-scraper handler.
 
 The handler module is imported directly (`legba.data.sources.scraper`) so
 these tests don't depend on the parent package's eager imports of sibling
@@ -8,7 +8,7 @@ Phase 3 handlers (rss, gdelt, ...). Most tests use ``respx`` if available
 for HTTP mocking; otherwise we patch :meth:`httpx.AsyncClient.get` via
 ``unittest.mock.patch``.
 
-Coverage focus per the L-135 brief:
+Coverage focus per the brief:
 
   * URL discovery — BFS depth honored, dedupe via state-store.
   * Rate-limit — token-bucket holds the second request.

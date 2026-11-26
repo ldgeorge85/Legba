@@ -46,13 +46,13 @@ round:
     rank_a:
       kind: judge
       card: cards/judge_rank.md
-      plane: llm.verify.innoai_gemma.openai_compat
+      plane: llm.verify.gateway_judge.openai_compat
       family_rule: {differs_from: [pitch, advocate_for, advocate_against]}
       reads: [{from: table, view: sentence_table}]
       output: verdict/1
       deadline_s: 120
     rank_b: {seat_ref: rank_a}
-    rank_c: {seat_ref: rank_a, plane: llm.judge.innoai_lightning_think.openai_compat}
+    rank_c: {seat_ref: rank_a, plane: llm.judge.gateway_rung2_think.openai_compat}
     advocate_for:
       kind: model
       card: cards/advocate_for.md
@@ -66,7 +66,7 @@ round:
     moderator:
       kind: judge
       card: cards/moderator.md
-      plane: llm.verify.innoai_gemma.openai_compat
+      plane: llm.verify.gateway_judge.openai_compat
       family_rule: {differs_from: [advocate_for, advocate_against]}
       reads: [{from: floor.sealed, view: sentence_table}]
       output: verdict/1

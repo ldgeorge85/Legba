@@ -1,8 +1,8 @@
 {
   "prompts": {
     "cross_doc_corroborator": {
-      "chars": 18281,
-      "sha256": "2b725bf2c36f95e8df3d0a825e7ea1adbd7772da4e21c5310a8c17a041bffd17",
+      "chars": 18108,
+      "sha256": "6fc639e26c99ff4aca70a4753832bb1139aec9e5a6ba52eb345be3b99fd75d83",
       "source": "analyst_cross_doc_corroborator.yaml"
     }
   },

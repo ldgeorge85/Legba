@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The declared tool grammar equals what the handlers actually read (W1 F-7).
+"""The declared tool grammar equals what the handlers actually read.
 
 ``TOOL_SCHEMAS`` (``legba.data.stack.llm.tool_rounds``) is the one place the
 argument signature of a tool is stated for the native channel, and
 ``validate_args`` REFUSES an argument the schema does not declare. A handler
 that reads a key the schema omits is therefore unreachable for a model that
 obeys the schema; a schema property no handler reads is a promise the tool
-does not keep. The wave-Q report found four such drifts by hand; this pins them
+does not keep. A review found four such drifts by hand; this pins them
 by AST so the next one fails here rather than in a live consult.
 
 For every entry in ``TOOL_SCHEMAS`` the test finds the handler registered for

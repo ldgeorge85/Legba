@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""H-2 (MASTER_PLAN 2026-07-10 F/H/S, audit W6) — scorecard↔composition
-disagreements, extracted to a PURE module + surfaced on the journal instrument.
+"""Scorecard↔composition disagreements, extracted to a PURE module + surfaced on the journal instrument.
 
 Two surfaces reconcile with the SAME code now:
 
@@ -83,7 +82,7 @@ def test_scorecard_disagreements_empty_when_reconciled() -> None:
 
 
 class _RoutingConn:
-    """Fake conn routing the H-2 reconciliation queries by SQL substring."""
+    """Fake conn routing the reconciliation queries by SQL substring."""
 
     def __init__(self, *, scorecards, compositions, lookups=None, raise_on=None) -> None:
         self._scorecards = scorecards
@@ -180,7 +179,7 @@ async def test_reconcile_surfaces_disagreement_and_extends_refs() -> None:
 
 @pytest.mark.asyncio
 async def test_reconcile_no_country_targets_is_noop_no_query() -> None:
-    """B-8: the no-op answer is ``None`` (NOT MEASURED), not ``[]`` (measured,
+    """The no-op answer is ``None`` (NOT MEASURED), not ``[]`` (measured,
     they agree). Nothing was compared here, and the journal must not be able to
     render that as a finding of agreement — the 08-03 entry did exactly that."""
     conn = _RoutingConn(scorecards=[], compositions=[])
@@ -242,7 +241,7 @@ async def test_reconcile_is_fail_safe_on_db_error() -> None:
     conn = _RoutingConn(scorecards=[], compositions=[], raise_on="kind = 'scorecard'")
     refs: list[str] = ["A0"]
     out = await _port(conn)._reconcile_scorecard_disagreements([{"target_id": "us"}], refs)
-    # B-8: degrades to honest ABSENCE, never raises — and never to `[]`, which
+    # Degrades to honest ABSENCE, never raises — and never to `[]`, which
     # would claim a reconciliation that did not happen.
     assert out is None
     assert refs == ["A0"]                       # refs untouched on failure

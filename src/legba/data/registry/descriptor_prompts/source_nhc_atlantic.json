@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.nhc.atlantic": {
+      "source": "source_nhc_atlantic.yaml",
+      "state": "draft"
+    }
+  }
+}

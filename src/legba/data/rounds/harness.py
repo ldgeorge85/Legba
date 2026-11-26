@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The harness host: run a round spec from the command line with synthetic
 or scripted seats, writing receipts, phase records and the run record to a
-folder (plan P4 §3.1, lane G-2).
+folder.
 
 ::
 
     python -m legba.data.rounds.harness SPEC --out DIR \\
         --input subject=s1 --input question="Will it reopen?" --input as_of=2026-01-01 \\
-        [--input cards=drafts/a,drafts/b]  [--script seats.yaml]  [--run-id ID]
+        [--input cards=card_a,card_b]  [--script seats.yaml]  [--run-id ID]
 
 * No model calls: seats are :class:`~.seats.SyntheticSeats` (deterministic,
   gate-clean) unless a ``--script`` gives replies for some seats (the rest

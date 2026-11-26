@@ -19,7 +19,7 @@ const RECEIPT = {
   reason: null,
 }
 
-describe('ConsultTurnStamp — the turn header cell (X2 / C1)', () => {
+describe('ConsultTurnStamp — the turn header cell', () => {
   it('a judged turn shows its score, the weak-judge mark, and its usage', () => {
     render(
       <ConsultTurnStamp
@@ -59,7 +59,7 @@ describe('ConsultTurnStamp — the turn header cell (X2 / C1)', () => {
     expect(screen.getByTestId('consult-turn-usage')).toHaveTextContent('$0.42')
   })
 
-  it('a judge that could not run names why — never a bare "judge unavailable" (W11-F93)', () => {
+  it('a judge that could not run names why — never a bare "judge unavailable"', () => {
     const { unmount } = render(
       <ConsultTurnStamp
         usage={RECEIPT}
@@ -146,7 +146,7 @@ describe('ConsultTurnStamp — the turn header cell (X2 / C1)', () => {
     expect(u.textContent).not.toMatch(/\b0 in\b/)
   })
 
-  it('a price-table estimate reads as an estimate (W11-F132)', () => {
+  it('a price-table estimate reads as an estimate', () => {
     render(
       <ConsultTurnStamp
         usage={{ ...RECEIPT, cost_usd: 4.2, cost_reason: 'table_estimate' }}

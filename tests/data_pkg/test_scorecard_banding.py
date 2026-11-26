@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""P4-T1 — the banded-verdict rule engine.
+"""the banded-verdict rule engine.
 
 Covers, mostly as PURE functions (no DB):
 
@@ -232,7 +232,7 @@ def test_r2_below_floor_when_effective_under_035():
 
 
 # ---------------------------------------------------------------------------
-# R1b (P4-T5) — the dedicated low-faithfulness exclusion
+# R1b — the dedicated low-faithfulness exclusion
 # ---------------------------------------------------------------------------
 
 

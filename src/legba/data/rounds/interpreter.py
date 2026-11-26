@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The round interpreter (plan P4 §3, lane G-2): runs a validated spec with
+"""The round interpreter: runs a validated spec with
 injected seats over a :class:`~.store.RunStore`.
 
 Guarantees:
@@ -10,7 +10,7 @@ Guarantees:
   (members packed into waves under ``max_parallel`` by their static slot
   demand), so the charged seconds, deadlines and peak are the same on every
   run. The harness executes members one after another; the runtime host
-  (lane G-6) can run them truly in parallel with the same accounting.
+  can run them truly in parallel with the same accounting.
 * **Replay = resume.** The walk is re-run from the root on every call; a step
   whose receipt exists is never re-run (its sealed output is reused, its
   calls and seconds re-counted). Interrupt a run anywhere and run it again on
@@ -43,7 +43,7 @@ from .judge_render import render_version
 from .record import build_record
 from .refs import Predicate, compare, parse_ref
 from .repair import repair_note
-from .rows import RowTypeError, parse_row
+from .rows import RowTypeError, fill_rows_from_ids, parse_row
 from .seats import Clock, SeatCall, SeatFailure, SeatFn, SeatNotBuilt, SeatReply, SystemClock
 from .spec import (
     Blind,
@@ -66,7 +66,7 @@ from .spec import (
     walk,
 )
 from .store import PhaseRecord, Receipt, RunStore
-from .tables import SCORE_FNS, Handed, candidates_of, stance_signature
+from .tables import SCORE_FNS, Handed, candidates_of, evidence_rows, stance_signature
 from .tally import gate_removals, tally, votes_of
 from .tree import build_index
 from .validate import require_valid
@@ -375,8 +375,14 @@ class Interpreter:
         seat = self.spec.seats[seat_id]
         card = seat.card
         if isinstance(card, CardFromItem):
+            # a card named by a run input is the profile's own prose
+            from .profile_cards import card_path
+
             value = pos.items.get(card.from_item)
-            card = f"cards/{value}.md" if isinstance(value, str) else None
+            if not isinstance(value, str):
+                raise SeatFailure(f"card_missing: item {card.from_item!r} names no card")
+            text = card_path(value).read_text(encoding="utf-8")
+            return f"profile:{value}", text, hashlib.sha256(text.encode("utf-8")).hexdigest()
         if not isinstance(card, str):
             return None, None, None
         if self.card_root is None:
@@ -543,7 +549,8 @@ class Interpreter:
                              "rows": [str(t.get("id")) for t in reply.tool_rows],
                              "absent": None})
         try:
-            payload = parse_row(seat.output, reply.payload)
+            payload = parse_row(seat.output, fill_rows_from_ids(
+                seat.output, reply.payload, evidence_rows(handed)))
         except RowTypeError as exc:
             r.failure, r.raw = f"unparseable: {exc}", reply.raw or _dump(reply.payload)
             self.store.put_receipt(r)

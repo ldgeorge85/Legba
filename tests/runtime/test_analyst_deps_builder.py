@@ -521,7 +521,7 @@ async def test_deterministic_builds() -> None:
 
 @pytest.mark.asyncio
 async def test_deterministic_wires_llm_tiebreak_when_flag_on(monkeypatch) -> None:
-    """Wave 2b (#101): flag ON + method.llm.primary -> the self-hosted vLLM
+    """Flag ON + method.llm.primary -> the self-hosted vLLM
     tie-break handler is injected into kind_deps.extras AND survives the run-time
     resolve in fact_contention_arbiter.handle()."""
     monkeypatch.setenv("LEGBA_FACT_CONTENTION_LLM_TIEBREAK", "1")

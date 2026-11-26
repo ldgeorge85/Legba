@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""``GET /v3/system/production-gauge`` — the S-1 whole-engine read surface.
+"""``GET /v3/system/production-gauge`` — the whole-engine read surface.
 
 The route is a thin projection of :mod:`legba.data.registry.production_gauge`,
 which the ``production_deficit`` alert-trigger class also reads. That sharing

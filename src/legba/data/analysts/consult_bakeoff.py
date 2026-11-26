@@ -1,9 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The bake-off's consult ARMS as runtime variants (lane X3/G0).
+"""The bake-off's consult ARMS as runtime variants.
 
-planning/reviews/BAKEOFF_DESIGN.md v1.0 §2 names what arms B and C need from
-the consult kind that the stock route cannot give: a per-arm TOOL SURFACE (six
+Arms B and C need from the consult kind what the stock route cannot give: a per-arm TOOL SURFACE (six
 raw readers for B; verified findings + their receipts for C), a per-arm SYSTEM
 PROMPT that does not order finished intelligence first, and a hard per-question
 SPEND STOP the harness controls (the live run ceilings are effectively off).
@@ -213,7 +212,7 @@ class BakeoffSpendGuard(SpendGuard):
             "cache_write_tokens": self.cache_write_tokens,
             "calls": self.calls,
             "table_estimate_usd": round(self.cost_usd, 6),
-            # W11-G1: a call CUT mid-stream (deadline, dropped stream, provider
+            # A call CUT mid-stream (deadline, dropped stream, provider
             # error) never reaches ``record`` — its usage is billed but unseen.
             # The harness charges each such cut this pessimistic projection
             # (the stop rule's own), so the run ledger never under-counts.

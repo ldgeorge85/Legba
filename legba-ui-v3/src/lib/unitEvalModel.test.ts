@@ -1,5 +1,5 @@
 /**
- * Unit test for the per-unit eval scoreboard data layer (P2-T6).
+ * Unit test for the per-unit eval scoreboard data layer.
  *
  * Locks the `findUnitScore` lookup: a bounded unit's row is matched by its
  * analyst id; a non-unit id (or an empty board) resolves to null so the badge

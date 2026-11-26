@@ -143,7 +143,7 @@ export default function LineageGraph({ kind, id }: LineageGraphProps) {
   // always renders; hiding an intermediate kind re-parents its children to the
   // nearest visible ancestor (buildLineageElements) so the DAG stays connected.
   const [hiddenKinds, setHiddenKinds] = useState<Set<string>>(() => new Set())
-  // P1-T5 — progressive one-hop-at-a-time reveal: how many derivation rings (by
+  // Progressive one-hop-at-a-time reveal: how many derivation rings (by
   // `depth`) are currently shown. Starts at the FIRST hop (root + its immediate
   // parents) and grows one ring per "expand", so the DAG is walkable a step at a
   // time down to the source rather than dumping the full graph at once.
@@ -180,7 +180,7 @@ export default function LineageGraph({ kind, id }: LineageGraphProps) {
     [allKinds, hiddenKinds],
   )
 
-  // P1-T5 — the progressive projection: the DAG bounded to `revealedDepth` rings.
+  // The progressive projection: the DAG bounded to `revealedDepth` rings.
   // Reuses the depth-gated, orphan-safe `buildLineageElements`, so hiding a kind
   // still re-parents onto the nearest visible ancestor and the root always shows.
   const progressive = useMemo(

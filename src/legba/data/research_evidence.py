@@ -2,8 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The RESEARCH SIGNAL — builder, licence ledger, ceiling, novelty, CAS write.
 
-R-A of the research program (``planning/RESEARCH_PROGRAM_SPEC_2026-09-05.md``
-§1). This module is the *builder*; ``analysts/agency/research_tools.py`` is the
+This module is the *builder*; ``analysts/agency/research_tools.py`` is the
 *handler* that calls it. They are separate on purpose: everything here is
 unit-testable without a pack, a governor or a search provider.
 
@@ -42,17 +41,16 @@ than by assertion, and each pinned by a test:
 3. **It never auto-grounds.** Fact extraction is a per-source PIPELINE FILTER
    a source descriptor binds; the research source has no descriptor, so it
    binds none, so no ``facts`` row can ever derive from a research signal
-   until R-D's corroboration test lifts the ceiling.
+   until a corroboration test lifts the ceiling.
 4. **Two archive depths, and the split is the licensing ledger's own rule**
    (:func:`depth_for_license`). Stamping ``retrieval_origin`` makes archiving
    IMPOSSIBLE by default — ``evidence_archiver.WEB_ORIGIN_UNKNOWN_LICENSE_ARCHIVES``
    is ``False``, and not one registered source carries a ``license_class``. So
    a licence-CLEARED host gets full text + content-addressed bytes; an
    UNREVIEWED host gets teaser depth (title/url/snippet, no bytes); a
-   FORBIDDEN host is never fetched at all. That is
-   ``SOURCE_LICENSING_LEDGER_2026-07-10.md:431-435`` verbatim. This module
+   FORBIDDEN host is never fetched at all. This module
    ships the ledger MACHINERY and **zero licence verdicts** — classifying a
-   host is a legal reading and an operator item (spec §8 F-2), never a
+   host is a legal reading and an operator item, never a
    model's guess.
 
 WHAT THIS MODULE MUST NOT DO, restated because each is a way to launder:
@@ -121,9 +119,9 @@ RESEARCH_PRODUCED_BY_KIND = "research"
 #: or novelty blocks — the same discipline as ``assembly.v1`` / ``absence.v4``.
 RESEARCH_PAYLOAD_SCHEMA = "research_evidence.v1"
 
-#: ``payload.research.novelty.version`` (spec §4.1). v1 matches on EXACT
+#: ``payload.research.novelty.version``. v1 matches on EXACT
 #: canonical_url or EXACT content_hash, and therefore OVER-REPORTS novelty: the
-#: same story from a different outlet counts as novel. R-D publishes this beside
+#: same story from a different outlet counts as novel. Publish this beside
 #: the ``near_dup_rate`` the existing dedup fold computes a tick later and says
 #: the truth is between them. Stated, never hidden.
 RESEARCH_NOVELTY_VERSION = "novelty.v1"
@@ -164,9 +162,8 @@ def is_research_source_id(source_id: Any) -> bool:
 def research_source_display_name(source_id: Any) -> str | None:
     """A human label for a synthetic source id, or ``None`` if it isn't one.
 
-    THE OBLIGATION THE UNREGISTERED ID CREATES (spec §1.2, an R-A acceptance
-    item). Every read surface that renders a ``source_id`` joins
-    ``source_descriptors`` for a name; a research row has no such row, so
+    THE OBLIGATION THE UNREGISTERED ID CREATES. Every read surface that renders a
+    ``source_id`` joins ``source_descriptors`` for a name; a research row has no such row, so
     without this it renders as a raw id and looks like a bug to the next
     reader. This is that two-line answer, in ONE place, so the surfaces cannot
     each invent their own.
@@ -199,7 +196,7 @@ def research_signal_id(
 
 
 # ---------------------------------------------------------------------------
-# The credibility ceiling (spec §1.4)
+# The credibility ceiling
 # ---------------------------------------------------------------------------
 
 def _mass_floor() -> float:
@@ -248,8 +245,8 @@ def research_salience(*, scored_at: str | None = None) -> dict[str, Any]:
     Deliberately stamped rather than left NULL for the LLM scorer to fill:
     ``signal_salience._SELECT_BATCH_SQL`` selects ``WHERE s.salience IS NULL``,
     so a stamped row is STRUCTURALLY invisible to the scorer and the ceiling
-    cannot be lifted by a model — only by R-D's deterministic corroboration
-    UPDATE (spec §1.4b).
+    cannot be lifted by a model — only by a deterministic corroboration
+    UPDATE.
 
     ``event_class``/``actor_rank`` carry the scorer's own unbound defaults
     (``other``/``none``) rather than a guess, and ``authority`` carries the
@@ -283,7 +280,7 @@ def ceiling_block() -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# The licence gate — two depths (spec §1.5)
+# The licence gate — two depths
 # ---------------------------------------------------------------------------
 
 #: Licence classes that CLEAR a host for full text + CAS bytes. Every value is
@@ -313,7 +310,7 @@ REASON_FETCH_FAILED = "fetch_failed"
 #: (a′) A publisher's edge REFUSED us — an anti-bot challenge/interstitial body
 #: or a 401/403/429. Distinct from ``fetch_failed`` on purpose: a caller that
 #: cannot tell a block from a network error reads both as "the web had
-#: nothing", which is the false-absence defect FETCH_REVIEW §2 names. The hit
+#: nothing", which is the false-absence defect. The hit
 #: still lands at TEASER depth (the licence gate is untouched); what changes is
 #: that the reason SAYS it was blocked.
 REASON_FETCH_BLOCKED = "fetch_blocked"
@@ -323,7 +320,7 @@ REASON_FETCH_NOT_REQUESTED = "fetch_not_requested"
 def forbidden_license_classes() -> frozenset[str]:
     """The never-fetch set — ``evidence_archiver.FORBID_RETENTION_CLASSES``,
     REUSED VERBATIM and never forked. Those three classes are a reviewed
-    publisher refusal; R-A honours it PRE-CONNECT (the archiver only ever
+    publisher refusal; it is honoured PRE-CONNECT (the archiver only ever
     honoured it as a retention refusal, after the bytes were already in hand).
     """
     from .analysts.deterministic_handlers.evidence_archiver import (
@@ -414,7 +411,7 @@ async def resolve_host_verdict(conn: Any, url: str) -> HostVerdict:
 
 
 # ---------------------------------------------------------------------------
-# NOVELTY — computed at WRITE time (spec §4.1)
+# NOVELTY — computed at WRITE time
 # ---------------------------------------------------------------------------
 
 NOVELTY_SCOPE_TARGET = "dispatching_target"
@@ -459,7 +456,7 @@ async def probe_novelty(
     A run with NO dispatching target (the corpus researcher self-selecting)
     yields ``scope: "none"`` and no booleans: there is no desk to be novel
     *to*, and inventing a comparison against the global pool would answer a
-    question nobody asked. R-D's denominator filters on exactly this key.
+    question nobody asked. A novelty denominator filters on exactly this key.
     """
     block: dict[str, Any] = {
         "version": RESEARCH_NOVELTY_VERSION,
@@ -548,7 +545,7 @@ class ResearchDispatch:
     ``sources[].source_id: null``), and ``geo`` is inherited from the
     dispatching question's target. A SELF-SELECTED run has no target ⇒ no geo
     ⇒ it reaches no desk. That is a real limit on the program and it is stated
-    rather than papered over: the desk hop is R-B's, not R-A's.
+    rather than papered over: the desk hop is not made here.
 
     ``geo``/``tags`` are read from the TARGET DESCRIPTOR (operator-owned),
     never from the planner's arguments — a planner-supplied geo would be a
@@ -601,7 +598,7 @@ class ResearchHit:
     novelty: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        # W11-F59: a redirect can land on a PRESIGNED object-store URL. Every
+        # A redirect can land on a PRESIGNED object-store URL. Every
         # path that builds a hit — and so the row's canonical_url, its payload
         # url and ``raw_provenance.fetched_url_chain`` — gets the query-free
         # form of a signed URL, and the unchanged form of any other.
@@ -629,7 +626,7 @@ def build_research_payload(
     *,
     regime: str,
 ) -> dict[str, Any]:
-    """``signals.payload`` for one research hit (spec §1.2b).
+    """``signals.payload`` for one research hit.
 
     ``payload.text`` is WHAT A DESK READS, and its depth is the licence gate's
     verdict: the extracted main text on a cleared host, the provider's own
@@ -664,8 +661,8 @@ def build_research_payload(
             "novelty": dict(hit.novelty),
             # WHO DISPATCHED THIS ROW, in the payload a desk actually reads.
             # ``raw_provenance.dispatch`` has carried the same three facts
-            # since R-A, but nothing downstream reads raw_provenance, so the
-            # 09-08 15:37Z rows (``geo {}``, ``kind self_selected``) could only
+            # from the start, but nothing downstream reads raw_provenance, so
+            # rows with ``geo {}`` / ``kind self_selected`` could only
             # be diagnosed by joining back to the run. Mirrored here — from the
             # SAME ``ResearchDispatch``, so the two can never disagree — the
             # question a landed row was fetched for is answerable from the row.
@@ -692,14 +689,13 @@ def build_research_provenance(
     requested_by: str,
 ) -> dict[str, Any]:
     """``signals.raw_provenance`` — the question that dispatched it and the run
-    that asked (spec §1.2c, ruling 2's requirement made mechanical).
+    that asked.
 
     Additive with a zero blast radius (no comparator reads ``raw_provenance``
     today) and queryable:
     ``raw_provenance->'dispatch'->>'hypothesis_id'``.
 
-    The ``novelty`` mirror here is deliberate and is the R-D lane's contract in
-    the task brief: the two boolean facts a novelty counter needs — did this
+    The ``novelty`` mirror here is deliberate: the two boolean facts a novelty counter needs — did this
     exact URL, or this exact content hash, already exist in the dispatching
     desk's slice — are readable WITHOUT parsing the fuller payload block. Both
     are written by ONE function from ONE probe, so they cannot disagree.
@@ -779,7 +775,7 @@ def build_research_row(
         "language": hit.language,
         # THE REACHABILITY KEY. Inherited from the dispatching question's
         # target scope; empty for a self-selected run, which therefore reaches
-        # no desk (spec §1.3, consequence 3).
+        # no desk.
         "geo": list(dispatch.geo),
         "tags": tags,
         # Left empty at write; the NER re-enrichment sweep fills it.
@@ -858,16 +854,16 @@ async def land_research_row(conn: Any, row: Mapping[str, Any]) -> Any | None:
         row["schema_uri"],
         row["retrieval_origin"],
         json.dumps(row["salience"], default=str),
-        # V3/P7 — the origin class derives from the retrieval origin this
+        # The origin class derives from the retrieval origin this
         # write path exists to stamp (web_search:* → 'web_retrieval').
         origin_class_for(row["retrieval_origin"]),
-        # N-S (migration 0247): the stored tier-1 dedupe key for this URL.
+        # Migration 0247: the stored tier-1 dedupe key for this URL.
         stored_canonical_url_hash(row["canonical_url"]),
     )
 
 
 # ---------------------------------------------------------------------------
-# The archive leg — at FETCH time, not through the sweep (spec §1.5)
+# The archive leg — at FETCH time, not through the sweep
 # ---------------------------------------------------------------------------
 
 

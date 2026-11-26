@@ -242,8 +242,8 @@ describe('the reader’s seal (view:forecasts)', () => {
   it('"included in the anchor of <day>" only when the path checks here', async () => {
     ledger(SEAL_PROOF)
     const row = (await screen.findAllByTestId('ledger-forecast-row'))[0]
-    fireEvent.click(within(row).getByTestId('ledger-forecast-more'))
-    const inc = await within(row).findByTestId('forecast-seal-inclusion')
+    fireEvent.click(within(row).getByTestId('ledger-forecast-select'))
+    const inc = await screen.findByTestId('forecast-seal-inclusion')
     await waitFor(() => expect(inc.getAttribute('data-state')).toBe('included'))
     expect(inc.textContent).toMatch(/^Included in the anchor of 2026-03-02: the path from this seal to that day's root checks in your browser\./)
     expect(inc.textContent).toMatch(/the timestamp proof is checked offline with the OpenTimestamps client/)
@@ -252,10 +252,10 @@ describe('the reader’s seal (view:forecasts)', () => {
   it('a tampered proof is said plainly', async () => {
     ledger({ ...SEAL_PROOF, question: { ...QUESTION_PROOF, path: QUESTION_PROOF.path!.slice(1) } })
     const row = (await screen.findAllByTestId('ledger-forecast-row'))[0]
-    fireEvent.click(within(row).getByTestId('ledger-forecast-more'))
-    const inc = await within(row).findByTestId('forecast-seal-inclusion')
+    fireEvent.click(within(row).getByTestId('ledger-forecast-select'))
+    const inc = await screen.findByTestId('forecast-seal-inclusion')
     await waitFor(() => expect(inc.getAttribute('data-state')).toBe('failed'))
     expect(inc.textContent).toMatch(/^The inclusion path did not check/)
-    expect(row.textContent).not.toMatch(/Included in the anchor/)
+    expect(screen.getByTestId('ledger-forecast-sheet').textContent).not.toMatch(/Included in the anchor/)
   })
 })

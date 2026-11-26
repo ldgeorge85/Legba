@@ -126,7 +126,7 @@ logger = logging.getLogger(__name__)
 #       - kind: a2a_skill
 #         config:
 #           skill_id: legba.test.echo
-#           description: Test-only echo skill for the O-1 e2e gate.
+#           description: Test-only echo skill for the e2e gate.
 #           auth_required: true
 #           input_schema:
 #             type: object
@@ -312,7 +312,7 @@ def echo_registry() -> A2ASkillRegistry:
             },
             response_schema={"type": "object"},
             auth_required=True,
-            description="Test-only echo skill for the O-1 e2e gate.",
+            description="Test-only echo skill for the e2e gate.",
         )
     )
     return reg
@@ -780,7 +780,7 @@ def _live_runtime_url() -> str | None:
 
 @pytest.mark.xfail(
     reason=(
-        "Production runtime does NOT currently mount the L-193 A2A skill router. "
+        "Production runtime does NOT currently mount the A2A skill router. "
         "dapr_host.main() builds its FastAPI app without threading "
         "(a2a_registry, a2a_identity, a2a_fetch_latest_outputs) through "
         "build_dapr_host_app(), so attach_a2a_skill_router() never fires. "
@@ -883,7 +883,7 @@ async def test_live_mnemosyne_trust_query_round_trip() -> None:
             exc, elapsed_ms,
         )
         print(
-            f"\n[a2a-e2e] Mnemosyne round-trip mismatch (expected per X-1): "
+            f"\n[a2a-e2e] Mnemosyne round-trip mismatch (expected): "
             f"{type(exc).__name__}: {exc}"
         )
         return

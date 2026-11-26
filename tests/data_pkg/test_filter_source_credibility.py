@@ -290,7 +290,7 @@ async def test_transform_inserted_row_overrides(credibility_pool: asyncpg.Pool):
             "INSERT INTO source_credibility "
             "(source_host, score, score_rationale, scored_by) VALUES "
             "($1, $2, $3, $4)",
-            host, 0.42, "L-152 integration test row", "test.operator",
+            host, 0.42, "integration test row", "test.operator",
         )
 
     try:
@@ -301,7 +301,7 @@ async def test_transform_inserted_row_overrides(credibility_pool: asyncpg.Pool):
         sig = _make_signal(canonical_url=f"https://{host}/article")
         out = await handler.transform(sig, _make_filter_ctx())
         assert out.source_credibility == pytest.approx(0.42)
-        assert out.source_credibility_rationale == "L-152 integration test row"
+        assert out.source_credibility_rationale == "integration test row"
         assert out.below_credibility_threshold is False  # 0.42 >= 0.3
     finally:
         async with credibility_pool.acquire() as conn:

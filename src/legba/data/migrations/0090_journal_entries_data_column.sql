@@ -3,7 +3,7 @@
 --
 -- 0090_journal_entries_data_column.sql
 --
--- VOICES LV-1 (planning/VOICES_PLAN_2026-07-21.md, DL-1). Free-form `data`
+-- VOICES: free-form `data`
 -- column on journal_entries — the home for the lens tier's per-row metadata
 -- (the faculty's lens_id) and the diff pass's structured agreement matrix. The
 -- lens tier rides the EXISTING journal_assessor kind + JournalPayload shape (the
@@ -12,17 +12,17 @@
 -- carried.
 --
 -- Every existing entry/consolidation/chronicle row is unaffected: no write path
--- touched `data` before LV-1, and the DEFAULT backfills every historical row to
+-- touched `data` before this, and the DEFAULT backfills every historical row to
 -- an empty object. Read sites can therefore skip a null-check.
 --
 -- WHY NOT NULL DEFAULT '{}': matches the table's own idiom — journal_entries
 -- already declares `claims JSONB NOT NULL DEFAULT '[]'::jsonb`
 -- (0048_journal.sql). A NOT-NULL default lets the lens/lens_diff read + diff
--- paths read `row["data"]` unconditionally, and the task-brief's plain
+-- paths read `row["data"]` unconditionally, and a plain
 -- `data jsonb NULL` alternative would force a null-guard at every read site for
--- no benefit (deviation recorded in VOICES_BUILD_DESIGN §1). No index — LV-1 has
--- no query that filters on `data` contents; the diff pass selects by
--- `entry_kind` + `analyst_id` + a produced_at window, all plain columns.
+-- no benefit. No index: nothing filters on `data` contents; the diff pass
+-- selects by `entry_kind` + `analyst_id` + a produced_at window, all plain
+-- columns.
 --
 -- IDEMPOTENT: ADD COLUMN IF NOT EXISTS, so a re-run against an already-migrated
 -- DB (the live dev rig) is a clean no-op. Routed through the filename-gated

@@ -1,5 +1,5 @@
 /**
- * Unit test for the fold-reason derivation (Program 7, 7b-i).
+ * Unit test for the fold-reason derivation.
  *
  * Locks the two halves:
  *  * `corroborationByOrdinal` — the record's own `blocks[].corroboration`,
@@ -229,7 +229,7 @@ describe('claimFoldChips — the verdict that lowered confidence', () => {
     expect(chip).toEqual({
       kind: 'unsupported',
       label: 'unsupported',
-      reason: 'verdict: unsupported by the verify judge, confidence lowered',
+      reason: 'verdict: not supported by its sources, by the check, confidence lowered',
       tone: 'warning',
     })
   })

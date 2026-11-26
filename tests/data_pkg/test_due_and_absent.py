@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane E-1 — the due-and-absent detector (``due_and_absent``).
+"""The due-and-absent detector (``due_and_absent``).
 
   * the descriptor parses on the runtime's model, merges its options with
     nothing rejected, ships draft (LIFECYCLE ``configured``), budget 0;
@@ -85,7 +85,7 @@ def test_a_bad_option_is_rejected_by_the_catalog() -> None:
 
 
 def test_lifecycle_records_it_active() -> None:
-    # Activated at roll 83 through the transition route (2026-11-14).
+    # Activated through the transition route.
     assert "| analyst | due_and_absent | active | draft |" in lifecycle_text(_DESC)
 
 

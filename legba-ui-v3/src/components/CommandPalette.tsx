@@ -59,7 +59,10 @@ import type { Mode, PanelKind } from '@/types'
 import { PANEL_REGISTRY } from '@/panel-registry/registry'
 import { catalogKinds } from '@/panel-registry/kindPlan'
 import { SURFACES, readerKinds, type Side } from '@/lib/surfaces'
-import { useBelowContributor } from '@/auth/roles'
+import { useBelowContributor, useRoleRank } from '@/auth/roles'
+import { ADMIN_ONLY_VIEWS, offeredToRank } from '@/auth/adminViews'
+import { declaredContract } from '@/panel-registry/contracts'
+import { applyPanelAction } from '@/lib/panelActions'
 import { drive, type WorkstationAction } from '@/lib/applyAction'
 import {
   INVESTIGATE_KINDS,
@@ -84,6 +87,7 @@ import { PROFILE_UI } from '@/lib/profileUi'
 import { subjectReadActions } from '@/lib/subjectRead'
 import { selectionKindLabel, SUBJECT_NOUN } from '@/lib/subjectNoun'
 import { cn } from '@/lib/cn'
+import { subjectKindNoun } from '@/lib/readerVocabulary'
 import { Dialog, DialogContent, DialogTitle } from '@/ui/dialog'
 
 export interface CommandPaletteProps {
@@ -252,12 +256,36 @@ function panelEntries(mode: Mode, run: Drive, side: Side = 'operator', readerOnl
   return out
 }
 
+/**
+ * The admin-only views (the Users page) — listed for an admin only, and only
+ * once their component is registered. They open through their contract.
+ */
+export function adminViewEntries(rank: ReturnType<typeof useRoleRank>): PaletteEntry[] {
+  const out: PaletteEntry[] = []
+  for (const id of ADMIN_ONLY_VIEWS) {
+    const c = declaredContract(id)
+    if (!c || !offeredToRank(id, rank)) continue
+    out.push({
+      key: `panel:${id}`,
+      family: 'panel',
+      label: c.name,
+      hint: 'admin',
+      entryKind: 'panel',
+      search: `${c.name} ${id} ${c.description}`,
+      open: () => {
+        applyPanelAction(id, 'open', {})
+      },
+    })
+  }
+  return out
+}
+
 /** Surface entries — the `#` family, and the guaranteed switcher. */
 function surfaceEntries(run: Drive, readerOnly = false): PaletteEntry[] {
   return SURFACES.filter((sf) => !readerOnly || sf.side === 'reader').map((sf) => ({
     key: `surface:${sf.id}`,
     family: 'surface' as const,
-    label: `${sf.side === 'reader' ? 'Surface' : 'Operator'} · ${sf.label}`,
+    label: `${sf.side === 'reader' ? 'Page' : 'Operator'} · ${sf.label}`,
     hint: `alt+${sf.key}`,
     entryKind: 'surface' as const,
     search: `${sf.label} ${sf.question} surface ${sf.side} ${sf.id}`,
@@ -286,7 +314,7 @@ function commandEntries(): PaletteEntry[] {
       key: `command:${c.id}`,
       family: 'command' as const,
       label: `Command · ${c.label}`,
-      hint: 'shell',
+      hint: 'action',
       entryKind: 'command' as const,
       search: `${c.label} ${c.id} command`,
       open: () => {
@@ -327,16 +355,20 @@ export function recordEntries(
   run: Drive,
   activity: ReadonlyMap<string, number> = new Map(),
   subjects?: SubjectIndex,
+  readerOnly = false,
 ): PaletteEntry[] {
   const out: PaletteEntry[] = []
   for (const rec of records) {
+    // A reader is offered the subjects only: units, sources and the
+    // Investigate grid are operator objects (their reads are refused).
+    if (readerOnly && rec.recordKind !== 'target') continue
     const primaryPanel = RECORD_PRIMARY_PANEL[rec.recordKind]
     // Defensive guard: a missing bound primary must degrade — skip the record,
     // never throw at runtime.
     const primaryDef = PANEL_REGISTRY[primaryPanel]?.definition
     if (!primaryDef) continue
     const family = recordFamily(rec)
-    const noun = recordNoun(rec.recordKind)
+    const noun = rec.recordKind === 'target' ? subjectKindNoun(rec.id, subjects) : recordNoun(rec.recordKind)
     const stateHint = rec.state && rec.state !== 'active' ? ` · ${rec.state}` : ''
     if (rec.recordKind === 'target') {
       // A SUBJECT: its declared name, its noun, its last read — and Enter
@@ -358,6 +390,7 @@ export function recordEntries(
         alt: () => run(paletteActions.selectRecord(rec.recordKind, rec.id, name)),
         altHint: 'inspect',
       })
+      if (readerOnly) continue
       out.push({
         key: `action:investigate-target:${rec.id}`,
         family: 'action',
@@ -469,6 +502,7 @@ export function CommandPalette({ open, mode, onClose, side = 'operator', onDrive
   const subjects = useSubjectIndex()
   // RA-1: a reader is never offered the operator side (its reads are refused)
   const readerOnly = useBelowContributor()
+  const rank = useRoleRank()
   const activity = useMemo(() => {
     const m = new Map<string, number>()
     const note = (id: string, iso: string | null) => {
@@ -486,11 +520,12 @@ export function CommandPalette({ open, mode, onClose, side = 'operator', onDrive
     () => [
       ...surfaceEntries(onDrive, readerOnly),
       ...caseEntries(cases),
-      ...recordEntries(records, onDrive, activity, subjects),
+      ...recordEntries(records, onDrive, activity, subjects, readerOnly),
       ...panelEntries(mode, onDrive, side, readerOnly),
+      ...adminViewEntries(rank),
       ...(open ? commandEntries() : []),
     ],
-    [records, mode, onDrive, cases, open, activity, subjects, side, readerOnly],
+    [records, mode, onDrive, cases, open, activity, subjects, side, readerOnly, rank],
   )
 
   // The order (`orderPaletteEntries`): with no query, recents, favorites, then
@@ -585,7 +620,7 @@ export function CommandPalette({ open, mode, onClose, side = 'operator', onDrive
             setQuery(e.target.value)
             setActive(0)
           }}
-          placeholder="Jump to a subject, record, view, case… (# surfaces, > views & commands)"
+          placeholder="Jump to a subject, record, view, case… (# pages, > views & commands)"
           aria-label="Search records, views and surfaces"
           data-testid="command-palette-input"
           className="w-full bg-surf-1 px-4 py-3 text-body text-ink-1 placeholder:text-ink-3 outline-none border-b border-line"
@@ -633,7 +668,7 @@ export function CommandPalette({ open, mode, onClose, side = 'operator', onDrive
                 className="flex flex-1 min-w-0 items-center gap-3 py-2 pl-2 pr-4 text-left text-body"
               >
                 <span className="flex-1 truncate">{entry.label}</span>
-                <span className="shrink-0 text-label uppercase tracking-wider text-ink-3">
+                <span className="shrink-0 text-label text-ink-3">
                   {entry.hint}
                 </span>
               </button>
@@ -641,7 +676,7 @@ export function CommandPalette({ open, mode, onClose, side = 'operator', onDrive
           ))}
         </ul>
         <div className="flex items-center justify-between px-4 py-2 text-label text-ink-3 border-t border-line">
-          <span>↑↓ navigate · ↵ open/select · ⌘↵ view · # surface · ★ favorite · esc</span>
+          <span>↑↓ navigate · ↵ open/select · ⌘↵ view · # page · ★ favorite · esc</span>
           <span>
             {filtered.length} result{filtered.length === 1 ? '' : 's'}
           </span>

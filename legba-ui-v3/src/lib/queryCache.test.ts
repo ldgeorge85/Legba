@@ -1,5 +1,5 @@
 /**
- * X4 READPATH (W11-F71) — the api layer's request dedupe + 30 s TTL.
+ * X4 READPATH — the api layer's request dedupe + 30 s TTL.
  *
  * Driven through the REAL `apiGet` with `fetch` mocked, so the test proves the
  * path every panel takes, not the cache in isolation.
@@ -89,7 +89,7 @@ describe('queryCache through apiGet', () => {
     vi.unstubAllGlobals()
   })
 
-  it('U-5: the TTL routes are the slow-changing landing reads; other routes keep nothing once settled', async () => {
+  it('The TTL routes are the slow-changing landing reads; other routes keep nothing once settled', async () => {
     expect(isCachedGet('/findings')).toBe(true)
     expect(isCachedGet('/findings?since=x&fields=judgment')).toBe(true)
     expect(isCachedGet('/signals?limit=500')).toBe(true)
@@ -108,7 +108,7 @@ describe('queryCache through apiGet', () => {
     vi.unstubAllGlobals()
   })
 
-  it('U-5: EVERY route shares a request in flight — two panels, one request', async () => {
+  it('EVERY route shares a request in flight — two panels, one request', async () => {
     const f = deferredFetch()
     vi.stubGlobal('fetch', f.fn)
     const a = apiGet('/v3/absence?scope=country_zz')
@@ -119,7 +119,7 @@ describe('queryCache through apiGet', () => {
     vi.unstubAllGlobals()
   })
 
-  it('U-5: the sign-in routes are never shared, not even in flight', async () => {
+  it('The sign-in routes are never shared, not even in flight', async () => {
     const fetchMock = vi.fn(async () => okJson({ kind: 'operator', role: 'operator' }))
     vi.stubGlobal('fetch', fetchMock)
     await Promise.all([apiGet('/auth/me'), apiGet('/auth/me')])
@@ -127,7 +127,7 @@ describe('queryCache through apiGet', () => {
     vi.unstubAllGlobals()
   })
 
-  it('U-5: nothing defeats the HTTP cache — the path is sent as asked, with no no-store', async () => {
+  it('Nothing defeats the HTTP cache — the path is sent as asked, with no no-store', async () => {
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => okJson({ data: [] }))
     vi.stubGlobal('fetch', fetchMock)
     await apiGet('/signals?limit=500')

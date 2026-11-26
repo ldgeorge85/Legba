@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W10-F3 - an adversarial flag lands on a NULL-data signal row, on the REAL driver.
+"""An adversarial flag lands on a NULL-data signal row, on the REAL driver.
 
 ``jsonb_set(NULL, ...)`` is NULL, so before the fix the UPDATE matched the
 row, reported ``UPDATE 1`` and wrote NULL back: the flag never landed on any

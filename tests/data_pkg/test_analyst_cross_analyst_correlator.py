@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""L-177 cross_analyst_correlator analyst-kind unit tests.
+"""cross_analyst_correlator analyst-kind unit tests.
 
 Scope per the task brief:
 

@@ -131,14 +131,14 @@ async def world(migrated_pg: PostgresConfig, monkeypatch):
     w = World(store=store, reg=reg, ex=ex, armed=await _arm(store), src=await _source(reg))
     yield w
     await reg.stop()
-    # Test isolation (W7-F5): everything this fixture and the four files that
+    # Test isolation: everything this fixture and the four files that
     # share it register into the SESSION DB is deleted here — the real
     # ``consult_write`` pack (a tree descriptor: left behind it is "co-present"
     # with the shipped tree and the production gauge's descriptor_state_drift
     # loop gauges it on a "blank" engine) and the ``source.test.cw_*`` source
     # heads (class analysis: left behind they are a candidate feed, and
     # test_desk_reference's unfillable requirement read fillable). Ordered
-    # suites failed on both from W6 on; the files passed alone.
+    # suites failed on both; the files passed alone.
     async with store.acquire() as conn:
         await _scrub_registered(conn)
     await store.close()
@@ -167,7 +167,7 @@ async def _scrub_registered(conn: Any) -> None:
     await conn.execute(
         "DELETE FROM action_pack_invocations WHERE pack_id = $1 AND requested_by LIKE 'analyst::cw\\_%'",
         W.CONSULT_WRITE_PACK_ID)
-    # W11 entity records (test_consult_write_entity mints ``cw_entity_*``
+    # Entity records (test_consult_write_entity mints ``cw_entity_*``
     # profiles): their judgements first (no FK), then the profiles — versions,
     # edges and links cascade.
     await conn.execute(
@@ -178,7 +178,7 @@ async def _scrub_registered(conn: Any) -> None:
         "DELETE FROM facts WHERE subject LIKE 'cw\\_entity\\_%'")
     await conn.execute(
         "DELETE FROM entity_profiles WHERE canonical_name LIKE 'cw\\_entity\\_%'")
-    # W11 C-2b-2/facts: the fact rows (predicate ``cw_fact*``) and the
+    # The fact rows (predicate ``cw_fact*``) and the
     # vocabulary family (``cw_fact.*``) test_consult_write_fact.py mints.
     await conn.execute("DELETE FROM facts WHERE predicate LIKE 'cw\\_fact%'")
     await conn.execute("DELETE FROM vocabulary_entries WHERE family LIKE 'cw\\_fact%'")
@@ -573,7 +573,7 @@ async def test_the_routes(world: World, monkeypatch):
 
 
 async def test_the_list_is_scoped_and_the_whole_ledger_never_carries_a_code(world: World, monkeypatch):
-    """W5-F8 — a read names its scope; ``?all=1`` needs an explicit principal and never leaks a code."""
+    """A read names its scope; ``?all=1`` needs an explicit principal and never leaks a code."""
     monkeypatch.delenv("LEGBA_REGISTRY_API_TOKEN", raising=False)
     monkeypatch.setenv("LEGBA_DEV_MODE", "1")
     app, _front = _writes_app(world)
@@ -712,7 +712,7 @@ def test_an_armed_request_without_the_grant_is_409_and_an_unrecorded_turn_is_503
 
 @pytest.mark.parametrize("shape", ["bad_status", "envelope"])
 async def test_an_actor_side_writes_unavailable_is_409_never_a_502(monkeypatch, shape):
-    """W5-F7 — the actor's own ``writes_unavailable`` refusal reaches the operator as 409."""
+    """The actor's own ``writes_unavailable`` refusal reaches the operator as 409."""
     import legba.data.registry.consult_api as consult_api
     from legba.data.registry.consult_runs import ConsultRunError
 

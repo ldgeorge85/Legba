@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane G-6: the harness egress guard. A compose service name that resolves
+"""The harness egress guard. A compose service name that resolves
 to a PUBLIC address (the host's resolver qualified ``opensearch`` with its
 search domain, whose wildcard answered) is refused before any connection; so
 is an undeclared name and a raw public address. Loopback, a declared name

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for the Program 6 L2 divergence-map route (7b-v).
+"""Tests for the layer divergence-map route.
 
 Covers :mod:`legba.data.registry.layers_api`:
 

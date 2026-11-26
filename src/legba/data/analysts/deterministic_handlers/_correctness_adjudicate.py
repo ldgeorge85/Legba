@@ -2,9 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """G1 — ADJUDICATION and THE TWO SHARES.
 
-Ported from ``planning/PROGRAM1_2026-09-16/score_step2.py`` (the adjudication
-rule and the shares) and ``PROOF_ROUND_2026-09-12/score_r4.py`` (the family
-agreement the re-gate scores with).
+The adjudication rule, the shares, and the family agreement the re-gate
+scores with.
 
 THE ADJUDICATION RULE is a rule about AGREEMENT, not about truth: the label at
 least TWO of the three families gave. No tie-break, no precedence ladder, no
@@ -50,7 +49,7 @@ from ._correctness_grade import UNPARSEABLE
 SPLIT = "split"
 UNPARSEABLE_ADJ = "unparseable"
 
-#: Program 1's pre-registered bars (PREREG_P1 §6 == R4's D4 bars). Used by the
+#: The pre-registered bars. Used by the
 #: RE-GATE only; never re-applied to a live country's own prose.
 POOLED_BAR = 0.75
 PAIRWISE_BAR = 0.70
@@ -146,7 +145,7 @@ def _disagreeing(family: str, claim_id: str, verdict: Any) -> str:
     """The verdict as the agreement math should see it.
 
     An UNPARSEABLE becomes unique to its (family, claim), so it can never be
-    equal to anything — PREREG_P1 §6's "UNPARSEABLE counts as disagreement",
+    equal to anything — the pre-registered "UNPARSEABLE counts as disagreement" rule,
     enforced in the DATA rather than by special-casing the shared function.
     """
     if verdict == UNPARSEABLE or not isinstance(verdict, str) or not verdict:

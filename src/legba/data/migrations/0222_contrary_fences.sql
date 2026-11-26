@@ -3,9 +3,9 @@
 --
 -- 0222_contrary_fences.sql
 --
--- Program 7a — THE FOUR FENCES on `claim_contentions.stance='contradicts'`,
+-- THE FOUR FENCES on `claim_contentions.stance='contradicts'`,
 -- written against the contrary-evidence pass's FIRST LIVE RUN
--- (planning/NEXT_ARC_CAPTURE_2026-09-23.md §A.1, docs/ANALYSIS.md §10.6.1).
+-- (docs/ANALYSIS.md §10.6.1).
 --
 -- ─────────────────────────────────────────────────────────────────────────
 -- WHY. Three rows, all false.

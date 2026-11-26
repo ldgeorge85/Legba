@@ -5,7 +5,7 @@
 This module defines the *framework* primitives that every seed adapter shares,
 mirroring how ``data/sources/`` source handlers share a contract — except seed
 adapters write to the **knowledge layer** (``facts`` / ``nexuses`` /
-``entity_profiles``) instead of ``signals``. See planning/SEEDING_SKETCH.md.
+``entity_profiles``) instead of ``signals``.
 
 Three concerns live here:
 

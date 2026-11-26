@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """G3 — THE WEIGHTED-COMPARISON LICENCE: the record's own ranking, relayed.
 
-THE DEFECT, and it is a GRADER defect rather than a fabrication. D-6's N=5
-clause replay (``planning/D6_PROMPT_CLAUSE_REPORT.md`` §4.4) measured the
+THE DEFECT, and it is a GRADER defect rather than a fabrication. A five-run
+prompt-clause replay measured the
 instrument-prose class falling 7 of 11 judge failures to 3 of 8 — the prompt
 clause did its job — and watched the failures REDISTRIBUTE rather than
 disappear. The new leading residual (1 → 3) is one shape:
@@ -21,8 +21,8 @@ unranked roll of threads *"is a roll call, not a bottom line"*. The composition
 rubric then grades each claim against the sub-claim its marker names — and no
 single bounded block states a comparison ACROSS blocks, so the judge returns
 ``unsupported`` on the exact sentence the channel asked for. **The channel's
-voice contract and its grader were in direct tension**, and D-6 §6.1 named the
-fix as *"the ``rank`` exemption widened to the record's own order, or the rubric
+voice contract and its grader were in direct tension**, and the
+fix was named as *"the ``rank`` exemption widened to the record's own order, or the rubric
 taught that the assembly performs one ranking the voice may relay"*.
 
 THE HONEST FIX IS THE SECOND ONE, and it rests on a fact about the payload
@@ -72,7 +72,7 @@ THE LICENCE, in full. All four conditions, and each one can withhold it:
          crowns the record's top-ranked block (ordinal 1) and is therefore
          relaying the order's own head. This is ``assessment_unsupported``'s
          third ``rank`` exemption, widened from the marker surface to the
-         grader, which is exactly what D-6 §6.1 asked for.
+         grader, which is the fix the replay called for.
        * ``refusal`` — a NEGATED weighing ("no single driver eclipsing the
          others", "neither outweighs the other") on a record whose arithmetic
          says concentration was NOT earned. The record refused to crown; the
@@ -150,7 +150,7 @@ def _verify():
 
 #: The rule ``assessment_channel.assessment_evidence_text`` writes between a
 #: block's quoted span and the record's own arithmetic. RESTATED (see the
-#: banner's last paragraph) and pinned against the owner by a test. It is the
+#: banner's last paragraph) and pinned by a test. It is the
 #: population fence: an evidence entry carrying this rule is an Assessment
 #: citation and nothing else in the tree has ever produced one.
 ARITHMETIC_RULE: str = "--- THE RECORD THIS BLOCK SITS IN ---"

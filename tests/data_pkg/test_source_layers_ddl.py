@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Program 6 L0 migration 0214 — the ``source_layers`` / ``desk_apertures``
+"""The ``source_layers`` / ``desk_apertures``
 SCHEMA contract.
 
 Asserts the invariants the migration exists to make representable/

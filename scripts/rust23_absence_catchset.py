@@ -12,9 +12,9 @@ disqualified its own best-scoring cell for exactly that (soft precision bought
 with pass-side integrity), so an absence-rubric change with no catch-side
 measurement is not deployable on this program's own precedent.
 
-THE SOURCE. ``planning/PROOF_ROUND_2026-08-20/`` lane C-D graded the product's
+THE SOURCE. A proof round (2026-08-20) graded the product's
 insufficiency / absence claims against Tier-1/2 world evidence and returned
-``evidence-existed`` on 29 of 51 graded atoms (SCORES.md §C-D). Those are true
+``evidence-existed`` on 29 of 51 graded atoms. Those are true
 fails with an adjudicated, ARCHIVED refuting span — the only population in the
 record that can answer "does v4 still catch a negative the evidence refutes?".
 
@@ -54,7 +54,7 @@ The dominant expected skip is (1)/(2): most C-D atoms target a SCORECARD band
 (``insufficient-evidence``, reason below-floor), which the deterministic floor
 produces and the judge never grades.
 
-Writes a fixture the replay harness consumes. Read-only over ``planning/``.
+Writes a fixture the replay harness consumes. Read-only over the round directory.
 """
 from __future__ import annotations
 
@@ -345,7 +345,7 @@ def build(round_dir: str) -> tuple[list[dict], list[dict]]:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--round", default="/usr/local/deployments/active/legba/"
-                                          "planning/PROOF_ROUND_2026-08-20")
+                                          "the proof-round output directory")
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
 

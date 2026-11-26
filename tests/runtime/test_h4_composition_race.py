@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """H4 — THE SCHEDULING RACE.
 
-``planning/PROOF_ROUND_2026-08-25/VERDICT_DRAFT.md`` measured 30 of 31 country
+A measurement found 30 of 31 country
 targets showing desk heads landing AFTER their own composition had already
 frozen (scorecard 04:40Z < composition 07:27-15:39Z < heads ~17:05Z) — a
 composition's cadence is deliberately staggered AFTER its units'

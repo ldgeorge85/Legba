@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.ecdc.epidemiological_updates": {
+      "source": "source_ecdc_epidemiological_updates.yaml",
+      "state": "draft"
+    }
+  }
+}

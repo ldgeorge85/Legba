@@ -2,7 +2,7 @@
 #
 # A `deterministic`-kind META analyst that whole-rebuilds `graph_arcs` — the
 # disposable, plane-tagged, cross-layer graph projection — from every source
-# table (spec §4.1), then swaps it in atomically and stamps graph_arcs_meta
+# table, then swaps it in atomically and stamps graph_arcs_meta
 # (projected_at / arc_count / source_counts / build_seconds — the E4 trigger
 # reading and the S-1 parity surface).
 #
@@ -24,7 +24,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: draft
-  owner: data_model_v3_p4b
+  owner: owner@local
 
 subscription:
   # META sweep: the handler reads the whole substrate directly through

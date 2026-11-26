@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The ``principal_kind`` family: the kinds of thing that can WRITE a row
-(data-model lane 9, "who writes").
+("who writes").
 
 A principal is one row in ``principals``: a person (linked to ``users``), a
 service, an analyst seat (descriptor id + version), a deterministic rule, or a

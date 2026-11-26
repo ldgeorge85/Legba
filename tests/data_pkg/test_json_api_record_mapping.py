@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane N-R — json_api ``title_template`` + ``geometry``, and the geocoder's
+"""json_api ``title_template`` + ``geometry``, and the geocoder's
 at-sea rung, end to end through the real handler and the real geocode filter.
 
 Fixture records mirror the UKMTO incident shape (field names and value

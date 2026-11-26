@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane I-2 — a page fetched ON REQUEST lands as a normal document.
+"""A page fetched ON REQUEST lands as a normal document.
 
 Three proofs over the recording pool (the database half — the real tables,
 collapse / fill-in, enrichment, geocoding, the desk slice — is in

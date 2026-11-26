@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """``kev_digest`` sub-handler — a deterministic digest of NEW catalogue entries.
 
-No model call. Lane K-2 (2026-11-14). The cyber desk's register feed
-(``source.cisa.kev``, lane K-1) lands each newly added catalogue entry as ONE
+No model call. The cyber desk's register feed
+(``source.cisa.kev``) lands each newly added catalogue entry as ONE
 signal: ``payload.external_id`` = the CVE id, ``payload.item`` = the whole
 record (cveID, vendorProject, product, vulnerabilityName, dateAdded, dueDate,
 knownRansomwareCampaignUse, …). This handler lists the entries that entered

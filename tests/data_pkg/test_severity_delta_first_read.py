@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Roll 83 — a first read's movement call is ``new``, decided in code.
+"""A first read's movement call is ``new``, decided in code.
 
-The cyber desk's first run (roll 82) tagged ``severity_delta:steady`` with no
+The cyber desk's first run tagged ``severity_delta:steady`` with no
 prior finding anywhere. Whether a prior finding exists is a row, not a
 judgement, so ``inline_target.run_method`` settles it before NARRATE. Held on
 the real path: the cyber desk's own descriptor options through the runtime's

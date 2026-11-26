@@ -34,7 +34,7 @@ the as-of + scope lines. HARD STOP $1 (design §7) by construction: the call's
 per 3 characters) plus the full output cap cannot cross the stop; if fewer than
 4,000 output tokens fit, the question is refused rather than squeezed.
 
-The G0 lane runs this as a DRY RUN only (fixtures); a paid call needs the gate
+Without the gate this runs as a DRY RUN only (fixtures); a paid call needs the gate
 (``--execute --run-ceiling-usd --prices``) exactly as ``run_arm.py``.
 """
 

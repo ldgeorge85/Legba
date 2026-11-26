@@ -54,6 +54,10 @@ import type { JudgeStatsResponse, SourceFiringRow } from '@/lib/api'
 import type { GraderRoster } from '@/lib/graderRosterModel'
 import type { AbsenceResponse } from '@/lib/absenceModel'
 import { relativeTime } from '@/lib/findingsViews'
+import { SUBJECT_NOUN } from '@/lib/subjectNoun'
+
+/** The profile's subject noun, for the sentences below. */
+const SUBJECT = SUBJECT_NOUN.toLowerCase()
 
 /** What a figure with no measurement behind it prints. Never `0`, never blank. */
 export const UNMEASURED = 'unmeasured'
@@ -123,10 +127,10 @@ export function sourcesFigure(
   now: number = Date.now(),
 ): CoverageFigure {
   if (failed) {
-    return absent('sources', 'sources', 'the source-firing matrix could not be read — /v3/system/source-firing did not answer, so there is no coverage reading to give')
+    return absent('sources', 'sources', 'which sources are firing could not be read, so there is no coverage reading to give')
   }
   if (!Array.isArray(rows)) {
-    return absent('sources', 'sources', 'the source-firing matrix has not been read yet — /v3/system/source-firing')
+    return absent('sources', 'sources', 'which sources are firing has not been read yet')
   }
   if (rows.length === 0) {
     return absent('sources', 'sources', 'no source is wired here — the firing matrix is empty, which is a roster with nothing in it rather than a roster firing at zero')
@@ -207,21 +211,21 @@ export function absenceFigure(
     return absent(
       'absence',
       'gaps',
-      'no single desk is in scope — /v3/absence answers one desk at a time, so there is no typed-absence count to give here. Scope a desk and this figure fills in.',
+      `no single ${SUBJECT} is chosen — gaps are counted one ${SUBJECT} at a time, so there is no count to give here. Choose a ${SUBJECT} and this figure fills in.`,
     )
   }
   if (failed) {
     return absent(
       'absence',
       'gaps',
-      `the typed-absence read for ${scopeTargetId} failed — /v3/absence?scope=${scopeTargetId} did not answer`,
+      `the gaps for ${input.scopeLabel || scopeTargetId} could not be read`,
     )
   }
   if (!res || !Array.isArray(res.absences)) {
     return absent(
       'absence',
       'gaps',
-      `the typed absences for ${scopeTargetId} have not been read yet — /v3/absence?scope=${scopeTargetId}`,
+      `the gaps for ${input.scopeLabel || scopeTargetId} have not been read yet`,
     )
   }
   const n = res.absences.length
@@ -231,17 +235,17 @@ export function absenceFigure(
   return {
     id: 'absence',
     label: 'gaps',
-    value: `${NUM.format(n)} typed`,
+    value: `${NUM.format(n)} recorded`,
     asOf: ago(res.read_at, now),
     title:
-      `${NUM.format(n)} typed absence${n === 1 ? '' : 's'} on ${label}, each with the proof of ` +
+      `${NUM.format(n)} gap${n === 1 ? '' : 's'} recorded on ${label}, each with the proof of ` +
       `what was checked and the clock saying whether anyone has looked since. ` +
       (staleN > 0
         ? `${NUM.format(staleN)} of them are last known and NOT re-checked. `
         : 'None of them is past its re-check. ') +
       (notMeasured > 0
-        ? `${NUM.format(notMeasured)} absence kind${notMeasured === 1 ? '' : 's'} could not be read for this scope at all. `
-        : 'Every absence kind was read for this scope. ') +
+        ? `${NUM.format(notMeasured)} kind${notMeasured === 1 ? '' : 's'} of gap could not be read here at all. `
+        : 'Every kind of gap was read here. ') +
       `Read at ${res.read_at}.`,
     unmeasured: false,
   }

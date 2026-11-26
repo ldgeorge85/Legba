@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Program 6 L0 — the ``layer_map`` descriptor schema
+"""The ``layer_map`` descriptor schema
 (``legba.data.registry.layer_map_schema``, migration 0214).
 
 Covers: the closed layer vocabulary is rejected off-list; an aperture
@@ -199,7 +199,7 @@ def test_descriptor_rejects_malformed_country(bad: str):
 
 
 # ---------------------------------------------------------------------------
-# 7. The committed IL map (curated, Program 6 L0 curate_il lane) round-trips
+# 7. The committed IL map (curated) round-trips
 #    through the real model. IL was the pilot DRAFT (docs/DATA_SOURCES.md) and has
 #    since been curated: reviewed state, real per-layer aperture
 #    declarations, and a reason on every entry that is either a confirmed

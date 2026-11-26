@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane N-R — the json_api record-mapping additions are byte-neutral.
+"""The json_api record-mapping additions are byte-neutral.
 
 ``title_template`` and ``geometry`` (lat/lon paths) are new, OPTIONAL json_api
 config. A source that declares neither must emit exactly the signals it

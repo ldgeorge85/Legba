@@ -48,6 +48,7 @@ import {
   type SourceFiringRow,
 } from '@/lib/api'
 import type { GraderRoster } from '@/lib/graderRosterModel'
+import { utcClock } from '@/lib/readerVocabulary'
 import { JUDGE_DEFAULT_WINDOW_DAYS } from '@/lib/judgeStats'
 import type { AbsenceResponse } from '@/lib/absenceModel'
 import {
@@ -68,6 +69,12 @@ const FOOTER_POLL_MS = 300_000
 
 export interface StatusBarProps {
   mode: Mode
+  /**
+   * Which side of the console is showing. The judge and grader figures are
+   * the checking machinery's own numbers: the operator side states them, the
+   * reader side does not (and does not ask for them).
+   */
+  side?: 'reader' | 'operator'
   authenticated: boolean
   lastRefresh: Date | null
   errorText?: string | null
@@ -131,7 +138,7 @@ function Figure({
  * in `lib/coverageFooter.ts`, so what the footer is allowed to claim is
  * argued with in a unit test rather than inside a component.
  */
-function CoverageLine({ onOpenPanel }: { onOpenPanel?: (kind: PanelKind) => void }) {
+function CoverageLine({ onOpenPanel, engine }: { onOpenPanel?: (kind: PanelKind) => void; engine: boolean }) {
   // `/v3/absence` answers ONE desk. A scope that names exactly one target is
   // the only case with a count to give; anything else states why it has none.
   const scope = useScope((s) => s.scope)
@@ -164,6 +171,7 @@ function CoverageLine({ onOpenPanel }: { onOpenPanel?: (kind: PanelKind) => void
     queryFn: () => fetchJudgeStats({ days: JUDGE_WINDOW_DAYS }),
     refetchInterval: FOOTER_POLL_MS,
     retry: false,
+    enabled: engine,
   })
 
   const grader = useQuery<GraderRoster>({
@@ -171,6 +179,7 @@ function CoverageLine({ onOpenPanel }: { onOpenPanel?: (kind: PanelKind) => void
     queryFn: () => apiGet<GraderRoster>('/v3/eval/grader_roster?nights=7'),
     refetchInterval: FOOTER_POLL_MS,
     retry: false,
+    enabled: engine,
   })
 
   const figures: CoverageFigure[] = [
@@ -181,8 +190,7 @@ function CoverageLine({ onOpenPanel }: { onOpenPanel?: (kind: PanelKind) => void
       res: absence.data,
       failed: absence.isError,
     }),
-    judgeFigure(judge.data, judge.isError),
-    graderFigure(grader.data, grader.isError),
+    ...(engine ? [judgeFigure(judge.data, judge.isError), graderFigure(grader.data, grader.isError)] : []),
   ]
 
   return (
@@ -199,6 +207,7 @@ function CoverageLine({ onOpenPanel }: { onOpenPanel?: (kind: PanelKind) => void
 
 export function StatusBar({
   mode,
+  side = 'operator',
   authenticated,
   lastRefresh,
   errorText,
@@ -224,12 +233,17 @@ export function StatusBar({
             mode: {mode}
           </span>
         )}
-        <CoverageLine onOpenPanel={onOpenPanel} />
+        <CoverageLine onOpenPanel={onOpenPanel} engine={side === 'operator'} />
       </div>
       <div className="flex shrink-0 items-center gap-3">
         <ExportBasketChip onOpen={onOpenExport} />
         {errorText && <span className="max-w-md truncate text-accent-critical">{errorText}</span>}
-        {lastRefresh && <span>refreshed {lastRefresh.toLocaleTimeString()}</span>}
+        {/* One clock: every time the console prints is UTC with a "Z". */}
+        {lastRefresh && (
+          <span title="Times on this console are UTC" data-testid="statusbar-refreshed">
+            updated {utcClock(lastRefresh)}
+          </span>
+        )}
         {/* X3-B3: who the registry says is here (GET /auth/me). */}
         <IdentityChip storedToken={authenticated} />
         <PreferencesControls />

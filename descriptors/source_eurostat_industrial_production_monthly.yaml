@@ -1,0 +1,159 @@
+# Eurostat's production in industry (mining,
+# manufacturing, electricity and gas; NACE B-D), calendar and seasonally
+# adjusted, index 2021 = 100, monthly (dataset sts_inpr_m), for the euro area
+# and its four largest economies, as a SERIES. Ships DRAFT; the reference host
+# walks it to CONFIGURED (descriptors/LIFECYCLE.md), never active — activation
+# is an admin's call. Kind: series_api, `format: jsonstat`.
+#
+# WHY: the real-economy activity reading beside the inflation and policy-rate
+# series the archive already holds; industry is where energy and supply-chain
+# shocks show first.
+#
+# THE ENDPOINT. Eurostat dissemination API,
+# /api/dissemination/statistics/1.0/data/sts_inpr_m, with nace_r2=B-D,
+# s_adj=SCA, unit=I21, geo=EA20, DE, FR, IT, ES and lastTimePeriod=24.
+# Checked 2026-11-25 (one GET, generic client identity, lastTimePeriod=2): 200,
+# application/json, ~4.2 KB, a JSON-stat 2.0 dataset "Production in industry -
+# monthly data", updated 2026-11-19, dimensions freq, indic_bt, nace_r2,
+# s_adj, unit, geo, time (indic_bt a single value, PRD); the time codes were
+# "2026-08" and "2026-09"; a `status` object flagged some cells ("i", "p").
+# The status flag rides as provenance.
+#
+# SUBJECTS. A country's index is subject_kind `country`, subject = the geo
+# code (DE, FR, IT, ES). The euro area (EA20, Eurostat's code for the
+# 20-member composition) is not a country: it is its own series with
+# subject_kind `entity`. Eurostat has changed the aggregate's code as members
+# joined; if it stops answering, that series goes quiet and the descriptor
+# needs the new code. UNIT: index (2021 = 100). Eurostat publishes around the
+# middle of the month, about six weeks after the reference month, and revises
+# the latest months: every poll re-reads 60 + 120 days, so a revised month is
+# a new vintage and an unchanged re-read writes nothing. A monthly series is
+# always `insufficient` under series_change's daily band; no rule is proposed
+# for it.
+#
+# Licence, in the publisher's words
+# (https://ec.europa.eu/eurostat/web/main/help/copyright-notice): "Reuse of
+# statistical data, metadata, publications, and other dissemination tools
+# published on this website for commercial or non-commercial purposes is
+# authorised provided the source is acknowledged." robots.txt was not read.
+# Class: official (the EU statistical office).
+
+identity:
+  id: source.eurostat.industrial_production_monthly
+  name: Eurostat — production in industry, index, monthly (series)
+  kind: series_api
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: owner@local
+  created: "2026-11-25T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: [en]
+  tags: [industry, production, macro, statistics, series, eu]
+  source_class: official
+  license_class: open_gov_attribution   # reuse authorised, source acknowledged
+  attribution: "Source: Eurostat, sts_inpr_m (Production in industry - monthly data)"
+  access_class: public
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "59 10 * * *"            # daily; the release lands once a month
+  cooldown_seconds: 3600
+  jitter_seconds: 120
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data/sts_inpr_m"
+  params:
+    factory_kind: list
+    raw:
+      - ["geo", "EA20"]
+      - ["geo", "DE"]
+      - ["geo", "FR"]
+      - ["geo", "IT"]
+      - ["geo", "ES"]
+      - ["nace_r2", "B-D"]
+      - ["s_adj", "SCA"]
+      - ["unit", "I21"]
+      - ["lastTimePeriod", "24"]
+  format:
+    factory_kind: text
+    raw: jsonstat
+  jsonstat_max_cells:
+    factory_kind: number
+    raw: 500
+  date_field:
+    factory_kind: text
+    raw: time
+  date_format:
+    factory_kind: text
+    raw: year_month
+  provenance_fields:
+    factory_kind: list
+    raw: [status]
+  outputs:
+    factory_kind: list
+    raw:
+      - series: eurostat.industrial_production.index
+        value_field: value
+        subject_field: geo
+        where:
+          - {field: geo, values: [EA20], negate: true}
+        unit: index
+        period: month
+        subject_kind: country
+        methodology_version: eurostat-sts-inpr-m-b-d-sca-i21/1
+      - series: eurostat.industrial_production.index_area
+        value_field: value
+        subject_field: geo
+        where:
+          - {field: geo, values: [EA20]}
+        unit: index
+        period: month
+        subject_kind: entity
+        methodology_version: eurostat-sts-inpr-m-b-d-sca-i21/1
+  lag_days:
+    factory_kind: number
+    raw: 60
+  revision_days:
+    factory_kind: number
+    raw: 120
+  backfill_days:
+    factory_kind: number
+    raw: 730
+
+sink:
+  family: observation
+  config:
+    series:
+      - id: eurostat.industrial_production.index
+        field: value
+        unit: index
+        period: month
+        subject_kind: country
+        methodology_version: eurostat-sts-inpr-m-b-d-sca-i21/1
+        description: "Production in industry (NACE B-D), calendar and seasonally adjusted, index 2021 = 100, monthly, per country (subject = the country's code in Eurostat's geo dimension)"
+      - id: eurostat.industrial_production.index_area
+        field: value
+        unit: index
+        period: month
+        subject_kind: entity
+        methodology_version: eurostat-sts-inpr-m-b-d-sca-i21/1
+        description: "Production in industry (NACE B-D), calendar and seasonally adjusted, index 2021 = 100, monthly, for the euro-area aggregate (subject = EA20, Eurostat's code for the 20-member composition)"
+
+pipeline:
+  ingestion_filters: []
+  enrichment: []
+  media: reference
+
+deps: {}
+
+subscription_policy: open

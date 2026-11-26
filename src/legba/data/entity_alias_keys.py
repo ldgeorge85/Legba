@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""``entity_alias_keys`` — backfill and drift verification (lane P-6).
+"""``entity_alias_keys`` — backfill and drift verification.
 
 The key table (migration 0263) is maintained by trigger in the same
 transaction as every ``entity_profiles`` write. Two things the trigger cannot

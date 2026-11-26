@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for the ``cross_source_coalesce`` deterministic sub-handler (P2).
+"""Tests for the ``cross_source_coalesce`` deterministic sub-handler.
 
 Three layers:
 
@@ -10,10 +10,10 @@ Three layers:
     cross-source-only / temporal-window / title-distance guards each block a
     false link. Runs in every CI lane.
   * **Synthetic embed path** (``deps=None`` + an injected fake embedder
-    satisfying the L-122 :class:`EmbeddingService` port) — proves the handler
+    satisfying the :class:`EmbeddingService` port) — proves the handler
     embeds then coalesces end-to-end without a real model/vector store, AND the
     off-by-default + degrade-not-drop (SEAM #19) refusals.
-  * **Live pivot DB** (env-gated) — the P2 acceptance: insert the SAME event via
+  * **Live pivot DB** (env-gated) — the acceptance case: insert the SAME event via
     2 ``source_id``s into ``legba_pivot_test``, run the handler with a fake
     embedder + fake Qdrant, and assert 1 canonical + 1 alias with BOTH raw rows
     preserved + idempotent rerun. Skips cleanly when the dev rig is down.
@@ -51,7 +51,7 @@ _VEC_OTHER = [0.0, 0.0, 1.0, 0.0]           # cosine 0.0 vs _VEC_EVENT
 
 
 class _FakeEmbedder:
-    """Process-local L-122 :class:`EmbeddingService` port.
+    """Process-local :class:`EmbeddingService` port.
 
     Maps a substring of the embed text to a canned vector so the handler's
     embed→coalesce path is exercised deterministically without a real model.
@@ -341,7 +341,7 @@ async def pivot_pool():
 
 
 async def test_live_pivot_acceptance(pivot_pool):
-    """P2 acceptance — same event via 2 sources (different wording, no shared
+    """Acceptance — same event via 2 sources (different wording, no shared
     content_hash) => 1 canonical + 1 cross_source_coalesce alias, both raw rows
     preserved, canonical_only sees 1, rerun idempotent."""
     import json

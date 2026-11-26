@@ -5,17 +5,12 @@
 
 WHY THIS EXISTS
 ---------------
-Every standing review converges on the same missing experiment.
-
-  * ``planning/review3.md`` §5, §9 — "No baseline comparison anywhere. […] the
-    central comparative question — *is any of this better than a much dumber
-    thing?* — has no experiment." The named fix: "pick three desks, run Legba's
-    verified composition against a $0.02 GPT-mini summary of the same 72h slice,
-    blind-grade both, publish the delta."
-  * ``planning/review1.md`` §3.5, §9 — "227k lines of pipeline and no A/B against
-    the one-shot baseline it was built to beat. […] If no reported number moves,
-    that is the most important finding the project will ever produce."
-  * ``planning/review2.md`` — same gap, same shape.
+The missing experiment: there is no baseline comparison anywhere. The central
+comparative question — *is any of this better than a much dumber thing?* — has
+no experiment. The fix is to pick three desks, run Legba's verified composition
+against a cheap one-shot summary of the same 72h slice, blind-grade both and
+publish the delta. If no reported number moves, that is itself the most
+important finding.
 
 This harness BUILDS that experiment. It does not grade it, does not deploy
 anything, and never writes to the substrate.
@@ -73,7 +68,7 @@ through the LIVE readers rather than re-derived:
      exists so a model cannot mistake fetch time for event time.
 
   What the baseline does NOT get, because they are not signals: the
-  ``[ASSESSED STRUCTURE]`` graph-metric pseudo-rows and the QW1-B desk-grounding
+  ``[ASSESSED STRUCTURE]`` graph-metric pseudo-rows and the desk-grounding
   rows (prior read / situation register / desk baseline / open questions). Those
   are tower machinery, and handing them to the baseline would leak the tower into
   the control arm. Recorded in the bundle as ``tower_only_context``.
@@ -103,7 +98,7 @@ COST / SAFETY
 USAGE
 -----
     python3 scripts/r5_ablation_harness.py run \
-        --env-file /usr/local/deployments/active/legba/.env \
+        --env-file .env \
         --out /path/to/scratch/R5_BUNDLE.json
 
     # Dry-run the selection + slices with NO LLM call (0 completions):

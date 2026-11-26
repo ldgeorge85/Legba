@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""L-170 tests for the inline_target analyst kind.
+"""Tests for the inline_target analyst kind.
 
 Covers:
   * happy path — synthetic signal list → structured finding.
@@ -161,7 +161,7 @@ def _signal_row(
 
 def test_kind_identity_constants():
     """KIND_NAME, SCHEMA_VERSION, HANDLER_VERSION, PROMPT_MODULE_PATH
-    match the L-170 contract.  These are load-bearing — the registry
+    match the contract.  These are load-bearing — the registry
     indexes by them and the optimizer imports the prompt module by
     string path."""
     assert KIND_NAME == "inline_target"
@@ -523,7 +523,7 @@ def test_coerce_finding_lifts_title_when_body_present_but_title_missing():
 
 
 # ---------------------------------------------------------------------------
-# D27 SECOND PASS — the live us/cn/fr/za case the W4 fix MISSED: the body
+# SECOND PASS — the live us/cn/fr/za case an earlier fix MISSED: the body
 # COLUMN is a JSON-STRINGIFIED envelope (a string that literally starts with
 # {"title": ...}), not a {title,body} dict whose body field is stringified.
 # Detect it, render the inner body as markdown, lift the inner title.
@@ -686,8 +686,8 @@ def test_salvage_envelope_body_returns_none_for_non_envelope():
 
 
 # ---------------------------------------------------------------------------
-# #77 — inline_target residual: bare TOOL-CALL JSON leaking into the answer
-# channel (WORLD_READ_JSON_LEAK.md §2 sub-class B). The census found 5 live
+# inline_target residual: bare TOOL-CALL JSON leaking into the answer
+# channel (a sub-class of the world-read JSON leak). The census found 5 live
 # rows in the last 30 days (cross_doc_corroborator x4, corpus_researcher x1)
 # where the REASON+ACT synthesis reply was a tool-call-shaped object instead
 # of the {title, body} contract. Every one carries a leading GATHER-style plan
@@ -811,10 +811,10 @@ def test_coerce_finding_well_formed_tool_call_json_with_no_preamble_also_fails_l
     """The preamble is not load-bearing for the fix: a tool-call object with NO
     preceding plan sentence parses cleanly on the PRIMARY attempt and lands in
     the successful dict-parse branch instead of ``_unstructured_finding`` — and
-    THAT branch already raised before this train, via its own
+    THAT branch already raised before this change, via its own
     ``is_unusable_output`` check on the empty unwrapped body. Pinned here so the
     two entry paths (primary parse vs. the ``_unstructured_finding`` fallback
-    this train fixes) are proven to agree on the same outcome."""
+    this change fixes) are proven to agree on the same outcome."""
     from legba.data.analysts.output_contract import OutputContractError
 
     raw = json.dumps(
@@ -863,7 +863,7 @@ def test_coerce_finding_prose_after_preamble_still_lands_unstructured():
     """A model that narrates a plan and then answers in PROSE (not JSON at
     all) is untouched by this fix — ``salvage_json_envelope`` returns ``{}``
     for text that is not JSON-shaped, and the D27 fallback runs exactly as it
-    did before this train."""
+    did before this change."""
     raw = (
         "Let me check the corpus for corroborating reports.\n"
         "Multiple independent sources corroborate the Hormuz incident report."
@@ -1115,7 +1115,7 @@ def test_dspy_module_compiles():
 
     Skipped when dspy isn't installed — the kind module still works
     via the direct chat_complete path; dspy is only required at
-    optimizer (L-176) compile time and at runtime when the descriptor
+    optimizer compile time and at runtime when the descriptor
     pins the prompt module path.
     """
     pytest.importorskip("dspy")
@@ -1125,7 +1125,7 @@ def test_dspy_module_compiles():
         ReasonSignature,
     )
 
-    # Signature carries the typed in/out fields per L-105 §2.2.
+    # Signature carries the typed in/out fields per §2.2.
     fields = ReasonSignature.model_fields
     assert "target_id" in fields
     assert "signals_block" in fields
@@ -1754,7 +1754,7 @@ async def test_propose_fact_tool_refuses_without_writeback():
 
 
 # ---------------------------------------------------------------------------
-# P0-T1 — cite the prose: map [N] markers -> signal ids, persist data['citations']
+# Cite the prose: map [N] markers -> signal ids, persist data['citations']
 # ---------------------------------------------------------------------------
 
 
@@ -2517,8 +2517,7 @@ async def test_run_method_gather_only_empty_slice_no_binding_still_noops():
 # ---------------------------------------------------------------------------
 # QW1-A — unit-slice RENDER quality cleans
 #
-# Evidence: planning/prompt_gallery/p1_units.md (the live `country_watch_ir`
-# 120-row slice all 8 broad units read) + p5_substrate_legs.md §3.
+# Evidence: the live `country_watch_ir` 120-row slice all 8 broad units read.
 # Every fixture below is the SHAPE of a real live row, not a hypothetical.
 # ---------------------------------------------------------------------------
 
@@ -2586,7 +2585,7 @@ def _gdelt_payload(**overrides: Any) -> dict[str, Any]:
 
 
 def test_gdelt_record_renders_as_prose_not_a_dict_dump():
-    """P1 gallery [6]: a CAMEO record rode into the prompt as ~1,500 chars of
+    """A CAMEO record rode into the prompt as ~1,500 chars of
     ``'Actor1Geo_FeatureID': 'IR'`` key-value junk. It must render as ONE
     readable line carrying the same facts."""
     row = {
@@ -2743,7 +2742,7 @@ def test_plain_slice_prompt_carries_no_legend():
 
 
 def test_dead_row_is_dropped_before_the_slice_is_numbered():
-    """P1 gallery [4]: ``(untitled)`` + empty snippet — a bare t.me forward the
+    """``(untitled)`` + empty snippet — a bare t.me forward the
     model can cite and ground NOTHING on. 632 of 5,377 rows in a live 24h
     window were this. Dropped, and counted in the ORIENT receipt."""
     live_id, dead_id = uuid4(), uuid4()
@@ -2768,7 +2767,7 @@ def test_dead_row_is_dropped_before_the_slice_is_numbered():
 
 
 def test_headline_only_row_is_KEPT():
-    """P1 gallery [5]: a real headline with an empty body IS evidence — only
+    """A real headline with an empty body IS evidence — only
     the both-empty case is dead. Keep-test for the drop above."""
     row = {"id": uuid4(),
            "title": "Oil price rises after Iran says it stops ships in Hormuz",
@@ -2824,7 +2823,7 @@ def test_translated_body_is_preferred_over_raw_arabic():
 
 
 def test_untranslated_body_renders_an_honest_marker():
-    """P1 gallery [2]: translated TITLE, raw Arabic BODY, no translation and no
+    """Translated TITLE, raw Arabic BODY, no translation and no
     distilled brief — say so instead of spending context on script the analyst
     cannot cite and the judge cannot grade."""
     row = {

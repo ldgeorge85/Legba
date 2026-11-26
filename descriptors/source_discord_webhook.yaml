@@ -8,8 +8,7 @@
 # would let the fleet ingest directly, complementing the RSS-skewed
 # collection surface as domains expand.
 #
-# ⚠ CORRECTION vs the source CODE_CLEANUP_ANALYSIS_2026-08-02.md list: it
-# used the module filename (`discord`) as the presumed dispatch kind.
+# NOTE: the dispatch kind is not the module filename (`discord`).
 # `source_factory.discover_source_kinds()` actually keys its registry by the
 # handler CLASS's `kind: ClassVar[str]` attribute, which for
 # `DiscordWebhookSourceHandler` is `"discord_webhook"`, not `"discord"`.
@@ -39,7 +38,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: w1e_built_but_unbound
+  owner: owner@local
   created: "2026-08-03T00:00:00Z"
 
 scope:
@@ -48,7 +47,7 @@ scope:
   languages: [en]
   tags: [push, discord, osint, community]
   source_class: analysis
-  access_class: restricted          # Wave-E — never-bound generic adapter; no concrete source to review terms for — fail-closed until classified at activation
+  access_class: restricted          # never-bound generic adapter; no concrete source to review terms for — fail-closed until classified at activation
 
 acquisition: push
 

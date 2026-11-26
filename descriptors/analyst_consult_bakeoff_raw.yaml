@@ -1,6 +1,6 @@
-# X3/G0 — consult_bakeoff_raw: the bake-off's ARM B (DRAFT).
+# consult_bakeoff_raw: the bake-off's ARM B (DRAFT).
 #
-# planning/reviews/BAKEOFF_DESIGN.md v1.1 §2, arm B — frontier consult over the
+# Arm B — frontier consult over the
 # RAW corpus (six source readers, nothing derived). A consult_on_demand analyst
 # that grants exactly ONE read pack, substrate_read_raw, and nothing else: the
 # runtime then binds the consult kind's governed read binding over that pack
@@ -10,7 +10,7 @@
 # list_findings first.
 #
 # NOT the stock consult: a run of consult_default is labelled B* by the harness
-# and excluded from the primary analysis (design §2).
+# and excluded from the primary analysis.
 #
 # Invoked ONLY by scripts/bakeoff/run_arm.py, directly on the actor
 # (analyst::consult_bakeoff_raw::<version[:16]>), never through the registry's
@@ -28,7 +28,7 @@
 # tool). budget_tokens_per_day 0 (house rule): the spend stop is the harness's.
 #
 # DRAFT. NOT in scripts/bringup_register_analysts.py. The operator registers and
-# activates it for the bake-off window through the audited lifecycle (G1) and
+# activates it for the bake-off window through the audited lifecycle and
 # retires it after.
 
 identity:
@@ -41,7 +41,7 @@ identity:
     input_type: legba.runtime.ConsultQuestion
     output_type: legba.runtime.ConsultResponse
   state: draft
-  owner: x3_g0_bakeoff
+  owner: owner@local
 
 subscription:
   substrate:
@@ -60,14 +60,12 @@ method:
       raw: llm.primary.openai_compat
       expected_family: llm_provider
     max_tokens: 32768
-  # W11-F133 — consult 6cd91190 (2026-10-29): the forced final died on a
-  # transient network error after 19 minutes and the actor's default transient
-  # retry (3 attempts) re-ran the WHOLE consult from scratch on the same
-  # request id — 19 more rounds, 162 tool calls, re-spent unasked, and that run
-  # failed too. A consult runs ONCE: its failure (or its partial answer) goes to
-  # the operator, who decides whether to ask again. Lane W11-G1 (bake-off
-  # readiness, 2026-11-05): a paid bake-off question runs once too — a re-run
-  # would bill the question twice under one hard stop the harness cannot see.
+  # A consult runs ONCE: the actor's default transient retry would re-run the
+  # WHOLE consult from scratch on the same request id (re-spending every round
+  # and tool call unasked). Its failure (or its partial answer) goes to the
+  # operator, who decides whether to ask again. A paid bake-off question runs
+  # once too — a re-run would bill the question twice under one hard stop the
+  # harness cannot see.
   retry:
     transient:
       max_attempts: 1

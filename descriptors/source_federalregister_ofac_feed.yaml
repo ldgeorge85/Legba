@@ -1,4 +1,4 @@
-# sources_2026_11_13 — draft SourceDescriptor. Ships DRAFT (operator activates).
+# Draft SourceDescriptor. Ships DRAFT (operator activates).
 #
 # Federal Register — Office of Foreign Assets Control (Treasury) documents:
 # the published notices of OFAC sanctions actions (designations, removals),
@@ -21,7 +21,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: sources_2026_11_13
+  owner: owner@local
   created: "2026-11-13T00:00:00Z"
 
 scope:

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W11-F93 — a consult turn is judged after it SETTLES, inside the judge's own
+"""A consult turn is judged after it SETTLES, inside the judge's own
 budget, and a judge that cannot run says why.
 
 2026-10-15: a capped consult turn printed a bare "not judged · judge

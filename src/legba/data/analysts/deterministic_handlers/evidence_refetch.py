@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """``evidence_refetch`` sub-handler — re-fetch the textless backlog on
-fetch-policy hosts (W11-F138).
+fetch-policy hosts.
 
 THE DEFECT it drains. Every Times of Israel and Jerusalem Post signal of the
 last 30 days was ingested with a summary and no ``payload.text``: both hosts

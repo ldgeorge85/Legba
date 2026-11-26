@@ -3,6 +3,7 @@ import { beforeEach } from 'vitest'
 import { setSubjectIndex, subjectIndexFrom } from '@/lib/subjectIndex'
 import { dropCachedGets } from '@/lib/queryCache'
 import subjectRoster from '@/test/subjectRoster.fixture.json'
+import { __newPageLoad } from '@/lib/pageLoad'
 
 // JSDOM doesn't implement WebSocket or fetch by default. The tests that
 // touch these provide their own mocks; we just stub here so imports don't
@@ -62,3 +63,7 @@ beforeEach(() => setSubjectIndex(SUBJECT_ROSTER))
 // X4 READPATH — the api layer's GET cache (`lib/queryCache`) is module state:
 // one test's mocked `/findings` answer must never be another test's.
 beforeEach(() => dropCachedGets())
+
+// THE ONE "SINCE" (`lib/morningReadBands::pageVisit`) is resolved once per
+// page load and kept in module state: each test is its own page load.
+beforeEach(() => __newPageLoad())

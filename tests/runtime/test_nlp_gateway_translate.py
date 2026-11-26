@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W11-F109 — translation on the innoai gateway's chat model.
+"""translation on the model gateway's chat model.
 
 The gateway has no translate route; :meth:`GatewayNlpClient.translate` asks the
 ``fast`` chat alias instead, behind the legacy ``/translate`` contract
@@ -39,17 +39,18 @@ from legba.data.stack.nlp_service.gateway_translate import (
 )
 from legba.runtime.nlp_client_factory import build_nlp_client_from_stack_component
 from legba.runtime.registry_client import RegistryHTTPClient
+from tests._gateway_env import GATEWAY_ENV
 
 _REPO = Path(__file__).resolve().parents[2]
-_YAML = _REPO / "descriptors" / "stack_component_nlp_innoai_gateway.yaml"
-_COMPONENT_ID = "nlp.innoai.gateway"
+_YAML = _REPO / "descriptors" / "stack_component_nlp_gateway_bearer.yaml"
+_COMPONENT_ID = "nlp.gateway.bearer"
 _BASE = "https://gw.test/v1"
 _TOKEN = "tok-test"
 _RU = "Путин заявил сегодня, что переговоры продолжатся."
 _EN = "Putin said today that the negotiations will continue."
 
 
-def _completion(content: Any, *, served: str = "MiMo-V2.6-Flash") -> httpx.Response:
+def _completion(content: Any, *, served: str = "core-chat-model") -> httpx.Response:
     return httpx.Response(
         200,
         headers={"x-served-model": served},
@@ -327,7 +328,7 @@ async def test_the_request_text_is_never_logged(caplog):
     assert caplog.records, "the counts-only debug line is emitted"
     assert all(_RU not in r.getMessage() and _EN not in r.getMessage()
                for r in caplog.records)
-    assert "served_model=MiMo-V2.6-Flash" in caplog.text
+    assert "served_model=core-chat-model" in caplog.text
     assert "completion_tokens=12" in caplog.text
 
 
@@ -352,7 +353,8 @@ async def test_supports_translate_follows_the_configured_model(model, expected):
 def test_the_descriptor_validates_with_translate_model():
     model = NLPService.model_validate(yaml.safe_load(_YAML.read_text()))
     assert model.config.translate_model is not None
-    assert model.config.translate_model.raw == "fast" == DEFAULT_TRANSLATE_MODEL
+    # The chat model is deployment data: the descriptor names the variable.
+    assert model.config.translate_model.raw == "${env:LEGBA_GATEWAY_TRANSLATE_MODEL}"
     assert "no translation" not in model.name
 
 
@@ -362,7 +364,7 @@ def test_translate_model_is_refused_on_the_legacy_provider():
         "endpoint": t("https://nlp.example.internal"),
         "translate_model": t("fast"),
     }
-    with pytest.raises(ValueError, match="translate_model is for provider 'innoai_gateway'"):
+    with pytest.raises(ValueError, match="translate_model is for provider 'bearer_gateway'"):
         NLPServiceConfig.model_validate(cfg)
     cfg.pop("translate_model")
     assert NLPServiceConfig.model_validate(cfg).translate_model is None
@@ -377,8 +379,8 @@ def _registry(body: dict[str, Any]) -> RegistryHTTPClient:
 
 
 @pytest.mark.parametrize("mutate, expected", [
-    (lambda c: None, "fast"),
-    (lambda c: c.pop("translate_model"), "fast"),
+    (lambda c: None, GATEWAY_ENV["LEGBA_GATEWAY_TRANSLATE_MODEL"]),
+    (lambda c: c.pop("translate_model"), DEFAULT_TRANSLATE_MODEL),
     (lambda c: c.__setitem__("translate_model", {"factory_kind": "text", "raw": "deep"}), "deep"),
     (lambda c: c.__setitem__("translate_model", {"factory_kind": "text", "raw": ""}), None),
 ])
@@ -497,3 +499,11 @@ async def test_the_sweep_leaves_a_row_unstamped_on_a_refused_answer():
     assert result.finding.data["failures"] == 1
     assert result.finding.data["titles_stamped"] == 0
     assert pool.writes == [], "garbage is never stamped; the row stays a candidate"
+
+
+@pytest.fixture(autouse=True)
+def _gateway_env(monkeypatch):
+    """The gateway descriptors name their endpoint and models as ${env:NAME}."""
+    from tests._gateway_env import set_gateway_env
+
+    set_gateway_env(monkeypatch)

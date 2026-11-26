@@ -33,7 +33,7 @@ THREE WAYS THIS DIFFERS FROM THE VOICE-4 KIT, each deliberate:
    tree holds, and the tree still gives the held desk its pre-D6 body shape.
 
 2. **THE PIN IS A CONTENT PROPERTY, NOT A FROZEN DIGEST.** VOICE-4 pinned nine
-   sha256s because its prompts came from drafts in gitignored ``planning/`` and
+   sha256s because its prompts came from drafts outside the tree and
    "byte-faithful to the draft" had to stay re-checkable in a clean checkout.
    FRAME-3's prompts come from the TREE, where the whole house contract is
    pinned against ``_tradecraft`` by ``tests/data_pkg/test_voice_contract.py``
@@ -263,7 +263,7 @@ def main() -> int:
         print(
             "\nThe fleet now tags severity as STANDING STATE. The bands do not "
             "move until each desk's next run writes a head under the new "
-            "contract — take the §7 before/after band diff (one conflict desk, "
+            "contract — take the before/after band diff (one conflict desk, "
             "one quiet desk) against scorecards stamped "
             "banding_semantics='standing' before reading the fleet."
         )

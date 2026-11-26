@@ -139,7 +139,7 @@ from ..data.provenance import origin as _origin
 
 # Re-exported for existing consumers (tests/runtime/test_graph_walk_cutover.py
 # imports both names from this module — the walk machinery moved to
-# ``substrate_graph_walks`` at V3/P3, the import surface did not).
+# ``substrate_graph_walks``, the import surface did not).
 from .substrate_graph_walks import _ASSERTING_FAMILIES, _walk_families  # noqa: F401,E402
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -159,7 +159,7 @@ __all__ = ["PostgresQdrantSubstrateQueryPort"]
 _MAX_ROW_LIMIT = 200
 
 # ``_FEED_EMPTY_SLACK`` and the source-health read live in
-# ``substrate_source_health`` (wave Q split); the slack is re-exported here
+# ``substrate_source_health`` (split out); the slack is re-exported here
 # so its existing readers keep their import.
 from .substrate_source_health import _FEED_EMPTY_SLACK  # noqa: E402,F401
 from .substrate_cited_refs import CITED_REFS_CLASSIFY_CAP  # noqa: E402,F401
@@ -195,7 +195,7 @@ def critic_folded_findings_sql(
 
     ``critic_as_of`` is the optional ``AND cr.produced_at <= $n`` fragment
     that dates the fold to a decision instant (``believed_as_of``).
-    ``offset_param`` (W11-F150) pages the read; without it the SQL is
+    ``offset_param`` pages the read; without it the SQL is
     byte-identical to the unpaged form.
 
     H17: the fold CTE itself is now built by
@@ -258,8 +258,8 @@ _SEARCH_CORPUS_DEFAULT_SIZE = _corpus.SEARCH_CORPUS_DEFAULT_SIZE
 # retired ``country_assessor``/``world_assessor`` MONOLITH default: the old
 # first-order ``country_assessor`` one-pager no longer produces, so keying the
 # journal's reflection surface on it read a DEAD surface. The live conclusion
-# chain is the four bounded P2 reasoning UNITS + the P3 per-country COMPOSITION
-# (``country_composition``) + the P3-T5 world COMPOSITION (``world_assessor``,
+# chain is the four bounded reasoning UNITS + the per-country COMPOSITION
+# (``country_composition``) + the world COMPOSITION (``world_assessor``,
 # repointed from the retired monolith to ``meta_findings_synthesizer`` — its
 # live head rows ARE compositions). Kept in sync with the unit set in
 # scorecard_banding.DIMENSIONS / unit_correctness_scorer._DEFAULT_UNITS and the
@@ -280,21 +280,21 @@ _ASSESSMENT_PRODUCER_ANALYSTS: tuple[str, ...] = (
     # W5 (2026-11-07): the second thematic composition, listed for the same
     # reason escalation_composition is.
     "hybrid_threat_composition",
-    # The ASSESSMENT CHANNEL (D-1 §2). After the demotion this is the surface
+    # The ASSESSMENT CHANNEL. After the demotion this is the surface
     # that ARGUES; the compositions above carry their inputs' words. The journal
     # and consult read this list, and a reflection surface that cannot see the
     # one interpretive read is reading the record and missing the reading.
     "world_assessment",
-    # P3 LANE A — the per-COUNTRY interpretive read. Listed for exactly the
+    # The per-COUNTRY interpretive read. Listed for exactly the
     # reason the comment above gives: an unlisted producer makes
     # ``get_assessments`` answer a confident empty and NAME it as "not a live
     # assessment producer", which is a false sentence the moment the channel is
     # transitioned active.
     "country_assessment",
     # The bounded units (first-order per-country reads the compositions fuse):
-    # the P2 four + the S1-T4/T5/T7 broad units, fused by country_composition +
+    # the four units + the broad units, fused by country_composition +
     # banded as fixed scorecard dimensions — the profile's ``rosters.scored_units``
-    # (ROSTER-1), the same helper scorecard_banding.DIMENSIONS reads.
+    # the same helper scorecard_banding.DIMENSIONS reads.
     *_rosters.scored_unit_roster(),
 )
 
@@ -305,7 +305,7 @@ _COMPARE_MAX_TARGETS = 12
 _COMPARE_RECENT_FINDINGS = 5
 
 # ------------------------------------------------------------------
-# Graph traversal (P5 / #99) — recursive-CTE walks over the OPEN nexus
+# Graph traversal — recursive-CTE walks over the OPEN nexus
 # graph. The nexus graph is CYCLIC (A→B, B→A, A→C→A are all legal), NOT a
 # DAG, so every traversal carries a VISITED-SET guard (the path-so-far is
 # accumulated as a text[] of lower(node) names and a candidate next hop is
@@ -313,11 +313,11 @@ _COMPARE_RECENT_FINDINGS = 5
 # independent of ``max_hops``. Every walk is additionally bounded by a hard
 # hop cap and a per-query row cap so a dense neighborhood can't explode.
 #
-# V3/P3: the machinery (SQL templates, caps, endpoint resolution, the three
+# The machinery (SQL templates, caps, endpoint resolution, the three
 # walk functions) lives in :mod:`legba.runtime.substrate_graph_walks`; the
 # port methods below delegate. The extraction is the module-size gate's own
 # instruction — the temporal parameters could not fit in the ~150 lines of
-# headroom this file had — and it is what P6's event tools will sit beside.
+# headroom this file had — and it is what the event tools sit beside.
 # ------------------------------------------------------------------
 
 
@@ -393,8 +393,8 @@ class PostgresQdrantSubstrateQueryPort:
         known_at: datetime | None = None,
     ) -> dict[str, Any]:
         """Full-text search over ``signals`` — body in
-        :mod:`legba.runtime.substrate_signal_search` (``known_at``: lane E0's
-        record-time cut, evaluation harness only)."""
+        :mod:`legba.runtime.substrate_signal_search` (``known_at``: the record-time
+        cut, evaluation harness only)."""
         return await _signal_search.search_signals(
             self._pool, query=query, limit=limit, scope_predicate=scope_predicate,
             max_limit=_MAX_ROW_LIMIT, known_at=known_at,
@@ -431,14 +431,14 @@ class PostgresQdrantSubstrateQueryPort:
         replaced or that has explicitly expired.  This is the same "open
         row" predicate the unique-triple index scopes to.
 
-        V3/P3 — ``as_of`` (ISO-8601, validity time) swaps that gate for the
+        ``as_of`` (ISO-8601, validity time) swaps that gate for the
         canonical as-of predicate (:mod:`substrate_temporal`): the facts
         that held on date D, INCLUDING rows superseded or expired since. A
         malformed value refuses rather than silently reading "now". The
         envelope then carries ``unbounded_start`` — how many returned rows
         have no recorded ``valid_from`` (over-included by construction).
 
-        V3/P7 — the gate now carries the ORIGIN-CLASS leg (migration 0209):
+        The gate now carries the ORIGIN-CLASS leg (migration 0209):
         the open read is ``live_gate_sql`` (the 0032 pair +
         ``origin_class IN ('live','web_retrieval','seed')``), so a history
         class can never read as current. On the ``as_of`` path
@@ -447,7 +447,7 @@ class PostgresQdrantSubstrateQueryPort:
         an as-of read unless the reader asks. An unknown class refuses loud
         rather than answering empty.
 
-        E2 — ``known_at`` (evaluation harness only): ``created_at < K``, and
+        ``known_at`` (evaluation harness only): ``created_at < K``, and
         the read becomes the as-of read at ``min(as_of, K)``
         (:mod:`legba.data.raw_reader_known_at`).
         """
@@ -473,7 +473,7 @@ class PostgresQdrantSubstrateQueryPort:
 
         # Current-facts gate (Piece-B follow-up): never surface superseded
         # or expired rows.  See migration 0032 — NULL on both columns is the
-        # canonical "open / live" fact; migration 0209 (V3/P7) adds the
+        # canonical "open / live" fact; migration 0209 adds the
         # origin-class leg to it.  With ``as_of`` the gate becomes the
         # as-of predicate: the open-row pair is deliberately NOT applied
         # (a row closed today was the answer on D), and ``superseded_by``
@@ -487,7 +487,7 @@ class PostgresQdrantSubstrateQueryPort:
         if as_of_dt is not None:
             params.append(as_of_dt)
             clauses.append(_temporal.temporal_predicate("", len(params)))
-            # P7 — the as-of read still defaults to the live classes; a
+            # The as-of read still defaults to the live classes; a
             # history-class row answers only when include_origin asks for it.
             clauses.append(origin_clause)
         elif include_origin is not None:
@@ -582,7 +582,7 @@ class PostgresQdrantSubstrateQueryPort:
         back to ``search_signals`` / ``query_facts`` without a crash.
 
         The body lives in :mod:`legba.runtime.substrate_entity_reads`
-        (``known_at``: lane E2's record-time cut, evaluation harness only).
+        (``known_at``: the record-time cut, evaluation harness only).
         """
         return await _entity.inspect_entity(self._pool, name=name, known_at=known_at)
 
@@ -1036,7 +1036,7 @@ class PostgresQdrantSubstrateQueryPort:
         0033).  A consult never reasons over a superseded or expired
         relationship.
 
-        V3/P3 — ``as_of`` (ISO-8601, validity time) reads the nexuses that
+        ``as_of`` (ISO-8601, validity time) reads the nexuses that
         held on date D instead: the canonical as-of predicate replaces the
         open-row gate, so a relationship superseded or expired since D still
         answers. A malformed value refuses; ``unbounded_start`` in the
@@ -1054,7 +1054,7 @@ class PostgresQdrantSubstrateQueryPort:
         # Open-nexus gate — "what holds now" is the single open row. With
         # ``as_of`` the gate becomes the as-of predicate: the open-row pair
         # is deliberately dropped and ``valid_until`` alone carries the
-        # close (spec §3.2).
+        # close.
         clauses: list[str] = []
         params: list[Any] = []
         if as_of_dt is not None:
@@ -1250,7 +1250,7 @@ class PostgresQdrantSubstrateQueryPort:
     # FINISHED INTELLIGENCE readers (the platform's OWN analytical products —
     # findings / situations / predictions; analysis-derived, source_type 'agent').
     # Wired as consult/GATHER tools so the agent can build on prior analysis
-    # instead of re-deriving from raw signals. See planning/CONSULT_PALETTE_*.
+    # instead of re-deriving from raw signals.
     # ------------------------------------------------------------------
 
     async def list_findings(
@@ -1292,8 +1292,8 @@ class PostgresQdrantSubstrateQueryPort:
         row still carries its own ``target_id``), or says plainly that the
         frame is empty. See :meth:`_resolve_empty_target_rows`.
 
-        V3/P3 — ``believed_as_of`` (ISO-8601, DECISION time — the other
-        clock from ``as_of``, spec §3.2): the findings Legba had published
+        ``believed_as_of`` (ISO-8601, DECISION time — the other
+        clock from ``as_of``): the findings Legba had published
         and not yet superseded on date D. ``analyst_outputs`` has no
         ``valid_*`` columns, so the predicate is
         ``produced_at <= D AND (superseded_at IS NULL OR superseded_at > D)``
@@ -1309,7 +1309,7 @@ class PostgresQdrantSubstrateQueryPort:
         applies AFTER the floor; ``critic_score`` is then the faithfulness
         verdict. The bake-off's arm C reads through it.
 
-        W11-F150 — ``mode="survey"``: ONE row per target, its newest LIVE
+        ``mode="survey"``: ONE row per target, its newest LIVE
         finding, ordered by target id, carrying a ``digest`` (at most 240
         characters from the top of the body) and ``body_chars``, never the
         body; drill with ``target_id`` or ``read_document(doc_id=<id>)``.
@@ -1321,7 +1321,7 @@ class PostgresQdrantSubstrateQueryPort:
         2,000) and ``next_offset``. ``limit`` defaults to 20 rows (page) or 25
         targets (survey). See :mod:`.substrate_findings_reads`.
 
-        E2 — ``known_at`` (evaluation harness only): ``created_at < K``; the
+        ``known_at`` (evaluation harness only): ``created_at < K``; the
         live-head gate becomes the decision predicate at
         ``min(believed_as_of, K)``, the critic fold and ``since_hours`` date to
         it, survey mode refuses (:mod:`legba.data.raw_reader_known_at`).
@@ -1500,14 +1500,14 @@ class PostgresQdrantSubstrateQueryPort:
         the filters applied, and names a ``status`` outside the live
         vocabulary as the reason when that is what emptied it.
 
-        V3/P3 — ``as_of`` (ISO-8601, validity time) adds the canonical as-of
+        ``as_of`` (ISO-8601, validity time) adds the canonical as-of
         predicate: the frames that held on date D, INCLUDING frames that have
         closed since. There is no open-row gate on this read (closed frames
         are already returned), so ``as_of`` narrows rather than swaps —
         ``unbounded_start`` counts returned frames with no recorded
         ``valid_from``. A malformed value refuses.
 
-        V3/P6 — the body lives in ``substrate_frame_reads.list_situations``
+        The body lives in ``substrate_frame_reads.list_situations``
         (the module-size extraction); this method is the Protocol surface.
         """
         return await _frames.list_situations(
@@ -1620,14 +1620,14 @@ class PostgresQdrantSubstrateQueryPort:
             "latest_produced_at": latest_produced_at.isoformat()
                 if latest_produced_at is not None else None,
             "feed_note": (
-                "prediction feed FROZEN since 2026-07-01 (country_predictor "
+                "prediction feed FROZEN (country_predictor "
                 "retired) — rows are historical forecasts, not live output; "
                 "check latest_produced_at before treating any row as current"
             ),
         }
 
     # ------------------------------------------------------------------
-    # belief_as_of (V3/P3) — "what did Legba believe on date D"
+    # belief_as_of — "what did Legba believe on date D"
     # ------------------------------------------------------------------
 
     async def belief_as_of(
@@ -1641,12 +1641,12 @@ class PostgresQdrantSubstrateQueryPort:
         known_at: datetime | None = None,
     ) -> dict[str, Any]:
         """The findings Legba had published and not yet superseded on date D
-        (DATA MODEL V3 §3.4) — a DECISION-time read on ``analyst_outputs``.
+        — a DECISION-time read on ``analyst_outputs``.
 
-        E2 — ``known_at`` (evaluation harness only): ``created_at < K`` and D
+        ``known_at`` (evaluation harness only): ``created_at < K`` and D
         clamped to ``min(as_of, K)``; ``fold_verdicts='latest'`` refuses.
 
-        ``analyst_outputs`` has no ``valid_*`` columns (§3.1's correction):
+        ``analyst_outputs`` has no ``valid_*`` columns:
         its validity interval is ``[produced_at, superseded_at)``, which is
         what the decision predicate filters. ``as_of`` is REQUIRED — a
         belief-as-of read with no date is a different tool (``list_findings``).
@@ -1838,7 +1838,7 @@ class PostgresQdrantSubstrateQueryPort:
         0114). Use to qualify a 'no signal on X' answer — no coverage vs a quiet
         feed. ``silent_only`` filters to sources silent > ``silent_hours``.
 
-        W11-F152 -- the body lives in ``substrate_source_health.list_sources``:
+        The body lives in ``substrate_source_health.list_sources``:
         freshest-first rows behind a whole-fleet ``summary`` (staleness and
         last-poll-outcome counts, an attention roster), each row carrying
         ``last_success_at`` and the ``staleness`` verdict; ``empty`` is
@@ -1853,7 +1853,7 @@ class PostgresQdrantSubstrateQueryPort:
         )
 
     # ------------------------------------------------------------------
-    # list_scheduled_events (W11-F141) — the always-on calendar
+    # list_scheduled_events — the always-on calendar
     # ------------------------------------------------------------------
 
     async def list_scheduled_events(
@@ -1893,7 +1893,7 @@ class PostgresQdrantSubstrateQueryPort:
         subject by merging two streams:
 
           * **facts** — current rows (the migration-0032 open pair plus the
-            P7 ``origin_class`` leg, ``live_gate_sql``) whose ``subject``
+            ``origin_class`` leg, ``live_gate_sql``) whose ``subject``
             substring-matches the argument; and
           * **signals** — recent signals whose title/summary FTS-matches
             the subject (the same Postgres ``to_tsvector`` backing
@@ -1907,13 +1907,13 @@ class PostgresQdrantSubstrateQueryPort:
         usable timestamp can't be placed on a timeline.  The merged list
         is sorted newest-first and clamped to ``limit``.
 
-        V3/P3 — ``since``/``until`` (ISO-8601) bound the window on each
+        ``since``/``until`` (ISO-8601) bound the window on each
         stream's ANCHOR, half-open ``[since, until)``, applied in SQL so the
         per-stream cap cannot evict an in-window item with an out-of-window
         one. Either bound may be given alone; a malformed value refuses
         rather than widening to all-time.
 
-        V3/P6 — the body lives in ``substrate_frame_reads.get_timeline``
+        The body lives in ``substrate_frame_reads.get_timeline``
         (the module-size extraction); this method is the Protocol surface.
         """
         return await _frames.get_timeline(
@@ -1926,7 +1926,7 @@ class PostgresQdrantSubstrateQueryPort:
         )
 
     # ------------------------------------------------------------------
-    # query_events / inspect_event (V3/P6 — spec §6.1)
+    # query_events / inspect_event
     # ------------------------------------------------------------------
 
     async def query_events(
@@ -1960,14 +1960,14 @@ class PostgresQdrantSubstrateQueryPort:
         widening to all-time.
 
         The default (no ``as_of``) read is the OPEN gate — the 0032 pair
-        plus the P7 ``origin_class`` leg — so a backfilled event can never
+        plus the ``origin_class`` leg — so a backfilled event can never
         read as live. ``as_of`` swaps to the validity predicate and only
         there does ``include_origin`` widen the class set (default
         ``LIVE_CLASSES``; an unknown class refuses). ``unbounded_start``
         counts returned rows with no recorded ``valid_from``.
 
         The body lives in ``substrate_frame_reads.query_events`` (``known_at``:
-        lane E2's record-time cut, evaluation harness only).
+        the record-time cut, evaluation harness only).
         """
         return await _frames.query_events(
             self._pool,
@@ -1992,7 +1992,7 @@ class PostgresQdrantSubstrateQueryPort:
         event_id: str,
         known_at: datetime | None = None,
     ) -> dict[str, Any]:
-        """The one-event dossier (V3/P6 — spec §6.1).
+        """The one-event dossier.
 
         Returns ``found=True`` plus the five sections: the ``event`` row
         itself (full provenance + geo + lifecycle columns); ``signals`` —
@@ -2009,14 +2009,14 @@ class PostgresQdrantSubstrateQueryPort:
         with a named error — never an empty-looking success.
 
         The body lives in ``substrate_frame_reads.inspect_event`` (``known_at``:
-        lane E2's record-time cut, evaluation harness only).
+        the record-time cut, evaluation harness only).
         """
         if known_at is not None:
             return await _frames.inspect_event(self._pool, event_id=event_id, known_at=known_at)
         return await _frames.inspect_event(self._pool, event_id=event_id)
 
     # ------------------------------------------------------------------
-    # The COLLECTION series reads (7g-2 §6)
+    # The COLLECTION series reads
     #
     # History, not now. These two are the only readers of `observations`,
     # the bitemporal series store a COLLECTION loads once and nothing
@@ -2055,7 +2055,7 @@ class PostgresQdrantSubstrateQueryPort:
         the ``sha256`` of the file the number was read out of, and a
         ``ref`` (``observation:<uuid>``) the citation builder resolves.
 
-        E2 — ``known_at`` (evaluation harness only): ``loaded_at < K`` and
+        ``known_at`` (evaluation harness only): ``loaded_at < K`` and
         ``as_of`` clamped to K.
         """
         return await _observations.read_series_history(
@@ -2121,7 +2121,7 @@ class PostgresQdrantSubstrateQueryPort:
         it reads that series over a bounded valid window, every revision with
         its two timestamps (``record_time``, ``loaded_at``), each row labelled
         ``live`` with its source id. Body and bounds in
-        :mod:`legba.runtime._observations_live_read`; ``known_at`` (lane E2)
+        :mod:`legba.runtime._observations_live_read`; ``known_at``
         keeps rows loaded and recorded before K.
         """
         return await _live_obs.read_live_series(
@@ -2176,7 +2176,7 @@ class PostgresQdrantSubstrateQueryPort:
         """Side-by-side substrate rollup for two or more target ids.
 
         For each ``target_id`` the rollup counts the substrate's live
-        material: current facts (the 0032 open pair plus the P7
+        material: current facts (the 0032 open pair plus the
         ``origin_class`` leg), open nexuses (``valid_until IS NULL AND
         superseded_by IS NULL``), the hypothesis status mix, and a handful of
         recent
@@ -2289,7 +2289,7 @@ class PostgresQdrantSubstrateQueryPort:
         }
 
     # ------------------------------------------------------------------
-    # query_paths (P5 / #99) — signed paths A → … → B
+    # query_paths — signed paths A → … → B
     # ------------------------------------------------------------------
 
     async def query_paths(
@@ -2348,7 +2348,7 @@ class PostgresQdrantSubstrateQueryPort:
         instead of an empty ``paths`` list, because on an id-keyed walk the two
         are otherwise indistinguishable.
 
-        V3/P3 — ``as_of`` (ISO-8601, validity time) walks the graph AS IT
+        ``as_of`` (ISO-8601, validity time) walks the graph AS IT
         STOOD on date D: the canonical as-of predicate replaces the open-row
         gate per hop, on BOTH the seed and the recursive arm (a path through
         an edge closed since D is not a path that existed on D). The envelope
@@ -2376,7 +2376,7 @@ class PostgresQdrantSubstrateQueryPort:
         )
 
     # ------------------------------------------------------------------
-    # find_proxy_chains (P5 / #99) — INDIRECT links A → … → B
+    # find_proxy_chains — INDIRECT links A → … → B
     # ------------------------------------------------------------------
 
     async def find_proxy_chains(
@@ -2401,7 +2401,7 @@ class PostgresQdrantSubstrateQueryPort:
         connected.  Same cyclic-graph VISITED-SET guard, hop cap, and
         ``polarity_product`` filter as :meth:`query_paths`.
 
-        V3/P3 — ``as_of`` inherits :meth:`query_paths`'s per-hop temporal
+        ``as_of`` inherits :meth:`query_paths`'s per-hop temporal
         gate exactly.
         """
         try:
@@ -2426,7 +2426,7 @@ class PostgresQdrantSubstrateQueryPort:
         )
 
     # ------------------------------------------------------------------
-    # query_brokers (P5 / #99) — entities ON the paths between two camps
+    # query_brokers — entities ON the paths between two camps
     # ------------------------------------------------------------------
 
     async def query_brokers(
@@ -2465,7 +2465,7 @@ class PostgresQdrantSubstrateQueryPort:
         and excluded, never silently dropped: a ranking over half a camp is a
         different answer from one over all of it.
 
-        V3/P3 — ``as_of`` (ISO-8601, validity time) applies the canonical
+        ``as_of`` (ISO-8601, validity time) applies the canonical
         as-of predicate per hop on BOTH the seed and the recursive arm, so
         the brokerage ranking is computed over the graph as it stood on
         date D. The envelope then carries ``unbounded_start``.
@@ -2491,7 +2491,7 @@ class PostgresQdrantSubstrateQueryPort:
         )
 
     # ==================================================================
-    # JOURNAL SELF-INSTRUMENT readers (Journal Assessor Wave 1, plan §5).
+    # JOURNAL SELF-INSTRUMENT readers (Journal Assessor).
     #
     # The journal is the ONE analyst pointed at the whole organism INCLUDING
     # ITSELF. These reads expose its own instruments — recent assessments, the
@@ -2504,7 +2504,7 @@ class PostgresQdrantSubstrateQueryPort:
     # / calibration aggregates / budget rollups — return ``refs: []`` and are cited
     # by the journal as observations rather than chip-linked rows). All temporal
     # reads gate to "currently true" rows (the journal physically cannot re-assert
-    # retired state). HONESTY (plan §10): calibration reports the unproven posture
+    # retired state). HONESTY: calibration reports the unproven posture
     # straight from the substrate; the journal's deterministic honesty post-step
     # reads these same numbers.
     # ==================================================================
@@ -2518,8 +2518,8 @@ class PostgresQdrantSubstrateQueryPort:
         limit: int = 20,
     ) -> dict[str, Any]:
         """Recent per-target / global ASSESSMENTS — the platform's own findings
-        from the LIVE producers: the bounded P2 units + the per-country and world
-        COMPOSITIONS (plan §5).
+        from the LIVE producers: the bounded units + the per-country and world
+        COMPOSITIONS.
 
         Distinct from ``list_findings`` only by intent: the journal narrates OVER
         the assessment conclusions, so this read defaults to the live producer set
@@ -2612,7 +2612,7 @@ class PostgresQdrantSubstrateQueryPort:
         # REMAINING divergence as a bounded `disagreements` block, using the SAME
         # pure reducers the registry's /eval/country_scorecard endpoint uses
         # (data/registry/scorecard_reconcile). This is a READ-TIME reflection
-        # surface so the journal can narrate the divergence honestly (the two P4
+        # surface so the journal can narrate the divergence honestly (the two
         # products judge over different windows) — it is NEVER a gate and NEVER
         # computed at compose-write. Fully fail-safe: any error (incl. the import)
         # degrades to `disagreements: null` and never breaks the assessments read.
@@ -2775,7 +2775,7 @@ class PostgresQdrantSubstrateQueryPort:
         limit: int = 20,
     ) -> dict[str, Any]:
         """The knowledge graph's SHAPE — the latest ``graph_mining`` metrics
-        (communities + modularity + top centrality) (plan §5).
+        (communities + modularity + top centrality).
 
         Reads the freshest ``graph_mining`` row from ``graph_metrics`` (the
         deterministic miner persists one per run). The journal narrates the
@@ -2828,7 +2828,7 @@ class PostgresQdrantSubstrateQueryPort:
         limit: int = 20,
     ) -> dict[str, Any]:
         """The graph's TENSION — the latest ``structural_balance`` unstable
-        (Heider-imbalanced ++− / --- ) triads + frustration map (plan §5).
+        (Heider-imbalanced ++− / --- ) triads + frustration map.
 
         Reads the freshest ``structural_balance`` row from ``graph_metrics``. An
         unstable signed triad (sign-product negative) predicts realignment
@@ -2889,7 +2889,7 @@ class PostgresQdrantSubstrateQueryPort:
         since_hours: int | None = 168,
         limit: int = 20,
     ) -> dict[str, Any]:
-        """The platform's OWN critic scores over recent outputs (plan §5).
+        """The platform's OWN critic scores over recent outputs.
 
         Reads recent ``kind='critique'`` rows from ``analyst_outputs`` (the live
         critique stream). HONESTY (self-anatomy MAP): the critic's ``overall_score``
@@ -2959,8 +2959,7 @@ class PostgresQdrantSubstrateQueryPort:
 
     async def get_calibration(self) -> dict[str, Any]:
         """The platform's CALIBRATION posture — the latest ``calibration_tracking``
-        finding, with the SEGREGATED acute-forecast pilot reported HONESTLY
-        (plan §5 / §10).
+        finding, with the SEGREGATED acute-forecast pilot reported HONESTLY.
 
         Reads the freshest calibration finding from ``analyst_outputs``. B0-3
         (read-truth): the writer produces ``kind='finding'`` with
@@ -2973,7 +2972,7 @@ class PostgresQdrantSubstrateQueryPort:
         reality); the acute-forecast pilot lives in its OWN keys
         (``brier_forecast_acute`` / ``brier_skill_score`` / sample size /
         ready / degenerate / status) and is NEVER pooled into the headline. This
-        is the read the journal's deterministic honesty post-step (§10) keys off:
+        is the read the journal's deterministic honesty post-step keys off:
         the forecast leg is UNPROVEN until ``forecast_acute_ready`` AND NOT
         ``forecast_acute_degenerate`` AND ``brier_skill_score > 0``. ``refs``
         carries the finding's row id so the journal can cite it.
@@ -3000,7 +2999,7 @@ class PostgresQdrantSubstrateQueryPort:
         # calibration metrics are its free-form `data` dict.
         data = payload.get("data") if isinstance(payload, dict) else None
         data = data if isinstance(data, dict) else {}
-        # Lane E: ONE shared reducer (data/calibration_honesty.py, a stdlib leaf)
+        # ONE shared reducer (data/calibration_honesty.py, a stdlib leaf)
         # — every Brier is returned with ITS OWN n, the pooled count is named
         # `pooled_sample_size`, stale populations say so, and the whole read
         # carries the legacy/untrusted label (and is NOT the sealed ledger).
@@ -3031,7 +3030,7 @@ class PostgresQdrantSubstrateQueryPort:
         quiet_hours: int = 24,
         limit: int = _MAX_ROW_LIMIT,
     ) -> dict[str, Any]:
-        """What FIRED vs went QUIET — the dead-analyst self-diagnosis (plan §5).
+        """What FIRED vs went QUIET — the dead-analyst self-diagnosis.
 
         Rolls up ``analyst_traces`` to the LAST run per analyst (most-recent
         ``run_started_at``), with its status, whether it carried an error_payload,
@@ -3136,10 +3135,10 @@ class PostgresQdrantSubstrateQueryPort:
         silent_hours: int = 48,
         limit: int = _MAX_ROW_LIMIT,
     ) -> dict[str, Any]:
-        """Source-poll HEALTH — which feeds are quiet or erroring (plan §5).
+        """Source-poll HEALTH — which feeds are quiet or erroring.
 
         The body lives in ``substrate_source_health.get_source_health`` (split
-        out on 2026-09-28, wave Q, at the size ceiling); this method is the
+        out at the size ceiling); this method is the
         port's surface for it and keeps the signature every caller binds.
         """
         return await _source_health.get_source_health(
@@ -3151,7 +3150,7 @@ class PostgresQdrantSubstrateQueryPort:
 
     async def list_due_resolvers(self, *, horizon_days: int = 14,
                                  include_closed: bool = False, limit: int = 50) -> dict[str, Any]:
-        """Forecast-ledger questions due within the horizon (W11-F162); body in
+        """Forecast-ledger questions due within the horizon; body in
         ``substrate_due_resolvers``."""
         return await _due_resolvers.list_due_resolvers(
             self._pool, horizon_days=horizon_days, include_closed=include_closed, limit=limit)
@@ -3164,7 +3163,7 @@ class PostgresQdrantSubstrateQueryPort:
         limit: int = 40,
     ) -> dict[str, Any]:
         """Governor / BUDGET pressure — today's per-analyst token consumption +
-        recent governor demotions/pauses (plan §5).
+        recent governor demotions/pauses.
 
         Reads today's ``budget_ledger`` bucket (per-analyst tokens / runs / cost)
         and the recent ``budget_demotion_events`` (a demotion = a per-analyst or
@@ -3245,12 +3244,12 @@ class PostgresQdrantSubstrateQueryPort:
         since: str | None = None,
         limit: int = 30,
     ) -> dict[str, Any]:
-        """What CHANGED since the journal's last entry (plan §5 / §4.10).
+        """What CHANGED since the journal's last entry.
 
         Returns the journal's own prior entry (the most recent ``entry``) + the
         current open consolidation (the "inner landscape") so the journal opens a
-        run knowing where it left off (the surviving attentional-continuity thread,
-        §7.5), PLUS ``recent_entries`` — the last few entries as short-excerpt
+        run knowing where it left off (the surviving attentional-continuity thread),
+        PLUS ``recent_entries`` — the last few entries as short-excerpt
         WALK-BACK so it sees its trajectory across windows, not just the single
         prior step. This IS the journal's self-memory: its output is the off-chain
         11th kind (journal_entries), so a substrate ``list_findings(analyst_id=
@@ -3328,7 +3327,7 @@ class PostgresQdrantSubstrateQueryPort:
                 "  AND produced_at >= $1",
                 since_dt,
             )
-            # Self-history WALK-BACK (§7.5 attentional-continuity fix, 2026-07-03).
+            # Self-history WALK-BACK.
             # The journal is the 11th, OFF-CHAIN kind — it writes to journal_entries,
             # NOT analyst_outputs — so a ``list_findings(analyst_id=journal_*)``
             # self-read is empty BY CONSTRUCTION and the journal spent every window
@@ -3399,8 +3398,7 @@ class PostgresQdrantSubstrateQueryPort:
         since: str | None = None,
         limit: int = 20,
     ) -> dict[str, Any]:
-        """This cycle's VOICES faculty lens reads — the chorus DIFF's material
-        (VOICES_BUILD_DESIGN §3.2, LV-1).
+        """This cycle's VOICES faculty lens reads — the chorus DIFF's material.
 
         Returns the MOST RECENT ``entry_kind='lens'`` row per ``analyst_id`` in
         ``lens_analyst_ids`` produced since ``since`` (an ISO8601 timestamp;
@@ -3409,7 +3407,7 @@ class PostgresQdrantSubstrateQueryPort:
         only the newest row per faculty makes the read idempotent under a
         retry/double-fire. ``analyst_ids_seen`` / ``analyst_ids_missing`` let the
         diff NARRATE be honest about an absent faculty rather than silently
-        thinning the matrix (§3.4 partial-roster contract). ``refs`` carries the
+        thinning the matrix (partial-roster contract). ``refs`` carries the
         lens-row ids — a diff MAY cite a faculty's own read (a real off-chain
         journal id, same as get_journal_delta exposes prior-entry ids).
 

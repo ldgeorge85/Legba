@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane N-U — the person-name guard keeps country names inside mislabelled
+"""The person-name guard keeps country names inside mislabelled
 institution / place spans; Britain / Great Britain; the US state Georgia; and
 the (flagged-off) demonym evidence tier.
 
-Live (roll 74, 7-day re-tag): 56 of 1,038 changes dropped a country the title
+Live (7-day re-tag): 56 of 1,038 changes dropped a country the title
 plainly names because the NER typed "US House", "Panama Canal", "Government of
 Liberia", "Democratic Republic of Congo", "McDonald's Australia" as person.
 """

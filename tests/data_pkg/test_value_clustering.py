@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Holes-B Wave 3 — the shared fuzzy value clusterer.
+"""The shared fuzzy value clusterer.
 
 Pure (no-DB) tests of the canon + tight normalized-Levenshtein "same-claim"
 grouping that BOTH the contested-claims arbiter and the Holes-A noisy-OR leg

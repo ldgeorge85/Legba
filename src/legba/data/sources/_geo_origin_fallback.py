@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The publisher-origin GEO FALLBACK (lane N-B): an untagged signal is not
+"""The publisher-origin GEO FALLBACK: an untagged signal is not
 left outside every desk.
 
 THE DEFECT. A signal whose geocoder resolved nothing carries ``geo = {}``, and

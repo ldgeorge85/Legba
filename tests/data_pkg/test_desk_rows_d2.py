@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Contract v2.1 (lane D-2): actors NAMED in a cited row are offered and
+"""Contract v2.1: actors NAMED in a cited row are offered and
 accepted; the SURFACE subject; GENERIC ROLES refused; the quote-words REPAIR
 RULE with planted smuggles and genuine alignments; SPLIT in repair; the
 naming hints; the SOURCE ROSTER read classified into the computed block; the
@@ -372,7 +372,7 @@ def test_the_code_lead_takes_the_top_judgement_then_the_verified_fact():
 
 
 # ---------------------------------------------------------------------------
-# Roll 85: the party-swap guard on a planted set built by code
+# The party-swap guard on a planted set built by code
 # ---------------------------------------------------------------------------
 
 
@@ -385,7 +385,7 @@ def test_the_party_swap_guard_on_the_planted_set():
     """29 swaps (subject/counterpart, actor/target in passives, voice inverted
     with the roles, speaker traded) and 24 good repairs that only reorder
     (faithful passive, moved attribution, reordered co-actors, moved place).
-    D-2's order rule measured 21/29 caught and 24/24 good repairs refused;
+    The earlier order rule measured 21/29 caught and 24/24 good repairs refused;
     the role rule must catch all and refuse none."""
     from tests.data_pkg._party_swap_planted import good_cases, swap_cases
     swaps, goods = swap_cases(), good_cases()

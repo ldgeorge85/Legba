@@ -141,12 +141,12 @@ class _FakeConn:
         return []
 
     async def executemany(self, sql: str, args: Any) -> None:
-        # the citation rows (lane DM-A) land in bulk; they are not the
+        # the citation rows land in bulk; they are not the
         # finding/fact/hypothesis writes this file counts
         return None
 
     def transaction(self) -> Any:
-        # A finding and its citation rows (lane DM-A) commit in one
+        # A finding and its citation rows commit in one
         # transaction; this fake records statements and has none to open.
         class _Tx:
             async def __aenter__(self) -> None:

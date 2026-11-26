@@ -1,10 +1,10 @@
-# evidence_archiver — P2-1 NATIVE cited-evidence archival (program §A3).
+# evidence_archiver — NATIVE cited-evidence archival.
 #
 # A `deterministic`-kind META analyst over the SHARED substrate. Every time it
 # fires it archives the next budgeted batch of signals CITED by VERIFIED
 # findings (derived_from of findings whose latest faithfulness critique passes
 # the verify floor) whose object_ref IS NULL and canonical_url is fetchable:
-# original bytes fetched over the SSRF egress guard + the P2-2 license gate,
+# original bytes fetched over the SSRF egress guard + the license gate,
 # stored CONTENT-ADDRESSED at {LEGBA_ARCHIVE_ROOT}/{sha256[:2]}/{sha256}, the
 # evidence_archive sidecar (migration 0104) upserted, and the signal stamped —
 # object_ref = cas:sha256/<hex> (the receipt chain now terminates in OUR
@@ -34,8 +34,7 @@
 #
 # Options (all optional; handler defaults in parentheses). Declared in
 # legba.data.analysts.handler_options and settable via a `method.options` block
-# below — X-1 (2026-07-29) connected that channel; before it, this list
-# documented knobs no operator could actually move. A key this build does not
+# below — that channel is connected, so these knobs can be moved. A key this build does not
 # declare, or a value outside its range, is dropped with a WARNING and a
 # `handler_options` note on the run's analyst_traces receipt; the handler
 # default then stands.
@@ -48,12 +47,12 @@
 #
 # LICENCE POSTURE — the one option worth a paragraph. `unknown_license_gate`
 # ships `archive`: a source whose licence was never classified still has its
-# bytes archived. That is the LIC-1 posture, and it was calibrated against a
+# bytes archived. That is the default posture, and it was calibrated against a
 # finite, operator-reviewed catalog — a finding about ~48 specific feeds on a
 # specific date, not a property of the world. If you registered your own feeds,
 # it was never measured for you.
 #
-#   RECOMMENDATION: classify your catalog (payload.license_class via the LIC-2
+#   RECOMMENDATION: classify your catalog (payload.license_class via the
 #   SourceScope stamp), then set this to `fail_closed`. Under fail_closed an
 #   unset/`unknown` licence withholds the BYTES and keeps the metadata — the
 #   sidecar still records the URL, class and origin, and the run receipt counts
@@ -85,7 +84,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: draft
-  owner: evidence_archiver
+  owner: owner@local
 
 subscription:
   # No `targets` block → META analyst: one global sweep per cadence tick over

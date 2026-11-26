@@ -77,7 +77,7 @@ Filter predicate
 A small Starlark / Python predicate that gates which rows materialise.
 Evaluated against the row's columns *before* the discovery emits the
 candidate, so the disappearance-ratio enforcement and downstream relabel
-chain only see countries the operator asked for. Bound names:
+chain only see countries that were asked for. Bound names:
 
     country.iso2 / iso3 / name / region / subregion / numeric / official
     languages  (list[str])
@@ -173,7 +173,7 @@ _ISO_3166_BUILTIN = "iso_3166"
 ``iso_countries`` snapshot per migration 0019."""
 
 _URL_PREFIX = "url:"
-"""``list_source`` prefix selecting a URL-fetched JSON list. Wave-C."""
+"""``list_source`` prefix selecting a URL-fetched JSON list."""
 
 _INLINE_PREFIX = "inline:"
 """``list_source`` prefix selecting a JSON-encoded inline list. The
@@ -680,7 +680,7 @@ class CountryListDiscovery:
             # the value; the discovery cycle fails fast with a useful
             # message until the URL fetcher lands.
             raise NotImplementedError(
-                f"list_source 'url:...' is reserved for Wave C; "
+                f"list_source 'url:...' is reserved for a later release; "
                 f"use 'iso_3166' (substrate-cached snapshot) or "
                 f"'inline:<json>' (test escape hatch) until the URL "
                 f"fetcher is wired. Got: {cfg.list_source!r}"

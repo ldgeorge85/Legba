@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""What a subscribed source's transport hands the spine (lane I-4).
+"""What a subscribed source's transport hands the spine.
 
 A transport (``runtime/stream_transport.py``) turns bytes on a held
 connection into :class:`StreamEvent` values; a subscribe-capable handler kind

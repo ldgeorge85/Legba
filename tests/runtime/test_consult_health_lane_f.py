@@ -1,4 +1,4 @@
-"""Lane F -- dlq_and_alert, consult run health, consult health alarm."""
+"""dlq_and_alert, consult run health, consult health alarm."""
 
 from __future__ import annotations
 

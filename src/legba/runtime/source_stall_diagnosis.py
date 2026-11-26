@@ -81,7 +81,7 @@ def _source_stall_diagnosis(row: dict[str, Any]) -> str:
     )
 
 
-#: Lane N-U: how long a source whose polls fail with an upstream ``HTTP 5xx``
+#: How long a source whose polls fail with an upstream ``HTTP 5xx``
 #: may go without a produced signal before its stall is a DEAD source (paged
 #: high) rather than an intermittent upstream error (recorded medium, not
 #: paged). Hours; ``LEGBA_SOURCE_5XX_DEAD_AFTER_HOURS`` overrides.

@@ -50,19 +50,18 @@ from legba.data.schemas.analyst import AnalystDescriptor  # noqa: E402
 DESCRIPTORS_DIR = pathlib.Path(__file__).resolve().parent.parent / "descriptors"
 
 ANALYST_FILES = [
-    # OPERATOR DECISION 2026-07-01: country_assessor (the monolithic per-country
-    # one-pager) is RETIRED, not just demoted-to-feeder. P2-T8/SEAMS #35 kept it
-    # running as a feeder, but the system (4 bounded units -> country_composition
+    # country_assessor (the monolithic per-country one-pager) is RETIRED, not
+    # just demoted-to-feeder. It once ran as a feeder, but the system (4 bounded units -> country_composition
     # -> scorecard/world_assessor) is the trusted product and NOTHING in the tower
     # reads it — so feeding ~150 untrusted findings/48h into the substrate is exactly
     # the verdict-from-nowhere pollution the tower exists to kill. Like country_predictor
-    # (SEAMS #31), nulling its cadence is INSUFFICIENT (it is REACTIVE via
+    # (below), nulling its cadence is INSUFFICIENT (it is REACTIVE via
     # subscription.targets has_tag g20), so the live head is `retired` (POST /retire)
     # AND it is removed from bringup so a fresh deploy cannot re-create it. To restore
     # the feeder: un-retire + re-add this line + re-register.
     # "analyst_country_assessor.yaml",
     "analyst_world_assessor.yaml",
-    # OPERATOR DECISION 2026-07-02: country_critic is RETIRED live. It pins the
+    # country_critic is RETIRED live. It pins the
     # retired country_assessor (it grades that analyst's findings), so with the
     # monolith gone it grades nothing — and re-registering it here would RESURRECT
     # a dead analyst (a fresh deploy would land it active again). Like
@@ -72,140 +71,139 @@ ANALYST_FILES = [
     # "analyst_country_critic.yaml",
     "analyst_country_optimizer.yaml",
     "analyst_consult_default.yaml",
-    # P3-T8 FREEZE COMPLETION: country_predictor (forecast-as-claim) is NOT
-    # registered here. Nulling its cadence (P0-T6 / SEAMS #31) did NOT freeze it —
+    # country_predictor (forecast-as-claim) is NOT registered here. Nulling its
+    # cadence did NOT freeze it —
     # it has subscription.targets (g20 signals) + state:active, so it fired
     # REACTIVELY (~1/hr live `prediction` rows). Removed from bringup + retired live
-    # so it stays at 0 until forecasting RETURNS at P4-T7 as a precise-question
+    # so it stays at 0 until forecasting RETURNS as a precise-question
     # scoreboard (a different design, not this reactive predictor). To restore the
     # OLD leg: re-add this line + re-register.
     # "analyst_country_predictor.yaml",
-    # OPERATOR DECISION 2026-07-02: meta_synthesizer (the LEGACY standalone
-    # cross-analyst synthesizer, Piece 3 Task B) is RETIRED live. It is superseded
+    # meta_synthesizer (the LEGACY standalone cross-analyst synthesizer) is
+    # RETIRED live. It is superseded
     # by the composition spine (country_composition -> region_composition ->
     # escalation_composition -> world_assessor), and it reads the now-retired
     # country_assessor + world_assessor FINDINGS as its inputs — so with the
     # monolith gone it went silent (31 legacy heads, no new output for >30h).
     # Removed from bringup so a fresh deploy cannot re-create it active over a
-    # dead input. cross_correlator (Task C) is now ALSO retired (2026-07-09): it
+    # dead input. cross_correlator is ALSO retired: it
     # drifted into a coverage-gap detector reading RETIRED analyst outputs (0
     # downstream consumers, emitted a live "score 0.00" faithfulness head); the
     # live head is state=retired + its heads tombstoned. To restore either:
     # un-retire, re-add its line, re-register (and for meta_synthesizer also
     # re-point its other_analysts at the live compositions).
-    # "analyst_meta_synthesizer.yaml",        # RETIRED — Piece 3 (Task B) legacy synthesizer
-    # "analyst_cross_correlator.yaml",        # RETIRED 2026-07-09 — Piece 3 (Task C) drifted; 0 consumers
-    # PIECE C SUPERSEDED Piece 3 Task D: the situation-gated hypothesis_lifecycle
-    # emitted 0 rows (gated on `active` situations that go dormant — see
-    # DATA_ANALYSIS_DEEP_REVIEW_2026-06-16.md §1.2). The competing_hypotheses ACH
+    # "analyst_meta_synthesizer.yaml",        # RETIRED — legacy synthesizer
+    # "analyst_cross_correlator.yaml",        # RETIRED — drifted; 0 consumers
+    # The situation-gated hypothesis_lifecycle emitted 0 rows (gated on `active`
+    # situations that go dormant). The competing_hypotheses ACH
     # kind below is now the REAL producer (reads facts/findings/nexuses directly,
     # NOT situation-gated). hypothesis_lifecycle is RETIRED from bringup (its
     # file + tests + deterministic-dispatch entry are kept so it can serve as a
     # lifecycle-maintenance feeder if re-enabled) — NOT registered here to avoid
     # a duplicate forward-claim producer over the same situations.
-    "analyst_competing_hypotheses.yaml",      # NEW — PIECE C (the ACH hypotheses producer)
-    "analyst_calibration_tracking.yaml",      # NEW — PIECE C (Brier-calibration feedback loop)
-    "analyst_fact_decay.yaml",                # NEW — facts-table temporal-lifecycle maintenance (audit fix)
-    "analyst_fact_contention_arbiter.yaml",   # NEW — Holes-B Wave 2 (#101) — contested-claims arbiter (DETECT-ONLY)
-    "analyst_deep_consult.yaml",              # NEW — Piece 4 (deep-consult workflow bridge)
-    "analyst_relationship_reifier.yaml",      # NEW — PIECE A (the reified typed-Nexus producer)
-    "analyst_structural_balance.yaml",        # NEW — PIECE A consumer (signed-triad balance over nexuses)
-    "analyst_graph_mining.yaml",              # NEW — PIECE A consumer (proxy-chain sign products over nexuses)
-    "analyst_nexus_decay.yaml",               # NEW — PIECE A (nexuses-table temporal-lifecycle maintenance)
-    "analyst_proposed_edge_governance.yaml",  # NEW — Phase D (promote/reject the proposed_edges queue; P3-1)
-    "analyst_thematic_proposal.yaml",        # NEW — Phase 5b (propose thematic frames for uncovered hot situations)
-    "analyst_indicator_tracker.yaml",        # NEW — S3-T2 (deterministic META: diffs the structured I&W data.indicators run-over-run per unit-stream; emits a summary finding on status FLIPS, esp. not_observed->triggered; trace-only on a no-flip/unchanged sweep)
-    "analyst_collection_gap.yaml",           # NEW — S3-T3 (deterministic META: monthly aggregation of the scorecard insufficient-evidence signal per desk x dimension into a collection-requirements finding naming the starved cells + plausible feed source classes; trace-only when nothing is starved)
-    "analyst_journal_assessor.yaml",         # NEW — Journal Assessor Wave 0 (the 11th OutputKind producer; entry tier)
-    "analyst_journal_consolidator.yaml",     # NEW — Journal Wave 2 (consolidation tier: SAME kind, distinct id, daily beat)
-    "analyst_entity_gc.yaml",                # NEW — health remediation D2 (deterministic GC of orphan entities/proposed_edges; drains the integrity_sweep-flagged backlog)
-    "analyst_entity_researcher.yaml",        # NEW — Phase E (E4: global META, LLM-adjudicated entity de-fragmentation; blocks candidates → adjudicates gray → tombstone+redirect merges; ships merge_mode: adjudicate_only [DRY-RUN], PUT-flip to apply)
-    "analyst_signal_salience.yaml",          # NEW — Phase S (S-1: global META, $0-plane per-signal consequence scorer; SELECTs un-scored recent text → LLM {event_class,actor_rank,magnitude} + deterministic authority → stamps signals.salience; ships score_mode: dry_run [no writes], PUT-flip to apply)
-    "analyst_unit_correctness_scorer.yaml",  # NEW — P2-T5 (deterministic meta scorer: each bounded unit's correctness_vs_reference vs the operator gold labels; null when a unit has 0 labels)
-    # P2-T2 — the 4 bounded-reasoning UNITS (T1 unit-factory pattern). Each is a
+    "analyst_competing_hypotheses.yaml",      # the ACH hypotheses producer
+    "analyst_calibration_tracking.yaml",      # Brier-calibration feedback loop
+    "analyst_fact_decay.yaml",                # facts-table temporal-lifecycle maintenance
+    "analyst_fact_contention_arbiter.yaml",   # contested-claims arbiter (DETECT-ONLY)
+    "analyst_deep_consult.yaml",              # deep-consult workflow bridge
+    "analyst_relationship_reifier.yaml",      # the reified typed-Nexus producer
+    "analyst_structural_balance.yaml",        # signed-triad balance over nexuses
+    "analyst_graph_mining.yaml",              # proxy-chain sign products over nexuses
+    "analyst_nexus_decay.yaml",               # nexuses-table temporal-lifecycle maintenance
+    "analyst_proposed_edge_governance.yaml",  # promote/reject the proposed_edges queue
+    "analyst_thematic_proposal.yaml",        # propose thematic frames for uncovered hot situations
+    "analyst_indicator_tracker.yaml",        # deterministic META: diffs the structured I&W data.indicators run-over-run per unit-stream; emits a summary finding on status FLIPS, esp. not_observed->triggered; trace-only on a no-flip/unchanged sweep
+    "analyst_collection_gap.yaml",           # deterministic META: monthly aggregation of the scorecard insufficient-evidence signal per desk x dimension into a collection-requirements finding naming the starved cells + plausible feed source classes; trace-only when nothing is starved
+    "analyst_journal_assessor.yaml",         # the 11th OutputKind producer; entry tier
+    "analyst_journal_consolidator.yaml",     # consolidation tier: SAME kind, distinct id, daily beat
+    "analyst_entity_gc.yaml",                # deterministic GC of orphan entities/proposed_edges; drains the integrity_sweep-flagged backlog
+    "analyst_entity_researcher.yaml",        # global META, LLM-adjudicated entity de-fragmentation; blocks candidates → adjudicates gray → tombstone+redirect merges; ships merge_mode: adjudicate_only [DRY-RUN], PUT-flip to apply
+    "analyst_signal_salience.yaml",          # global META, $0-plane per-signal consequence scorer; SELECTs un-scored recent text → LLM {event_class,actor_rank,magnitude} + deterministic authority → stamps signals.salience; ships score_mode: dry_run [no writes], PUT-flip to apply
+    "analyst_unit_correctness_scorer.yaml",  # deterministic meta scorer: each bounded unit's correctness_vs_reference vs the gold labels; null when a unit has 0 labels
+    # The 4 bounded-reasoning UNITS (unit-factory pattern). Each is a
     # topic-scoped inline_target descriptor carrying its OWN method.system_prompt
     # + scope predicate + eval.rubric; NO new Python kind, so NO _NEW_ANALYST_KINDS
     # entry is needed (identity.kind: inline_target is a built-in).
-    "analyst_leadership_transition.yaml",    # NEW — P2-T2 unit (leadership-transition risk)
-    "analyst_energy_security.yaml",          # NEW — P2-T2 unit (energy-security pressure)
-    "analyst_escalation.yaml",               # NEW — P2-T2 unit (escalation risk)
-    "analyst_narrative_coordination.yaml",   # NEW — P2-T2 unit (narrative / coordination signals)
-    # S1-T4/T5/T7 — three MORE bounded units (same T1 unit-factory pattern). BROAD
+    "analyst_leadership_transition.yaml",    # leadership-transition risk
+    "analyst_energy_security.yaml",          # energy-security pressure
+    "analyst_escalation.yaml",               # escalation risk
+    "analyst_narrative_coordination.yaml",   # narrative / coordination signals
+    # Three MORE bounded units (same unit-factory pattern). BROAD
     # (blanket g20+watch predicate → every desk), so each is wired as a FIXED
     # scorecard dimension + into country_composition.other_analysts.
-    "analyst_internal_stability.yaml",       # NEW — S1-T4 unit (internal-stability / coup-risk)
-    "analyst_military_posture.yaml",         # NEW — S1-T5 unit (military-posture shift)
-    "analyst_economic_coercion.yaml",        # NEW — S1-T7 unit (economic coercion: sanctions/trade/currency)
-    "analyst_proliferation_watch.yaml",      # NEW — S1-T6 unit (proliferation / WMD risk; NARROW: has_tag("nuclear_watch") — 8 nuclear desks, deliberately NOT a fixed scorecard dimension)
-    # P3-T1/T2 — per-country COMPOSITION over the 4 verified units. Same
+    "analyst_internal_stability.yaml",       # internal-stability / coup-risk
+    "analyst_military_posture.yaml",         # military-posture shift
+    "analyst_economic_coercion.yaml",        # economic coercion: sanctions/trade/currency
+    "analyst_proliferation_watch.yaml",      # proliferation / WMD risk; NARROW: has_tag("nuclear_watch") — 8 nuclear desks, deliberately NOT a fixed scorecard dimension
+    # Per-country COMPOSITION over the 4 verified units. Same
     # meta_findings_synthesizer kind (no new kind), but a PER-TARGET descriptor
     # (subscription.targets has_tag g20) reading the units as other_analysts, with
     # a verify-floor slice + hedged [[ref:<uuid>]] prompt. Registered AFTER the
     # units it reads (registration order is independent, but this reads clearly).
-    "analyst_country_composition.yaml",      # NEW — P3-T1/T2 (per-country composition over verified sub-claims)
-    # S2-T2 — per-REGION composition BETWEEN the country reads and the world read.
+    "analyst_country_composition.yaml",      # per-country composition over verified sub-claims
+    # Per-REGION composition BETWEEN the country reads and the world read.
     # SAME meta_findings_synthesizer kind (no new kind), a PER-TARGET descriptor
     # (subscription.targets has_tag region → one worker per region frame) reading
     # country_composition as other_analysts. The kind's READ_SLICE region branch
     # resolves each frame → its member country desks and reads their
     # country_composition heads as a SET; the run uses the WORLD-shaped prompt.
-    "analyst_region_composition.yaml",       # NEW — S2-T2 (per-region composition over verified country reads)
-    # S2-T4 — THEMATIC composition PILOT. SAME meta_findings_synthesizer kind, a
+    "analyst_region_composition.yaml",       # per-region composition over verified country reads
+    # THEMATIC composition PILOT. SAME meta_findings_synthesizer kind, a
     # target-LESS descriptor (no subscription.targets → one global run) that fuses
     # ONE dimension (the `escalation` UNIT, analyst_id) across EVERY g20+watch desk
     # into one global escalation read. The subscription.substrate.thematic_dimension
     # marker routes the kind's READ_SLICE to the thematic branch (one head per desk,
     # post-supersession, verify-floored) instead of the world-over-regions branch;
-    # the T7 cross-desk correlation guard de-dupes shared underlying signals.
-    "analyst_escalation_composition.yaml",   # NEW — S2-T4 (thematic escalation composition over all desks)
-    "analyst_escalation_dyad.yaml",          # NEW — S2-T5 (IR-IL thematic escalation dyad; thematic_desks=[ir,il], guard fires on shared signals)
-    # W5 (2026-11-07) — a THEME-filtered thematic (thematic_theme.py): several
+    # the cross-desk correlation guard de-dupes shared underlying signals.
+    "analyst_escalation_composition.yaml",   # thematic escalation composition over all desks
+    "analyst_escalation_dyad.yaml",          # IR-IL thematic escalation dyad; thematic_desks=[ir,il], guard fires on shared signals
+    # A THEME-filtered thematic (thematic_theme.py): several
     # units' heads across every desk, admitted when the quoted lead carries a
     # declared term. Ships `state: draft` (no actor, no reminder); activation is
     # its descriptors/LIFECYCLE.md row plus the world_assessor other_analysts line.
-    "analyst_hybrid_threat_composition.yaml",  # NEW — W5 (cross-border hybrid activity; assembly-only, SEAMS #75)
-    # ST1-A (2026-11-13) — the forecast ledger's resolution job: rule proposals
+    "analyst_hybrid_threat_composition.yaml",  # cross-border hybrid activity; assembly-only
+    # The forecast ledger's resolution job: rule proposals
     # (no model) into forecast_resolution_records (0244). Ships `state: draft`.
-    "analyst_forecast_resolver.yaml",          # NEW — ST1-A (6-hourly META, deterministic, $0)
-    # D-6 — THE ASSESSMENT CHANNEL. Registered so it EXISTS in the registry and
+    "analyst_forecast_resolver.yaml",          # 6-hourly META, deterministic, $0
+    # THE ASSESSMENT CHANNEL. Registered so it EXISTS in the registry and
     # can be promoted through the lifecycle route without a deploy; it ships
     # `state: draft`, which creates no live actor and registers no cadence
     # reminder, because the record it reads (a world_assessor row under
-    # `regime: assembly`) does not exist in production until the operator flips
-    # LEGBA_COMPOSITION_ASSEMBLY at the D-3 cutover. Same
+    # `regime: assembly`) does not exist in production until
+    # LEGBA_COMPOSITION_ASSEMBLY is switched on at the cutover. Same
     # meta_findings_synthesizer kind as every composition (no new Python kind,
     # no verify-dispatch edit); the `subscription.substrate.assessment_spine`
     # marker routes READ_SLICE to the ONE-row spine read instead of the
     # world-over-regions branch.
-    "analyst_world_assessment.yaml",         # NEW — D-6 (the interpretive channel; derived_from = [assembly_id], draft until the cutover)
-    # P3 LANE A — the PER-COUNTRY interpretive channel. Same kind, same fence,
+    "analyst_world_assessment.yaml",         # the interpretive channel; derived_from = [assembly_id], draft until the cutover
+    # The PER-COUNTRY interpretive channel. Same kind, same fence,
     # same draft state; it carries `subscription.targets` so the runtime fans it
     # out one worker per desk with `target_filter` set, and READ_SLICE scopes the
     # spine read to that desk's own country_composition head. Draft because
-    # activation is ~32 always-judged runs per cycle — an operator's number.
-    "analyst_country_assessment.yaml",       # NEW — P3 Lane A (the cross-dimension per-country read; derived_from = [country_composition head id], draft)
-    "analyst_composition_lineage_sweep.yaml", # NEW — P3-T6 (deterministic META sweep: multi-floor lineage-integrity over world+country composition outputs via validate_lineage; read-only audit)
-    "analyst_scorecard_producer.yaml",  # NEW — P4-T2 (banded-scorecard producer; deterministic META, one scorecard row per active G20 country; data.bands = the T1 verdict, T5 eval folded)
-    "analyst_forecast_scoreboard.yaml",  # NEW — P4-T7 (acute-forecast scoreboard producer; deterministic META, weekly-idempotent driver of the forecast_acute pilot: issue → exogenous-resolve → count. Side-writes acute_forecasts rows only; TRACE_ONLY counts receipt; forecasting surfaces ONLY in the T4 scoreboard, never as a claim)
-    # P4-T6 — the SCOPED, MEASURED GEPA return. A SEPARATE optimizer descriptor
+    # activation is ~32 always-judged runs per cycle — a capacity choice.
+    "analyst_country_assessment.yaml",       # the cross-dimension per-country read; derived_from = [country_composition head id], draft
+    "analyst_composition_lineage_sweep.yaml", # deterministic META sweep: multi-floor lineage-integrity over world+country composition outputs via validate_lineage; read-only audit
+    "analyst_scorecard_producer.yaml",  # banded-scorecard producer; deterministic META, one scorecard row per active G20 country; data.bands = the T1 verdict, T5 eval folded
+    "analyst_forecast_scoreboard.yaml",  # acute-forecast scoreboard producer; deterministic META, weekly-idempotent driver of the forecast_acute pilot: issue → exogenous-resolve → count. Side-writes acute_forecasts rows only; TRACE_ONLY counts receipt; forecasting surfaces ONLY in the T4 scoreboard, never as a claim
+    # The SCOPED, MEASURED GEPA return. A SEPARATE optimizer descriptor
     # (analyzed=leadership_transition, fitness_metric=faithfulness) — the frozen
-    # country_optimizer monolith stays null-cadence (SEAMS #30). META analyst (no
+    # country_optimizer monolith stays null-cadence. META analyst (no
     # subscription.targets) => ONE run_cadence reminder (flat Dapr job count); the
     # candidate is human_gated with a REAL before/after faithfulness delta and can
     # NEVER promote on a degenerate/absent/non-positive delta.
-    "analyst_unit_optimizer.yaml",       # NEW — P4-T6 (bounded-unit GEPA optimizer, faithfulness-measured)
+    "analyst_unit_optimizer.yaml",       # bounded-unit GEPA optimizer, faithfulness-measured
 ]
 
-# Journal Assessor (plan §4.8 leg 2): `journal_assessor` is a NEW analyst kind,
+# Journal Assessor: `journal_assessor` is a NEW analyst kind,
 # NOT in the closed AnalystKind enum. The registry recognizes it via a
 # `vocabulary_entries` row (family='analyst_kind'). We (a) register it in the
 # in-process ANALYST_KIND_REGISTRY so the descriptor's `model_validate` accepts
 # the kind during this bring-up, and (b) upsert the persistent vocabulary row so
 # a freshly-booted registry recognizes it too (idempotent).
 #
-# NOTE (Wave 2): the consolidation tier (`journal_consolidator`,
+# NOTE: the consolidation tier (`journal_consolidator`,
 # analyst_journal_consolidator.yaml above) is the SAME kind — `identity.kind:
-# journal_assessor` (§4.7, "the tier is the descriptor, not a mode flag"). It is a
+# journal_assessor` ("the tier is the descriptor, not a mode flag"). It is a
 # distinct DESCRIPTOR id, NOT a new analyst kind, so it needs NO new vocabulary
 # row here — only its descriptor file in ANALYST_FILES. The single kind below
 # covers both tiers' `model_validate`.
@@ -215,7 +213,7 @@ _NEW_ANALYST_KINDS: list[str] = ["journal_assessor", "entity_researcher", "signa
 def _load_body(name: str) -> dict:
     """Parse a descriptor YAML body + stamp the placeholder version.
 
-    Split out of ``_load`` so the P2-T7 unit drift guard (below) can inspect the
+    Split out of ``_load`` so the unit drift guard (below) can inspect the
     RAW descriptor structure — rubric + verify presence — before pydantic
     validation + DB registration. Pure file parse; no DB, no validation.
     """
@@ -229,7 +227,7 @@ def _load(name: str) -> AnalystDescriptor:
 
 
 # ---------------------------------------------------------------------------
-# P2-T7 — unit drift guard (fail loud at REGISTER time)
+# Unit drift guard (fail loud at REGISTER time)
 # ---------------------------------------------------------------------------
 #
 # A bounded reasoning UNIT (the T1/T2 unit-factory pattern) is JUST an
@@ -312,7 +310,7 @@ def _print_unit_coverage(bodies: list[tuple[str, dict]]) -> None:
     """Enumerate each bounded unit + its {rubric, verify} coverage at register
     time so the operator sees the picture before anything touches the DB."""
     rows = _unit_coverage_rows(bodies)
-    print(f"Bounded-unit eval coverage (P2-T7 drift guard) — {len(rows)} unit(s):")
+    print(f"Bounded-unit eval coverage (drift guard) — {len(rows)} unit(s):")
     if not rows:
         print("  (no bounded inline_target units in this set)")
         return
@@ -345,7 +343,7 @@ def _assert_unit_eval_coverage(bodies: list[tuple[str, dict]]) -> None:
             problems.append(f"  - {unit_id} ({fname}): missing " + " AND ".join(missing))
     if problems:
         raise UnitDriftError(
-            "P2-T7 unit drift guard: bounded inline_target unit(s) lack required "
+            "unit drift guard: bounded inline_target unit(s) lack required "
             "eval coverage. Every bounded UNIT (inline_target + an inline "
             "method.system_prompt) MUST declare BOTH eval.rubric AND "
             "method.llm.verify before it can register:\n" + "\n".join(problems)
@@ -353,7 +351,7 @@ def _assert_unit_eval_coverage(bodies: list[tuple[str, dict]]) -> None:
 
 
 async def _register_new_analyst_kinds(pg: Any) -> None:
-    """Register the NEW (non-builtin) analyst kinds (plan §4.8 leg 2).
+    """Register the NEW (non-builtin) analyst kinds (see _NEW_ANALYST_KINDS).
 
     (a) in-process: so the descriptor `model_validate` below accepts the kind.
     (b) persistent: idempotently upsert the `vocabulary_entries` row so a
@@ -376,7 +374,7 @@ async def _register_new_analyst_kinds(pg: Any) -> None:
 
 
 async def main() -> int:
-    # Load the raw descriptor bodies up front so the P2-T7 unit drift guard can
+    # Load the raw descriptor bodies up front so the unit drift guard can
     # inspect their structure and FAIL LOUD before we open a DB connection or
     # register anything. Catching a missing rubric/verify here — the earliest
     # point — beats the critic hard-failing or the verify silently falling back

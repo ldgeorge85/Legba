@@ -1,5 +1,5 @@
 /**
- * Scorecard — the sealed-ledger scorecard (ST1), a tab of `system.ledgers`.
+ * Scorecard — the sealed-ledger scorecard, a tab of `system.ledgers`.
  *
  * Reads `GET /api/v1/v3/ledger/scorecard`. Useful before any resolution
  * (sealed questions, each arm's number, spread, due dates, "0 resolved") and

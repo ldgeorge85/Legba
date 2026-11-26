@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W11 C-2b-2/facts — the write plane's FACT record class on the REAL driver.
+"""The write plane's FACT record class on the REAL driver.
 
 Design C-2a §1 row 6, §4 and §10 for ``fact``, on the frame's fixture: real
 migrated Postgres, a real ``DescriptorRegistry`` with a real signing identity,

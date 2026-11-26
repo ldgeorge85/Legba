@@ -120,14 +120,14 @@ describe('the alert log', () => {
   })
   it('says whether it paged and by which entry of the rule, or why it was only logged', () => {
     const by = Object.fromEntries(rows.map((r) => [r.id, r.decision]))
-    expect(by.a1).toEqual({ paged: true, words: 'Paged at high', rule: 'the page rule pages this kind at high or above', delivered: true })
-    expect(by.a2).toMatchObject({ paged: false, words: 'Logged only', rule: 'the page rule has no entry for this kind' })
-    expect(by.a4.rule).toBe('the page rule pages this kind at high or above; this reached medium')
+    expect(by.a1).toEqual({ paged: true, words: 'Paged at high', rule: 'this kind sends a notification at high or above', delivered: true })
+    expect(by.a2).toMatchObject({ paged: false, words: 'Logged only', rule: 'no notification is set for this kind' })
+    expect(by.a4.rule).toBe('this kind sends a notification at high or above; this reached medium')
     // paged, but its page fell outside the window: the kind's rule names it, delivery unknown
-    expect(by.c1).toMatchObject({ paged: true, rule: 'the page rule pages this kind at medium or above', delivered: null })
+    expect(by.c1).toMatchObject({ paged: true, rule: 'this kind sends a notification at medium or above', delivered: null })
   })
   it('a rule that was not read is said, not guessed', () => {
-    expect(pageDecision(ep({}), new Map(), []).rule).toBe('the page rule was not read')
+    expect(pageDecision(ep({}), new Map(), []).rule).toBe('the notification settings could not be read')
   })
   it('parses a rule entry with and without a subject', () => {
     expect(parseRuleEntry('volume_surge >= medium')).toEqual({ min: 'medium', subject: null })
@@ -148,7 +148,7 @@ describe('the alert log', () => {
   })
   it("the contract's enums are the model's options", () => {
     expect([...WATCH_ALERT_GROUPS].sort()).toEqual(['all', 'reader', ...Object.keys(ALERT_GROUP_LABEL)].sort())
-    // roll 84: the chip names the reader's noun, not the engine's unit
+    // the chip names the reader's noun, not the engine's unit
     expect(ALERT_GROUP_LABEL.desk).toBe(`${PROFILE_UI.subject.singular} stalled`)
     expect(ALERT_GROUP_LABEL.desk).not.toMatch(/\bunit\b/i)
     expect([...WATCH_SEVERITY_FLOORS]).toEqual(['any', ...SEVERITIES])

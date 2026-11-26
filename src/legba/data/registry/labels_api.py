@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Labeled reference-set (gold) write + read surface (P2-T4).
+"""Labeled reference-set (gold) write + read surface.
 
 Backs the per-bounded-unit CORRECTNESS scorer: Phase 2 measures each small
 reasoning unit individually, and scoring "is the unit's read RIGHT?" needs a
@@ -83,8 +83,8 @@ class LabelsOut(BaseModel):
 
 
 class UnitEvalScore(BaseModel):
-    """One bounded unit's eval scoreboard row (P2-T6) — read off the latest
-    ``unit_correctness_scorer`` run (P2-T5). ``correctness_vs_reference`` is None
+    """One bounded unit's eval scoreboard row — read off the latest
+    ``unit_correctness_scorer`` run. ``correctness_vs_reference`` is None
     (NOT a fabricated number) until the unit has scorable gold labels; the
     ``badge`` string is composed HERE, server-side, so the "no invented number"
     honesty contract is enforced in one place.
@@ -199,7 +199,7 @@ def _compose_badge(
     n_operator_scored: int = 0,
     n_operator_labels: int = 0,
 ) -> str:
-    """The honest eval badge (P2-T6) — composed server-side so "no invented
+    """The honest eval badge — composed server-side so "no invented
     number" is enforced in ONE place. Examples:
       * labeled + scored : ``verified | faithfulness 0.90 | correctness 0.78 (n=12)``
       * unlabeled        : ``verified | faithfulness 0.45 | unmeasured (0 labels)``
@@ -315,8 +315,8 @@ def build_labels_router(deps: RegistryAPIDeps) -> APIRouter:
         unit_analyst_id: str | None = Query(default=None),
         principal: str = Depends(require_bearer),
     ) -> EvalScoresOut:
-        """Per-unit eval scoreboard (P2-T6) read off the LATEST
-        ``unit_correctness_scorer`` run (P2-T5) — faithfulness (measured) +
+        """Per-unit eval scoreboard read off the LATEST
+        ``unit_correctness_scorer`` run — faithfulness (measured) +
         correctness-vs-reference (None until scorable gold labels exist) + an
         honest ``badge`` per unit. No scorer run yet → no scored_at and no
         scorer-derived rows. Optionally filter to one ``unit_analyst_id``.

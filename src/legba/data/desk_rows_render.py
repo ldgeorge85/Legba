@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""PROSE LAST — the read's text rendered from its rows (lane D-1).
+"""PROSE LAST — the read's text rendered from its rows.
 
 A contract-v2 read is never written as prose by the model. Its text is
 RENDERED, deterministically, from the rows that passed their gates (and, for a
@@ -30,7 +30,7 @@ and date it states must be in those rows' texts. A sentence that maps is kept
 and given the markers of the rows it maps to; one that does not is DROPPED and
 counted — the lead may only restate rows.
 
-THE LEAD IS BUILT BY CODE (lane D-2, :func:`code_lead`). D-1 kept 13 of 65
+THE LEAD IS BUILT BY CODE (:func:`code_lead`). An earlier model-written lead kept 13 of 65
 model-written lead sentences: the rest framed or judged beyond the rows (16),
 restated rows that had failed (13), synthesised across more than two rows (8),
 paraphrased (6) or carried a figure or date no shown row states (8). So the

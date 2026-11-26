@@ -1,14 +1,13 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Registry-side discovery materialization loop (L-181 / L-182 consumer).
+"""Registry-side discovery materialization loop.
 
-Per L-106 §2-§5 + L-180 contract + L-200 / Wave D integration brief: the
-discovery handler emits :class:`CandidateTarget` instances; the *registry*
+The discovery handler emits :class:`CandidateTarget` instances; the *registry*
 runs each candidate through the discovery descriptor's relabel chain,
 merges the result with the inherited template body, and upserts a
 materialized L1 :class:`TargetDescriptor` row into ``target_descriptors``.
 
-This module is the consumer the L-180 contract was missing — the
+This module is the consumer of those candidates: the
 ``materialize_discovered(...)`` callsite paired with the static-target
 shortcut :func:`legba.data.discovery.static.materialize_static` so the
 runtime's actor host can dispatch uniformly between the two paths.
@@ -18,19 +17,19 @@ Architecture
 
 ```
                 ┌──────────────────────────────────┐
-                │ DiscoveryKind.discover(ctx)      │  L-181 / L-182
+                │ DiscoveryKind.discover(ctx)      │
                 │   ⇒ async iter[CandidateTarget]  │
                 └─────────────────┬────────────────┘
                                   │
                                   v
               ┌────────────────────────────────────────┐
               │ reconcile_discovered_targets()         │  this module
-              │  ├── evaluate_relabel_chain(candidate) │  L-180 / relabel.py
+              │  ├── evaluate_relabel_chain(candidate) │  relabel.py
               │  ├── merge_descriptor_bodies(template, │  this module
               │  │                            relabeled)│
               │  ├── TargetDescriptor.model_validate() │  schemas/target.py
               │  ├── INSERT/UPDATE target_descriptors  │  this module
-              │  └── evaluate_disappearance()          │  L-180 /
+              │  └── evaluate_disappearance()          │
               │      ├── proceed → retire missing keys │   disappearance.py
               │      └── anomaly → pause + DLQ + alert │
               └────────────────────────────────────────┘
@@ -47,7 +46,7 @@ Architecture
 Parent-body merge contract
 --------------------------
 
-Per Wave D integration brief §5 ("lean" option): the materialized L1
+The materialized L1
 instance inherits its sources / pipeline / analyst / outputs from the L2
 template referenced by ``identity.inherits[0]``. The relabel chain
 produces a (possibly partial) body that overrides template fields:
@@ -58,7 +57,7 @@ produces a (possibly partial) body that overrides template fields:
   * **lists**: replaced by the relabeled list when the relabeled side
     specifies the key, otherwise inherited from the template unchanged.
     A future ``merge: replace | extend`` per-list directive can flip this
-    to extension semantics — not in Wave D scope. The choice biases
+    to extension semantics; not supported today. The choice biases
     toward *predictable substitution*: an operator writing
     ``scope.geo = [{{ country_iso2 }}]`` expects exactly that list, not
     the template's placeholder plus the new entry.
@@ -81,7 +80,7 @@ Public surface
 
   * :func:`reconcile_discovered_targets` — orchestrates per-candidate
     materialization for one discovery cycle. Applies disappearance-ratio
-    enforcement per L-106 §5 (:func:`evaluate_disappearance`), retires
+    enforcement (:func:`evaluate_disappearance`), retires
     candidates whose ``natural_key`` is absent this cycle, and routes
     excess-disappearance candidates to the DLQ + pauses the discovery
     descriptor per the policy.
@@ -91,23 +90,23 @@ Public surface
 
   * :class:`ReconcileResult` — structured per-cycle outcome.
 
-Wave D / L-200 integration notes
---------------------------------
+Integration notes
+-----------------
 
-The L-200 ``discovery_geopolitical_countries`` descriptor + the
+The ``discovery_geopolitical_countries`` descriptor + the
 ``template_country`` L2 template materialise N per-country L1 instances
 through this loop. The relabel chain in
 ``descriptors/discovery_geopolitical_countries.yaml`` writes
 ``scope.geo``, ``scope.languages``, ``scope.tags``, ``identity.id``, and
 ``identity.inherits``; the template provides ``sources``, ``pipeline``,
-``analyst``, ``outputs``. The Wave D vocabulary migration (0020) seeds
+``analyst``, ``outputs``. The vocabulary migration (0020) seeds
 the entity_classes + relationship_types the template uses so the merged
 body passes :class:`DescriptorRegistry`'s vocabulary check on insert.
 
 For now the L2 template body is read from the descriptor registry by
 ``identity.id`` — the discovery descriptor's ``identity.inherits[0]``
 points at the template. Future iterations may allow multiple template
-inherits with explicit merge ordering; Wave D scope is single-parent.
+inherits with explicit merge ordering; today it is single-parent.
 """
 
 from __future__ import annotations
@@ -234,7 +233,7 @@ class ReconcileResult:
 
 
 # ---------------------------------------------------------------------------
-# Parent-body merge contract — Wave D §5 lean
+# Parent-body merge contract
 # ---------------------------------------------------------------------------
 
 
@@ -242,7 +241,7 @@ def merge_descriptor_bodies(
     template: Mapping[str, Any],
     relabeled: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Merge a template body with a relabel-chain output per Wave D §5.
+    """Merge a template body with a relabel-chain output.
 
     Rules:
 
@@ -307,7 +306,7 @@ def _deep_merge_into(
     dst: MutableMapping[str, Any],
     src: Mapping[str, Any],
 ) -> None:
-    """In-place deep-merge of ``src`` into ``dst`` per Wave D §5 rules."""
+    """In-place deep-merge of ``src`` into ``dst`` by the merge-contract rules."""
     for key, sval in src.items():
         if sval is None:
             # Relabel chain explicitly set None — treat as "no override"
@@ -328,7 +327,7 @@ def _deep_merge_into(
 
 
 # ---------------------------------------------------------------------------
-# Semantic fingerprint — idempotency guard (Fix 2)
+# Semantic fingerprint — idempotency guard
 # ---------------------------------------------------------------------------
 
 
@@ -461,7 +460,7 @@ def _assemble_materialized_body(
         write_set = _extract_chain_writes(relabel_rules, relabeled_labels)
 
     # Top-level `tags` written by the chain promote into `scope.tags`
-    # (Wave D L-200 surfaced that `tags` is logically a scope-level
+    # (`tags` is logically a scope-level
     # concept; the relabel chain in `discovery_geopolitical_countries`
     # writes `tags` as a top-level label).
     top_level_tags = write_set.pop("tags", None)
@@ -583,7 +582,7 @@ async def materialize_discovered(
             parent_id = discovery_descriptor.identity.inherits[0]
         if parent_id is None:
             # Discovery descriptors should always declare a parent
-            # template per L-200 / topology_redesign §5.2; treat as a
+            # template; treat as a
             # programming error rather than silently materialising a
             # parent-less body.
             raise ValueError(
@@ -666,8 +665,8 @@ async def materialize_discovered(
     body_with_version = descriptor.model_dump(mode="json", by_alias=True)
     body_with_version["identity"]["version"] = hash_hex
 
-    # Fetch the current head row once — used by the owner guard (Fix 1)
-    # and the semantic-idempotency guard (Fix 2) below. Both run BEFORE
+    # Fetch the current head row once — used by the owner guard
+    # and the semantic-idempotency guard below. Both run BEFORE
     # the exact-version idempotency insert so we never demote/re-mint a
     # head we shouldn't touch.
     head = await conn.fetchrow(
@@ -676,7 +675,7 @@ async def materialize_discovered(
         descriptor.identity.id,
     )
 
-    # Fix 1 — never demote an ACTIVE target owned by a DIFFERENT owner.
+    # Owner guard — never demote an ACTIVE target owned by a DIFFERENT owner.
     # The discovery cycle re-materialises descriptors every cycle; when a
     # materialised descriptor_id collides with an operator-registered
     # workingset target that the operator has promoted to ACTIVE, demoting
@@ -706,7 +705,7 @@ async def materialize_discovered(
             dropped_reason="skip_active_operator_target",
         )
 
-    # Fix 2 — semantic idempotency. When a head already exists for this
+    # Semantic idempotency. When a head already exists for this
     # descriptor_id and its *behavioural* fingerprint (scope/sources/
     # analyst/pipeline/outputs) equals the new body's, this cycle changed
     # only provenance (e.g. identity.inherits' parent-version pointer).
@@ -824,15 +823,13 @@ async def materialize_discovered(
 # Discovery-state persistence helpers
 # ---------------------------------------------------------------------------
 #
-# Per L-106 §2 the registry tracks `(discovery_id, natural_key) → descriptor_id`
+# The registry tracks `(discovery_id, natural_key) → descriptor_id`
 # so subsequent cycles can classify retained / new / disappeared without
-# scanning the target_descriptors table by name. The migration set
-# doesn't ship a dedicated `discovery_state` table yet — Wave D piggybacks
-# on `target_descriptors.body` by querying the rows whose body declares
+# scanning the target_descriptors table by name. There is no dedicated
+# `discovery_state` table yet: this reads `target_descriptors.body` by
+# querying the rows whose body declares
 # `identity.inherits @> ARRAY[discovery_id]` for the prior cycle's
-# natural_key set. This is the L-200 lean for Wave D; the proper
-# `discovery_state` table is L-181's follow-up (tracked in the L-204 /
-# Phase 9 tail).
+# natural_key set.
 
 
 async def _load_prior_keys(
@@ -844,11 +841,11 @@ async def _load_prior_keys(
 
     The mapping is reconstructed from the descriptor body itself —
     materialised L1 instances embed the discovery descriptor's id in
-    ``inherits`` (the L-200 relabel chain re-asserts the *template* id;
+    ``inherits`` (the relabel chain re-asserts the *template* id;
     the registry inserts append ``discovery_descriptor.identity.id`` as
     well so this lookup is unambiguous).
 
-    Wave D substrate-storage note: the descriptor row carries the natural
+    Storage note: the descriptor row carries the natural
     key in ``body.identity.id`` (e.g. ``country_geopolitical_br``). The
     inverse mapping back to the *candidate* natural_key (``BR``) lives in
     the body's discovery-provenance trailer that
@@ -926,7 +923,7 @@ async def _pause_discovery(
 ) -> None:
     """Transition the discovery descriptor's head row to ``paused``.
 
-    Per L-106 §5 ``alert_and_pause`` semantics: existing materialised
+    ``alert_and_pause`` semantics: existing materialised
     instances stay ``active`` (ingest continues on them); only the
     discovery cycle pauses (no new materialisation, no retirement) until
     an operator clears the anomaly via the resync-review UI.
@@ -964,7 +961,7 @@ async def reconcile_discovered_targets(
 ) -> ReconcileResult:
     """Run one discovery cycle's materialisation loop.
 
-    Per L-106 §2-§5 + L-180 contract:
+    Steps:
 
       1. Apply :func:`materialize_discovered` to every candidate (with
          the relabel chain + parent merge + validation + substrate write).

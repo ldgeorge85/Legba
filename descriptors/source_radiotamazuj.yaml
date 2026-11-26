@@ -1,10 +1,10 @@
-# X-1 source expansion (2026-11-14) — draft SourceDescriptor. Ships DRAFT;
+# Draft SourceDescriptor. Ships DRAFT;
 # the reference host walks it to CONFIGURED (descriptors/LIFECYCLE.md), never
-# active — activation is the owner's call per source.
+# active — activation is the operator's call per source.
 #
 # Radio Tamazuj — independent South Sudanese news outlet (English edition).
 # Fills the South Sudan gap (no South Sudanese outlet in the tree).
-# Checked 2026-11-14 by the source-expansion review (one GET, generic client
+# Checked (one GET, generic client
 # identity): HTTP 200, application/rss+xml, 12 items, newest 2026-11-14 19:24
 # UTC, oldest 2026-11-13 18:20 — about 10 items a day, so the feed window is
 # roughly one day. Every two hours keeps inside it.
@@ -26,7 +26,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: x1_source_expansion
+  owner: owner@local
   created: "2026-11-14T00:00:00Z"
 
 scope:

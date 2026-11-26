@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""T1.0 (JOURNAL_CONNECTIVE_AUDIT_PROPOSAL_2026-09-09 §6) — the REFLECT claim
+"""The REFLECT claim
 machinery, extracted verbatim from ``journal_assessor.py`` when the module
-pressed against its 3,000-line size-gate ceiling with three follow-on lanes
-(T1.1 / T1.2 / T1.4) about to ADD to both the REFLECT pass and slice
+pressed against its 3,000-line size-gate ceiling with further additions
+about to be made to both the REFLECT pass and slice
 selection. Behavior is byte-identical to the pre-extraction code — same
 regexes, same branches, same docstrings — and ``journal_assessor`` re-exports
 every name, so every existing import path (direct or via the ``journal_assessor``
@@ -35,7 +35,7 @@ from ..provenance.models import JournalClaim
 # cited span. We also harvest the UUIDs into claims + cited_substrate_refs.
 _REF_MARKER_RE = re.compile(r"\[\[ref:([0-9a-fA-F-]{36})\]\]")
 # An explicit speculation / perspective marker the agent may use in lieu of a ref
-# on a factual-sounding span (§4.5 / §10) — kept, never stripped.
+# on a factual-sounding span — kept, never stripped.
 _SPECULATION_RE = re.compile(
     r"\[\[(?:spec|speculation|perspective|wonder|inference|unverified|instrument)\]\]",
     re.IGNORECASE,
@@ -64,7 +64,7 @@ def _instrument_span_is_worldly(span: str) -> bool:
 # A coarse "this span asserts a fact" heuristic for the permissive REFLECT flag:
 # a span with a number, a date, a proper-noun-ish capitalized token, or a
 # declarative copula reads as factual. This is INTENTIONALLY permissive — it only
-# FLAGS (never deletes), and the tie-breaker is voice-preservation (§4.5): when in
+# FLAGS (never deletes), and the tie-breaker is voice-preservation: when in
 # doubt we treat the span as perspective and leave it alone.
 _FACTUAL_HINT_RE = re.compile(
     r"\d|\b(?:is|are|was|were|has|have|flipped|rose|fell|went|"
@@ -83,7 +83,7 @@ _PERSPECTIVE_CUE_RE = re.compile(
 
 
 # ---------------------------------------------------------------------------
-# Claim extraction + the permissive REFLECT citation flag (§3.6 / §4.5 / §10)
+# Claim extraction + the permissive REFLECT citation flag
 # ---------------------------------------------------------------------------
 
 
@@ -91,11 +91,10 @@ def _span_is_factual(text: str) -> bool:
     """Coarse, PERMISSIVE fact-vs-perspective classifier for the REFLECT flag.
 
     Returns True only when a span reads as a factual assertion AND carries no
-    first-person wonder/inference cue. The tie-breaker is voice-preservation
-    (§4.5): a span that hints at both fact and perspective is treated as
+    first-person wonder/inference cue. The tie-breaker is voice-preservation: a span that hints at both fact and perspective is treated as
     perspective (exempt) — we never want to flag the connective tissue that IS
     the voice. This NEVER deletes anything; the worst it does is attach a
-    ``needs_citation`` marker the UI renders distinctly (§9).
+    ``needs_citation`` marker the UI renders distinctly.
     """
     t = text.strip()
     if not t:
@@ -107,11 +106,11 @@ def _span_is_factual(text: str) -> bool:
 
 def _reflect_claims(body: str) -> tuple[list[JournalClaim], list[UUID], list[str]]:
     """Parse the body into per-claim citation bindings, FLAGGING (never stripping)
-    an uncited factual span (plan §3.6 / §4.5 / §10 — the REFLECT pass).
+    an uncited factual span (the REFLECT pass).
 
     For each span (split on blank lines):
       * a span with ≥1 ``[[ref:<uuid>]]`` (or a nested ``[[ref:a] [ref:b]]``
-        group, lane N-U) → a ``kind='fact'`` claim bound to its refs (a cited
+        group) → a ``kind='fact'`` claim bound to its refs (a cited
         factual claim survives intact);
       * a span with no ref but an explicit speculation marker (``[[spec]]`` …) OR
         no factual hint → a ``kind='perspective'`` claim (wonder/inference is
@@ -119,7 +118,7 @@ def _reflect_claims(body: str) -> tuple[list[JournalClaim], list[UUID], list[str
       * a span that reads factual but carries NO ref and NO speculation marker →
         a ``kind='fact'`` claim with empty refs, tagged ``needs_citation`` in its
         text (FLAGGED, never deleted — voice-preservation is the tie-breaker; the
-        UI renders it in the "unverified perspective" style, §9).
+        UI renders it in the "unverified perspective" style).
 
     Returns ``(claims, flat_cited_refs, reflect_flags)`` where ``reflect_flags``
     is a per-run audit list (e.g. ``["uncited_factual_span"]``) the trace records.
@@ -179,7 +178,7 @@ def _reflect_claims(body: str) -> tuple[list[JournalClaim], list[UUID], list[str
                 JournalClaim(text_span=text[:8192], refs=[], kind="perspective")
             )
             continue
-        # Uncited factual span: FLAG, do NOT delete (voice-preservation §4.5).
+        # Uncited factual span: FLAG, do NOT delete (voice-preservation).
         reflect_flags.append("uncited_factual_span")
         flagged = f"[needs_citation] {text}"
         claims.append(
@@ -189,8 +188,7 @@ def _reflect_claims(body: str) -> tuple[list[JournalClaim], list[UUID], list[str
 
 
 # ---------------------------------------------------------------------------
-# B1 (T1.2, JOURNAL_CONNECTIVE_AUDIT_PROPOSAL_2026-09-09 §3 P4 / §6) — the
-# deterministic instrument-as-report honesty flag. A fact span whose refs are
+# The deterministic instrument-as-report honesty flag. A fact span whose refs are
 # majority EVENT-CODED instrument rows (``journal_slice._is_instrument_row``,
 # surfaced here via the caller's ``ref_labels`` map — REFLECT has no DB access
 # of its own) and that carries NO ``[[instrument]]`` marker reads the coder's
@@ -229,8 +227,7 @@ def _flag_instrument_as_report(
 
 
 # ---------------------------------------------------------------------------
-# B2 (T1.4, JOURNAL_CONNECTIVE_AUDIT_PROPOSAL_2026-09-09 §3 P6 / §6) — the
-# deterministic routine-as-signal honesty flag. A fact span citing a
+# The deterministic routine-as-signal honesty flag. A fact span citing a
 # scheduled-product row (``journal_slice._is_routine_row``, surfaced here via
 # the caller's ``ref_labels`` map) that ALSO carries a change/causal
 # connective reads a routine number as a signal of change without ever
@@ -268,9 +265,7 @@ def _flag_routine_as_signal(
 
 
 # ---------------------------------------------------------------------------
-# B5 (JOURNAL_CONNECTIVE_AUDIT_PROPOSAL_2026-09-09 §6, the T1.3 reader lane's
-# live finding on entry dde520d3) — REPAIR a hand-copied ``[[ref:<uuid>]]``
-# typo. The writer copies UUIDs from its gathered window by hand and
+# REPAIR a hand-copied ``[[ref:<uuid>]]`` typo. The writer copies UUIDs from its gathered window by hand and
 # occasionally transcribes one hex digit wrong (the police-civilian span's
 # ref ``233bd806-…-4c3c-…`` — the real GDELT row is ``…-4e3c-…``, one digit
 # off; the census independently saw a second near-miss). REPAIR a marker
@@ -281,7 +276,7 @@ def _flag_routine_as_signal(
 # NEVER dropped, only (sometimes) corrected in place.
 #
 # Runs BEFORE ``_reflect_claims`` on the raw body string, so ``_reflect_claims``
-# itself is completely untouched — its byte-identity proof (T1.0) keeps
+# itself is completely untouched — its byte-identity keeps
 # holding for every existing caller that doesn't pass a ref set.
 # ---------------------------------------------------------------------------
 

@@ -10,9 +10,10 @@
     "build": "tsc -b && vite build && vite build --config vite.config.mobile.ts",
     "preview": "vite preview",
     "lint": "tsc --noEmit",
-    "lint:tokens": "node tools/lint-tokens.mjs --max 1186",
+    "lint:tokens": "node tools/lint-tokens.mjs --max 1164",
     "lint:absence": "node tools/lint-absence.mjs --max 38",
     "lint:phone": "node tools/lint-phone-imports.mjs",
+    "lint:engine-words": "node tools/lint-engine-words.mjs --max 11",
     "test": "vitest run",
     "test:watch": "vitest"
   },

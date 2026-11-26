@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Source drift — classify the drift rows, flag the dependants, and the flag
-lifecycle (lane D-1).
+lifecycle.
 
 THE PASS (:func:`classify_pending`). Every ``fetch_drift_observations`` row
 without a classification, oldest first, bounded per pass:

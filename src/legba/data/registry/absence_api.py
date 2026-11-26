@@ -45,11 +45,11 @@ THE CLOSED VOCABULARY (:data:`ABSENCE_KINDS`, one line each on the wire under
     (``band = 'insufficient-evidence'``). ``reason = 'no-finding'`` is
     deliberately NOT this kind — that is the card's own window seeing nothing,
     which ``not_collected`` / ``source_stale`` own.
-  * ``layer_declared_absent`` — Program 6 L0's aperture declaration
+  * ``layer_declared_absent`` — the desk aperture declaration
     (``desk_apertures.declared = 'absent'``, migration 0214), with the
     operator's own reason carried verbatim. The code never infers ``absent``; a
     layer nobody has looked at is ``unmeasured`` and is not an absence.
-  * ``history_gap`` (7g-2) — the only kind about the PAST rather than the
+  * ``history_gap`` — the only kind about the PAST rather than the
     present: a curated COLLECTION's manifest declares a (series, subject) for
     this desk over measured provider years, and the ``observations`` table
     does not hold them. Composed off the SAME reader the era coverage map
@@ -63,7 +63,7 @@ THE CLOSED VOCABULARY (:data:`ABSENCE_KINDS`, one line each on the wire under
     names is not this kind either: it goes to ``not_measured`` naming which
     desks the holdings do cover, because a gap in a holding that does not
     exist is not an absence this platform can type.
-  * ``carried_unsupported`` (W11-F14) — the unit HAS a current read, and the
+  * ``carried_unsupported`` — the unit HAS a current read, and the
     status it states is carried rather than evidenced: none of the read's own
     indicators triggered (or, for a level-shaped one, was observed at its level
     on a citation — X4 LEVEL), and the newest read of that unit on this desk
@@ -180,7 +180,7 @@ ABSENCE_KINDS: dict[str, str] = {
         "an operator declared this information layer absent for this desk, "
         "with a reason (Program 6 aperture)"
     ),
-    # 7g-2 — the EIGHTH kind. The seven above are all about the PRESENT: a
+    # The EIGHTH kind. The seven above are all about the PRESENT: a
     # source that carried nothing, a unit that did not run, a dimension that
     # did not band. This one is about the PAST, and it is a different question
     # — a curated collection's manifest declares which years a provider holds
@@ -198,7 +198,7 @@ ABSENCE_KINDS: dict[str, str] = {
         "and the observations table does not hold it; the proof is the load "
         "that should have written it"
     ),
-    # W11-F14 — the NINTH kind, and the only one about a read that EXISTS: the
+    # The NINTH kind, and the only one about a read that EXISTS: the
     # unit spoke, but the status it states has not been re-evidenced inside N
     # of its own windows. Never a band (`legba.data.carried_state`).
     "carried_unsupported": (
@@ -1214,7 +1214,7 @@ async def read_absences(
             _unreadable(_carried.CARRIED_UNSUPPORTED, "the unit reads' indicators", exc)
         )
     try:
-        # 7g-2 — HISTORY_GAP. Composed off the SAME reader the era coverage
+        # HISTORY_GAP. Composed off the SAME reader the era coverage
         # map serves (`collections_coverage.read_coverage`), so a hole shown
         # on `/v3/collections/coverage` and a hole typed here are literally
         # the same measurement. A desk no loaded holding names is NOT a gap:

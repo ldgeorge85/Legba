@@ -1,6 +1,6 @@
 # WORKED EXAMPLE (machinery only — not registered by any script, no live mailbox).
 #
-# The `email_imap` source kind (W5 SRC-8): one folder of one IMAP mailbox, one
+# The `email_imap` source kind: one folder of one IMAP mailbox, one
 # signal per message from an allowed sender. For publishers that deliver only
 # by mailing list — agency bulletin services, e-alert lists with no feed, lists
 # whose RSS was retired.

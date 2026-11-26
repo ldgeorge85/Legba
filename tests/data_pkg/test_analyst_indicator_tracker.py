@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""indicator_tracker handler — S3-T2 structured-I&W flips, debounced (W11-F55).
+"""indicator_tracker handler — S3-T2 structured-I&W flips, debounced.
 
 Pure-logic coverage of the sweep core (follow each unit-stream's indicators run
 over run by the stable `id` slug, else the normalised statement; record every
@@ -136,7 +136,7 @@ def test_raw_flip_joining_by_id():
 
 
 def test_fuzzy_statement_join_when_ids_re_minted():
-    """DQ P6 — when two runs share NO ids (re-minted slugs), the lineage is
+    """When two runs share NO ids (re-minted slugs), the lineage is
     followed by the normalized STATEMENT text, so a status change on a
     re-slugged-but-same signpost is still seen."""
     stmt = "Reservist call-up or mobilization orders issued by the target state"
@@ -220,7 +220,7 @@ def test_malformed_indicator_entries_dropped():
 
 
 def test_eleven_oscillations_make_eleven_raw_and_one_debounced_flip():
-    """DONE TEST (W11-F55): a stream that oscillates 11 times between two held
+    """DONE TEST: a stream that oscillates 11 times between two held
     stretches yields 11 raw records and ONE debounced flip, which says how many
     raw toggles it took to settle."""
     statuses = [N, N] + [T, N] * 5 + [T, T]

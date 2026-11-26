@@ -146,7 +146,7 @@ kept on the row so every grouping can be argued with: a claim source's declared 
 Telegram channel; a Telegram bundle (one group for the bundle, which under-counts until an admin
 splits it); a feed reached through an in-stack proxy (grouped by the publisher the route names); the
 registrable domain of the configured address; a licence-ledger host; a knowledge set; and, when none
-applies, the descriptor on its own. An admin may move an origin to another group
+applies, the descriptor on its own. An **item** resolves finer than its source: a Telegram item is its channel (`telegram:<channel>`), an item of an aggregator such as GDELT is the publisher domain of its article (`host:<domain>`), and anything else is its source's group. A deployment's **owner map** (`seeds/owner_map.yaml`, git-ignored; format in `seeds/owner_map.example.yaml`) joins what a domain cannot, such as one publisher on two domains. `scripts/derive_owner_groups.py` re-derives all of it: a dry-run by default, `--apply` to write, idempotent, and an admin-corrected origin is never moved. An admin may move an origin to another group
 (`PUT /api/v1/registry/origins/{origin_id}/group`); `GET /api/v1/registry/origins` and
 `…/origins/{origin_id}/log` read them. `scripts/report_origin_groups.py --list` names the known wrong
 cases (uncommon public suffixes, one publisher on two domains, proxied and direct feeds of one
@@ -169,6 +169,7 @@ path calls it.
 | `entity_edge_events` | the transition ledger for edge mints and polarity flips; behind `LEGBA_EDGE_TRANSITION_LEDGER` (off by default). Transitions before it was written are not recoverable | **append-only** |
 | `entity_judgement` | one adjudication verdict per candidate entity pair: an audit row and a re-adjudication cache | **append-only** |
 | `proposed_edges` | pairwise co-occurrence candidates accruing confidence, the reifier's input queue | **mutate-in-place** (status plus confidence; no version chain) |
+| `proposed_edge_markers` | one row per candidate pair that ended rejected or retired (its lowercased key, final state, when, confidence); the pair is never proposed again | **insert-only in practice** (a trigger on `proposed_edges` writes it; removed only if the same row leaves a final state) |
 | `signal_entity_links` | the signal-to-entity provenance edge | **append-only** |
 | `graph_metrics` | signed-triad balance, centrality and community, proxy-chain sign products, as queryable rows | **append-only** |
 | `seed_batches` | the curated-import ledger; facts and nexuses carry its id | **append-only** |
@@ -183,7 +184,8 @@ path calls it.
 | Table | Purpose | Write semantics |
 |---|---|---|
 | `analyst_outputs` | the typed-output table, routed by kind across the `OutputKind` vocabulary: findings, meta-findings, alerts, critiques, prompt-module candidates, scorecards, situation updates | **append-only**; a validation failure routes to `output_dead_letter` rather than landing a malformed row |
-| `analyst_traces` | one row per run (output, side-write, trace-only or failure alike) with the run's steps, tool calls and prompt hash, hash-chained per analyst | **append-only** |
+| `analyst_traces` | one row per run (output, side-write, trace-only or failure alike) with the run's steps, tool calls and prompt hash, hash-chained per analyst | **append-only**; an old run's prompt, input and output may be moved into `analyst_trace_bundles` (the only update) |
+| `analyst_trace_bundles` | the prompt, input and output of up to N old runs of one analyst, xz-compressed together; read only through `trace_bulk.hydrate_traces` | **insert-only** |
 | `analyst_outputs` rows with `kind = 'critique'` | every faithfulness verdict, one row per verified output, `confidence` carrying the score and the judge model and pipeline revision in `data`. The older `analyst_critiques` table remains, written only by a legacy judge path in `runtime/actor_payload.py` | **append-only** |
 | `hypotheses` | competing-hypothesis pairs with their evidence matrix, and, in the same shape, the standing open-question set | **append** plus **status mutate-in-place** |
 | `inquiry_ledger` | an inquiry's continuity: its hypotheses (each with a resolution test frozen at write), questions, observations and expectations, with status `open` / `confirmed` / `refuted` / `answered` / `expired` / `withdrawn`. The `inquiry_state` action pack is its only read and write surface | **append** plus **status mutate-in-place**; `written_by` |

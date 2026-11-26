@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""S-1 acceptance — the generic ``series_api`` kind and F6's series, on a real
+"""Acceptance — the generic ``series_api`` kind and F6's series, on a real
 migrated Postgres (container suite, ``migrated_pg``) and a private
 evidence-store root.
 
@@ -251,7 +251,7 @@ async def test_eia_series_end_to_end_and_f6_reads_it(pool, root) -> None:
     res = await series_change.handle([], {"source_ids": [EIA], "level_rules": ["eia.pet_spot.rbrte>=100"],
                                           "current_days": 10}, deps)
     data = res.finding.data
-    assert data["method_version"] == "series_change/2026-11.3"   # I-5: named family rules (unused here)
+    assert data["method_version"] == "series_change/2026-11.3"   # Named family rules (unused here)
     # Brent: 99.40 (the revised date) -> 101 the next day enters >= 100; holding
     # above it afterwards is not an event. WTI has no rule: the band, and 15
     # days are too few for its baseline.

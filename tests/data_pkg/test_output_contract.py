@@ -2,9 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """V-N1 — the inline_target OUTPUT CONTRACT, pinned on the REAL write path.
 
-THE DEFECT THESE TESTS ENCODE. Finding
-``16f6a460-541a-4deb-b536-407433411173`` (``cross_doc_corroborator``, live
-2026-08-04) was persisted with the sentence ``We will use search_corpus.`` as
+THE DEFECT THESE TESTS ENCODE. A finding
+(``cross_doc_corroborator``, live) was persisted with the sentence ``We will use search_corpus.`` as
 its TITLE and a raw JSON blob as its BODY. Its own contract — a real title, a
 BLUF body, ``confidence``, ``evidence``, ``tags`` — sat one line below the plan
 sentence, fully parseable, and was discarded because every recovery path in
@@ -308,8 +307,7 @@ def test_is_unusable_output_keeps_one_line_of_prose() -> None:
 # parse and ``parse_finding_envelope``'s "find it anywhere" recovery raised
 # on the same token and fell through to ``_unstructured_finding`` — landing
 # a 0.9-confidence coordination call at a flat 0.30 with an EMPTY
-# ``indicators`` array. Measured in ``planning/VOICE_REPLAY_2026-08-20/
-# runs/REVISION_RESULT_2026-08-21.md`` §5: five cells, all five spelling out
+# ``indicators`` array. Measured in a voice replay (2026-08-21): five cells, all five spelling out
 # "nine", all five a confident coordination-positive call — three in the
 # 2026-08-21 narrative replay (``narrative_coordination``), two more in the
 # frozen 2026-08-20 corpus (``disruption_status``, ``internal_stability``).
@@ -353,16 +351,16 @@ def test_repair_confidence_word_token_leaves_body_prose_alone() -> None:
 # here.
 _CONFIDENCE_WORD_TOKEN_CASES = [
     # (fixture filename, label, model's own `indicators` array survives coercion whole)
-    ("nar_jp_0818__old__s2.txt", "nar_jp_0818 OLD s2 (frozen arm)", True),
-    ("nar_jp_0818__v2r2__s5.txt", "nar_jp_0818 v2r2 s5", True),
-    ("nar_jp_0817__v2r4__s8.txt", "nar_jp_0817 v2r4 s8", True),
-    ("dis_hormuz_0818__new__s2.txt", "dis_hormuz_0818 new s2", True),
-    # int_ar_0807's OWN indicators carry non-ISO dates ("21 August 2026") —
+    ("nar_rep_0818__old__s2.txt", "nar_rep_0818 OLD s2 (frozen arm)", True),
+    ("nar_rep_0818__v2r2__s5.txt", "nar_rep_0818 v2r2 s5", True),
+    ("nar_rep_0817__v2r4__s8.txt", "nar_rep_0817 v2r4 s8", True),
+    ("dis_port_0818__new__s2.txt", "dis_port_0818 new s2", True),
+    # int_rep_0807's OWN indicators carry non-ISO dates ("21 August 2026") —
     # a separate, pre-existing IndicatorEntry validation drop, unrelated to
     # this defect. The DS-1 prose-derivation fallback fires instead and
     # still yields a non-empty array: the "indicators must never come back
     # EMPTY" property this fix is about still holds, via the sibling path.
-    ("int_ar_0807__new__s1.txt", "int_ar_0807 new s1", False),
+    ("int_rep_0807__new__s1.txt", "int_rep_0807 new s1", False),
 ]
 
 
@@ -405,7 +403,7 @@ def test_confidence_word_token_cells_land_the_intended_confidence_and_indicators
 # The JSON-ENVELOPE LEAK (2026-08-29) — salvage_json_envelope
 #
 # Live defect: the world composition of 2026-08-29 12:00Z
-# (823ff9dd-89b9-47f9-9c7e-8c9cc631e31d) published its JSON WRAPPER as the body.
+# (a composition run) published its JSON WRAPPER as the body.
 # The model emitted an unrequested sixth key, `body_additional_sections`, and
 # emitted it MALFORMED — `"## Tension": "…": "…"`, two string values for one
 # key — so json.loads raised and the fail-safe branch stored the raw envelope.
@@ -419,9 +417,9 @@ _ENVELOPE_LEAK_FIXTURES = Path(__file__).parent / "fixtures" / "json_envelope_le
 
 
 def test_salvage_unwraps_the_live_world_composition_envelope() -> None:
-    """The exact 823ff9dd raw bytes unwrap to the model's markdown body and its
+    """The exact the leaked run raw bytes unwrap to the model's markdown body and its
     real headline — NOT to the JSON wrapper that actually shipped."""
-    raw = (_ENVELOPE_LEAK_FIXTURES / "world_assessor_823ff9dd__leaked.txt").read_text(
+    raw = (_ENVELOPE_LEAK_FIXTURES / "world_assessor_envelope__leaked.txt").read_text(
         encoding="utf-8"
     )
     # Fixture integrity: this MUST still be the shape that broke, or the test
@@ -433,11 +431,11 @@ def test_salvage_unwraps_the_live_world_composition_envelope() -> None:
     salvaged = salvage_json_envelope(raw)
 
     expected = (
-        _ENVELOPE_LEAK_FIXTURES / "world_assessor_823ff9dd__unwrapped.md"
+        _ENVELOPE_LEAK_FIXTURES / "world_assessor_envelope__unwrapped.md"
     ).read_text(encoding="utf-8")
     assert salvaged["body"] == expected
     assert salvaged["title"] == (
-        "Russia mobilization heightens European escalation risk amid global hotspots"
+        "Veldmark berth closure heightens regional escalation risk amid port disputes"
     )
     # The whole point: no JSON scaffolding survives into the body.
     assert not salvaged["body"].lstrip().startswith("{")

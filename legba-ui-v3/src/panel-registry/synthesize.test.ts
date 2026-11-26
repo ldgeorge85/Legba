@@ -126,7 +126,7 @@ describe('mergeRegistrations', () => {
     expect(pages[0].id).toBe('row-1')
   })
 
-  it('UI-B3 — a real row naming a RETIRED panel id covers its survivor\'s instance', () => {
+  it('A real row naming a RETIRED panel id covers its survivor\'s instance', () => {
     const synthetic = synthesizeBoundRegistrations([rec('brazil')], [], 'personal')
     const merged = mergeRegistrations([realReg({ panel_id: 'target_overview' })], synthetic)
     expect(merged.length).toBe(synthetic.length)

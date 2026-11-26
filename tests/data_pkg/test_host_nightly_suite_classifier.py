@@ -292,7 +292,7 @@ def test_captured_error_logging_is_not_mistaken_for_a_failure():
 
 
 def test_the_hygiene_reports_are_logged_and_never_move_the_verdict():
-    """Roll 85: the three read-only P-8 reports run after the test phases;
+    """The three read-only P-8 reports run after the test phases;
     findings (rc=1), a connection error (rc=2) and a clean report are each
     one summary line, and none of them turns a clean night into a FAIL."""
     import tempfile

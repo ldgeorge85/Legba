@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""C-1 — the CLAIM source class on the real path (migrated Postgres, the
+"""The CLAIM source class on the real path (migrated Postgres, the
 isolated test stack only).
 
 Covered: the intake refuses a request born of a claim row's links
@@ -204,7 +204,7 @@ async def test_counting_sql_with_the_claim_predicate_plans(pool):
 
 
 # ---------------------------------------------------------------------------
-# C-2 — one hop more: a fact resting on a finding that rested only on claims
+# One hop more: a fact resting on a finding that rested only on claims
 # ---------------------------------------------------------------------------
 
 

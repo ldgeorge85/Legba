@@ -1,8 +1,7 @@
-# CURATED — layer_map_cn (Program 6 L0 lane curate_cn, wave E).
+# CURATED — layer_map_cn.
 # Started from scripts/gen_layer_map_draft.py --country CN (the generator's
-# own derived output, every reason "derived:", every aperture unmeasured —
-# see planning/LAYER_MAP_DRAFTS_2026-09-24/layer_map_cn.yaml for that
-# baseline). Curated per docs/DATA_SOURCES.md and the wave-E curate_cn brief:
+# own derived output, every reason "derived:", every aperture unmeasured).
+# Curated per docs/DATA_SOURCES.md:
 #
 #   * Every entries[] reason is now either "curated: ..." (the layer/reading
 #     was actively assessed for China and the reason rewritten to say why —
@@ -18,26 +17,24 @@
 #     physical present, social_digest absent (from our sources, not
 #     structurally — see the aperture reason).
 #
-# NOTE ON identity.state: the brief asked for `state: reviewed`, but
+# NOTE ON identity.state: `state: reviewed` is not available:
 # `LayerMapIdentity.state` is typed `LifecycleState`
 # (src/legba/data/schemas/lifecycle.py), a CLOSED enum of exactly
 # draft/configured/active/paused/retired — "reviewed" is not a member and
-# is REJECTED by validation (confirmed live against this model before
-# writing this file). Used `state: active` instead, as the closest existing
-# value for "this is the current, curated map, not the raw draft" — flagged
-# for the reviewer; adding a `REVIEWED` member to `LifecycleState` (or a
-# layer-map-specific state enum) is a follow-up if the literal word matters,
-# not something this lane's brief authorizes touching.
+# is REJECTED by validation (confirmed against this model). `state: active` is used instead, as the
+# closest existing value for "this is the current, curated map, not the raw
+# draft"; adding a `REVIEWED` member to `LifecycleState` (or a
+# layer-map-specific state enum) would be a separate change.
 #
-# NO LIVE DB ACCESS. Validated via `scripts/load_layer_map.py --dry-run`
-# only; the reviewer runs the real load with `--target country_g20_cn`.
+# Validated via `scripts/load_layer_map.py --dry-run`; the real load runs with
+# `--target country_g20_cn`.
 
 identity:
   id: layer_map_cn
   name: CN layer map (reviewed)
   schema_uri: legba/layer_map/1.0.0
   kind: layer_map
-  owner: curate_cn
+  owner: owner@local
   created: '2026-01-01T00:00:00Z'
   state: reviewed
 country: CN

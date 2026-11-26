@@ -430,7 +430,7 @@ def test_a_recovery_that_measured_no_census_carries_None():
 
 
 # ---------------------------------------------------------------------------
-# W4b F-9 - events fold into the class buckets; the classify cap is reported
+# Events fold into the class buckets; the classify cap is reported
 # ---------------------------------------------------------------------------
 
 

@@ -4,7 +4,7 @@
 
 Per-bounded-unit CORRECTNESS scorer. Phase 2 measures each small reasoning UNIT
 individually; this handler answers, per unit, "was the unit's read RIGHT?" — a
-question DISTINCT from faithfulness (P0-T2), which only asks "is the prose
+question DISTINCT from faithfulness, which only asks "is the prose
 faithful to its own cites?". A finding can be perfectly faithful to citations
 that do not support the conclusion the operator would have drawn; the 2026-07-28
 gold-set round measured exactly that gap (operator correctness ≈0.625 against a

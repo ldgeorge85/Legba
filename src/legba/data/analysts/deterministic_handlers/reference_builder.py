@@ -40,8 +40,8 @@ what it is not:
     this module ever leaves the core plane.
 
 THE STAGGER IS DERIVED, NOT SCHEDULED. R1 measured one reference at ~1–1.7M
-core-plane prompt tokens and ~8 minutes of ai1. A 33-target roster on a
-fortnightly cadence is ~4–5 hours of ai1 per cycle, which is affordable only if
+core-plane prompt tokens and ~8 minutes of the models host. A 33-target roster on a
+fortnightly cadence is ~4–5 hours of the models host per cycle, which is affordable only if
 at most one runs at a time. So the cadence tick fires often and the handler
 picks the SINGLE most overdue target (``max_targets_per_run`` = 1): the roster
 staggers itself, a new target joins by appearing in the roster, and no stagger
@@ -129,7 +129,7 @@ DEFAULT_CADENCE_DAYS = 7
 DEFAULT_MAX_TARGETS_PER_RUN = 1
 
 #: R1's measured budget. 80 calls produced 19 developments across 8 dimensions
-#: at 78.9% span verification and ~8 minutes of ai1.
+#: at 78.9% span verification and ~8 minutes of the models host.
 DEFAULT_TOOL_CALL_CAP = 80
 
 #: Fewer than this many verified developments in a dimension ⇒ thin.
@@ -199,7 +199,7 @@ WEB_INVOCATIONS_PER_HOUR = 1_000_000   # 2026-09-20 operator: no search cap (was
 # cooldown roughly every day, whatever else was fixed.
 #
 # 8M carries that with a third to spare, on the $0 core plane where the only
-# real cost is ai1 wall time (~5 x 5.5 min/day). The wiring test asserts the
+# real cost is models-host wall time (~5 x 5.5 min/day). The wiring test asserts the
 # three numbers stay consistent, so a cadence change or a roster that outgrows
 # this one is a RED TEST rather than a cooldown discovered in the logs.
 
@@ -336,7 +336,7 @@ def coverage_warning(cadence_days: int) -> str | None:
     would report stale references, each correct, neither naming the other.
 
     Two remedies and they are the operator's, not this handler's, because both
-    spend something: halve ``cadence_days`` (twice the ai1 time, references
+    spend something: halve ``cadence_days`` (twice the models-host time, references
     always fresh) or raise the grace env (no extra cost, but claims are graded
     against an older account of the world).
     """
@@ -348,7 +348,7 @@ def coverage_warning(cadence_days: int) -> str | None:
         f"the grader treats one as current for only {grace} days after its "
         f"window closes ({env}), so each target reads `reference_stale` for "
         f"about {cadence_days - grace} day(s) per cycle and is not graded then. "
-        f"Close it by lowering cadence_days to {grace} (more ai1 time, fresher "
+        f"Close it by lowering cadence_days to {grace} (more models-host time, fresher "
         f"references) or by raising {env} to {cadence_days} (free, but claims "
         "are graded against an older account of the world). Both are operator "
         "decisions and neither is taken here."

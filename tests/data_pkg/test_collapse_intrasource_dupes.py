@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Historical intra-source dupe collapse script (W-2a).
+"""Historical intra-source dupe collapse script.
 
 Exercises ``scripts/collapse_intrasource_dupes.py`` against the ephemeral
 migrated test DB (the ``migrated_pg`` session fixture):

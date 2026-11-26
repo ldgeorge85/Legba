@@ -1,19 +1,17 @@
 /**
  * subjectRead — what a click on a SUBJECT does (X3/D3; review D §C5).
  *
- * A subject picked from the rail (or ⌘K) used to be a bare `focus`: the
- * Inspector opened on the subject's DESCRIPTOR (allowed_action_packs,
- * cycle_hop_limit, a 64-hex version) while the Morning Read beside it kept
- * showing another subject. The click now compiles to three drive actions, in
- * this order, through the ONE executor:
+ * A subject picked from the rail (or ⌘K, the top bar's switcher, a Watch row's
+ * subject) used to be a bare `focus`, then a bound copy of its page opened
+ * inside whatever tab the reader was on ("Alert log › Ukraine"). The click
+ * now compiles to three drive actions, in this order, through the ONE
+ * executor:
  *
- *   1. `set_scope {target}` — the wall is about this subject: the Live Feed
- *      filters to it and the Morning Read re-scopes to it;
- *   2. `focus {target}`     — the Inspector and Consult's pin follow it (the
- *      Inspector opens on the subject's READ STATE; the descriptor is one
- *      click further, under "Configuration");
- *   3. `open_panel subject.page {subject, tab: brief}` — its page, on the
- *      brief.
+ *   1. `set_scope {target}` — the subject is THE POINT: the top bar names it,
+ *      the regions that follow it narrow to it, Consult asks about it;
+ *   2. `focus {target}`     — the selection follows it;
+ *   3. `arrange subject`    — its home: the subject tab, whose page follows
+ *      the point. A subject has one home and is never opened elsewhere.
  *
  * X4/D4: `lib/commands.ts::railActions.subject` now compiles exactly these
  * three, and this is the one definition (`subjectReadActions` below IS
@@ -24,8 +22,8 @@ import type { WorkstationAction } from '@/lib/applyAction'
 import { railActions } from '@/lib/commands'
 
 /**
- * A click on a subject: scope the wall, focus it, open its read. The order is
- * the contract (the scope lands first so the page opens already scoped).
+ * A click on a subject: make it the point, focus it, go to its home. The
+ * order is the contract (the point lands first so the page opens on it).
  */
 export function subjectReadActions(id: string, label?: string): WorkstationAction[] {
   return railActions.subject(id, label)

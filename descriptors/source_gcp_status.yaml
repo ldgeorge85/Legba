@@ -1,4 +1,4 @@
-# K-1 cyber desk (2026-11-14) — draft SourceDescriptor. Ships DRAFT (operator activates).
+# Draft SourceDescriptor. Ships DRAFT (operator activates).
 #
 # Google Cloud's public service-health Atom feed. Probed 2026-11-13: HTTP 200,
 # application/atom+xml, ONE entry (the feed holds recent incidents only; the
@@ -7,7 +7,7 @@
 # source_aws_status.yaml. Every fifteen minutes.
 #
 # Desk routing: scope.classifications `geopolitics.topic:cyber` is stamped on
-# every signal (W10 TAX-2) — the cyber desk's tag arm (target_cyber.yaml).
+# every signal — the cyber desk's tag arm (target_theme_cyber.yaml).
 
 identity:
   id: source.gcp.status
@@ -17,7 +17,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: cyber_desk_k1
+  owner: owner@local
   created: "2026-11-14T00:00:00Z"
 
 scope:

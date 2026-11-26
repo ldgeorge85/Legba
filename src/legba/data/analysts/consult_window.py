@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The consult turn's WINDOW CONTRACT (lane Q-1, rule A) — pure, no I/O.
+"""The consult turn's WINDOW CONTRACT — pure, no I/O.
 
-THE DEFECT. A consult turn of 2026-11-14 was asked about infrastructure
+THE DEFECT. A consult turn was asked about infrastructure
 disruptions "for this window". No window reached the turn (the console's
 "asking about … window …" line sends nothing), the model chose one itself and
 opened "Survey window: … disruption inventory 2026-11-12 to 2026-11-14 …",
@@ -23,9 +23,9 @@ fixed order, and the answer states which source it came from:
    (``LEGBA_CONSULT_DEFAULT_WINDOW_HOURS``), the same 168 hours
    ``list_findings(mode="survey")`` reads by default.
 
-Q-2 widened what (1) reads — numeric day/month dates under a stated rule,
+(1) also reads numeric day/month dates under a stated rule,
 "from the 3rd to the 10th", "early / mid / late <month>" on fixed day bands
-(``consult_window_words``; the reading taken is printed) — and added EVENT
+(``consult_window_words``; the reading taken is printed) — and EVENT
 ANCHORS ("since the ceasefire"; ``consult_window_anchor``): one whose own
 words carry a date is anchored on it; any other is declared on the window as
 asked for and NOT resolved, and the precedence above stands.

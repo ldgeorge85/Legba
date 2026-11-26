@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W10 SUBJECT-1 — ONE subject ladder across the reference/grader and the
+"""ONE subject ladder across the reference/grader and the
 slug-tail copies (``src/legba/data/subject.py``).
 
 This file proves:
@@ -272,7 +272,7 @@ def test_all_32_desks_resolve_to_the_pins_values() -> None:
     blob = json.dumps(got, ensure_ascii=False, separators=(",", ":"))
     assert hashlib.sha256(blob.encode("utf-8")).hexdigest() == PINNED_SHA256
     # The two pin-era derivations the ladder replaces agree with it on every
-    # desk — the identity this lane must preserve.
+    # desk — the identity this change must preserve.
     for tid, code, *_ in PINNED:
         assert tid[-2:].upper() == code                       # the pin's grader
         assert _body(tid)["scope"]["geo"][0].upper() == code  # the pin's reference roster

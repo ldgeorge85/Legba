@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The geocoder's text-sweep RULES (lane N-B): two homonym classes the
+"""The geocoder's text-sweep RULES: two homonym classes the
 country-name sweep in :mod:`legba.data.filters.geocode` could not tell apart.
 
 1. **PERSON-NAME GUARD.** "Republicans elect Jim Jordan as House minority
-   leader" filed under the country JORDAN (signal 0bbbf4c0, 11-10): the sweep
+   leader" filed under the country JORDAN (a real signal): the sweep
    matches every whole-word country name, and a person's name is not a place.
    The upstream NER (``ner_multilingual``, which runs before ``geocode`` in the
    enrichment chain) already typed "Jim Jordan" as ``person``. The guard blanks
@@ -60,11 +60,11 @@ EXTRA_COUNTRY_NAMES: dict[str, str] = {
     "congo brazzaville": "CG",
     "republic of the congo": "CG",
     "republic of congo": "CG",
-    # Lane N-O: the Spanish "EE. UU." (Estados Unidos) — its bare "EE" was
-    # resolving to ESTONIA (es copy, 7-day sample 11-13).
+    # The Spanish "EE. UU." (Estados Unidos) — its bare "EE" was
+    # resolving to ESTONIA.
     "ee. uu.": "US",
     "ee.uu.": "US",
-    # Lane N-U: pycountry knows GB only as "United Kingdom" and its official
+    # pycountry knows GB only as "United Kingdom" and its official
     # "...of Great Britain and Northern Ireland"; English copy writes
     # "Britain" / "Great Britain" far more often ("New Britain", the PNG
     # island and the Connecticut city, is blanked by NON_COUNTRY_PLACE_NAMES).
@@ -73,7 +73,7 @@ EXTRA_COUNTRY_NAMES: dict[str, str] = {
 }
 
 # ---------------------------------------------------------------------------
-# Lane N-O — tokens that are NOT place references (the 11-13 official-source
+# Tokens that are NOT place references (official-source
 # mis-tags: "91 FR 60505" -> France, "GI Breuer" -> Gibraltar, image-hash hex
 # "...56BA9105E..." -> Bosnia, "SDN List" -> Sudan). Keyed by the SOURCE's
 # language (``payload.language``); ``"*"`` applies in every language. A token
@@ -119,8 +119,8 @@ ABBREVIATION_COLLISIONS: dict[str, frozenset[str]] = {
         "TR",    # Taiwan Railway (Turkey)
         "NA",    # National Assembly / not applicable (Namibia)
         "GP",    # general practitioner / Grand Prix (Guadeloupe)
-        "GL",    # OFAC "general license (GL): GL W" (Greenland) - roll 74
-        "EE",    # OFAC "General Licenses EE and FF" / EE the UK carrier (Estonia) - roll 74
+        "GL",    # OFAC "general license (GL): GL W" (Greenland)
+        "EE",    # OFAC "General Licenses EE and FF" / EE the UK carrier (Estonia)
     }),
     "de": frozenset({
         "GI",    # Generalinspekteur (Gibraltar)
@@ -218,7 +218,7 @@ def blank_markup(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Lane N-U — DEMONYM evidence ("Russian strikes hit Kharkiv", "North Korean
+# DEMONYM evidence ("Russian strikes hit Kharkiv", "North Korean
 # troops"). An adjective is WEAKER evidence than a country name ("Russian
 # dressing", "Chinese New Year", "American Airlines"), so the geocoder reads it
 # only as a LOW-PRECEDENCE candidate: English copy, the title / lead zone only,
@@ -320,7 +320,7 @@ def first_demonym_iso2(
 QUERY_NAMES: dict[str, str] = {
     "CD": "Democratic Republic of the Congo",
     "CG": "Republic of the Congo",
-    # Lane N-O: pycountry's inverted formal names are bad Nominatim queries —
+    # pycountry's inverted formal names are bad Nominatim queries —
     # the live cache holds "korea, republic of" -> SINGAPORE (a Korea
     # Investment Corp office) and "taiwan, province of china" -> CHINA (a
     # Fujian museum). Every ISO with a ``common_name`` queries by it
@@ -376,7 +376,7 @@ AMBIGUOUS_NAMES: dict[str, AmbiguousName] = {
             )),
         ),
     ),
-    # Lane N-U: the US STATE. NWS / US-agency copy ("Flood Watch for
+    # The US STATE. NWS / US-agency copy ("Flood Watch for
     # Chatham County, Georgia"; "Georgia and South Carolina") filed under the
     # country GE. A state cue — another US state, a county, a Georgia city,
     # the weather service — resolves the bare name to US; a Caucasus cue
@@ -436,12 +436,12 @@ def person_surfaces(entities: Any) -> list[str]:
 
 #: Country names that are also attested PERSONAL names (given names or
 #: surnames): "Jim Jordan", "Chad Smith", "Israel Adesanya", "Georgia Meloni",
-#: "India Walton", "Kenya Barris", "Kathy Ireland", "Cuba Gooding". Lane N-U:
-#: the person-name guard blanks a country name inside a ``person``-class NER
+#: "India Walton", "Kenya Barris", "Kathy Ireland", "Cuba Gooding". The
+#: person-name guard blanks a country name inside a ``person``-class NER
 #: surface ONLY when the country is one of these. The NER also labels "US
 #: House", "Panama Canal", "Government of Liberia", "Democratic Republic of
 #: Congo", "McDonald's Australia", "Saab Denmark" and "Qatar MotoGP" as
-#: ``person`` (roll 74: 56 of 1,038 re-tag changes dropped a country the title
+#: ``person`` (dropping a country the title
 #: plainly names); none of those countries is a personal name, so they stay.
 PERSON_NAME_COUNTRIES: frozenset[str] = frozenset({
     "jordan", "chad", "israel", "georgia", "india", "kenya", "ireland",
@@ -552,7 +552,7 @@ def mask_person_names(
     out = text
     for name in sorted(persons, key=len, reverse=True):
         if not is_personal_name_span(name, country_names):
-            # Lane N-U: a mislabelled institution / place ("US House",
+            # A mislabelled institution / place ("US House",
             # "Panama Canal") — its country is the story's, not a person's.
             continue
         out = _blank(out, re.escape(name).replace(r"\ ", r"\s+"))

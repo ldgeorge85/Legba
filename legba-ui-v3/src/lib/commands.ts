@@ -25,7 +25,8 @@
 import type { PanelKind } from '@/types'
 import { act, type WorkstationAction } from '@/lib/applyAction'
 import { CASE_ACTIONS, type CaseActionName } from '@/lib/caseModel'
-import { SUBJECT_READ_KIND, SUBJECT_READ_TAB } from '@/lib/subjectNoun'
+/** The reader tab a subject lives on (`lib/surfaces.ts`). */
+const SUBJECT_HOME = 'subject'
 
 // ---------------------------------------------------------------------------
 // The registry.
@@ -231,16 +232,17 @@ export const paletteActions = {
 /** The object rail — a click is an object action, never a panel row. */
 export const railActions = {
   /**
-   * A click on a subject = its READ (X4/D4; review D C5): scope the view,
-   * focus the subject (the Record sheet and Consult's pin follow), open its
-   * page on the brief. The order is the contract — the scope lands first so
-   * the page opens already scoped. `lib/subjectRead.ts::subjectReadActions`
-   * is this.
+   * A click on a subject = its READ: make it the point (the scope — the top
+   * bar, the regions that follow it and Consult's pin), focus it, and go to
+   * the subject tab, whose page follows the point. A subject has ONE home:
+   * it never opens inside whatever tab the reader was on. The order is the
+   * contract — the point lands first so the page opens already on it.
+   * `lib/subjectRead.ts::subjectReadActions` is this.
    */
   subject: (id: string, label?: string): WorkstationAction[] => [
     setScope('target', id, label),
     focus('target', id, label),
-    openPanel(SUBJECT_READ_KIND, { subject: { kind: 'target', id }, tab: SUBJECT_READ_TAB }),
+    goToSurface(SUBJECT_HOME),
   ],
   unit: (id: string, label?: string): WorkstationAction[] => [focus('analyst', id, label)],
   source: (id: string, label?: string): WorkstationAction[] => [focus('source', id, label)],

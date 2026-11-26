@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Program 7g-1 — load a collection's series into ``observations``.
+"""Load a collection's series into ``observations``.
 
 A COLLECTION IS NOT A SOURCE and this is not an ingest. There is no NATS
 publish here, no signal write, no enrichment enqueue and no analyst run: this

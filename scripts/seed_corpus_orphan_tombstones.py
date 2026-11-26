@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Seed ``corpus_tombstones`` for the OpenSearch corpus docs that ALREADY have no
-substrate row — the historical orphan population (W2-C, 2026-08-03).
+substrate row — the historical orphan population (2026-08-03).
 
 WHY THIS IS A SCRIPT AND NOT A MIGRATION
 ----------------------------------------

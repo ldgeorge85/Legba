@@ -4,7 +4,7 @@
 # it fires it embeds the next batch of un-embedded signals into the Qdrant
 # `legba_signals` collection (1024-dim BGE-M3 cosine) — the VECTOR PLANE of the
 # signal-content-depth program (a semantic-retrieval substrate that lights up
-# `vector_search`, which no-ops today because the collection holds 0 points).
+# `vector_search` over the signals the sweep has embedded).
 # Signals already live structured in Postgres and, for the lexical mining
 # substrate, in the OpenSearch corpus; this is the third leg — semantic nearest-
 # neighbour retrieval + payload-facet filtering over the whole signal body. The
@@ -55,7 +55,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: active
-  owner: signal_embedder
+  owner: owner@local
 
 subscription:
   # No `targets` block → META analyst: one global sweep per cadence tick over the
@@ -72,14 +72,14 @@ method:
   kind: deterministic
   impl: legba.data.analysts.deterministic:run_method
   sub_handler: signal_embedder
-  # Re-embed drain (operator, 2026-08-03): 36,775 sub-floor vectors released for
-  # re-embedding after the B-4 length-floor fix; the default 200/tick cap put the
+  # Re-embed drain: 36,775 sub-floor vectors were released for
+  # re-embedding after a length-floor fix; the default 200/tick cap put the
   # drain at ~28 days. 1000/tick cuts it to days. batch_limit stays at the
   # default 200 — the embedding SERVICE call size is unchanged; only the number
   # of batches per tick grows. Revert to default by deleting this block once the
   # drain completes.
   options:
-    max_embeds: 200   # live value (W6 SPLIT-1 fold, 2026-10-04: the live head carries this; the tree now does too); the file said 1000
+    max_embeds: 200
   # Deterministic kind, NO LLM block: this sweep uses the Qdrant vector plane +
   # the hosted embedding service, not an LLM. The runtime deps-builder connects a
   # QdrantStore into deps.extras["signal_embedder_qdrant"] and threads the process-

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""N-W — the smaller loop-lag offenders roll 76's monitor named on live.
+"""N-W — the smaller loop-lag offenders the loop-lag monitor named on live.
 
 Each fix keeps its output bit-equal to the code it replaces (the old code is
 kept here as the reference) and only removes repeated work.

@@ -1,5 +1,4 @@
-# Cross-source semantic/temporal coalesce analyst (review P2 data-integrity:
-# "cross-source semantic/temporal coalescing not built").
+# Cross-source semantic/temporal coalesce analyst.
 #
 # A `deterministic`-kind META analyst — substrate-wide, deterministic, NO LLM.
 # Distinct from the ingest-time Dedupe4TierHandler (which runs per target / per
@@ -8,8 +7,8 @@
 # Qdrant collection (`legba_coalesce`) and links near-duplicate signals reporting
 # the SAME real-world event from DIFFERENT sources, reusing the dedupe filter's
 # tier-3 (cosine) + tier-4 (temporal window + title Levenshtein) logic. It LINKS,
-# never collapses — every source observation stays audit-grade (P-02
-# link-never-collapse), tied to a deterministic canonical via `signal_aliases`
+# never collapses — every source observation stays audit-grade
+# (link-never-collapse), tied to a deterministic canonical via `signal_aliases`
 # (reason = 'cross_source_coalesce') + the alias's `canonical_signal_id` pointer.
 #
 # OFF-BY-DEFAULT (mirrors the signals_retention precedent — a registered
@@ -17,7 +16,7 @@
 # in via the per-run trigger options channel). Two gates:
 #   1. NOT in the default bringup set (an operator registers this file to opt in).
 #      cadence it no-ops until an operator turns it on — EITHER by declaring
-#      `method.options: {enabled: true, ...}` on this descriptor (X-1; makes
+#      `method.options: {enabled: true, ...}` on this descriptor (makes
 #      every cadence fire carry it, live-editable via `PUT /descriptors/…`)
 #      OR by forcing a run with `{"options": {"enabled": true, ...}}` (the
 #      `payload.options` pass-through, which outranks the descriptor). The
@@ -45,7 +44,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: active
-  owner: cross_source_coalesce
+  owner: owner@local
 
 subscription:
   # No `targets` block → META analyst: one global sweep per cadence tick over the
@@ -67,7 +66,7 @@ method:
   # embedding service / Qdrant client (threaded via deps.extras). Handler options
   # (enabled / window_hours / semantic_threshold / title_distance_threshold /
   # qdrant_collection / max_signals) ride EITHER a `method.options` block here
-  # (X-1 — declared in legba.data.analysts.handler_options, validated at fire
+  # (declared in legba.data.analysts.handler_options, validated at fire
   # time) or the per-run trigger options channel, which outranks it. `enabled`
   # defaults False and no options block ships — see the header note.
 

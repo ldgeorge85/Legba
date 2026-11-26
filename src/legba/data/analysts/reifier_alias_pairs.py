@@ -98,7 +98,7 @@ SELECT id FROM entity_profiles
  LIMIT 1
 """
 
-#: Who writes these rows (lane 9): the relationship reifier's alias-pair rule.
+#: Who writes these rows: the relationship reifier's alias-pair rule.
 _WRITTEN_BY = rule_handle("relationship_reifier")
 
 _INSERT_SQL = f"""

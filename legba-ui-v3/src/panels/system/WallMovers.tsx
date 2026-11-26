@@ -20,18 +20,18 @@
  * (see `App.tsx`'s boot effect + `lib/layoutPresets.ts`'s
  * `DEFAULT_BOOT_LAYOUT`).
  *
- * Shares `useSince` + `MoversContent` with the full Wall (`Wall.tsx`) so
- * both read/advance the SAME `legba_wall_cursor` — opening this tile and
- * later opening the full Wall never disagree about "since when."
+ * Shares `useSince` + `MoversContent` with the full Wall (`Wall.tsx`), which
+ * read the page load's one "since" (`pageVisit`) — the same since-time the
+ * Board list and every other region state.
  */
 import { PanelChrome } from '@/components/PanelChrome'
 import { MoversContent, useSince } from './Wall'
-import { relTime } from '@/lib/evalOps'
+import { sinceWords } from '@/v4/read/boardData'
 import type { PanelProps } from '@/types'
 
 export default function WallMoversPanel({ registration }: PanelProps) {
   const { visit, data, isLoading, error, refetch } = useSince()
-  const sinceLabel = visit.firstVisit ? 'first visit — last 24h' : `since ${relTime(visit.cursor)}`
+  const sinceLabel = sinceWords(visit)
   return (
     <PanelChrome
       registration={registration}

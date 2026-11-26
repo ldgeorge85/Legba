@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""forecast_resolver — the forecast ledger's scheduled resolution job (ST1-A).
+"""forecast_resolver — the forecast ledger's scheduled resolution job.
 
 A ``deterministic`` META analyst (sub_handler=forecast_resolver), every 6 h.
 One tick = :func:`legba.data.forecast_resolution.run_resolution_job`: the

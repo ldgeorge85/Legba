@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Re-enqueue the width claims whose span check never ran (2026-09-05 seam).
 
-THE INCIDENT. Between the width deploy (2026-09-05 ~18:00Z) and the seam repair
-stamped ``2026-09-06/1``, the drain called W-3's ``check_span`` with keyword
+THE DEFECT. Between the width deploy (2026-09-05 ~18:00Z) and the seam repair
+stamped ``2026-09-06/1``, the drain called the width pass's ``check_span`` with keyword
 arguments it does not accept and — underneath that — nothing fetched the
 decisive page at all. Every call raised into the wrapper's except-branch, which
 degraded the verdict to ``UNCHECKED / span_check_unavailable``. The measured

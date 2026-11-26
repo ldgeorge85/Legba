@@ -67,7 +67,7 @@ describe('membersFromAssembly — every id is already on the row', () => {
     // The world fixture's first block has markers with no `signal_id` — those
     // are absences on the record, and an absence must not become a member.
     expect(m.signalIds).not.toContain(null)
-    expect(m.signalIds).toContain('7e98612b-b6db-436b-ac07-dfe5d014d98c')
+    expect(m.signalIds).toContain('00000000-0000-4000-8000-000000000034')
     expect(m.sourceIds).toContain('source.gcaptain.all')
   })
 

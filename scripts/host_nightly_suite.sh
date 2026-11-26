@@ -28,14 +28,14 @@
 # pages. Anything ON it that stops failing is reported in the summary as a
 # stale entry to retire — the list is meant to shrink.
 #
-# ALERT-ONLY. It never restarts, redeploys, or mutates the stack. Since X1-A4
-# (2026-10-08) the tests run on the ISOLATED test substrate
+# ALERT-ONLY. It never restarts, redeploys, or mutates the stack. Since 2026-10-08
+# the tests run on the ISOLATED test substrate
 # (deploy/compose.test.yml: its own Postgres, NATS, Redis, Qdrant and journal
 # AGE fixture, in one network namespace the test container joins), never the
 # production services; the stack is torn down and recreated FRESH at the start
 # of each night so pollution can only live as long as one run.
 #
-# THE VERDICT (X1-A4):
+# THE VERDICT:
 #   * posts to its OWN ntfy topic, `nightly` (PASS and FAIL alike — the
 #     channel is the suite's, so a quiet night is visible as a quiet night),
 #     never the shared `legba-alerts` topic;
@@ -52,9 +52,9 @@
 # /etc/cron.d/). Docs: docs/RUNBOOK.md §24.4.
 #
 # Run it by hand exactly as cron does:
-#   /usr/local/deployments/active/legba/scripts/host_nightly_suite.sh
+#   <repo>/scripts/host_nightly_suite.sh
 # Skip the slow half while testing the plumbing:
-#   PHASES=lint /usr/local/deployments/active/legba/scripts/host_nightly_suite.sh
+#   PHASES=lint <repo>/scripts/host_nightly_suite.sh
 #
 set -uo pipefail
 
@@ -65,13 +65,13 @@ set -uo pipefail
 REPO_ROOT="${LEGBA_REPO_ROOT:-/usr/local/deployments/active/legba}"
 RUNNER="${REPO_ROOT}/scripts/run_tests_in_container.sh"
 LOG_ROOT="${LEGBA_NIGHTLY_LOG_DIR:-/var/log/legba/nightly}"
-# Rotation is this script's own job. P6 §6 item 11 is "no logrotate for any
-# /var/log/legba*.log", and the log collector answers that the same way.
+# Rotation is this script's own job: there is no logrotate for
+# /var/log/legba*.log, and the log collector handles its logs the same way.
 KEEP_RUNS="${LEGBA_NIGHTLY_KEEP_RUNS:-14}"
-# The suite's OWN topic (X1-A4). Deliberately not $NTFY_URL: an inherited
+# The suite's OWN topic. Deliberately not $NTFY_URL: an inherited
 # shared-alerts URL must not reroute the nightly back onto legba-alerts.
 NTFY_URL="${LEGBA_NIGHTLY_NTFY_URL:-http://127.0.0.1:8093/nightly}"
-# The host-wide test lock every lane and the nightly share: the isolated test
+# The host-wide test lock every test run and the nightly share: the isolated test
 # stack is ONE stack, and two runs on it corrupt each other's fixtures exactly
 # as two runs on the old shared `legba_pivot_test` did.
 TEST_LOCK_FILE="${LEGBA_TEST_LOCK_FILE:-/tmp/legba-container-tests.lock}"
@@ -90,7 +90,7 @@ SELF_LOG_MAX_BYTES="${LEGBA_NIGHTLY_SELF_LOG_MAX:-5242880}"   # 5 MiB
 PHASE_TIMEOUT="${LEGBA_NIGHTLY_PHASE_TIMEOUT:-7200}"
 # Which phases to run, space- or comma-separated. Full set by default.
 PHASES="${PHASES:-lint ordered shuffled}"
-# The read-only hygiene reports (roll 85): list-route weights against their
+# The read-only hygiene reports: list-route weights against their
 # budgets, schema objects no migration declares, indexes nobody reads. They
 # never touch the verdict; 0 skips them.
 HYGIENE="${LEGBA_NIGHTLY_HYGIENE:-1}"
@@ -134,7 +134,7 @@ SEED="${LEGBA_NIGHTLY_SEED:-$(( (RANDOM << 15) | RANDOM ))}"
 # Two further classes fail ONLY in a git worktree and so are deliberately
 # absent — they cannot fire where cron runs this:
 #   * tests/data_pkg/test_dockerfiles_build_clean.py (6) hardcodes
-#     REPO_ROOT = /usr/local/deployments/active/legba, which is not mounted in
+#     REPO_ROOT = the main checkout's absolute path, which is not mounted in
 #     a worktree container.
 #   * tests/data_pkg/test_seed.py + test_substrate_export_import.py (6) need
 #     seeds/ — curated data that is gitignored and lives only in the main
@@ -142,20 +142,18 @@ SEED="${LEGBA_NIGHTLY_SEED:-$(( (RANDOM << 15) | RANDOM ))}"
 # If a worktree dry-run shows those twelve, that is the worktree talking.
 KNOWN_FAILURES=(
   # --- 1. dspy is a WORKER-ONLY dependency ---------------------------------
-  # RETIRED 2026-08-21 (RUST-4 mothball). This section used to carry eleven
+  # RETIRED 2026-08-21 (optimizer plane mothballed). This section used to carry eleven
   # entries: every test that resolves an optimizer's parent prompt module
   # (the `legba.prompts.*` packages import dspy at module level) dies with
   # ModuleNotFoundError in the dspy-free test image, or a
   # PromptModuleImportError / DescriptorValidationError wrapping one, and
   # they were masked red here instead of paging every night.
   #
-  # The GEPA optimizer plane is now MOTHBALLED (docs/SEAMS.md #53,
-  # planning/RUST4_EVIDENCE_2026-08-21.md) — installing dspy into
-  # legba/legba-test to make these green for real is no longer the operator
-  # call this note used to frame it as; the plane isn't shipping. Instead
+  # The GEPA optimizer plane is now MOTHBALLED (docs/SEAMS.md #53) — installing dspy into
+  # legba/legba-test to make these green for real is no longer needed; the
+  # plane isn't shipping. Instead
   # the eleven tests now carry an explicit
-  # `@pytest.mark.skip(reason="optimizer plane mothballed 2026-08-21
-  # (RUST-4)")` in their own files (NOT deleted — they still exist, still
+  # `@pytest.mark.skip(reason="optimizer plane mothballed 2026-08-21")` in their own files (NOT deleted — they still exist, still
   # collect, and un-skip trivially if the plane un-mothballs) and so no
   # longer need to be named here: a real pytest skip is honest in a way a
   # standing allowlist entry silently masking a fail never was. Removing them
@@ -175,7 +173,7 @@ KNOWN_FAILURES=(
   # agency_hard_gate::test_process_media_pack_enqueues_real_job, the two
   # test_output_webhook emit tests, the three test_critic_descriptor_e2e
   # daprd tests and the two test_webhook_alert_e2e tests. ROOT CAUSE REMOVED
-  # 2026-10-08 (X1-A4): the suite runs in the isolated test namespace
+  # 2026-10-08: the suite runs in the isolated test namespace
   # (deploy/compose.test.yml), the five isolated-NATS tests run and pass
   # (LEGBA_TEST_ISOLATED_NATS=1) and the three critic e2e tests are a
   # declared opt-in (LEGBA_TEST_DAPR_APP_CHANNEL=1). Evidence for the
@@ -231,7 +229,7 @@ KNOWN_SHARED_STATE=(
   # Those seven were RESTORED pending-root and are retired below by that rule,
   # each with its polluter named and a command that reproduces the failure.
   #
-  # RETIRED 2026-08-16 (task #23 — rooted, then fixed). Both classes turned out
+  # RETIRED 2026-08-16 (rooted, then fixed). Both classes turned out
   # to be the same shape the section header describes: a test asserting a
   # GLOBAL statement over a substrate the whole single-process suite shares,
   # broken by a sibling that wrote to that substrate and never retired what it
@@ -285,7 +283,7 @@ KNOWN_SHARED_STATE=(
   #     ledger rows written inside it; tests/runtime/jobs/
   #     test_ledger_scope_isolation.py pins both halves of that contract.
   #
-  # RETIRED 2026-08-10 (fixed, not aged out — the #16/#17 hygiene pass):
+  # RETIRED 2026-08-10 (fixed, not aged out):
   #   * test_claim_watch::test_stream_hub_entities_are_floored_… — the same
   #     mechanism as that morning's global-damping page: the global-df
   #     filler was stamped into the shared PAST, so recent sibling leftovers
@@ -302,7 +300,7 @@ KNOWN_SHARED_STATE=(
   #     rows before its first run, so it is a genuine first seeding in any
   #     order.
   #
-  # RETIRED 2026-08-25 — on the operator's read of the 08-23 and 08-24 runs:
+  # RETIRED 2026-08-25 — on a read of the 08-23 and 08-24 runs:
   # both printed "allowlist entry matched nothing (retire it?)" two nights
   # running. Re-verified this session, both directly (ordered, isolated) and
   # inside a full `tests/` ORDERED pass alongside every sibling that could
@@ -347,8 +345,7 @@ KNOWN_SHARED_STATE=(
   #         `public.` qualification AND PostgresStore._setup_connection's
   #         per-acquire search_path re-apply reproduces UndefinedTableError
   #         against the rewritten test; reverting only the fix under test
-  #         restores a clean pass — see
-  #         planning/CAMPAIGN_2026-08-29/SHUFFLE_FIX_REPORT.md).
+  #         restores a clean pass).
   #     (2) test_runtime_telemetry_api.py now truncates actor_state at setup
   #         (autouse `_clean_actor_state`, via the new centralized
   #         `clean_tables` primitive in tests/data_pkg/conftest.py) so it
@@ -648,7 +645,7 @@ fi
 REPLAY="LEGBA_REPO_ROOT=${REPO_ROOT} LEGBA_TEST_SHUFFLE_SEED=${SEED} bash ${RUNNER} tests/"
 say "known-failure hits: ${#SEEN_KNOWN[@]}"
 
-# --- which phases GATE (X4 NIGHTLY, W11-F81; the operator's grant 10-16) ------
+# --- which phases GATE ------
 # LEGBA_NIGHTLY_GATE_PHASES names the pytest phases whose unexpected failures
 # turn the verdict to FAIL (the roll gate refuses on that). Default `ordered`:
 # the ordered run is the reproducible one; a shuffled failure is the code plus

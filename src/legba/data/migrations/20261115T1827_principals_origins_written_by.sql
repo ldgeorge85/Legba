@@ -3,14 +3,14 @@
 --
 -- 20261115T1827_principals_origins_written_by.sql
 --
--- WHO WRITES (data-model lane 9): principals, origins and origin groups, and
+-- WHO WRITES: principals, origins and origin groups, and
 -- a `written_by` principal reference on the tables that hold judgements,
 -- labels, decisions, descriptor changes and entered knowledge.
 --
 -- WHY
 -- ---
 -- Three different "who" are recorded, never merged into one "source"
--- (docs/TYPES.md "Principal kinds"; merged recommendation §1.3 #10):
+-- (docs/TYPES.md "Principal kinds"):
 --   * who WROTE the row -- a PRINCIPAL: a person (linked to `users`), a
 --     service, an analyst seat (descriptor id + version), a deterministic
 --     rule, or a credential several people hold (the shared admin token);

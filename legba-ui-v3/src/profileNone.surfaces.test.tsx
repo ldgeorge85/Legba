@@ -9,7 +9,7 @@
  * greps the rendered DOM for the exemplar's words.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactElement } from 'react'
 
@@ -206,7 +206,7 @@ describe('THE NONE LANDING — the rendered DOM carries no exemplar word', () =>
   it('the shell boots on its landing; REGIONS / COUNTRIES / G20 appear nowhere', async () => {
     render(wrap(<App />))
     await waitFor(() => expect(getShell()).not.toBeNull())
-    await waitFor(() => expect(document.querySelector('[data-testid="morning-read-rail"]')).not.toBeNull(), {
+    await waitFor(() => expect(document.querySelector('[data-testid="board-list"][data-read="1"]')).not.toBeNull(), {
       timeout: 5000,
     })
     const text = document.body.textContent ?? ''
@@ -216,7 +216,12 @@ describe('THE NONE LANDING — the rendered DOM carries no exemplar word', () =>
       text.slice(Math.max(0, m.index! - 60), m.index! + 40),
     )
     expect(hits).toEqual([])
-    // the bands' source is named on the rail (the plane refused)
+    // the full daily read, one link away: its bands' source is named on its
+    // rail (the plane refused), and it carries no exemplar word either
+    fireEvent.click(document.querySelector('[data-testid="board-daily-read"]')!)
+    await waitFor(() => expect(document.querySelector('[data-testid="morning-read-rail"]')).not.toBeNull(), {
+      timeout: 5000,
+    })
     await waitFor(() =>
       expect(document.querySelector('[data-testid="morning-read-rail"]')).toHaveAttribute(
         'data-bands-source',

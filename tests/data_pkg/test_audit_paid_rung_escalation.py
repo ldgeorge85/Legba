@@ -395,8 +395,8 @@ async def test_a_claim_never_spends_more_than_one_second_search(monkeypatch):
 def test_the_egress_reservation_is_unchanged_by_this_build():
     """If either number moves, the day's SERP budget silently overruns."""
     assert EGRESS_CALLS_PER_CLAIM == 3
-    # L1 (same wave) made the tick clamp read the LIVE pack governor; the
-    # arithmetic this lane must not move is calls-per-claim and the division.
+    # The tick clamp reads the LIVE pack governor; the
+    # arithmetic that must not move is calls-per-claim and the division.
     assert governor_max_claims_per_tick(None) == (
         DEFAULT_GOVERNOR_INVOCATIONS_PER_HOUR // EGRESS_CALLS_PER_CLAIM
     )

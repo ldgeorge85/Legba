@@ -92,7 +92,7 @@ def test_the_by_id_route_imports_in_the_slim_registry_image() -> None:
 
 
 # ---------------------------------------------------------------------------
-# W11 walk fix (roll 84 live walk: the Watch page 4.57 MB against 2 MB, the
+# Walk fix (the Watch page 4.57 MB against 2 MB, the
 # phone landing's largest response 0.279 MB against 0.25 MB).
 # ---------------------------------------------------------------------------
 
@@ -127,7 +127,7 @@ def test_the_light_modules_import_in_the_slim_registry_image() -> None:
 
 
 def test_events_take_a_summary_by_name(openapi_gets):
-    """Roll 87: the Watch page 2.01 MB against 2.00, its largest read
+    """The Watch page 2.01 MB against 2.00, its largest read
     ``/v3/events?limit=500`` at 0.42 MB; the map and the time band ask the
     light row by name, every other reader keeps the whole row."""
     from legba.data.registry import event_list_weight as ew

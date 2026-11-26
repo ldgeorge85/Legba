@@ -1,7 +1,7 @@
-# P3-6 Wave-A (A1) — draft SourceDescriptor. Ships DRAFT (operator activates).
+# Draft SourceDescriptor. Ships DRAFT (operator activates).
 #
-# US EIA 'Today in Energy' — the daily, analytically useful EIA feed (a NET-NEW source alongside the already-registered source.eia.press; the 2026-07-02 sweep said register BOTH).
-# Verified live 2026-06-30. Keyless. Host eia.gov already credibility-seeded (S-1).
+# US EIA 'Today in Energy' — the daily, analytically useful EIA feed (a NET-NEW source alongside the already-registered source.eia.press).
+# Verified live 2026-06-30. Keyless. Host eia.gov already credibility-seeded.
 #
 # source_class: official. Credibility host eia.gov (seeded 0.90/gov, state_affiliation True by the registrar).
 # state: draft — bulk registration creates NO live actor; activation
@@ -15,7 +15,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: p3_6_wave_a
+  owner: owner@local
   created: "2026-07-27T00:00:00Z"
 
 scope:
@@ -24,7 +24,7 @@ scope:
   languages: [en]
   tags: [gov, energy, energy_security, economic, wave_a]
   source_class: official
-  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
+  access_class: public          # free no-auth feed, no separate reuse agreement
 
 acquisition: poll
 
@@ -49,7 +49,7 @@ pipeline:
   enrichment:
     # language_detect FIRST so ner_multilingual uses the detected language.
     # No fact_extractor on the draft: the operator adds it after confirming the
-    # route yields full article text (mirrors the RSSHub-lane conservative default).
+    # route yields full article text (mirrors the other RSSHub routes' conservative default).
     - kind: language_detect
       config: {}
     - kind: ner_multilingual

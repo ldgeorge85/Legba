@@ -100,9 +100,15 @@ export function useMarkSeen() {
   }
 }
 
-/** The words for where the cursor lives, for the Settings page and the Changed line. */
+/**
+ * Where "what you have already seen" is remembered, as a sentence, for the
+ * Settings page and the Changed line: with the account it follows the reader
+ * to any device; on the phone it stays on this one.
+ */
 export function seenWhereWords(a: SeenAnswer | undefined): string {
   if (!a) return ''
-  if (a.where === 'account') return 'kept with your account'
-  return a.reason === 'signin_off' ? 'kept on this phone (sign-in is off)' : 'kept on this phone'
+  if (a.where === 'account') return 'What you have seen is remembered on your account, on every device'
+  return a.reason === 'signin_off'
+    ? 'What you have seen is remembered on this phone only (sign-in is off)'
+    : 'What you have seen is remembered on this phone only'
 }

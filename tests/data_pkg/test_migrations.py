@@ -15,7 +15,7 @@ from legba.data.postgres import PostgresStore
 from legba.data.smoke import RETIRED_TABLES
 from legba.data.vocabulary import ENTITY_CLASSES, RELATIONSHIP_TYPES
 
-# NOTE (C-1): the retired pre-pivot tests that asserted the OLD substrate
+# NOTE: the retired pre-pivot tests that asserted the OLD substrate
 # shape (legacy `sources`/`predictions` tables, analyst-provenance columns
 # on `signals`) were DELETED. The post-pivot equivalents live in
 # `legba.data.smoke` (EXPECTED_TABLES / SIGNAL_PROVENANCE_COLUMNS, already
@@ -71,7 +71,7 @@ async def test_seed_vocabulary_inserted(migrated_pg: PostgresConfig):
         ec_values = {r["value"] for r in ec_rows}
         rt_values = {r["value"] for r in rt_rows}
 
-        # 0010 baseline vocab must be present; 0020 (L-200 geopolitical
+        # 0010 baseline vocab must be present; 0020 (geopolitical
         # extension) layers additional rows for the geopolitical template.
         # Subset (not equality) keeps the test stable as future migrations
         # extend the vocabulary.
@@ -80,7 +80,7 @@ async def test_seed_vocabulary_inserted(migrated_pg: PostgresConfig):
         assert not missing_ec, f"entity_class seed missing rows: {missing_ec}"
         assert not missing_rt, f"relationship_type seed missing rows: {missing_rt}"
 
-        # 0020 extension rows (L-200 / Wave D).
+        # 0020 extension rows (geopolitical vocabulary).
         geopolitical_ec = {
             "military_unit", "political_party", "armed_group",
             "international_org", "media_outlet", "event_series",

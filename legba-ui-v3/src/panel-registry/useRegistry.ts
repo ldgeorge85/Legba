@@ -2,12 +2,11 @@
  * React hook that fetches `PanelRegistration` rows from the backend and
  * keeps the in-memory map live via NATS events.
  *
- * The hook is the L-108 §8 step [4] "frontend's reactive registry subscriber"
- * for L-204 — it owns the instance map keyed on
+ * The hook is the frontend's reactive registry subscriber — it owns the instance map keyed on
  * `(panel_kind, scope_value)` so other parts of the shell read from it
  * without re-fetching.
  *
- * Bound-panel reachability (P0-2f): the live `ui_panel_registrations` surface
+ * Bound-panel reachability: the live `ui_panel_registrations` surface
  * is empty (no descriptor declares `outputs.ui_panel`), so alongside the real
  * rows the hook fetches the target/analyst descriptor heads and SYNTHESIZES
  * the per-record bound-panel registrations (see synthesize.ts). Real rows stay
@@ -42,7 +41,7 @@ import {
 /** Soft descriptor-head fetch — empty on any failure so the sidebar always
  *  degrades to the real registration rows rather than erroring out. The
  *  synthesis reads an id, a name and a state, so it asks the summary weight
- *  (the subject roster's own route, one request between them): roll 84's live
+ *  (the subject roster's own route, one request between them): a live
  *  walk measured the whole analyst bodies at 546 KB on every landing. */
 async function softDescriptorHeads(family: 'target' | 'analyst'): Promise<RecordDescriptor[]> {
   try {

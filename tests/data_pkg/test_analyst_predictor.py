@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for the L-174 ``predictor`` analyst kind.
+"""Unit tests for the ``predictor`` analyst kind.
 
 The predictor is a pure-function async handler — no substrate I/O at the
 ``run_method`` boundary — so these tests run without containers. Only the

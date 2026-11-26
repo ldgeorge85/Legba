@@ -2,8 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Each registry list route's default page, measured against its declared
-budget (``registry/list_weights.py``) — READ-ONLY GETs, nightly-runnable
-(lane P-8, 03c §5 #1).
+budget (``registry/list_weights.py``) — READ-ONLY GETs, nightly-runnable.
 
 One GET per route with no parameters (the default limit and weight); a path
 parameter takes a sample id (``--analyst-id``, ``--target-id``); a route that

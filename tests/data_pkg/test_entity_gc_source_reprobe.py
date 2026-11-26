@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Auto-unpause re-probe — entity_gc op 7 (MASTER_PLAN 2026-07-10 ~L319).
+"""Auto-unpause re-probe — entity_gc op 7.
 
 The auto-pause latch (op 4, ``_pause_failing_sources``) writes a source's
 ``state`` -> 'paused' and stamps ``body->>auto_paused_*`` directly (an
@@ -607,7 +607,7 @@ async def test_reprobe_passes_cap_as_fetch_limit(monkeypatch):
 
 
 def test_reprobe_min_age_matches_master_plan_spec():
-    # MASTER_PLAN 2026-07-10 ~L319: "hourly HEAD after 24h auto-paused".
+    # Spec: "hourly HEAD after 24h auto-paused".
     assert entity_gc._REPROBE_MIN_PAUSED_AGE == timedelta(hours=24)
 
 

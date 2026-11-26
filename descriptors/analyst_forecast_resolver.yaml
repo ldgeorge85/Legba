@@ -1,4 +1,4 @@
-# forecast_resolver — ST1-A, the forecast ledger's resolution job.
+# forecast_resolver — the forecast ledger's resolution job.
 #
 # A `deterministic`-kind META analyst (sub_handler=forecast_resolver). Every
 # 6 h it reads the SEALED open questions of the forecast ledger (migration
@@ -37,7 +37,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: draft
-  owner: st1_forecast_ledger
+  owner: owner@local
 
 subscription:
   # META analyst: one global run per tick over the whole ledger.
@@ -56,7 +56,7 @@ method:
   budget_tokens_per_day: 0      # no LLM — SQL reads + regex rules
 
 cadence:
-  fallback_schedule: "25 */6 * * *"   # every 6 h at :25 (plan 10 §3.4)
+  fallback_schedule: "25 */6 * * *"   # every 6 h at :25
   cooldown_seconds: 19800             # 5.5 h (strictly below the 6 h interval)
 
 # The proposals are side-written by the handler; the returned summary is a

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""X4 / ESC (W11-F52) - the uncited-sentence share, measured on the BODY.
+"""X4 / ESC - the uncited-sentence share, measured on the BODY.
 
 WHY THIS EXISTS. A unit read can lose most of its score to ``no_citation``: the
 deterministic floor counts every FACT-ASSERTING sentence that carries no marker
@@ -34,7 +34,7 @@ DEFINITIONS (stamped on the critique's ``verification`` block, read by
                                 marker, whether or not the floor would count it.
                                 A label alone on its line (``**BLUF:**`` then
                                 the verdict below it) is read off the verdict
-                                sentence, not the label (W11-F86).
+                                sentence, not the label.
 
 A scoped negative ("not observed in collected reporting") is fact-asserting to the
 floor only when it names something; one that does stays in the numerator, which is
@@ -50,7 +50,7 @@ from typing import Any
 #: A BLUF line, with any heading hashes / bullets / emphasis in front of it.
 _BLUF_LINE_RE = re.compile(r"^[\s#>*_\-]*bluf\b", re.IGNORECASE)
 
-#: W11-F86 — a BLUF LABEL standing alone on its line (``**BLUF:**`` / ``## BLUF``)
+#: A BLUF LABEL standing alone on its line (``**BLUF:**`` / ``## BLUF``)
 #: with the verdict on the next line. The segmenter keeps the label as its own
 #: span, so the instrument used to read the bare label as the BLUF and stamp
 #: ``uncited`` on a read whose BLUF sentence carried its markers. The BLUF is

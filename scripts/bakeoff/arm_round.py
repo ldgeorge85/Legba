@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""arm_round.py — run any round spec as an arm (plan P4 §6, lane G-5).
+"""arm_round.py — run any round spec as an arm .
 
 One command runs a round spec (``src/legba/data/rounds/specs/*.yaml`` or any
 spec file) on a question file at a cut time, N samples per question, through
@@ -18,7 +18,7 @@ the HARNESS HOST (``legba.data.rounds.harness.run_file``) with real seats:
 
 SAFETY. Before the first call a ROUTE ASSERTION runs on every plane the spec
 names: the core component must pass ``statement_seats.assert_core_route`` (the
-S-3/S-4 check: the seat component, not Anthropic, the self-hosted subprovider,
+seat component, not Anthropic, the self-hosted subprovider,
 no component price, an empty price table); every judge plane must be an
 unpriced gateway route (not Anthropic, the same subprovider, no price, an
 empty price table, the gateway endpoint). Any failure stops the command before
@@ -26,7 +26,7 @@ a call is made. A response that reports a cost stops the run. A hard cap on
 wire calls (``--call-cap``, a ledger file shared by every command run on the
 same ``--root``) refuses the call that would exceed it. At most 4 calls are in
 flight at once (``--max-parallel``, capped at 4 and at the spec's
-``max_parallel``): the owner's instruction, "don't send too many concurrent".
+``max_parallel``): a deliberately low concurrency.
 
 THINKING ALIAS. The live core component may not declare its thinking alias
 yet; the harness overlays ``thinking_model_name`` onto the row it READS (never
@@ -49,9 +49,9 @@ USAGE
     LEGBA_LLM_THINKING_MODEL_NAME=<alias> python3 scripts/bakeoff/arm_round.py probe-thinking \\
         --root planning/reviews/rounds_smoke_2026-11-14 --pairs 24 --tool-probes 3
     python3 scripts/bakeoff/arm_round.py calibrate --root <root> --label <l> --row-type verdict/2 \\
-        --card cards/judges/support.md --plane llm.verify.innoai_gemma.openai_compat
+        --card cards/judges/support.md --plane llm.verify.gateway_judge.openai_compat
 
-JUDGE CALIBRATION (lane G-6). ``calibrate`` runs each judge card on each judge
+JUDGE CALIBRATION. ``calibrate`` runs each judge card on each judge
 plane over the planted positions (``legba.data.rounds.judge_planted``) and
 writes catch / false-reject rates to ``<root>/judge_calibration.json``; ``run``
 reads that book and the interpreter lets only judges at or above the floors
@@ -87,7 +87,16 @@ sys.path.insert(0, str(common.REPO_ROOT / "src"))
 ARM_ROUND_VERSION = "g5.1"
 CORE_COMPONENT = "llm.primary.openai_compat"
 THINKING_ENV = "LEGBA_LLM_THINKING_MODEL_NAME"
-GATEWAY_HOST = "api.innoai.net"
+#: The model gateway's host is the core plane's own endpoint host: the .env
+#: LEGBA_LLM_API_ENDPOINT the registrar seeds the core component from. Read at
+#: call time (``common.load_env`` runs after import); unset = no gateway host,
+#: so every route assertion fails closed.
+GATEWAY_ENDPOINT_ENV = "LEGBA_LLM_API_ENDPOINT"
+
+
+def gateway_host() -> str:
+    raw = (os.environ.get(GATEWAY_ENDPOINT_ENV) or "").strip()
+    return raw.split("://", 1)[-1].split("/", 1)[0] if raw else ""
 #: Tools bound in this harness: the classified read tools whose backends this
 #: process builds without a model route (``vector_search`` needs the
 #: embedding route and is not bound here; a seat that calls it is refused).
@@ -202,7 +211,7 @@ def guard_egress() -> Any:
     gateway) before any connection is opened."""
     from legba.data.rounds.egress import EgressPolicy, install
 
-    return install(EgressPolicy(gateway_hosts=frozenset({GATEWAY_HOST}),
+    return install(EgressPolicy(gateway_hosts=frozenset({gateway_host()} - {""}),
                                 container_names=compose_service_names()))
 
 
@@ -262,7 +271,7 @@ def assert_routes(facts: dict[str, dict[str, Any]]) -> dict[str, Any]:
         checks = {
             "component_not_anthropic": "anthropic" not in comp.lower(),
             "subprovider_is_gateway_compat": f["subprovider"] == want,
-            "endpoint_is_gateway": f["endpoint_host"] == GATEWAY_HOST,
+            "endpoint_is_gateway": bool(gateway_host()) and f["endpoint_host"] == gateway_host(),
             "component_unpriced": f["component_price"] is None and not f["config_price_fields"],
             "price_table_empty": f["price_table_entries"] == 0,
         }

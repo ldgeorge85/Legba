@@ -343,6 +343,7 @@ The tiers, in order:
 | `world_assessor` | the world **record** — an assembly over the country assemblies, each block carrying that country's own assessment in full as context |
 | `world_assessment` | the world **voice**, fenced to that one assembly |
 | `escalation_composition`, `escalation_dyad` | thematic cross-desk reads, carrying a correlation guard so correlated desks are not double-counted |
+| `hybrid_threat_composition` | a theme-filtered cross-desk read of cross-border hybrid activity (infrastructure sabotage, hoax threats, jamming, drone incursions). It lists several units and admits a desk's head only when its lead span carries one of the theme's terms; a desk with none is reported as quiet, not as a gap. It composes only under the assembly regime, and the world read carries its head as its own labelled thematic block |
 | `scorecard_producer` | one banded row per active desk, from high-precision rules over already-verified claims |
 
 Two disciplines hold across every tier. A composition's read slice admits only

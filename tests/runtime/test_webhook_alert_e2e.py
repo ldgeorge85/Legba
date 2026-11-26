@@ -1,11 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""End-to-end validation for the L-196 webhook + L-197 alert output kinds
-(Done-plan §4 Group O-4).
+"""End-to-end validation for the webhook + alert output kinds.
 
-Both kinds landed in Wave A (Phase 8) but Wave A wired no descriptor that
-configures either, and the alert kind's per-sink delivery state was
-log-only. This test exercises the production handler code paths against:
+Both kinds shipped before any descriptor configured either, and the alert kind's per-sink delivery state was log-only. This test exercises the production handler code paths against:
 
   * A real FastAPI echo server (booted on a free local port via a
     background ``uvicorn.Server`` task) that captures every POSTed body
@@ -569,7 +566,7 @@ async def test_alert_dispatcher_no_pg_pool_writes_no_row(
     session_prefix: str,
 ):
     """Back-compat: when callers don't pass ``pg_pool`` the dispatcher
-    keeps Wave A behaviour — NATS publish lands, no audit row written."""
+    keeps the earlier behaviour — NATS publish lands, no audit row written."""
     analyst_id = f"{session_prefix}_alert_nopool"
     alert_row_id = await _seed_alert_row(
         pg_pool,
@@ -584,7 +581,7 @@ async def test_alert_dispatcher_no_pg_pool_writes_no_row(
         severity="low",
         confidence=0.6,
     )
-    deps = OutputDeps(nats=nats_store)  # no pg_pool — Wave A path
+    deps = OutputDeps(nats=nats_store)  # no pg_pool — back-compat path
     ctx = OutputContext(
         analyst_id=analyst_id,
         alert_row_id=str(alert_row_id),

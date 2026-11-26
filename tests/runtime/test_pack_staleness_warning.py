@@ -261,7 +261,7 @@ async def test_warn_stale_pack_deps_no_op_on_empty_cache():
 
 
 # ---------------------------------------------------------------------------
-# W11-F161 — the consult binding is on kind_deps, and the sweep sees it now
+# The consult binding is on kind_deps, and the sweep sees it now
 # ---------------------------------------------------------------------------
 
 

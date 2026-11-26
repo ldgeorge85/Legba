@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for the P-17 budget telemetry API surface.
+"""Tests for the budget telemetry API surface.
 
 Three GET endpoints under `/api/v1/budget/`:
 

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """X1/B5 — typed absence tells the truth about a failed search; search health
-is measured (W11-F15, SW-3).
+is measured.
 
 The defect: every ``searched_found_nothing`` absence on the us/cn/ua desks (70
 of 70 sampled through ``/v3/absence``) carried a proof that said the search

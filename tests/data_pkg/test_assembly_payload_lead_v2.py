@@ -20,8 +20,8 @@ the fleet began at ordinal 1 because ``m >= 0.60 * ms[0]`` is trivially true at
 index 0.
 
 The FOURTH rule that is deliberately absent is worth a test too: the block
-ORDER stays severity-first under both regimes (the policy lane measured
-mass-first and found it makes energy_security's dominance worse). A crown
+ORDER stays severity-first under both regimes (measured
+mass-first, it it makes energy_security's dominance worse). A crown
 change that also reordered the page would be a different instrument.
 
 Flag OFF must be byte-identical to the shipped payload, ``lead.test`` KEYS

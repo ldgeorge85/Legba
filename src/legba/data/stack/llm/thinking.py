@@ -29,8 +29,8 @@ How a caller asks
 What thinking never changes
 ---------------------------
 Temperature handling (the house 1.0 is sent as before; the vendor forces
-1.0 in thinking mode anyway) and the output limit (no ``max_tokens`` is
-added). The reasoning-token budget parameter is unknown (the owner has not
+1.0 in thinking mode anyway). The output limit sent is the thinking alias's
+own declared maximum (``thinking_max_output_tokens``), never a smaller one. The reasoning-token budget parameter is unknown (the owner has not
 supplied its name or value): the component may declare it
 (``reasoning_budget_param`` + ``reasoning_budget_tokens``) and
 :func:`reasoning_budget_fields` sends it on thinking calls only when BOTH are

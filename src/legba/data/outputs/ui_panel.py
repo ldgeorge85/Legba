@@ -421,7 +421,7 @@ class UIPanelRegistry:
 
     All methods accept an :class:`asyncpg.Connection`-shaped object; the
     caller owns connection / pool / transaction lifecycle. This matches
-    the Wave A output-kind pattern (see ``substrate.py``).
+    the output-kind pattern (see ``substrate.py``).
 
     The registry persists exactly what :class:`PanelRegistration`
     describes. It does **not**:

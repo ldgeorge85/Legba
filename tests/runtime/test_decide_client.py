@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W11-F108 — the decision client (``POST {api_endpoint}/decide``).
+"""the decision client (``POST {api_endpoint}/decide``).
 
 Every test drives the REAL handler: a :class:`DecisionProviderHandler`
 configured through ``on_configure`` (the vault resolve included), its
@@ -27,10 +27,11 @@ from legba.data.registry.credentials import MissingSecretError
 from legba.data.schemas import LLMProviderConfig, Property
 from legba.data.stack.llm import LLM_HANDLERS, DecisionProviderHandler
 from legba.data.stack.llm.base import HardLLMFailure, TransientLLMFailure
+from tests._gateway_env import GATEWAY_ENV
 
-_COMPONENT_ID = "llm.decide.innoai_clef_flash"
+_COMPONENT_ID = "llm.decide.gateway_typed_choice"
 _REPO = Path(__file__).resolve().parents[2]
-_YAML = _REPO / "descriptors" / "stack_component_llm_decide_innoai_clef_flash.yaml"
+_YAML = _REPO / "descriptors" / "stack_component_llm_decide_gateway_typed_choice.yaml"
 
 _QUESTIONS = {
     "bears": {
@@ -43,7 +44,7 @@ _QUESTIONS = {
 
 def _ok_body(choice: str = "yes", p_yes: float = 0.9143) -> dict[str, Any]:
     return {
-        "model": "clef-flash",
+        "model": "decision-model",
         "answers": {
             "bears": {
                 "type": "choice",
@@ -104,9 +105,9 @@ def _config(*, max_concurrent: int | None = None) -> LLMProviderConfig:
     if max_concurrent is not None:
         kwargs["max_concurrent"] = Property.Number.of(max_concurrent, minimum=1, maximum=1000)
     return LLMProviderConfig(
-        api_endpoint=Property.Text.of("https://api.innoai.net/v1"),
-        api_key=Property.Secret.of("llm.innoai.api_key"),
-        model_name=Property.Text.of("clef-flash"),
+        api_endpoint=Property.Text.of("https://gateway.example.invalid/v1"),
+        api_key=Property.Secret.of("llm.gateway.api_key"),
+        model_name=Property.Text.of("decision-model"),
         max_tokens=Property.Number.of(1, minimum=1, maximum=200000),
         **kwargs,
     )
@@ -119,12 +120,12 @@ async def _handler(responder, *, max_concurrent: int | None = None) -> DecisionP
             instance_id=_COMPONENT_ID,
             instance_version="0" * 16,
             config=_config(max_concurrent=max_concurrent),
-            secrets=_Resolver({"llm.innoai.api_key": b"tok-test"}),
+            secrets=_Resolver({"llm.gateway.api_key": b"tok-test"}),
         )
     )
     assert handler._client is None, "configure must make no network call"  # noqa: SLF001
     handler._client = httpx.AsyncClient(  # noqa: SLF001
-        base_url="https://api.innoai.net",
+        base_url="https://gateway.example.invalid",
         headers=handler._auth_headers(),  # noqa: SLF001
         transport=httpx.MockTransport(responder),
         timeout=httpx.Timeout(10.0),
@@ -175,7 +176,7 @@ async def test_a_200_is_parsed_and_the_request_is_the_decide_contract():
     assert req.headers["authorization"] == "Bearer tok-test"
     body = json.loads(req.content)
     assert body == {
-        "model": "clef-flash",
+        "model": "decision-model",
         "state": "Question thesis: x\nNews item: y",
         "questions": _QUESTIONS,
     }
@@ -184,7 +185,7 @@ async def test_a_200_is_parsed_and_the_request_is_the_decide_contract():
     (rec,) = calls
     assert rec["component_id"] == _COMPONENT_ID
     assert rec["subprovider"] == "decide"
-    assert rec["model"] == "clef-flash"
+    assert rec["model"] == "decision-model"
     assert rec["status"] == "success" and rec["http_status"] == 200
     assert rec["leg"] == "bearing_shadow"
     assert rec["prompt_tokens"] == 317 and rec["completion_tokens"] == 0
@@ -372,11 +373,11 @@ async def test_no_max_concurrent_means_no_gate():
 def test_a_decide_component_id_routes_to_the_decision_client():
     from legba.runtime.analyst_deps_builder import infer_llm_subprovider
 
-    assert infer_llm_subprovider(_COMPONENT_ID, endpoint="https://api.innoai.net/v1") == "decide"
+    assert infer_llm_subprovider(_COMPONENT_ID, endpoint="https://gateway.example.invalid/v1") == "decide"
     assert LLM_HANDLERS["decide"] is DecisionProviderHandler
     # The chat components on the same gateway keep their route.
     assert infer_llm_subprovider(
-        "llm.verify.innoai_gemma.openai_compat", endpoint="https://api.innoai.net/v1"
+        "llm.verify.gateway_judge.openai_compat", endpoint="https://gateway.example.invalid/v1"
     ) == "vllm"
 
 
@@ -394,14 +395,16 @@ async def test_the_production_build_path_yields_a_configured_decision_client():
     client = RegistryHTTPClient(base_url="http://registry.test", token=None, client=inner)
 
     async def secrets(secret_id: str) -> bytes:
-        assert secret_id == "llm.innoai.api_key"
+        assert secret_id == "llm.gateway.api_key"
         return b"tok-test"
 
     handler = await build_llm_handler_from_stack_component(
         _COMPONENT_ID, registry_client=client, secrets_resolve=secrets,
     )
     assert isinstance(handler, DecisionProviderHandler)
-    assert handler._cfg.model_name.raw == "clef-flash"  # noqa: SLF001
+    # The descriptor names its model and endpoint by variable; the build resolves them.
+    assert handler._cfg.model_name.raw == GATEWAY_ENV["LEGBA_GATEWAY_DECIDE_MODEL"]  # noqa: SLF001
+    assert handler._cfg.api_endpoint.raw == GATEWAY_ENV["LEGBA_GATEWAY_API_ENDPOINT"]  # noqa: SLF001
     assert handler._concurrency_limit() == 8  # noqa: SLF001
     assert handler._client is None  # noqa: SLF001 — nothing dialled at build
     await inner.aclose()
@@ -420,15 +423,17 @@ def test_the_descriptor_validates_and_is_registered():
     assert model.state.value == "draft", "registering it must activate nothing"
     assert model.schema_uri == "legba/stack/llm_provider/1.0.0"
     cfg = model.config
-    assert cfg.api_endpoint.raw == "https://api.innoai.net/v1"
-    assert cfg.api_key.raw == "llm.innoai.api_key"
-    assert cfg.model_name.raw == "clef-flash"
-    assert cfg.max_tokens.raw == 1
+    # The endpoint and the served alias are deployment data: named by variable.
+    assert cfg.api_endpoint.raw == "${env:LEGBA_GATEWAY_API_ENDPOINT}"
+    assert cfg.api_key.raw == "llm.gateway.api_key"
+    assert cfg.model_name.raw == "${env:LEGBA_GATEWAY_DECIDE_MODEL}"
+    # No output limit: a decision call generates no tokens.
+    assert cfg.max_tokens is None and cfg.max_output_tokens is None
     assert cfg.timeout_seconds.raw == 30
     assert cfg.tier.raw == "cheap"
     assert cfg.max_concurrent.raw == 8
     assert "family" not in body
-    assert GRADER_FAMILY_BY_COMPONENT[_COMPONENT_ID] == "cloudflare_clef"
+    assert GRADER_FAMILY_BY_COMPONENT[_COMPONENT_ID] == "decision_model"
 
     # The registrar LISTS it (read off its source: importing the registrar
     # resolves an operator token, which a unit test has no business doing).
@@ -440,3 +445,11 @@ def test_the_descriptor_validates_and_is_registered():
         ):
             listed = [e.value for e in node.value.elts]
     assert _YAML.name in listed
+
+
+@pytest.fixture(autouse=True)
+def _gateway_env(monkeypatch):
+    """The gateway descriptors name their endpoint and models as ${env:NAME}."""
+    from tests._gateway_env import set_gateway_env
+
+    set_gateway_env(monkeypatch)

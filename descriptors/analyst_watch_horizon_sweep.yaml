@@ -1,4 +1,4 @@
-# watch_horizon_sweep — closes consult watches at their horizon (W5 WATCH-CLOSE).
+# watch_horizon_sweep — closes consult watches at their horizon.
 #
 # A `deterministic`-kind META analyst on claim_watch's ~30-minute cadence (offset
 # ten minutes so the two never start together), no LLM, no spend. Over the OPEN
@@ -38,7 +38,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: draft
-  owner: watch_horizon_sweep
+  owner: owner@local
 
 subscription:
   # No `targets` block -> META analyst: one global sweep per cadence tick.

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit + integration tests for the L-171 ``cross_target_raw`` analyst kind.
+"""Unit + integration tests for the ``cross_target_raw`` analyst kind.
 
 The kind is a pure-function async handler at the ``run_method`` boundary
 — no substrate I/O inside ``run_method`` itself; the LLM port is the only
@@ -172,10 +172,10 @@ def test_shared_types_with_inline_target_sibling():
 
 
 def test_build_prompt_module_returns_dspy_module():
-    """Wave B prereq #4 (2026-05-21): build_prompt_module now returns a
+    """build_prompt_module now returns a
     real dspy.Module instance instead of the placeholder dict descriptor.
 
-    Skipped when dspy isn't installed — the optimizer (L-176) requires
+    Skipped when dspy isn't installed — the optimizer requires
     dspy at compile time, but the runtime's direct chat_complete path
     runs without it.
     """

@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Pause the five frozen rsshub AP-topic sources (2026-08-03 incident).
+"""Pause the five frozen rsshub AP-topic sources.
 
 The apnews topic feeds froze upstream on 2026-07-28 — every poll re-serves the
 same 39-item snapshot, and dedup bumps ``fetched_at`` on each re-encounter, so
 six-day-old stories sit at the top of every recency-ordered slice forever (the
 journal hyperfocus). Pausing stops the re-bumps; the frozen rows then age out
 of all slices naturally within the 72h window. Reverse with --resume once the
-F-B freshness fix + AP re-route land.
+the freshness fix + AP re-route land.
 
 Usage:  python3 scripts/ops_pause_apnews_frozen.py [--resume] [--env-file .env]
 """

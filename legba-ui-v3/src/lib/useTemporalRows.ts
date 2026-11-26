@@ -41,23 +41,31 @@ async function listRows<T>(path: string): Promise<T[]> {
   }
 }
 
-const READERS: Record<TemporalSource, () => Promise<TemporalRow[]>> = {
-  signals: async () =>
+/** `&target_id=<id>` when the read is narrowed to one subject, else nothing. */
+function subjectParam(targetId: string | null, first: boolean): string {
+  if (!targetId) return ''
+  return `${first ? '?' : '&'}target_id=${encodeURIComponent(targetId)}`
+}
+
+const READERS: Record<TemporalSource, (targetId: string | null) => Promise<TemporalRow[]>> = {
+  signals: async (t) =>
     // W11: the summary weight (a title, a category, two clocks) — the full
     // payload was 2.21 MB live at 500 rows, read on every landing.
-    (await listRows<SignalWire>(`/signals?limit=${TEMPORAL_READ_LIMIT.signals}&fields=summary`)).map(signalRow),
+    (
+      await listRows<SignalWire>(`/signals?limit=${TEMPORAL_READ_LIMIT.signals}&fields=summary${subjectParam(t, false)}`)
+    ).map(signalRow),
   // U-5: the summary projection — a finding's lane reads only its id, title,
   // severity and two clocks, all of which `fields=summary` carries; the full
   // row was ~12 MB live for 200 rows.
-  findings: async () =>
+  findings: async (t) =>
     (
-      await listRows<FindingWire>(`/findings?limit=${TEMPORAL_READ_LIMIT.findings}&fields=summary`)
+      await listRows<FindingWire>(`/findings?limit=${TEMPORAL_READ_LIMIT.findings}&fields=summary${subjectParam(t, false)}`)
     ).map(findingRow),
-  situations: async () => (await listRows<SituationWire>('/situations')).map(situationRow),
-  // Roll 87: the light row by name (the title, severity, lifecycle, both
+  situations: async (t) => (await listRows<SituationWire>(`/situations${subjectParam(t, true)}`)).map(situationRow),
+  // The light row by name (the title, severity, lifecycle, both
   // clocks) — the SAME read as the map's events layer (mapData.ts
   // WORLD_EVENTS_PATH), so the one GET answers both; whole, 0.42 MB live.
-  events: async () => (await listRows<EventWire>(WORLD_EVENTS_PATH)).map(eventRow),
+  events: async (t) => (await listRows<EventWire>(`${WORLD_EVENTS_PATH}${subjectParam(t, false)}`)).map(eventRow),
 }
 
 export interface TemporalRowsResult {
@@ -68,20 +76,27 @@ export interface TemporalRowsResult {
   refetch: () => void
 }
 
-function useSource(source: TemporalSource) {
+function useSource(source: TemporalSource, targetId: string | null) {
   return useQuery({
-    queryKey: ['temporal-rows', source],
-    queryFn: READERS[source],
+    // The unnarrowed read keeps its original key, so every surface that reads
+    // everything shares one fetch.
+    queryKey: targetId ? ['temporal-rows', source, targetId] : ['temporal-rows', source],
+    queryFn: () => READERS[source](targetId),
     refetchInterval: 60_000,
     staleTime: 30_000,
   })
 }
 
-export function useTemporalRows(): TemporalRowsResult {
-  const signals = useSource('signals')
-  const findings = useSource('findings')
-  const situations = useSource('situations')
-  const events = useSource('events')
+/**
+ * The rows on both clocks. `targetId` narrows every read to one subject (the
+ * routes' own `target_id` filter); omitted, the reads cover everything.
+ */
+export function useTemporalRows(opts: { targetId?: string | null } = {}): TemporalRowsResult {
+  const t = opts.targetId ?? null
+  const signals = useSource('signals', t)
+  const findings = useSource('findings', t)
+  const situations = useSource('situations', t)
+  const events = useSource('events', t)
   const all = { signals, findings, situations, events }
   // One array per data change, so a consumer's memo over `rows` holds still
   // between polls.

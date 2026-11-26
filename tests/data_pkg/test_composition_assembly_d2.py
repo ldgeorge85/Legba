@@ -1,6 +1,6 @@
-"""D-2 — THE ASSEMBLER. `planning/DEMOTION_D1_SPEC_2026-09-04.md` §1.
+"""THE ASSEMBLER.
 
-What this file proves, in the spec's own order:
+What this file proves, in order:
 
   * §1.2 / §3.6 / F-12 — a span is byte-identical to its origin, and a TAMPERED
     span CANNOT be constructed. That is the hard gate, and it lives here rather
@@ -163,7 +163,7 @@ def test_lead_span_is_the_bluf_sentence_with_byte_exact_offsets() -> None:
 
 def test_the_sentence_terminator_does_not_cut_at_an_abbreviation() -> None:
     """The measured failure a naive split produces on the first live head read
-    for this train: ``recent U.`` is nine words that assert nothing."""
+    for this change: ``recent U.`` is nine words that assert nothing."""
     span = asp.extract_lead_span(_row("a"), head_id="a")
     assert "U.S. strikes" in span["text"]
     # Titles, month abbreviations and single-letter initials are all part of the
@@ -505,7 +505,7 @@ def test_all_three_lead_outcomes_are_reachable_and_stamped() -> None:
 
 
 def test_a_no_conflict_declaration_always_says_what_it_checked() -> None:
-    """M-11 in a new costume is the failure this prevents: a `## Tension` section
+    """In a new costume is the failure this prevents: a `## Tension` section
     asserting unanimity with no statement of scope. The live degenerate form was
     13.8% of world bodies."""
     _, payload = _assembly([_row("a"), _row("b")])
@@ -536,7 +536,7 @@ def test_a_detected_pair_is_declared_and_never_explained() -> None:
 
 
 # ---------------------------------------------------------------------------
-# W-1 (2026-09-06) — a CROSS-TIER pair is not a conflict the record published
+# A CROSS-TIER pair is not a conflict the record published
 # ---------------------------------------------------------------------------
 #
 # The live defect, from the 12:00Z world read: its ONE declared tension paired a
@@ -686,7 +686,7 @@ def test_every_quoted_sentence_in_the_body_is_a_span_verbatim() -> None:
     _, payload = _assembly([_row(f"h{i}") for i in range(4)])
     body = ar.render_assembly_body(payload)
     for b in payload["blocks"]:
-        # P3-A: the fixture is a COUNTRY assembly, so each block also carries its
+        # The fixture is a COUNTRY assembly, so each block also carries its
         # origin head in FULL under ``context_body``. That span is deliberately
         # NOT in the body — it is handed to the fenced reader, never rendered —
         # and the assertion below pins exactly that. The QUOTATIONS are unchanged.
@@ -715,7 +715,7 @@ def test_no_connective_in_the_vocabulary_asserts_a_state_of_the_world() -> None:
 
 
 def test_w4_f3_the_floor_connectives_are_in_the_closed_vocabulary() -> None:
-    """W4 F-3 — four new fixed strings, the version does NOT move (D3)."""
+    """Four new fixed strings, the version does NOT move (D3)."""
     for phrase in (
         "carried, floor honoured",
         "carried, floor NOT honoured",
@@ -793,7 +793,7 @@ def test_the_title_is_deterministic_in_all_three_lead_shapes() -> None:
 
 
 def test_the_title_carries_no_authored_claim_only_a_quotation() -> None:
-    """F-9: the assembly's title needs no rubric because it makes no claim of its
+    """The assembly's title needs no rubric because it makes no claim of its
     own — its only content is text a desk already wrote and the record quotes."""
     _, payload = _assembly([_row("a", signal_ids=("s1", "s2"))] + [
         _row(f"h{i}", signal_ids=()) for i in range(9)
@@ -864,13 +864,13 @@ def test_the_coverage_ledger_is_persisted_verbatim() -> None:
 
 
 # ---------------------------------------------------------------------------
-# F-3 — the bounded question, and its honest fallback
+# The bounded question, and its honest fallback
 # ---------------------------------------------------------------------------
 
 
 def test_the_bounded_question_falls_back_and_stamps_that_it_did() -> None:
-    """No descriptor field holds one today (F-3). The fallback rate has to be
-    COUNTABLE, not invisible, so the parallel descriptor train can be measured."""
+    """No descriptor field holds one today. The fallback rate has to be
+    COUNTABLE, not invisible, so the parallel descriptor change can be measured."""
     _, without = _assembly([_row("a")])
     b = without["blocks"][0]
     assert b["question"] == "Narrative coordination"
@@ -1110,7 +1110,7 @@ async def test_the_assembly_run_is_reproducible_byte_for_byte(monkeypatch) -> No
 
 
 # ---------------------------------------------------------------------------
-# D-2b — THE OWED SMALLS (D-2 §10 handoff, D-3 §2, R4 PREREG E-3)
+# THE OWED SMALLS (D-2 §10 handoff, D-3 §2, R4 PREREG E-3)
 #
 # Two producer-side fields the arms were written against and the row did not
 # carry. Until they land, D-3's ARM 3 counts

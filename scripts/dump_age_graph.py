@@ -4,8 +4,8 @@
 """Dump the Apache AGE graph ``legba_graph`` to a file, prove the file restores,
 and say whether the graph is empty. READ ONLY; run BEFORE the drop migration.
 
-Owner decision 2026-11-15 (data-model lane DM-G): the empty graph database may
-be permanently deleted, dumped to a file first. The deletion itself is the
+The empty graph database may be permanently deleted, dumped to a file
+first. The deletion itself is the
 migration ``20261115T1829_drop_empty_age_graph.sql``, which drops the graph ONLY
 if every label table is empty when it applies and refuses loudly otherwise;
 this script is the dump that comes before it. It never drops, deletes or

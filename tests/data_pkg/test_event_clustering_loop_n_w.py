@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """N-W — ``event_clustering`` writes the same thing, off the event loop.
 
-Live 2026-11-13 (roll 76's loop-lag monitor): every tick at :14/:34/:54 held
+Live (loop-lag monitor): every tick at :14/:34/:54 held
 the runtime's asyncio loop 23-44 s — the cluster phase, the front match walk
 (29.5 s over 2,000 open events, ``normalized_levenshtein``'s cell-by-cell DP
 the innermost frame of every report) and the tower leg's open-set fold
@@ -306,7 +306,7 @@ async def test_a_live_sized_pass_never_blocks_the_event_loop(monkeypatch) -> Non
             gaps.append(now - last)
             last = now
 
-    # Roll 86: the session heap is frozen so a gen-2 GC pass over ~7,000
+    # The session heap is frozen so a gen-2 GC pass over ~7,000
     # earlier tests' objects is not charged to the pass (test_event_reconciler_n_v).
     gc.collect()
     gc.freeze()

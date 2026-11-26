@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit + integration tests for the ACLED source handler (L-132).
+"""Unit + integration tests for the ACLED source handler.
 
 Unit tests mock ``httpx`` via ``httpx.MockTransport`` so we exercise the
 full pull/health logic without touching the network. ACLED migrated OFF the
@@ -337,7 +337,7 @@ def test_config_requires_both_oauth_secrets() -> None:
 
 
 def test_config_event_types_whitelist_covers_brief() -> None:
-    """All event types listed in the L-132 brief are accepted."""
+    """All event types listed in the brief are accepted."""
     cfg = ACLEDConfig(
         username_secret="vault://acled/user",
         password_secret="vault://acled/pass",
@@ -726,7 +726,7 @@ async def test_signal_payload_carries_required_fields() -> None:
 @pytest.mark.asyncio
 async def test_signal_content_hash_changes_when_record_revised() -> None:
     """A late-edit on notes / fatalities must yield a different hash so the
-    L-151 dedupe recognizes the revision as a new payload version."""
+    Dedupe recognizes the revision as a new payload version."""
     cfg = ACLEDConfig(username_secret="vault://acled/user", password_secret="vault://acled/pass")
     handler = ACLEDSourceHandler()
 

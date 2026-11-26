@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """A planted set for the desk-rows repair rule's party-swap guard, built by
-code (roll 85; D-2 designed and tested the guard on the same four cases).
+code.
 
 Each case is ``(label, old, new, quotes)`` — a fact row's text before and
 after a repair, and the located quotes the repair may take words from (the
@@ -113,7 +113,7 @@ def good_cases() -> list[tuple[str, str, str, list[str]]]:
 
 # ---------------------------------------------------------------------------
 # HELD OUT: written after the role rule was tuned on the sets above and run
-# once, as-is, to say how far the rule generalises (roll 85 report).
+# once, as-is, to say how far the rule generalises.
 # ---------------------------------------------------------------------------
 
 HELD_PAIRS = [("Lebanon", "Israel"), ("Colombia", "Venezuela"), ("Mali", "Niger"), ("Kenya", "Somalia"),

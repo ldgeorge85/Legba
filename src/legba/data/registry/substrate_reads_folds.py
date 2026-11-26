@@ -41,6 +41,8 @@ __all__ = [
     "FULL_ROW_JSON_TEXT_COLUMNS",
     "full_row_sql",
     "parse_full_row",
+    "as_of_findings_where",
+    "verification_ctes",
 ]
 
 #: How many findings ONE ``/findings`` call scans when the verification facet
@@ -127,9 +129,65 @@ STRUCTURAL_BADGE_CTE = critic_fold.latest_critique_cte(
 FULL_ROW_JSON_TEXT_COLUMNS = frozenset({"data", "verification", "structural_verification"})
 
 
-def full_row_sql(where_sql: str, page_limit: str, after_fold: str) -> str:
+# ---------------------------------------------------------------------------
+# The record as it stood (``?at=``)
+# ---------------------------------------------------------------------------
+#
+# A finding row is written once; what changes after it is written is the
+# critique that judges it (a later verify pass) and, for a superseded finding,
+# the supersession stamp, which ``/findings`` does not read. So the list as the
+# system had recorded it at an instant is: the findings written by then, each
+# with the latest critique written by then. ``created_at`` is the write time;
+# ``produced_at`` is stamped at the same write and is the column the page is
+# ordered and indexed on, so it bounds the index scan to start at the instant.
+
+
+def as_of_findings_where(param: int) -> list[str]:
+    """The page predicates for a read as of the instant bound at ``$param``."""
+    return [f"f.created_at <= ${param}", f"f.produced_at <= ${param}"]
+
+
+def _as_of(alias: str, param: int | None) -> str:
+    return f"{alias}.created_at <= ${param}" if param is not None else ""
+
+
+def verification_ctes(as_of_param: int | None, *, full: bool = False) -> tuple[str, str]:
+    """The faithfulness and structural folds, each limited to the critiques
+    written by the instant at ``$as_of_param`` when one is given. ``full``
+    selects the full row's projections (score and badge as well as the block)."""
+    if as_of_param is None:
+        return (CRITIC_SCORE_CTE, STRUCTURAL_BADGE_CTE) if full else (
+            FAITHFULNESS_VERIFICATION_CTE, STRUCTURAL_VERIFICATION_CTE)
+    faith_cols = (
+        "(cr.data->>'overall_score')::real AS critic_score,"
+        " (cr.data->'data'->'verification') AS verification"
+        if full else "(cr.data->'data'->'verification') AS verification"
+    )
+    struct_cols = (
+        "(sr.data->'data'->'verification'->>'structural_verified')"
+        " AS structural_verified,"
+        " (sr.data->>'overall_score')::real AS structural_score,"
+        " (sr.data->'data'->'verification') AS structural_verification"
+        if full else "(sr.data->'data'->'verification') AS structural_verification"
+    )
+    return (
+        critic_fold.latest_critique_cte(
+            "c", faith_cols, PAGE_IDS, extra_where=_as_of("cr", as_of_param),
+        ),
+        critic_fold.latest_critique_cte(
+            "s", struct_cols, PAGE_IDS, alias="sr",
+            title_like=critic_fold.STRUCTURAL_TITLE_LIKE, require_score=False,
+            extra_where=_as_of("sr", as_of_param),
+        ),
+    )
+
+
+def full_row_sql(
+    where_sql: str, page_limit: str, after_fold: str, as_of_param: int | None = None,
+) -> str:
     """The full-row ``/findings`` statement for the route's own WHERE, page
     bound and post-fold filter/order/limit (see the notes above)."""
+    critic_cte, badge_cte = verification_ctes(as_of_param, full=True)
     return f"""
             WITH f AS MATERIALIZED (
                 SELECT f.id, f.kind, f.title, f.body, f.confidence, f.severity,
@@ -140,7 +198,7 @@ def full_row_sql(where_sql: str, page_limit: str, after_fold: str) -> str:
                  WHERE {where_sql}
                  ORDER BY f.produced_at DESC, f.id DESC
                  {page_limit}
-            ), {CRITIC_SCORE_CTE}, {STRUCTURAL_BADGE_CTE}
+            ), {critic_cte}, {badge_cte}
             SELECT p.id, p.kind, p.title, p.body, p.confidence, p.severity,
                    p.data::text AS data, p.target_id, p.target_version,
                    p.analyst_id, p.analyst_version, p.produced_at,

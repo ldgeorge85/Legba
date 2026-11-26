@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""C-1 — boot/wiring layer coverage (review §3.4).
+"""Boot/wiring layer coverage.
 
 Both live wiring bugs (the ``owner_tenant`` envelope stamp and the
 ``trigger_regs=0`` silent no-wire) shipped through 2300+ green tests because
@@ -445,7 +445,7 @@ async def test_boot_wiring_registers_triggers_and_marks_dirty(
 
     # G2 block coverage — the three agency/output streams bring-up MUST bind,
     # by (name, subjects). A regression here silently reproduces the
-    # corpus_researcher/cross_doc_corroborator "nats: timeout" incident: no
+    # corpus_researcher/cross_doc_corroborator "nats: timeout" failure: no
     # stream bound == every publish on that subject family awaits an ack that
     # never comes.
     assert ("legba_channels", ["channels.>"]) in ensure_stream_calls

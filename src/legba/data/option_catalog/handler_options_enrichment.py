@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""X-1 option specs — the ``reenrich_pending`` sweep (W11-F118), the
-``verify_backfill`` sweep (W11-F84), and the ``evidence_refetch`` backlog
-drain (W11-F138).
+"""X-1 option specs — the ``reenrich_pending`` sweep, the
+``verify_backfill`` sweep, and the ``evidence_refetch`` backlog
+drain.
 
 Split out only for the module-size gate: ``handler_options_catalog.py`` sits
 just under the gate's 1,500-line new-entrant threshold, so a new entry lands

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""P2-T4 — labeled reference-set substrate + labels API.
+"""Labeled reference-set substrate + labels API.
 
 DB-backed against the ISOLATED ``legba_test_<uuid>`` database the data_pkg
 ``migrated_pg`` fixture creates, migrates to head (so migration 0057 actually
@@ -212,7 +212,7 @@ def test_migration_file_present_at_next_number_and_idempotent():
 
 
 # ---------------------------------------------------------------------------
-# P2-T6 — eval scoreboard badge (the honest "no invented number" contract)
+# Eval scoreboard badge (the honest "no invented number" contract)
 # ---------------------------------------------------------------------------
 
 
@@ -244,7 +244,7 @@ def test_badge_real_zero_correctness_is_shown_not_hidden():
 
 async def test_eval_scores_empty_when_scorer_never_ran(client):
     """With no unit_correctness_scorer output present, /eval/scores returns an
-    honest scoreboard — no scored_at, no invented unit rows. P2-5: a unit row
+    honest scoreboard — no scored_at, no invented unit rows. A unit row
     MAY still appear without a scorer run, but only when it carries REAL
     operator gold-set verdicts (the live correctness_labels overlay; the
     session-shared test DB may hold some from the goldset-loop tests) — never

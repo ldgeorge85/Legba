@@ -28,7 +28,7 @@ Promote: HUMAN-GATED — an operator flips ``promotion_gate`` to
          candidate row but nothing auto-acts on it (it too requires the
          operator flip).
 
-Wave B prereqs (commit ``8a1fd5c``):
+Prerequisites:
   * ``MethodBlock.kind`` has the ``dspy_compile`` literal.
   * ``dspy_compile`` is exempt from the ``prompt_module`` requirement
     on :class:`MethodBlock` — the optimizer COMPILES prompts; it
@@ -52,6 +52,7 @@ import asyncpg
 
 from ..provenance.kinds import OutputKind
 from ..provenance.models import FindingPayload, PromptModuleCandidatePayload
+from ..trace_bulk import hydrate_traces, pointer_columns_sql
 from ...runtime.analyst_method import AnalystMethodResult
 from ...runtime.dapr_workflow.gepa import (
     InProcessWorkflowClient,
@@ -79,7 +80,7 @@ HANDLER_VERSION: str = "0.1.0"
 # :mod:`legba.data.provenance.kinds`.
 OUTPUT_KIND: OutputKind = OutputKind.PROMPT_MODULE_CANDIDATE
 
-# Wave B prereq: the optimizer kind is exempt from build_prompt_module()
+# The optimizer kind is exempt from build_prompt_module()
 # because its job is to COMPILE prompts, not to carry a static one.  The
 # host's discover layer still calls this (defensive) — returning None is
 # the contract for kinds that don't expose a prompt module.
@@ -87,7 +88,7 @@ PROMPT_MODULE_PATH: str | None = None
 
 
 def build_prompt_module() -> Any:
-    """Optimizer is exempt from carrying a prompt module (Wave B prereq).
+    """Optimizer is exempt from carrying a prompt module.
 
     Returns None so the host's discover layer can still look this
     attribute up without crashing.  The optimizer compiles OTHER
@@ -101,7 +102,7 @@ def build_prompt_module() -> Any:
 # ---------------------------------------------------------------------------
 
 
-# Per 2026-05-16 ratified decision: 50 ground-truth rows per analyst by
+# 50 ground-truth rows per analyst by
 # default.  Descriptors override via ``eval.optimizer.min_traces_required``.
 DEFAULT_MIN_TRACES_REQUIRED: int = 50
 DEFAULT_MIN_CRITIQUES_REQUIRED: int = 0
@@ -284,7 +285,8 @@ async def read_traces_and_critiques(
             c.scores              AS critique_scores,
             c.revision_delta      AS critique_revision_delta,
             c.id                  AS critique_id,
-            t.run_started_at      AS run_started_at
+            t.run_started_at      AS run_started_at,
+            {pointer_columns_sql("t")}
         FROM analyst_traces t
         LEFT JOIN analyst_critiques c ON c.trace_id = t.run_id
         WHERE t.analyst_id = $1
@@ -294,7 +296,11 @@ async def read_traces_and_critiques(
         LIMIT {int(limit)}
     """
     rows = await conn.fetch(query, *params)
-    return [dict(r) for r in rows]
+    # A run older than the trace compaction age has its prompt and output in a
+    # bundle; this puts them back under the names selected above.
+    return await hydrate_traces(
+        conn, rows, aliases={"prompt_rendered": "input", "output_payload": "gold"},
+    )
 
 
 async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
@@ -450,7 +456,7 @@ async def resolve_promoted_system_prompt(
     evolved instructions actually reach inference (the analyst still runs its
     own direct ``chat_complete`` — no dspy on the hot path).
 
-    P4-T6 — the DB-edit-proof measured-delta guard. A candidate that carries a
+    The DB-edit-proof measured-delta guard. A candidate that carries a
     measured-faithfulness eval block (every unit_optimizer candidate does)
     reaches inference ONLY when the eval's ``promotable`` flag is ``'true'`` — a
     positive, non-degenerate, judge-scored, sufficiently-paired delta. So even a
@@ -535,11 +541,11 @@ async def resolve_promoted_system_prompt(
 # ---------------------------------------------------------------------------
 #
 # The GEPA optimizer plane is MOTHBALLED: code kept, deploy/schedule surface
-# dropped. Evidence: `planning/RUST4_EVIDENCE_2026-08-21.md` — one real GEPA
+# dropped. Evidence: one real GEPA
 # compile ever completed (2026-08-10) and it did not clear the promotion bar
 # (faithfulness delta -0.5354 against a +0.03 floor); the workflow long-
 # activity round-trip bug (#86) reproduced again the following week
-# (2026-08-17, `workflow_timeout`); and the manual VOICE-4 prompt wave
+# (2026-08-17, `workflow_timeout`); and manual prompt work
 # shipped in its place. Declared as SEAMS #53 (`docs/SEAMS.md`).
 #
 # Both live optimizer descriptors' `identity.id` are refused here, loud,
@@ -561,8 +567,7 @@ class OptimizerMothballedError(RuntimeError):
     A trigger reaching here means something re-armed a path that should
     stay inert (a restored cadence, a manual force-run, a stray reminder)
     — the loud failure is the signal to fix THAT, not to silence this
-    guard. See ``docs/SEAMS.md`` #53 and
-    ``planning/RUST4_EVIDENCE_2026-08-21.md``.
+    guard. See ``docs/SEAMS.md`` #53.
     """
 
 
@@ -667,7 +672,7 @@ async def run_method(
         analyzed_analyst_id=str(analyzed_analyst_id),
         analyzed_analyst_version=str(analyzed_analyst_version or "") or None,
     )
-    # P4-T6 — carry the OPTIMIZER analyst's OWN id + any option-supplied
+    # Carry the OPTIMIZER analyst's OWN id + any option-supplied
     # fitness config into the workflow input. ``fitness_metric`` defaults to
     # ``critique_proxy`` (country_optimizer untouched); the worker re-resolves
     # it (+ the paired gates + parent_system_prompt_source) from THIS optimizer's
@@ -736,7 +741,7 @@ async def run_method(
     diagnostics = dict(workflow_result.diagnostics or {})
     actual_method = str(diagnostics.get("method") or "unknown")
 
-    # P4-T6 — the measured-faithfulness eval record (the honest before/after
+    # The measured-faithfulness eval record (the honest before/after
     # delta). Present ONLY for a fitness_metric=faithfulness run; the
     # critique_proxy monolith path carries no ``eval`` block, so its candidate
     # data has no ``eval`` key and the resolve_promoted_system_prompt promotable
@@ -843,7 +848,7 @@ async def run_method(
             f"analyzed:{analyzed_analyst_id}",
             f"generation:{workflow_result.gepa_generation}",
             promotion_policy,
-            # P4-T6 — mark the MEASURED bounded-unit experiment on the finding so
+            # Mark the MEASURED bounded-unit experiment on the finding so
             # it is unmistakable on the trust surface (never confused with the
             # frozen critique_proxy monolith). Additive; absent for critique_proxy.
             *(

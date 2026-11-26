@@ -86,7 +86,7 @@ EVENT_CLUSTERING_OPTIONS = (
         "float",
         "Share of the pass budget held back for the tower leg while the "
         "slice, cluster, match and write phases run; 0 lets those phases "
-        "spend the whole budget (the pre-P1c shape).",
+        "spend the whole budget (the earlier shape).",
         minimum=0.0,
         maximum=1.0,
     ),

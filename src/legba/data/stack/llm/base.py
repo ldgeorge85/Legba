@@ -7,9 +7,9 @@ This module defines:
   * `LLMResponse` / `LLMChunk` / `LLMUsage` — unified response shapes.
   * `LLMTool` / `LLMToolCall` — provider-neutral tool-call shape (OpenAI
     Chat Completions JSON Schema spec on the wire; translated per provider).
-  * `LLMProviderHandler` — base class conforming to L-102 §1 `KindHandler`
-    plus the LLM-specific `chat_complete` / `stream_complete` /
-    `count_tokens` / `health_check` surface used by L-103 runtime.
+  * `LLMProviderHandler` — base class conforming to the `KindHandler`
+    Protocol plus the LLM-specific `chat_complete` / `stream_complete` /
+    `count_tokens` / `health_check` surface used by the runtime.
 
 Concrete providers (Anthropic, vLLM, OpenAI) subclass this and
 override the network-shaped methods (`_translate_messages`,
@@ -74,6 +74,7 @@ from ...run_accounting import (
 )
 from ...schemas.stack import LLMProviderConfig
 from .call_gate import gate_for_component
+from .model_limits import declared_count, max_output_by_alias
 from .pricing import call_token_total
 from .thinking import (
     ThinkingUnavailable,
@@ -154,17 +155,16 @@ LLMTool = dict[str, Any]
 # ---------------------------------------------------------------------------
 # Lightweight context Protocols
 #
-# L-103 (runtime) owns the canonical `ConfigureContext` / `RuntimeContext`
-# pydantic dataclasses. Those don't exist yet at L-120-land time; we define
-# Protocols here that match the relevant slice from L-102 §1 so handlers
-# can be constructed against test doubles today and against the real
-# runtime context once L-160/L-161 land.
+# The runtime owns the canonical `ConfigureContext` / `RuntimeContext`
+# pydantic dataclasses. We define Protocols here that match the relevant slice
+# so handlers can be constructed against test doubles as well as against the
+# real runtime context.
 # ---------------------------------------------------------------------------
 
 
 @runtime_checkable
 class BudgetReporter(Protocol):
-    """Per L-102 §7. Handlers report consumed tokens / cost; the runtime
+    """Handlers report consumed tokens / cost; the runtime
     enforces envelope out-of-band. Phase-2 hook surface only."""
 
     async def record(
@@ -180,7 +180,7 @@ class BudgetReporter(Protocol):
 
 @runtime_checkable
 class TelemetryHandle(Protocol):
-    """Per L-102 §1. Bound to the instance by the runtime."""
+    """Bound to the instance by the runtime."""
 
     def log(self, level: int, msg: str, /, **fields: Any) -> None: ...
 
@@ -193,7 +193,7 @@ class TelemetryHandle(Protocol):
 class HandlerContext(Protocol):
     """Common context slice used by both Configure and Runtime phases.
 
-    Subset of L-102 §1 `ConfigureContext` / `RuntimeContext`. Concrete L-103
+    Subset of `ConfigureContext` / `RuntimeContext`. Concrete
     pydantic objects are duck-compatible: they expose these attrs.
     """
 
@@ -212,7 +212,7 @@ class RuntimeContextLike(HandlerContext, Protocol):
 
 
 # ---------------------------------------------------------------------------
-# Typed exceptions per L-102 §7
+# Typed exceptions
 # ---------------------------------------------------------------------------
 
 
@@ -225,7 +225,7 @@ class TransientLLMFailure(Exception):
     the provider's instruction instead of guessing a backoff; ``None`` whenever
     no header was sent, which is every pre-existing raise site.
 
-    W11-F101: the analyst actor's transient retry loop also reads it (see
+    The analyst actor's transient retry loop also reads it (see
     ``legba.runtime.actor_retry._transient_retry_delay``). The HTTP layer parses
     both header forms (seconds and HTTP-date) and caps the value at
     ``RETRY_AFTER_CAP_S``.
@@ -244,7 +244,7 @@ class TransientLLMFailure(Exception):
 
 
 class StreamInterruptedFailure(TransientLLMFailure):
-    """A streamed generation died AFTER it had delivered output (W11-F133).
+    """A streamed generation died AFTER it had delivered output.
 
     Raised by the OpenAI-compatible stream accumulator (``vllm.py``) when the
     connection drops, the server sends an error event, or the stream closes
@@ -337,7 +337,7 @@ def _envelope_code(err: Mapping[str, Any]) -> int | None:
     return None
 
 
-#: Ceiling on an honoured ``Retry-After``, in seconds (W11-F101). A provider
+#: Ceiling on an honoured ``Retry-After``, in seconds. A provider
 #: may ask for anything; one that answers ``Retry-After: 3600`` must not park an
 #: analyst actor for an hour. 120 s clears the gateway's observed 23 s
 #: concurrency window several times over while keeping a run bounded. A hard
@@ -578,13 +578,13 @@ def _split_endpoint(endpoint: str, default_port: int) -> tuple[str | None, int, 
 class LLMProviderHandler:
     """Base class for LLM-provider stack-component handlers.
 
-    Conforms to L-102 §1 `KindHandler` Protocol (kind, family, schema_version,
+    Conforms to the `KindHandler` Protocol (kind, family, schema_version,
     config_schema, handler_version + lifecycle hooks + health_check +
     telemetry). Subclasses set the kind / endpoint defaults / pricing and
     implement the wire-shape methods.
     """
 
-    # ---- KindHandler classvars (L-102 §1) --------------------------------
+    # ---- KindHandler classvars --------------------------------
     kind: ClassVar[str] = "llm_provider"
     family: ClassVar[Literal["source", "filter", "output", "analyst", "discovery", "stack"]] = "stack"  # type: ignore[assignment]
     schema_version: ClassVar[str] = "legba/stack.llm_provider/1-0-0"
@@ -599,7 +599,7 @@ class LLMProviderHandler:
     default_port: ClassVar[int] = 443
     #: Per-subprovider pricing table; subclasses override.
     PRICE_TABLE: ClassVar[Mapping[str, ModelPrice]] = {}
-    #: W11-F133. True on a handler whose ``_call_chat`` may receive a
+    #: True on a handler whose ``_call_chat`` may receive a
     #: ``stream: true`` payload and folds the SSE body back into the
     #: non-streaming JSON shape via :meth:`_accumulate_sse`. False (every
     #: handler that never streams through the base loop) keeps ``_call_chat``
@@ -632,7 +632,7 @@ class LLMProviderHandler:
     async def on_configure(self, ctx: HandlerContext) -> None:
         """Bind to the configured `LLMProviderConfig` instance.
 
-        Per L-102 §1, `ctx.config` is the pydantic model parsed against
+        `ctx.config` is the pydantic model parsed against
         `self.config_schema`. Idempotent: repeated calls re-resolve the
         credential and reset the HTTP client if the endpoint changed.
         """
@@ -779,13 +779,15 @@ class LLMProviderHandler:
 
     # ---- LLM-specific surface --------------------------------------------
 
+    def max_output_tokens_by_alias(self) -> dict[str, int]:  # see ``model_limits``
+        return max_output_by_alias(self._cfg, component_id=self._instance_id)
+
     def model_max_output_tokens(self, model: str | None = None) -> int | None:
-        """THE declared maximum output of the model a call runs on — the value
-        sent where a wire requires the field (no output caps: a caller's
-        ``max_tokens`` never reaches a wire). Here: the component's ``max_tokens``;
-        Anthropic overrides with its documented per-model table."""
-        raw = getattr(getattr(self._cfg, "max_tokens", None), "raw", None)
-        return int(raw) if isinstance(raw, (int, float)) and raw > 0 else None
+        """The declared maximum output of the alias ``model`` (default
+        ``model_name``), sent as ``max_tokens``; ``None`` when undeclared.
+        Anthropic overrides with its documented table."""
+        cfg = self._cfg
+        return None if cfg is None else self.max_output_tokens_by_alias().get(model or str(cfg.model_name.raw))
 
     def thinking_available(self) -> bool:
         """Does this component declare a thinking alias (``thinking.py``)?"""
@@ -813,8 +815,8 @@ class LLMProviderHandler:
                 `_translate_messages`.
             tools: optional OpenAI-tool-spec list; translated per provider.
             model: optional model override; defaults to the configured one.
-            max_tokens: accepted, never sent (no output caps): a wire that
-                requires the field gets ``model_max_output_tokens``.
+            max_tokens: accepted, never sent: the wire carries the alias's
+                own maximum (``model_max_output_tokens``) or nothing.
             reasoning_effort: o-series / GPT-5 / Claude extended thinking.
             system: top-level system prompt for providers that take it
                 separately (Anthropic). For OpenAI-style providers the base
@@ -824,7 +826,8 @@ class LLMProviderHandler:
                 alias (``thinking_model_name``), resolved in
                 ``stack/llm/thinking.py`` — the one place an alias is chosen.
                 ``None``/``False`` is the call as it always was. Thinking
-                never adds a ``max_tokens`` and never changes temperature.
+                never changes temperature; the output limit sent is the
+                thinking alias's own declared maximum.
                 T-2: a thinking call that fails for a reason the thinking
                 alias causes is retried ONCE on the plain alias, the retry's
                 receipt carrying ``thinking_fallback`` (``thinking.py``).
@@ -868,7 +871,7 @@ class LLMProviderHandler:
             raise HardLLMFailure(str(exc)) from exc
         for key, value in reasoning_budget_fields(cfg, thinking=thinking).items():
             kwargs.setdefault(key, value)
-        chosen_max_tokens = max_tokens or int(cfg.max_tokens.raw)  # type: ignore[union-attr]
+        chosen_max_tokens = self.model_max_output_tokens(chosen_model) or 0
 
         # RUST-5 — ``analyst_traces.prompt_rendered``. Captured from the
         # ORIGINAL (pre-translation) ``messages``/``system`` — the same args
@@ -901,7 +904,7 @@ class LLMProviderHandler:
             **kwargs,
         )
 
-        # R11 — the single chokepoint every provider-plane LLM call passes
+        # The single chokepoint every provider-plane LLM call passes
         # through (no subclass overrides ``chat_complete``, and the base
         # ``stream_complete`` delegates here), so this is where a run's
         # ``analyst_traces.llm_calls`` receipt is accumulated. Records BOTH
@@ -1171,7 +1174,7 @@ class LLMProviderHandler:
         retryable = {429, 500, 502, 503, 529}
         max_retries = 3
         last_exc: Exception | None = None
-        # W11-F133: a streaming handler sends the SAME request with
+        # A streaming handler sends the SAME request with
         # ``stream: true`` and reads the body incrementally. Everything that
         # happens BEFORE the stream opens (connect errors, status codes,
         # Retry-After, a router's 2xx error envelope, a server that ignored
@@ -1241,7 +1244,7 @@ class LLMProviderHandler:
         streaming path shares every branch; ``streaming`` only decides how the
         body is READ (an SSE body is accumulated, anything else is read whole).
         """
-        # Seconds or an HTTP-date, capped at RETRY_AFTER_CAP_S (W11-F101);
+        # Seconds or an HTTP-date, capped at RETRY_AFTER_CAP_S;
         # ``None`` when absent or unparsable -> the 2**attempt schedule.
         retry_after = _parse_retry_after(response.headers.get("retry-after"))
         if response.status_code in retryable and attempt < max_retries:
@@ -1402,7 +1405,7 @@ class LLMProviderHandler:
             return self._client
         cfg = self._require_configured()
         # Subclasses' `_chat_endpoint_path()` prepends `/v1/...` (OpenAI
-        # convention, mirrored by vLLM / gpt-oss-120b / Anthropic). If the
+        # convention, mirrored by vLLM / the core model / Anthropic). If the
         # operator-supplied `api_endpoint` already ends in `/v1` the two
         # would double up (e.g. `/v1/v1/chat/completions` → 404). Strip
         # trailing `/v1` segments defensively so both
@@ -1464,15 +1467,8 @@ class LLMProviderHandler:
         return list(self._model_list)
 
     def context_window_tokens(self) -> int | None:
-        """The configured model's context window in tokens, if this handler knows it.
-
-        W11-F133: the consult loop derives its input ceiling from this when the
-        descriptor sets none (``consult_context_ceiling.derive_ceiling``). The
-        base knows nothing; a subclass that can learn the window (the
-        OpenAI-compatible ``/v1/models`` listing, a documented constant)
-        overrides it. ``None`` = unknown, never a guess.
-        """
-        return None
+        """The declared ``context_window_tokens`` (sizes ``_llm_budget``); None = unknown."""
+        return declared_count(self._cfg, "context_window_tokens", component_id=self._instance_id)
 
 
 # ---------------------------------------------------------------------------

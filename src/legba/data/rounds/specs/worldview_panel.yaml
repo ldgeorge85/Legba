@@ -1,10 +1,10 @@
-# worldview_panel/1 — the Story's worldview panel (plan P4 §2.6 (iii)), with a red
-# team, a coverage auditor and a key-assumptions check. Which worldview cards
-# exist is profile data: the spec maps over a card list given as an input
-# (e.g. [drafts/worldview_realist, drafts/worldview_institutionalist, ...]), so
-# the spec names no worldview. Each item's card resolves to cards/<item>.md.
-# The worldview cards shipped beside this spec are DRAFTS: who writes them is
-# the operator's question (P4 §9.1).
+# worldview_panel/1 — a worldview panel with a challenge seat, a coverage
+# auditor and a key-assumptions check. Which worldview cards exist is profile
+# data: the spec maps over a card list given as an input (e.g.
+# [worldview_realist, worldview_institutionalist, ...]), so the spec names no
+# worldview. Each item names a card in the selected profile's round_cards/
+# folder (legba.data.rounds.profile_cards); a card the profile lacks fails the
+# seat by name.
 round:
   id: worldview_panel
   version: 1
@@ -43,7 +43,7 @@ round:
       plane: llm.primary.openai_compat
       thinking: on
       reads: [{from: views.sealed, view: sentence_table}, {from: packet}]
-      output: position/1
+      output: challenge/1
       gates: [handed_rows]
       deadline_s: 240
       retries: 1
@@ -71,7 +71,7 @@ round:
     j_support:
       kind: judge
       card: cards/judge_support.md
-      plane: llm.verify.innoai_gemma.openai_compat
+      plane: llm.verify.gateway_judge.openai_compat
       family_rule: {differs_from: [worldview, red_team]}
       reads: [{from: table, view: sentence_table}]
       output: verdict/1

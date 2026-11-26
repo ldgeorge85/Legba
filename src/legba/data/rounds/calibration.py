@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Judge calibration records, and the HOST RULE built on them (lane G-6):
+"""Judge calibration records, and the HOST RULE built on them:
 a judge whose measured planted-error catch rate is under the floor the
 statement verifier uses may not gate.
 
@@ -19,8 +19,8 @@ interpreter at every panel (both hosts run the interpreter):
 * a voting judge that may not gate is left out of the count (recorded as
   advisory, and its absence is what the quorum rule sees).
 
-The book is read from a file the host is given (the harness: a path under
-``planning/``; results are run data and stay out of the repo). An interpreter
+The book is read from a file the host is given (the harness: a path outside
+the repo; results are run data and stay out of it). An interpreter
 given no book records ``calibration: not_enforced`` on every tally it writes,
 so a run that skipped the rule says so. Pure.
 """

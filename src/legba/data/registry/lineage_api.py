@@ -98,6 +98,7 @@ from pydantic import BaseModel, Field
 
 from ..archive import sha256_from_object_ref
 from ..provenance._core import compute_receipt_hash
+from ..trace_bulk import hydrate_traces
 from .api import RegistryAPIDeps, require_bearer
 
 
@@ -448,10 +449,14 @@ def _receipt_node_from_trace(
 # ``SELECT *`` also detoasted ``llm_calls`` / ``intermediate_steps`` /
 # ``input_payload`` (the bulk of the 1.8 GB ``analyst_traces`` TOAST) for
 # every receipt it built and threw them away.
+#
+# The two pointer columns let ``trace_bulk.hydrate_traces`` put back the
+# prompt and output of a trace whose bulk was compacted into a bundle; every
+# fetch below goes through it before the re-hash.
 _TRACE_COLUMNS = (
     "run_id, analyst_id, analyst_version, input_row_refs, prompt_module_hash, "
     "prompt_rendered, output_row_refs, output_payload, run_ended_at, "
-    "receipt_hash, prev_receipt_hash"
+    "receipt_hash, prev_receipt_hash, bulk_bundle_id, bulk_columns"
 )
 
 #: node id → its producing trace, for a whole walk at once (GIN overlap).
@@ -541,7 +546,7 @@ async def _receipt_for_trace(
 async def _fetch_traces_for_nodes(
     conn: asyncpg.Connection,
     node_ids: Iterable[UUID],
-) -> dict[UUID, asyncpg.Record]:
+) -> dict[UUID, dict[str, Any]]:
     """Map substrate rows → their producing ``analyst_traces`` rows, if any,
     in ONE query (``node_id ∈ analyst_traces.output_row_refs``: the L-107 §7
     lineage-into-chain — the trace records the rows it produced). A node with
@@ -555,7 +560,7 @@ async def _fetch_traces_for_nodes(
         if len(ids) >= _TRACES_WIDE_FROM
         else _TRACES_BY_OUTPUT_REF_SQL
     )
-    rows = await conn.fetch(sql, ids)
+    rows = await hydrate_traces(conn, await conn.fetch(sql, ids))
     return {r["node_id"]: r for r in rows}
 
 
@@ -564,7 +569,7 @@ async def _fetch_trace_for_node(
     *,
     node_id: UUID,
     run_id: UUID | None,
-) -> asyncpg.Record | None:
+) -> Mapping[str, Any] | None:
     """Map ONE substrate row → its producing ``analyst_traces`` row, if any.
 
     Two lookups, first hit wins (mirrors the root resolution):
@@ -580,12 +585,14 @@ async def _fetch_trace_for_node(
     source-ingested row, or an analyst_output predating the receipt chain) —
     honestly absent, never a fabricated receipt.
     """
-    trace: asyncpg.Record | None = None
+    trace: Mapping[str, Any] | None = None
     if run_id is not None:
-        trace = await conn.fetchrow(
+        row = await conn.fetchrow(
             f"SELECT {_TRACE_COLUMNS} FROM analyst_traces WHERE run_id = $1",
             run_id,
         )
+        if row is not None:
+            trace = (await hydrate_traces(conn, [row]))[0]
     if trace is None:
         trace = (await _fetch_traces_for_nodes(conn, [node_id])).get(node_id)
     return trace
@@ -629,7 +636,7 @@ async def _attach_receipts_to_walk(
     conn: asyncpg.Connection,
     nodes: list[LineageNode],
 ) -> None:
-    """Attach each WALK node's own receipt-chain receipt, in place (P1-T4).
+    """Attach each WALK node's own receipt-chain receipt, in place.
 
     P0-T4 enriched the ROOT only. To drill the DAG one hop at a time (the P1-T5
     UI) EVERY analyst-produced node needs its receipt + recomputed
@@ -1011,7 +1018,7 @@ def build_lineage_router(deps: RegistryAPIDeps) -> APIRouter:
                 edges.extend(down_edges)
                 truncated = truncated or down_trunc
 
-            # P1-T4: attach EACH walk node's own receipt (recomputed
+            # Attach EACH walk node's own receipt (recomputed
             # chain_consistent + honest single-node badge) so the DAG can be
             # drilled one hop at a time. Signal / source-ingested nodes carry
             # receipt=None honestly (no producing analyst run to re-hash).

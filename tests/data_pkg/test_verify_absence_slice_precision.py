@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W1 (2026-08-02) — CONTRADICTED-BRANCH PRECISION, from the adjudicated cases.
+"""CONTRADICTED-BRANCH PRECISION, from the adjudicated cases.
 
 The 08-02 acceptance readout measured ``absence_slice_contradicted`` at ~46%
 precision (6/13 correct) while it carried 50% of ALL hard fails, and the operator
@@ -190,7 +190,7 @@ def test_a_claim_that_enumerates_countries_scopes_itself() -> None:
 def test_irregular_demonyms_count_as_naming_the_country() -> None:
     """"Spanish enclave Ceuta" names Spain; "Italian troop movements" names Italy.
 
-    W10 CANON-1: the matcher is read from ``absence_slice`` (verify no longer
+    The matcher is read from ``absence_slice`` (verify no longer
     re-exports country symbols; the tables are the profile's gazetteer)."""
     from legba.data.provenance import absence_slice as AS
 
@@ -300,7 +300,7 @@ def test_a_body_quote_resolves_but_a_short_fragment_never_does() -> None:
     ) == _MEXICO_BODY
     assert V._resolve_violating_row("Mexico", shown) is None
     assert V._resolve_violating_row("a campaign we invented wholesale", shown) is None
-    # Exact whole-row match — the pre-W1 TITLE behavior — still resolves.
+    # Exact whole-row match — the pre-TITLE behavior — still resolves.
     assert V._resolve_violating_row(_MEXICO_TITLE, [_MEXICO_TITLE]) == _MEXICO_TITLE
 
 
@@ -447,10 +447,15 @@ def test_the_stage_two_rubric_states_both_override_rules() -> None:
     """The carve-out and epistemic-qualifier rules are the two the readout's
     (d) class needs, and they must OVERRIDE the topical-collision reading."""
     system = V._ABSENCE_SLICE_JUDGE_SYSTEM
-    assert "CARVE-OUTS" in system
-    assert "EPISTEMIC QUALIFIERS" in system
-    assert "below the verification floor" in system
-    assert "bill under consideration" in system
+    # An exempted thing never contradicts the claim that exempts it.
+    assert "something the claim exempts" in system
+    # A proposal, plan, threat or unconfirmed report never contradicts a claim
+    # about confirmed occurrences.
+    assert "a proposal, plan, threat or unconfirmed report" in system
+    assert "against a claim about confirmed occurrences" in system
+    # And the rule is stated as part of "contradicted", not as a lean: there is
+    # no "when in doubt answer supported".
+    assert "when in doubt" not in system.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -659,7 +664,7 @@ async def test_a_healthy_slice_reports_its_size_without_the_thin_caveat(
 async def test_a_genuine_on_target_violation_is_still_a_hard_fail(
     monkeypatch,
 ) -> None:
-    """The operator decision was NO interim demotion: a real violator — on
+    """There is NO interim demotion: a real violator — on
     target, real reporting, not carved out — still earns the hard fail."""
     monkeypatch.setenv("LEGBA_VERIFY_LLM_JUDGE", "1")
     violator = "US Treasury adds three Haitian gang financiers to the sanctions list"
@@ -744,7 +749,7 @@ async def test_hard_fail_9_the_world_read_continuity_claim_leaves_the_route(
 
 
 def test_the_continuity_claim_test_is_not_positional() -> None:
-    """W1(e)'s frame test is positional — which is why the class survived it.
+    """The frame test is positional — which is why the class survived it.
 
     Every shape below leads with the negative, so the prior-read referent TRAILS
     it and the positional test cannot reach any of them.
@@ -792,7 +797,7 @@ def test_real_scoped_negatives_stay_on_the_route() -> None:
 
 
 def test_r2_reaches_the_qualifier_forms_the_producers_actually_emit() -> None:
-    """`hard_fail#9` missed W2/R2 on the READ arm's two fixed bigrams."""
+    """`hard_fail#9` missed two bigrams on the READ arm's two fixed bigrams."""
     for framing in (
         "since the prior world read of 2026-08-03T00:00:15Z",
         "unchanged from the prior verified read",
@@ -858,7 +863,7 @@ async def test_the_scale_the_claim_denies_rides_into_the_stage_two_prompt(
     )
     prompt = judge.slice_prompts[0]
     assert "SCALE this claim denies: 'mass'" in prompt
-    assert "SMALLER scale" in prompt
+    assert "at a smaller scale" in prompt
 
 
 async def test_a_genuine_mass_scale_row_is_still_a_hard_fail(monkeypatch) -> None:

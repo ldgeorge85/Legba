@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for L-193 — `legba.data.outputs.a2a_skill`.
+"""Unit tests for `legba.data.outputs.a2a_skill`.
 
 No substrate required: the registry + envelope helpers are pure-Python,
 and the FastAPI route is exercised via `httpx.AsyncClient + ASGITransport`

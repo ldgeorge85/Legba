@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """SSRF egress guard for HTTP source fetchers.
 
-Source URLs come from descriptors — operator-registered, and (post P-13
+Source URLs come from descriptors — operator-registered, and (with
 polymorphic discovery) potentially auto-wired from a selector — so a fetcher
 could be pointed, deliberately or accidentally, at an INTERNAL address
 (``127.0.0.1``, ``10.x``/``172.16.x``/``192.168.x``, link-local, the cloud
@@ -24,8 +24,8 @@ socket to the validated IP (which breaks SNI/Host); for our threat model —
 a descriptor/selector pointed at an internal address — the resolve-check closes
 the realistic vector. A rebinding-hardened transport is a tracked follow-up.
 
-THE TRANSPORT OWNS THE TLS HANDSHAKE AND THE HTTP VERSION (wave O, lane o1)
---------------------------------------------------------------------------
+THE TRANSPORT OWNS THE TLS HANDSHAKE AND THE HTTP VERSION
+-------------------------------------------------------------
 ``httpx`` configures TLS and ALPN on the TRANSPORT, not on the client: the
 moment a caller mounts an explicit ``transport=``, the ``verify=`` and
 ``http2=`` arguments it passed to :class:`httpx.AsyncClient` are silently
@@ -69,7 +69,7 @@ What this does NOT change is the User-Agent. usnews.com refuses our UA over
 every transport we can build — including the ``curl_cffi`` impersonation
 path, which spoofs the fingerprint and deliberately keeps our name. Sending a
 browser UA would divorce the robots.txt decision from the agent in the
-publisher's log (FETCH_REVIEW §3(a)/§3(e)); that is a policy question owned
+publisher's log; that is a policy question owned
 by :data:`FETCH_IMPERSONATE_ENV`, not a transport bug, and after this change
 the host and the image give the same answer to it.
 """
@@ -348,7 +348,7 @@ def fetch_client(
     **kwargs: Any,
 ) -> Any:
     """The PAGE-fetch client: :func:`guarded_async_client`, or an impersonated
-    one when ``LEGBA_FETCH_IMPERSONATE`` says so (FETCH_REVIEW §5).
+    one when ``LEGBA_FETCH_IMPERSONATE`` says so.
 
     ``off`` (the default, and what every deployment gets until an operator
     changes it) is deliberately a SINGLE statement returning the existing

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""A closed JSON-stat 2.0 reader for ``series_api`` (lane I-5).
+"""A closed JSON-stat 2.0 reader for ``series_api``.
 
 JSON-stat (https://json-stat.org/format/) publishes a CUBE: an ordered list of
 dimension ids with their sizes, each dimension's categories (code → position),

@@ -1,4 +1,4 @@
-# Legba scheduled backup — one ENCRYPTED set per night (X1-A2).
+# Legba scheduled backup — one ENCRYPTED set per night.
 #
 # Oneshot unit run by legba-backup.timer: scripts/backup_scheduled.sh runs
 # scripts/backup.sh (postgres + the evidence archive (incremental) + qdrant +

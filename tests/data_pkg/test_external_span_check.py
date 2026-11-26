@@ -126,7 +126,7 @@ def test_no_span_at_all_is_no_decisive_verdict() -> None:
 
 
 def test_the_tier_registry_resolves_the_rounds_own_bounds() -> None:
-    """Transcribed from the binding text every R2/R3 lane packet carried."""
+    """Transcribed from the binding text of the grading packets."""
     assert esc.source_tier_for_url("https://www.reuters.com/x").tier_class == "tier_2"
     assert esc.source_tier_for_url("https://data.imf.org/x").tier_class == "tier_1"
     assert esc.source_tier_for_url("https://treasury.gov/x").tier_class == "tier_1"
@@ -394,7 +394,7 @@ def test_a_non_decisive_proposal_passes_through_ungated() -> None:
 # ---------------------------------------------------------------------------
 
 #: R3's ONE non-resolving span in 282 — ML_A ``CR-2bbcd291``, quoted verbatim
-#: from ``planning/PROOF_ROUND_2026-08-29/stage2_ML.json``. The VERDICT calls it
+#: from the stage-2 ML packet. The VERDICT calls it
 #: *"a self-referential provenance claim whose truth-maker is the packet, not the
 #: world"*. Impact if dropped: C-A 0.4805 -> 0.4801.
 ML_A_SPECIMEN = (

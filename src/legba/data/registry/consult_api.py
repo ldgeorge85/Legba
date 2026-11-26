@@ -615,7 +615,7 @@ def _project_consult_response(
         usage=_stamps.usage_receipt(
             usage, plane=model, route=CONSULT_MODEL_ALLOWLIST.get(model or ""),
         ),
-        # W11-F93: the verdict is checked against THIS answer and ref set —
+        # The verdict is checked against THIS answer and ref set —
         # the ones persisted — and withdrawn (``not_settled``) if they moved.
         verification=_stamps.verification_stamp(
             inner_data.get("verification"), reason_if_absent="no_stamp_from_run",
@@ -1118,7 +1118,7 @@ def build_consult_router(deps: RegistryAPIDeps) -> APIRouter:
         # resolver wired at all, would silently run on the cached Opus
         # primary. Checking here means the SAME clear, model-named message
         # comes back immediately, and Opus is never silently billed for a
-        # request the operator asked to route elsewhere.
+        # request the caller asked to route elsewhere.
         if llm_component_override is not None:
             try:
                 await deps.stack_registry.get(llm_component_override)

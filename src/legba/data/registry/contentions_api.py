@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""``GET /v3/contentions`` — the contrary-evidence pass's records (Program 7a).
+"""``GET /v3/contentions`` — the contrary-evidence pass'srecords.
 
 WHAT THIS SERVES, AND WHAT IT IS NOT. Each row is one RETRIEVAL OUTCOME against
 one published claim: the counter-query that was issued, the rung it ran on, the

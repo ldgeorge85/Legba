@@ -1,8 +1,8 @@
 {
   "prompts": {
     "narrative_coordination": {
-      "chars": 17472,
-      "sha256": "81e125be70d8ca22dc7cc472e1bac89809697fcae0dd962e9c4314a00d274210",
+      "chars": 19749,
+      "sha256": "9de5b9d0831708afa338632037c4b87a0a1b01ca6d2d9a7365d886dd509052d8",
       "source": "analyst_narrative_coordination.yaml"
     }
   },

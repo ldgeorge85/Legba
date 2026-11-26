@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for :mod:`legba.clients.mnemosyne_a2a`.
 
-Covers L-210:
+Covers the Mnemosyne A2A client:
 
   * Envelope construction — shape mirrors the inbound a2a_skill wire
     form (``{envelope: {envelope_version, skill_id, nonce, issued_at,
@@ -13,7 +13,7 @@ Covers L-210:
     mocked transport returns a response envelope signed by the
     recipient, the client verifies + returns the inner payload.
   * trust_query convenience — maps Mnemosyne's TRUST_QUERY output onto
-    the L-210 ``{score, rationale, hop_count, ...}`` surface.
+    the ``{score, rationale, hop_count, ...}`` surface.
   * Signature mismatch on the response → :class:`A2ASignatureError`.
   * Signer DID not in trusted_keys → :class:`A2ASignatureError`.
   * Transport failure (connection refused) → :class:`A2ATransportError`.

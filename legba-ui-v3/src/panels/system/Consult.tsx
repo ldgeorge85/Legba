@@ -81,6 +81,7 @@ import {
 } from '@/lib/consultContext'
 import {
   consultActions,
+  DEFAULT_MAX_ROUNDS,
   useConsultPanel,
   stripFinalFrame,
   type ChatTurn,
@@ -101,18 +102,17 @@ import { CitedRecords } from '@/components/CitedRecords'
 import { describeOnScreen } from '@/lib/onScreen'
 import {
   GROUNDING_CHOICES,
-  WINDOW_CHOICES,
+  bandWindowWords,
   loadGroundingMode,
-  loadWindowChoice,
   saveGroundingMode,
-  saveWindowChoice,
-  windowChoiceWords,
   type GroundingMode,
   type WindowChoiceId,
 } from '@/lib/consultContract'
+import { ConsultComposer } from '@/components/ConsultComposer'
+import { useDeepConsult } from '@/panels/system/useDeepConsult'
+import { DeepConsultResult } from '@/panels/system/DeepConsultResult'
 import { ConsultContractBlock } from '@/components/ConsultContract'
 import { useWorldState } from '@/v4/world/worldState'
-import { spanPresetFor } from '@/lib/mapTime'
 import type { PanelProps } from '@/types'
 
 /** Below this tile width the case rail collapses to the step counter + STOP. */
@@ -425,7 +425,7 @@ function stepLabel(s: StepFrame): string {
   return reason ? `${base} — ${reason}` : base
 }
 
-export default function ConsultPanel({ registration }: PanelProps) {
+export default function ConsultPanel({ registration, initialTab }: PanelProps) {
   // The store key. `singleton:system.consult` for the ordinary panel — stable
   // across an `api.clear()`, so a re-opened panel rejoins its own conversation.
   const panelId = registration.id
@@ -454,10 +454,20 @@ export default function ConsultPanel({ registration }: PanelProps) {
   // U-8 / Q-1 — the window and the grounding mode the turn is asked under,
   // sent on every turn (the server's `window` / `grounding_mode`). A window the
   // question itself states ("last 48 hours") still wins on the server.
-  const [windowChoice, setWindowChoice] = useState<WindowChoiceId>(() => loadWindowChoice())
+  // The window a turn is sent with is THE TIME BAND'S — its absolute ends,
+  // the one window every region reads (`worldState`, the band its only
+  // writer). Consult has no window of its own and shows the band's read-only.
+  const windowChoice: WindowChoiceId = 'band'
   const [grounding, setGrounding] = useState<GroundingMode>(() => loadGroundingMode())
-  const bandSpanMs = useWorldState((s) => s.spanMs)
-  const bandSpanText = spanPresetFor(bandSpanMs)?.label ?? `${Math.round(bandSpanMs / 3_600_000)}h`
+  // Deep is a mode of the same composer: a long task that writes a finding,
+  // instead of a quick answer in this conversation. A retired "deep" address
+  // opens with it on.
+  const [deep, setDeep] = useState(initialTab === 'deep')
+  const [emitFacts, setEmitFacts] = useState(true)
+  const [emitHypotheses, setEmitHypotheses] = useState(true)
+  const bandStartMs = useWorldState((s) => s.windowStartMs)
+  const bandEndMs = useWorldState((s) => s.windowEndMs)
+  const windowWords = bandWindowWords(bandStartMs, bandEndMs)
   // The case player is module state (it must outlive this tile); the tile only
   // reads whether a case of ITS slice is playing.
   const casePlaying = useCasePlayer(
@@ -525,6 +535,7 @@ export default function ConsultPanel({ registration }: PanelProps) {
   // the pin effect left, as it always has.
   const consultTurn = useConsultTurn(panelId, { model })
   const { busy, detached, stopPhase, resynthIndex, quiet, closeStream } = consultTurn
+  const deepTask = useDeepConsult(pins, model, deep)
 
   // Keep the conversation pinned to the bottom as turns / steps arrive.
   useEffect(() => {
@@ -565,6 +576,13 @@ export default function ConsultPanel({ registration }: PanelProps) {
     // D1 — "Allow changes" applies to THIS turn only, and resets on send.
     setAllowWrites(false)
     await sending
+  }
+
+  // Ask: a quick answer in the conversation, or — with Deep on — a long task.
+  const ask = async () => {
+    if (!deep) return send('chat')
+    const ok = await deepTask.submit({ question: draft, scope, emitFacts, emitHypotheses })
+    if (ok) consultActions().setDraft(panelId, '')
   }
 
   const resetChat = () => {
@@ -622,6 +640,213 @@ export default function ConsultPanel({ registration }: PanelProps) {
     return `Thinking… (${pendingTurn.steps.length} steps)`
   }, [pendingTurn, detached, sessionId])
 
+  // Which of the menu's settings are off their defaults, said in short phrases
+  // the composer prints under its controls, so nothing that changes an answer
+  // is set out of sight.
+  const nonDefault: string[] = []
+  if (model !== 'core') nonDefault.push(`model ${CONSULT_MODEL_OPTIONS.find((o) => o.value === model)?.label ?? model}`)
+  if (presentCase) nonDefault.push('drive the view on')
+  if (allowWrites) nonDefault.push('changes allowed this turn')
+  if (scope.trim()) nonDefault.push('scope set')
+  if (maxRounds !== DEFAULT_MAX_ROUNDS) nonDefault.push(`${maxRounds} tool rounds`)
+  if (deep && (!emitFacts || !emitHypotheses)) {
+    nonDefault.push(`deep writes ${[emitFacts && 'facts', emitHypotheses && 'hypotheses'].filter(Boolean).join(' and ') || 'only the finding'}`)
+  }
+  const depthResult = deepTask.statusResp ? <DeepConsultResult status={deepTask.statusResp} /> : null
+
+  // The body of the composer's "⋯" menu: every setting that is not on the
+  // composer itself, in the order a person reaches for them.
+  const menuButton = 'rounded-control border border-line px-2 py-1 text-label text-ink-3 hover:text-ink-1 disabled:opacity-50'
+  const menuHead = 'text-label uppercase tracking-[0.06em] text-ink-3'
+  const menu = (
+    <>
+      <div className="space-y-1.5">
+        <div className={menuHead}>Conversation</div>
+        <div className="flex flex-wrap gap-2">
+          {!compact && (
+            <button onClick={() => setHistoryOpen((v) => !v)} className={menuButton} data-testid="consult-history-toggle">
+              {historyOpen ? 'Hide history' : 'History'}
+            </button>
+          )}
+          <button onClick={resetChat} disabled={busy} className={menuButton} data-testid="consult-new-chat">
+            New chat
+          </button>
+          <button
+            onClick={pinSelection}
+            disabled={!selection || selectionPinned}
+            className={menuButton + ' flex items-center gap-1'}
+            title={
+              selection
+                ? selectionPinned
+                  ? 'already pinned to context'
+                  : `pin ${selection.kind} to consult context`
+                : 'select a record to pin it'
+            }
+            data-testid="consult-pin"
+          >
+            <Pin className="h-3 w-3" aria-hidden />
+            {selectionPinned ? 'Pinned' : 'Pin selection'}
+          </button>
+        </div>
+      </div>
+
+      {pins.length > 0 && (
+        <div className="space-y-1.5" data-testid="consult-pins">
+          <div className={menuHead}>Context sent with each question</div>
+          <div className="flex flex-wrap items-center gap-1">
+            {pins.map((p) => (
+              <span
+                key={`${p.kind}:${p.id}`}
+                className="flex items-center gap-1 rounded border border-line px-1.5 py-0.5 text-label text-ink-1"
+                title={`${selectionKindLabel(p.kind)} ${p.id}`}
+                data-testid="consult-pin-chip"
+              >
+                <span className="text-ink-3">{selectionKindLabel(p.kind)}:</span>
+                <span className="max-w-[140px] truncate">{p.label ?? p.id}</span>
+                <button
+                  onClick={() => consultActions().removePin(panelId, p.kind, p.id)}
+                  className="text-ink-3 hover:text-ink-1"
+                  title="unpin"
+                  aria-label="unpin"
+                >
+                  <X className="h-2.5 w-2.5" />
+                </button>
+              </span>
+            ))}
+            <button
+              onClick={() => consultActions().clearPins(panelId)}
+              className="ml-1 text-label text-ink-3 underline underline-offset-2 hover:text-ink-1"
+              data-testid="consult-pins-clear"
+            >
+              Clear
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="space-y-1.5">
+        <div className={menuHead}>Answer</div>
+        <label className="flex items-center gap-2 text-label text-ink-3">
+          <span className="shrink-0">Model</span>
+          <select
+            id="consult-model"
+            value={model}
+            onChange={(e) => {
+              const m = e.target.value as ConsultModel
+              setModel(m)
+              saveConsultModel(m)
+            }}
+            className="min-w-0 flex-1 rounded border border-line bg-surface-200 px-1.5 py-0.5 text-label"
+            data-testid="consult-model"
+          >
+            {CONSULT_MODEL_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        {/* The window is the time band's: shown here, set there. */}
+        <p className="text-label text-ink-3" data-testid="consult-window-words">
+          Answers look at {windowWords} unless your question names a time.
+        </p>
+      </div>
+
+      <div className="space-y-1.5">
+        <div className={menuHead}>The view</div>
+        {/* The DRIVE MODE, a switch that stays where it is set. On: what an
+            answer pulls up (open, focus, window, map) runs at once, listed in
+            the case rail with STOP and one Undo. Off: a plain turn that moves
+            nothing. A change to the system is never a view action and always
+            waits for your Confirm. */}
+        <button
+          type="button"
+          role="switch"
+          onClick={() => setPresentCase(!presentCase)}
+          disabled={busy || casePlaying}
+          aria-checked={presentCase}
+          className={
+            'flex items-center gap-1.5 rounded-control border px-2 py-1.5 text-label disabled:opacity-50 ' +
+            (presentCase ? 'border-point/60 text-ink-1' : 'border-line text-ink-3 hover:text-ink-1')
+          }
+          data-testid="consult-drive-toggle"
+          aria-describedby="consult-drive-hint"
+        >
+          <span aria-hidden className={'inline-block h-2 w-2 rounded-full ' + (presentCase ? 'bg-point' : 'border border-ink-3')} />
+          Drive the view: {presentCase ? 'on' : 'off'}
+        </button>
+        <p id="consult-drive-hint" className="text-label text-ink-3" data-testid="consult-drive-hint">
+          {presentCase
+            ? 'On: an answer may open panels, focus a record and set the window for you — Undo puts the view back.'
+            : 'Off: answers only reply; nothing on screen moves. Turn on to let an answer move the view, with Undo.'}
+        </p>
+        {/* Opt-in per turn; off by default, reset on every send. While on, this
+            turn may change the platform through consult — destructive changes
+            still wait for your Confirm, and every change gets a receipt with
+            Revert. */}
+        <button
+          type="button"
+          onClick={() => setAllowWrites((v) => !v)}
+          disabled={busy}
+          aria-pressed={allowWrites}
+          className={
+            'rounded-control border px-2 py-1.5 text-label disabled:opacity-50 ' +
+            (allowWrites ? 'border-amber-500/60 bg-amber-500/20 text-ink-1' : 'border-line text-ink-3 hover:text-ink-1')
+          }
+          data-testid="consult-allow-writes"
+          title={
+            allowWrites
+              ? 'this turn may change the platform — pause, retire and activate wait for your Confirm; every change gets a receipt with Revert'
+              : 'allow consult to carry out a change you ask for, on this turn only'
+          }
+        >
+          Allow changes this turn
+        </button>
+      </div>
+
+      <div className="space-y-1.5 text-xs text-ink-3">
+        <div className={menuHead}>Limits</div>
+        <input
+          className="w-full rounded border border-line bg-surface-200 p-2 font-mono text-xs"
+          value={scope}
+          onChange={(e) => consultActions().setScope(panelId, e.target.value)}
+          placeholder='scope predicate (optional) — target.id == "brazil"'
+          aria-label="Scope predicate"
+          data-testid="consult-scope"
+        />
+        <label className="flex items-center gap-2">
+          max tool rounds:
+          <input
+            type="number"
+            min={1}
+            max={MAX_ROUNDS}
+            value={maxRounds}
+            onChange={(e) =>
+              consultActions().setMaxRounds(panelId, Math.max(1, Math.min(MAX_ROUNDS, Number(e.target.value) || 1)))
+            }
+            className="w-16 rounded border border-line bg-surface-200 px-1 py-0.5 font-mono text-xs"
+            data-testid="consult-max-rounds"
+          />
+        </label>
+      </div>
+
+      {deep && (
+        <div className="space-y-1.5 text-label text-ink-3">
+          <div className={menuHead}>Deep question</div>
+          <label className="flex items-center gap-1.5">
+            <input type="checkbox" checked={emitFacts} onChange={(e) => setEmitFacts(e.target.checked)} data-testid="consult-deep-facts" />
+            Write facts
+          </label>
+          <label className="flex items-center gap-1.5">
+            <input type="checkbox" checked={emitHypotheses} onChange={(e) => setEmitHypotheses(e.target.checked)} data-testid="consult-deep-hypotheses" />
+            Write hypotheses
+          </label>
+        </div>
+      )}
+    </>
+  )
+
+
   return (
     <PanelChrome
       registration={registration}
@@ -629,7 +854,7 @@ export default function ConsultPanel({ registration }: PanelProps) {
       onRefresh={frame ? undefined : resetChat}
     >
       <div className="flex h-full min-h-0 min-w-0" ref={tileRef}>
-        {/* History sidebar — prior chat sessions (0038 audit trail). */}
+        {/* History sidebar — prior chats, or (with Deep on) prior deep tasks. */}
         {historyOpen && !compact && (
           <div
             className="w-56 shrink-0 border-r border-slate-700 pr-2 mr-2 overflow-y-auto min-h-0"
@@ -637,32 +862,35 @@ export default function ConsultPanel({ registration }: PanelProps) {
           >
             <div className="flex items-center justify-between mb-2">
               <span className="text-label uppercase tracking-wide text-slate-400">
-                Prior chats
+                {deep ? 'Deep tasks' : 'Prior chats'}
               </span>
               <button
-                onClick={() => void loadHistory()}
+                onClick={() => void (deep ? deepTask.loadHistory() : loadHistory())}
                 className="text-label text-slate-400 hover:text-slate-200"
                 title="refresh history"
+                aria-label="refresh history"
                 data-testid="consult-history-refresh"
               >
                 ↻
               </button>
             </div>
-            {historyError && (
-              <div className="text-label text-accent-critical mb-2">{historyError}</div>
+            {(deep ? deepTask.historyError : historyError) && (
+              <div className="text-label text-accent-critical mb-2">{deep ? deepTask.historyError : historyError}</div>
             )}
-            {sessions.length === 0 && !historyError && (
-              <div className="text-label text-slate-500 py-2">No prior chats yet.</div>
+            {(deep ? deepTask.tasks : sessions).length === 0 && !(deep ? deepTask.historyError : historyError) && (
+              <div className="text-label text-slate-500 py-2">{deep ? 'No deep tasks yet.' : 'No prior chats yet.'}</div>
             )}
             <ul className="space-y-1" data-testid="consult-history-list">
-              {sessions.map((s) => (
+              {(deep ? deepTask.tasks : sessions).map((s) => (
                 <li key={s.id}>
                   <button
-                    onClick={() => void openSession(s.id)}
-                    disabled={busy}
+                    onClick={() => (deep ? void (s.task_id && deepTask.openTask(s.task_id)) : void openSession(s.id))}
+                    disabled={busy || (deep && !s.task_id)}
                     className={
                       'w-full text-left rounded px-2 py-1 text-xs hover:bg-surface-200 disabled:opacity-50 ' +
-                      (s.id === sessionId ? 'bg-surface-200 text-slate-100' : 'text-slate-300')
+                      (s.id === sessionId || (deep && s.task_id && s.task_id === deepTask.statusResp?.task_id)
+                        ? 'bg-surface-200 text-slate-100'
+                        : 'text-slate-300')
                     }
                     title={s.title}
                     data-testid="consult-history-item"
@@ -679,42 +907,6 @@ export default function ConsultPanel({ registration }: PanelProps) {
         )}
 
         <div className="flex flex-col h-full min-h-0 min-w-0 flex-1">
-        {/* History toggle + new-chat bar */}
-        {!compact && (
-        <div className="flex items-center gap-2 mb-2 shrink-0">
-          <button
-            onClick={() => setHistoryOpen((v) => !v)}
-            className="text-label text-ink-3 hover:text-ink-1 rounded px-2 py-0.5 border border-line"
-            data-testid="consult-history-toggle"
-          >
-            {historyOpen ? '◀ Hide history' : '☰ History'}
-          </button>
-          <button
-            onClick={resetChat}
-            disabled={busy}
-            className="text-label text-ink-3 hover:text-ink-1 rounded px-2 py-0.5 border border-line disabled:opacity-50"
-            data-testid="consult-new-chat"
-          >
-            + New chat
-          </button>
-          <button
-            onClick={pinSelection}
-            disabled={!selection || selectionPinned}
-            className="ml-auto flex items-center gap-1 text-label text-ink-3 hover:text-ink-1 rounded px-2 py-0.5 border border-line disabled:opacity-50"
-            title={
-              selection
-                ? selectionPinned
-                  ? 'already pinned to context'
-                  : `pin ${selection.kind} to consult context`
-                : 'select a record to pin it'
-            }
-            data-testid="consult-pin"
-          >
-            <Pin className="h-3 w-3" />
-            {selectionPinned ? 'Pinned' : 'Pin selection'}
-          </button>
-        </div>
-        )}
         {/* Conversation — scrolls; the composer below stays pinned. */}
         <div
           ref={scrollRef}
@@ -1029,12 +1221,13 @@ export default function ConsultPanel({ registration }: PanelProps) {
               )}
             </div>
           )}
+          {depthResult}
         </div>
 
-        {/* Composer — pinned chat bar at the bottom */}
-        <div className={compact ? 'shrink-0 space-y-1.5' : 'shrink-0 border-t border-line pt-2 mt-2 space-y-2'}>
-          {/* C-1b — the case rail. In the pinned composer region, never in the
-              scrolling transcript, so its STOP cannot scroll out of view. */}
+        {/* Composer — one compact block pinned at the foot. */}
+        <div className={compact ? 'shrink-0 space-y-1.5' : 'shrink-0 space-y-1 border-t border-line pt-1'}>
+          {/* The case rail sits in the pinned region, never in the scrolling
+              transcript, so its STOP cannot scroll out of view. */}
           {caseRequestId && (
             <CaseRail
               panelId={panelId}
@@ -1044,262 +1237,55 @@ export default function ConsultPanel({ registration }: PanelProps) {
               )}
             />
           )}
-          {/* Pinned context — injected into every turn until cleared (#90). */}
-          {pins.length > 0 && !compact && (
-            <div className="flex flex-wrap items-center gap-1" data-testid="consult-pins">
-              <span className="text-label uppercase tracking-wide text-ink-3 mr-1">
-                Context
-              </span>
-              {pins.map((p) => (
-                <span
-                  key={`${p.kind}:${p.id}`}
-                  className="flex items-center gap-1 rounded bg-accent-info/15 border border-accent-info/30 px-1.5 py-0.5 text-label text-ink-1"
-                  title={`${selectionKindLabel(p.kind)} ${p.id}`}
-                  data-testid="consult-pin-chip"
-                >
-                  <span className="text-ink-3">{selectionKindLabel(p.kind)}:</span>
-                  <span className="truncate max-w-[140px]">{p.label ?? p.id}</span>
-                  <button
-                    onClick={() => consultActions().removePin(panelId, p.kind, p.id)}
-                    className="text-ink-3 hover:text-ink-1"
-                    title="unpin"
-                    aria-label="unpin"
-                  >
-                    <X className="h-2.5 w-2.5" />
-                  </button>
-                </span>
-              ))}
-              <button
-                onClick={() => consultActions().clearPins(panelId)}
-                className="text-label text-ink-3 hover:text-ink-1 underline underline-offset-2 ml-1"
-                data-testid="consult-pins-clear"
-              >
-                Clear
-              </button>
-            </div>
-          )}
-          {error && (
+          {(error || deepTask.error) && (
             <div
               className="bg-accent-critical/10 border border-accent-critical/40 rounded p-2 text-xs text-accent-critical whitespace-pre-wrap"
               data-testid="consult-error"
             >
-              {error}
+              {error ?? deepTask.error}
             </div>
           )}
-          {/* F1 model picker — which LLM plane answers this chat. */}
-          <div className={compact ? 'hidden' : 'flex items-center gap-2 text-label text-ink-3'}>
-            <label htmlFor="consult-model" className="shrink-0">
-              Model
-            </label>
-            <select
-              id="consult-model"
-              value={model}
-              onChange={(e) => {
-                const m = e.target.value as ConsultModel
-                setModel(m)
-                saveConsultModel(m)
-              }}
-              className="bg-surface-200 border border-line rounded px-1.5 py-0.5 text-label"
-              data-testid="consult-model"
-            >
-              {CONSULT_MODEL_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          {/* X1/D1 — the question box owns its row. It used to share one
-              flex row with three buttons that never shrink, so in a 26 %
-              dock the textarea came out ~34 px wide. Now it is the ONLY
-              child of its row at every dock width, and the per-turn toggles
-              and Send sit under it in a row that wraps instead of squeezing. */}
-          {/* U-2 — what the next question is asked ABOUT, above the box. */}
-          <ConsultPointLine pinned={pins.length} windowWords={windowChoiceWords(windowChoice, bandSpanText)} />
-          <div className="w-full" data-testid="consult-question-row">
-            <textarea
-              className="block w-full min-w-0 bg-surface-200 border border-line rounded p-2 text-sm resize-none"
-              rows={compact ? 1 : 2}
-              value={draft}
-              onChange={(e) => consultActions().setDraft(panelId, e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault()
-                  void send('chat')
-                }
-              }}
-              placeholder="Ask a question…  (Enter to send · Shift+Enter for a new line)"
-              data-testid="consult-question"
-            />
-          </div>
-          <div
-            className="flex flex-wrap items-center gap-2"
-            data-testid="consult-composer-controls"
-          >
-            {/* U-2 — the DRIVE MODE, a switch that stays where it is set. On:
-                what an answer pulls up (open, focus, window, map) runs at once,
-                listed in the case rail with STOP and one Undo. Off: a plain
-                turn that moves nothing. A change to the system is never a view
-                action and always waits for your Confirm. */}
-            <button
-              type="button"
-              role="switch"
-              onClick={() => setPresentCase(!presentCase)}
-              disabled={busy || casePlaying}
-              aria-checked={presentCase}
-              className={
-                'flex items-center gap-1.5 px-2 py-1.5 text-label rounded-control border shrink-0 disabled:opacity-50 ' +
-                (presentCase ? 'border-point/60 text-ink-1' : 'border-line text-ink-3 hover:text-ink-1')
-              }
-              data-testid="consult-drive-toggle"
-              aria-describedby="consult-drive-hint"
-              title={
-                presentCase
-                  ? 'Drive the view is ON — what an answer pulls up runs at once; Undo in the case strip puts the view back'
-                  : 'Drive the view is OFF — answers move nothing; turn it on to let an answer open, focus and set the window, with one Undo'
-              }
-            >
-              <span
-                aria-hidden
-                className={
-                  'inline-block h-2 w-2 rounded-full ' + (presentCase ? 'bg-point' : 'border border-ink-3')
-                }
-              />
-              Drive the view: {presentCase ? 'on' : 'off'}
-            </button>
-            {/* C-2b-1 / D2 — opt-in per turn, beside Send; off by default,
-                reset on every send. While on, this turn may change the
-                platform through consult — destructive changes still wait for
-                your Confirm, and every change gets a receipt with Revert. */}
-            <button
-              type="button"
-              onClick={() => setAllowWrites((v) => !v)}
-              disabled={busy}
-              aria-pressed={allowWrites}
-              className={
-                'px-2 py-1.5 text-label rounded-control border shrink-0 disabled:opacity-50 ' +
-                (allowWrites
-                  ? 'border-amber-500/60 bg-amber-500/20 text-ink-1'
-                  : 'border-line text-ink-3 hover:text-ink-1')
-              }
-              data-testid="consult-allow-writes"
-              title={
-                allowWrites
-                  ? 'this turn may change the platform — pause, retire and activate wait for your Confirm; every change gets a receipt with Revert'
-                  : 'allow consult to carry out a change you ask for, on this turn only'
-              }
-            >
-              Allow changes this turn
-            </button>
-            {/* U-8 / Q-1 — the window this turn is asked over (default: the
-                server's declared 7 days) and how strictly it must rest on rows. */}
-            <label className="flex items-center gap-1 text-label text-ink-3 shrink-0">
-              <span>Window</span>
-              <select
-                value={windowChoice}
-                onChange={(e) => {
-                  const v = e.target.value as WindowChoiceId
-                  setWindowChoice(v)
-                  saveWindowChoice(v)
-                }}
-                disabled={busy}
-                className="bg-surface-200 border border-line rounded px-1 py-0.5 text-label"
-                data-testid="consult-window"
-                title="the window the answer is held to; a window your question states (last 48 hours, say) wins"
-              >
-                {WINDOW_CHOICES.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.id === 'band' ? `${c.label} (${bandSpanText})` : c.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={grounding === 'record_only'}
-              onClick={() => {
-                const v: GroundingMode = grounding === 'record_only' ? 'default' : 'record_only'
-                setGrounding(v)
-                saveGroundingMode(v)
-              }}
-              disabled={busy}
-              className={
-                'px-2 py-1.5 text-label rounded-control border shrink-0 disabled:opacity-50 ' +
-                (grounding === 'record_only' ? 'border-point/60 text-ink-1' : 'border-line text-ink-3 hover:text-ink-1')
-              }
-              data-testid="consult-grounding"
-              title={GROUNDING_CHOICES.find((g) => g.id === grounding)?.hint}
-            >
-              Record only: {grounding === 'record_only' ? 'on' : 'off'}
-            </button>
-            <button
-              onClick={() => send('chat')}
-              disabled={busy || !draft.trim()}
-              className="ml-auto px-4 py-1.5 text-body border border-point/60 text-ink-1 hover:bg-point/15 disabled:opacity-50 rounded-control shrink-0"
-              data-testid="consult-submit"
-            >
-              {busy ? 'Consulting…' : 'Send'}
-            </button>
-            {/* Only while something is in flight, and never gated on `busy` —
-                this is the control that ENDS the spending, so it must work
-                exactly when everything else is locked. */}
-            {pendingTurn && (
-              <button
-                onClick={() => void consultTurn.stop()}
-                disabled={stopPhase !== null}
-                className="px-3 py-2 text-sm bg-accent-critical/20 hover:bg-accent-critical/40 border border-accent-critical/40 text-accent-critical disabled:opacity-50 rounded shrink-0"
-                data-testid="consult-stop"
-                title="stop drilling now and answer from the evidence gathered so far"
-              >
-                {stopPhase === 'stopping'
-                  ? 'Stopping…'
-                  : stopPhase === 'synthesizing'
-                    ? 'Synthesizing…'
-                    : 'Stop'}
-              </button>
-            )}
-          </div>
-          {/* U-3 — what the switch does, in one plain line (the owner: "if
-              toggled on, do it with an undo; if not, not"). Off is the default. */}
-          <p id="consult-drive-hint" className={compact ? 'sr-only' : 'text-label text-ink-3'} data-testid="consult-drive-hint">
-            {presentCase
-              ? 'On: an answer may open panels, focus a record and set the window for you — Undo puts the view back.'
-              : 'Off: answers only reply; nothing on screen moves. Turn on to let an answer move the view, with Undo.'}
-          </p>
-          <details className={compact ? 'hidden' : 'text-xs text-ink-3'}>
-            <summary className="cursor-pointer select-none">Options</summary>
-            <div className="mt-2 space-y-2">
-              <input
-                className="w-full bg-surface-200 border border-line rounded p-2 text-xs font-mono"
-                value={scope}
-                onChange={(e) => consultActions().setScope(panelId, e.target.value)}
-                placeholder='scope predicate (optional) — target.id == "brazil"'
-                data-testid="consult-scope"
-              />
-              <label className="flex items-center gap-2">
-                max tool rounds:
-                <input
-                  type="number"
-                  min={1}
-                  max={MAX_ROUNDS}
-                  value={maxRounds}
-                  onChange={(e) =>
-                    consultActions().setMaxRounds(
-                      panelId,
-                      Math.max(1, Math.min(MAX_ROUNDS, Number(e.target.value) || 1)),
-                    )
-                  }
-                  className="w-16 bg-surface-200 border border-line rounded px-1 py-0.5 text-xs font-mono"
-                  data-testid="consult-max-rounds"
-                />
-              </label>
-              <p className="text-label text-ink-3">
-                Deep, durable analysis (a long-running task that writes a finding) lives in its own{' '}
-                <span className="text-ink-3 font-medium">Deep Consult</span> panel.
-              </p>
-            </div>
-          </details>
+          <ConsultComposer
+            compact={compact}
+            point={<ConsultPointLine pinned={pins.length} windowWords={windowWords} />}
+            draft={draft}
+            onDraft={(v) => consultActions().setDraft(panelId, v)}
+            onSend={() => void ask()}
+            placeholder={
+              deep
+                ? 'Ask a deep question — it runs as a long task and writes a finding…'
+                : 'Ask a question…  (Enter to send · Shift+Enter for a new line)'
+            }
+            canAsk={!!draft.trim()}
+            busy={busy || deepTask.submitting}
+            deep={deep}
+            onDeep={setDeep}
+            recordOnly={grounding === 'record_only'}
+            onRecordOnly={(on) => {
+              const v: GroundingMode = on ? 'record_only' : 'default'
+              setGrounding(v)
+              saveGroundingMode(v)
+            }}
+            recordOnlyHint={GROUNDING_CHOICES.find((g) => g.id === grounding)?.hint}
+            nonDefault={nonDefault}
+            stop={
+              /* Only while something is in flight, and never gated on `busy` —
+                 this is the control that ENDS the spending, so it must work
+                 exactly when everything else is locked. */
+              pendingTurn ? (
+                <button
+                  onClick={() => void consultTurn.stop()}
+                  disabled={stopPhase !== null}
+                  className="shrink-0 rounded border border-accent-critical/40 bg-accent-critical/20 px-3 py-1 text-sm text-accent-critical hover:bg-accent-critical/40 disabled:opacity-50"
+                  data-testid="consult-stop"
+                  title="stop drilling now and answer from the evidence gathered so far"
+                >
+                  {stopPhase === 'stopping' ? 'Stopping…' : stopPhase === 'synthesizing' ? 'Synthesizing…' : 'Stop'}
+                </button>
+              ) : null
+            }
+            menu={menu}
+          />
         </div>
         </div>
       </div>

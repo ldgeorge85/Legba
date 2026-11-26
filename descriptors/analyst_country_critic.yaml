@@ -1,13 +1,13 @@
-# P-17 — new-model critic analyst: country_critic.
+# New-model critic analyst: country_critic.
 #
-# kind: critic.  method.kind: critic (the L-175 critic kind).  Grades the
+# kind: critic.  method.kind: critic (the critic kind).  Grades the
 # country_assessor's findings against the rubric below.  Replaces the old
 # india_energy_critic which carried the RETIRED `tools_whitelist`
 # (mnemosyne_trust_query) — that surface is gone; cross-pillar tools come
 # through action_packs now.
 #
-# Heterogeneity guard (L-105 §3): the judge LLM (Claude Opus 4.7 via Anthropic)
-# differs from the analyzed analyst's LLM (gpt-oss-120b).  The guard fires at
+# Heterogeneity guard: the judge LLM (Claude Opus 4.7 via Anthropic)
+# differs from the analyzed analyst's LLM (the core model).  The guard fires at
 # actor activation, not registration.
 #
 # Pinned analyzed analyst: eval.optimizer.analyzed_analyst_id locks this critic
@@ -27,7 +27,7 @@ identity:
   # retired (was draft) so a stray re-register cannot resurrect a retired
   # analyst — descriptor_state_drift reconciliation 2026-09-06.
   state: retired
-  owner: p17_reregister
+  owner: owner@local
 
 subscription:
   # The critic reads ONE analyst-output row keyed off options['analyzed_output_id']
@@ -50,13 +50,12 @@ method:
     # guard compares subprovider-vs-stackref and won't trip on its own).
     # TO REVERT to a heterogeneous Anthropic judge: set raw back to
     # llm.anthropic.opus_4_7 here AND set allow_self_correlated=false on
-    # country_assessor's descriptor. max_tokens below is INERT on the core plane (vLLM
-    # doesn't send it) — kept for documentation / the eventual revert.
+    # country_assessor's descriptor. No max_tokens: every handler sends the
+    # model's own maximum output.
     primary:
       factory_kind: stack_ref
       raw: llm.primary.openai_compat
       expected_family: llm_provider
-    max_tokens: 1536
   budget_tokens_per_day: 0
 
 cadence:
@@ -68,7 +67,7 @@ cadence:
   # the cap (50 000 tok/day) is tighter relative to volume than the assessor's.
   #
   # Per-run tokens: one finding body + rubric in, a graded critique out.
-  #   ≈ input 800–1 500 + output ≤ max_tokens 1536 ≈ 2 300–3 000 tok/run.
+  #   ≈ input 800–1 500 + a graded critique out ≈ 2 300–3 000 tok/run.
   # Budget headroom: 50 000 / 3 000 ≈ 16 graded rows/day.
   #
   # The assessor now emits ≈ 19 × 4 ticks = 76 findings/day (post-A3). We do

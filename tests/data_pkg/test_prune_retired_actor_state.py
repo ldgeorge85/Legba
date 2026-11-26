@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""P-5 — ``scripts/prune_retired_actor_state.py`` on the isolated test stack.
+"""``scripts/prune_retired_actor_state.py`` on the isolated test stack.
 
 A retired ``actor_state`` row goes only when it is retired, superseded by a
 head a live actor runs, has no reminder (sidecar GET 404), and is older than

@@ -9,8 +9,7 @@ three times across two arms — ``kp`` is North Korea, ``pk`` is Pakistan — an
 the judge failed every one of those sentences, correctly: the country the voice
 named appears nowhere in the evidence map, and neither does any name at all.
 
-That is 3 of the 6 tension-relay sentences in the D-6 replay
-(``planning/ASSESSMENT_TENSIONS_IN_MAP_REPORT.md`` §5.1), and it was the
+That is 3 of the 6 tension-relay sentences in a replay, and it was the
 dominant cause of a 0-for-6 on the relay. It could not be repaired inside the
 Assessment channel, whose fence is the payload: **the name was never on the
 payload to render**.

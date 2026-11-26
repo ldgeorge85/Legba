@@ -1,12 +1,12 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for :class:`legba.data.sources.json_api.JsonApiSourceHandler` (S-3).
+"""Tests for :class:`legba.data.sources.json_api.JsonApiSourceHandler`.
 
 The generic polled JSON/CSV HTTP API kind. Coverage:
 
   * Config schema validation (defaults, unknown field, bad path syntax,
     unknown url_template placeholder, auth shape, csv/items_path conflict).
-  * L-102 class-var contract + factory-tuple registration.
+  * Class-var contract + factory-tuple registration.
   * URL template substitution — cursor-driven window values, URL-quoting.
   * Items extraction incl. nested + bracket paths; CSV rows via stdlib csv.
   * Signal emission + dedupe key (content_hash stable across pulls,

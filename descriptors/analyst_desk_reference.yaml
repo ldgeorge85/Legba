@@ -1,4 +1,4 @@
-# Out-of-Plane Desk Reference (A-1) — the ATTENTION instrument.
+# Out-of-Plane Desk Reference — the ATTENTION instrument.
 #
 # THE GAP. Under the quotation regime the desk sentence IS the product, and
 # nothing anywhere in the stack asks whether a story the desk's OWN slice
@@ -52,8 +52,8 @@
 # dapr_actors.py entirely: a sub-handler plus this descriptor.
 #
 # WHICH MODEL, AND WHY IT IS A FIELD HERE RATHER THAN A CONSTANT IN CODE.
-# The reference is worthless in-plane: a gpt-oss-120b reference against
-# gpt-oss-120b desks measures the family's shared blind spots and calls them
+# The reference is worthless in-plane: a core-model reference against
+# core-model desks measures the family's shared blind spots and calls them
 # agreement. It must also not share a family with the JUDGE, or the instrument
 # that measures attention and the instrument that measures faithfulness inherit
 # each other's blindness. So this binds a THIRD family —
@@ -61,7 +61,7 @@
 # a registered ACTIVE component) — which is neither the writer's family nor the
 # judge's. Because it is a DESCRIPTOR field resolved by the shared
 # _wire_deterministic_llm, an operator re-points it (to a self-hosted family on
-# ai1, say) with a PUT: no code edit, no image rebuild. That helper's Anthropic
+# the models host, say) with a PUT: no code edit, no image rebuild. That helper's Anthropic
 # hard-refuse still applies — a SCHEDULED analyst may never route onto the
 # billed plane, and consult / deep_consult remain the only sanctioned Anthropic
 # users.
@@ -88,9 +88,8 @@
 # NOTHING PAGES, AND NOTHING DISPATCHES, FROM THIS TRAIN. The product is a
 # counting-not-repairing GAUGE: one kind='finding' row per sweep carrying
 # data.collection_gauge / data.attention_gauge / data.instrument, every ratio
-# None when its denominator is empty. The `attention_gap` alert class (A-5) and
-# the `reference_gap` research side-write (A-4) are separate trains, and A-5 is
-# gated absolutely on the validity harness: no page from an ungraded instrument.
+# None when its denominator is empty. The `attention_gap` alert class and
+# the `reference_gap` research side-write are separate trains, gated absolutely on the validity harness: no page from an ungraded instrument.
 #
 # VERIFY-EXEMPT ON PURPOSE. desk_reference joins
 # STRUCTURAL_VERIFY_EXEMPT_ANALYSTS. It is an INSTRUMENT, not a claim about the
@@ -124,7 +123,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: draft
-  owner: a1_attention_measurement
+  owner: owner@local
 
 subscription:
   # No `targets` block => META analyst: ONE global sweep per cadence tick. The
@@ -143,7 +142,7 @@ method:
   kind: deterministic
   impl: legba.data.analysts.deterministic:run_method
   sub_handler: desk_reference
-  # X-1 declared knobs (handler_options.HANDLER_OPTIONS['desk_reference']).
+  # Declared knobs (handler_options.HANDLER_OPTIONS['desk_reference']).
   # Every one bounds a COST — paid out-of-plane calls, external searches, the
   # size of the graded sample — so an operator widens or narrows the instrument
   # with a PUT and no code edit. Values below are the in-source defaults, stated
@@ -172,17 +171,14 @@ method:
     # REPOINTABLE BY PUT. The deterministic deps-builder resolves this ref
     # through the shared _wire_deterministic_llm, which hard-refuses an
     # Anthropic component for any deterministic sub-handler — so this field can
-    # be moved to another cross-family route (a self-hosted family on ai1, for
+    # be moved to another cross-family route (a self-hosted family on the models host, for
     # instance) without a code change, and can never be moved onto the billed
     # plane.
     temperature: 1.0        # a reference is not a writer; reproducibility wins
     primary:
       factory_kind: stack_ref
-      raw: llm.grader.innoai_lightning.openai_compat   # cutover 2026-10-23: the third family on the box (the OpenRouter Mistral lane is retired); Cerebras Gemma was the first pick, its key unfunded (HTTP 402) 2026-09-05
+      raw: llm.grader.gateway_third_family.openai_compat   # the third family, served on the gateway
       expected_family: llm_provider
-    # Output cap. The handler's own REFERENCE_MAX_TOKENS is the live control;
-    # this is the hosted-endpoint safety net.
-    max_tokens: 900
   # Per-day token cap (24h bucket). Sized above the v1 worst case (38 calls at
   # ~11k input) with headroom for the v2 rotation, and far below anything that
   # could crowd the shared gateway.

@@ -1,6 +1,6 @@
 # country_predictor — per-G20-country event-tempo forecaster.
 #
-# Wires the L-174 predictor analyst kind (predictor.py — AutoARIMA + naive-mean
+# Wires the predictor analyst kind (predictor.py — AutoARIMA + naive-mean
 # fallback, fully built) onto the live G20 fan-out. Mirrors country_assessor's
 # subscription (predicate has_tag("g20") → one run per G20 target), but reads a
 # 14-day window of that target's signals, aggregates a daily event-count
@@ -30,7 +30,7 @@ identity:
   # retired (was draft) so a stray re-register cannot resurrect a retired
   # analyst — descriptor_state_drift reconciliation 2026-09-06.
   state: retired
-  owner: release_predictor_activation
+  owner: owner@local
 
 subscription:
   targets:
@@ -56,17 +56,17 @@ method:
     ci_level: 90
 
 cadence:
-  # ── P0-T6 SEQUENCED FREEZE (SUBTRACT) ──────────────────────────
+  # ── SEQUENCED FREEZE (SUBTRACT) ──────────────────────────
   # fallback_schedule is NULLED to freeze the forecast-as-claim predictor: the
   # dapr_actors on-activate gate (`if schedule:`, ~L1198) registers NO reminder
   # for a null schedule, so no G20 forecast tick fires. This is a FREEZE, NOT a
   # deletion — a numeric forecast is a CLAIM that must be scored before it ships
-  # as a producer. The predictor RETURNS at P4 behind a Brier scoreboard
+  # as a producer. The predictor RETURNS later behind a Brier scoreboard
   # (calibrated, measured) rather than emitting unscored predictions. Declared
   # in docs/SEAMS.md as a sequenced freeze. To restore: set fallback_schedule
   # back to "0 */12 * * *" (the prior twice-daily cadence).
   fallback_schedule: null
-  # Inert without a schedule; retained for the P4 12h-interval floor.
+  # Inert without a schedule; retained for the 12h-interval floor.
   cooldown_seconds: 39600
 
 # Output sink — mirrors how the pre-pivot india_energy_predictor (and

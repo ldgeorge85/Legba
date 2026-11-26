@@ -11,7 +11,7 @@
 #
 # HONESTY: this anchors EXISTENCE, not correctness — it proves a chain head
 # existed before a timestamp, nothing more. Verification is deliberately
-# out-of-tree (operator-side `ots` CLI; docs/ANALYSIS.md §measurement).
+# out-of-tree (operator-side `ots` CLI; docs/ANALYSIS.md).
 #
 # META analyst: no subscription.targets → a SINGLE global run per cadence
 # tick; reads/writes analyst_traces + receipt_anchors directly via
@@ -33,7 +33,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: draft
-  owner: h13_sealed_ledger
+  owner: owner@local
 
 subscription:
   # META analyst: one global anchor per tick over the whole receipt chain.

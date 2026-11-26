@@ -66,7 +66,7 @@ def _migration_statement() -> str:
 # ---------------------------------------------------------------------------
 
 
-#: C-1 (2026-11-14) added this clause to the shared selection so a claim row
+#: This clause (added 2026-11-14) is in the shared selection so a claim row
 #: never counts as an independent source. Migration 0160 ran once, long before
 #: any claim row existed, and an applied migration is never edited; so the pin
 #: is: the migration IS the module statement minus exactly this clause.

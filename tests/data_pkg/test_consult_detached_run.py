@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The detached consult run — 202, the terminal frame, and the partial (D-7).
+"""The detached consult run — 202, the terminal frame, and the partial.
 
 What broke on 2026-09-16
 ========================

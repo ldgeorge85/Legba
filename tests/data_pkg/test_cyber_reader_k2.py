@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane K-2 — the cyber desk gets a reader.
+"""The cyber desk gets a reader.
 
 Three pieces, each held on the path it really runs on:
 
@@ -252,7 +252,8 @@ def test_banned_phrases_appear_only_inside_the_prohibition():
 
 def test_the_prompt_keeps_the_three_source_kinds_apart():
     p = _norm(_prompt())
-    assert "THREE SOURCE KINDS — KEEP THEM APART" in p
+    assert "SOURCE KINDS — KEEP THEM APART" in p
+    assert "THREE SOURCE KINDS" not in p
     assert '"<agency> published <advisory / catalogue entry> about <subject>"' in p
     assert 'supports "<outlet> reported …"' in p
     assert '"<provider> declared an incident / a degradation / a recovery' in p

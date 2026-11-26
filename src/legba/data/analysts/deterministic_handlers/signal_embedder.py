@@ -8,8 +8,8 @@ facets), not just the lexical corpus or the analytic slice — so this sub-handl
 projects each signal into the Qdrant ``legba_signals`` collection (1024-dim
 BGE-M3 cosine). Signals already live structured in Postgres and, for the lexical
 mining substrate, in the OpenSearch corpus; this is the third leg — the vector
-retrieval substrate that lights up ``vector_search`` (which no-ops today because
-the collection holds 0 points).
+retrieval substrate that lights up ``vector_search`` over the signals the
+sweep has embedded.
 
 It is an ASYNC SWEEP (never inline in ingest — ingestion must stay cheap): every
 time the bound ``deterministic`` analyst fires (cadence), it embeds the next
@@ -77,8 +77,7 @@ image credit outranked a 446-char summary. Measured on the live collection
 input with another signal** — 337 distinct strings covering 940 rows, led by
 ``"(END)"`` ×81, ``"Credit: DIGITIMES"`` ×31, ``"[allAfrica]"`` ×26. Identical
 input ⇒ identical vector ⇒ **cosine 1.0000 between unrelated stories**, which is
-why 50.5% of what semantic dedup would link at 0.95 was wrong
-(``planning/engine_review/p2_substrate.md`` §2.4). Because a desk slice is
+why 50.5% of what semantic dedup would link at 0.95 was wrong. Because a desk slice is
 canonical-only, a false dedup link deletes a real signal from every analyst on
 the platform — so poisoning the vector plane is not a cosmetic defect.
 

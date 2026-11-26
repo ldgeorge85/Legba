@@ -129,7 +129,7 @@ describe('geometryFor — what the subject DECLARES, read as data', () => {
   })
 })
 
-describe('fit_ref resolves through the declared geometry (C-1a §6.5)', () => {
+describe('fit_ref resolves through the declared geometry', () => {
   it('a declared POLYGON fits its bounds', () => {
     const { geometry, camera } = fitRef({ kind: 'target', id: 'theatre_gulf' }, INDEX, DECLARED)
     expect(geometry.kind).toBe('polygon')

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane N-D — verification stands IN FRONT of the text.
+"""Verification stands IN FRONT of the text.
 
   1. Journal: the verify runs BEFORE the row is written; a flagged sentence is
      marked in place and the flags land on the published row (journal

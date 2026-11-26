@@ -1,19 +1,19 @@
 """ASSEMBLY SPANS — the unit of currency, and the gate that lives at construction.
 
-D-1 §1.2 / §1.3b / §3.6. A span is a verbatim slice of ONE origin head's body
+A span is a verbatim slice of ONE origin head's body
 that carries its own provenance: the head id, BYTE offsets into that body, and a
 sha256 of the whole body at capture time. Never a path, never a paraphrase, never
 a depth-2 reference — every tier's quote check is depth-1 against the desk head
 that wrote the words.
 
-THE HARD GATE LIVES HERE (D-1 §3.6, ratified F-12). The assembly is
+THE HARD GATE LIVES HERE. The assembly is
 deterministic, so a quote-fidelity failure is not a model error — it is a bug in
 this module. Treating it as a verify-time reject would be treating a crash as a
-score, and D-1 §3.6 measured that verify has no withhold seam to reject INTO.
+score, and verify has no withhold seam to reject INTO.
 So :func:`build_span` self-checks every span against the origin body at
 CONSTRUCTION and raises :class:`SpanConstructionError` when the bytes disagree.
 A span that fails byte-identity cannot be built, therefore cannot be persisted,
-therefore cannot be rendered. Quote fidelity is 1.0 by construction; D-3's arm 1
+therefore cannot be rendered. Quote fidelity is 1.0 by construction; the audit arm
 is an independent auditor that must READ 1.0, and a non-1.0 is a construction
 regression that pages.
 
@@ -62,13 +62,13 @@ class SpanConstructionError(RuntimeError):
     """A span could not be constructed byte-identically against its origin.
 
     Raised, never swallowed, never degraded to a soft reason code — the no-stubs
-    rule and D-1 §3.6's assemble-time gate. The caller's contract is to fail the
+    rule and the assemble-time gate. The caller's contract is to fail the
     RUN, not to publish a read with a hole in it.
     """
 
 
 #: ``spans[].role`` — the closed vocabulary. The role also STAMPS WHICH LOCATOR
-#: FIRED (D-1 §1.4d): ``bluf`` means the ``**BLUF:**`` marker was present and
+#: FIRED: ``bluf`` means the ``**BLUF:**`` marker was present and
 #: parsed, ``what_changed`` and ``body`` are the two declared fallbacks. A run
 #: can therefore be audited for how often the fallback fired without re-parsing
 #: a single body.
@@ -97,7 +97,7 @@ SPAN_ROLE_INDICATOR: str = "indicator"
 #: IT IS NOT QUOTED PROSE. Every consumer that RENDERS or REASONS OVER the
 #: record's quotations takes :func:`quoted_spans`, never ``block["spans"]``
 #: raw — the record body, the region rollup's carry, the absence test, the
-#: external-audit claim set and D-3's arms. See each call site's comment.
+#: external-audit claim set and the audit arms. See each call site's comment.
 #:
 #: STEP E (2026-09-20) — THE SAME ROLE, ONE TIER UP, AND ITS ORIGIN IS A VOICE.
 #: The WORLD tier's input is one desk SENTENCE per country, and the world voice
@@ -218,7 +218,7 @@ _WHAT_CHANGED_RE = re.compile(
 _AS_OF_LINE_RE = re.compile(r"^\s*\*?As of\b.*$", re.IGNORECASE | re.MULTILINE)
 
 #: Fallback 2's floor: a prose sentence shorter than this is a fragment, a
-#: heading remnant or a stub, not a lead. D-1 §1.4d fixes it at 40.
+#: heading remnant or a stub, not a lead. Fixed at 40.
 MIN_PROSE_SPAN_CHARS: int = 40
 
 # Sentence-terminator abbreviations. A naive "first period" split cuts the very
@@ -247,7 +247,7 @@ _SENTENCE_OPENER_RE = re.compile(r'^[\s]*(?:[A-ZÀ-ɏ"“‘(\[【#*\-]|$)')
 def body_sha256(body: Any) -> str:
     """sha256 of the FULL origin body, hex.
 
-    Over the whole body, NOT over the captured prefix — D-1 §1.3b. An origin
+    Over the whole body, NOT over the captured prefix. An origin
     that was truncated on capture is then DETECTABLE (``end`` runs past the
     captured text while the digest still describes the real row) rather than
     silently mis-verified against a shorter string.
@@ -363,7 +363,7 @@ def build_span(
     """One ``spans[]`` entry, self-checked against ``body``.
 
     ``start_char`` / ``end_char`` index the RAW body by CHARACTER; the stored
-    offsets are BYTE offsets, because that is what D-1 §1.2 specifies and what
+    offsets are BYTE offsets, because that is what the span format specifies and what
     makes a digest and an offset describe the same object. The conversion is
     explicit rather than implicit so nobody later "simplifies" it into a
     character offset that agrees on ASCII and lies on everything else.
@@ -371,9 +371,9 @@ def build_span(
     ``scope_predicate`` is ``composition_integrity.has_collection_denominator_
     scope`` (injected so this module stays a leaf of the analysts package and
     does not import the provenance verify tree). When it fires on the SOURCE
-    SENTENCE the collection qualifier is recorded in ``scope_tokens`` — D-3's
-    arm 2 then has the token it needs to prove the span did not truncate the
-    denominator away (the M-8 shape).
+    SENTENCE the collection qualifier is recorded in ``scope_tokens`` — the audit
+    arm then has the token it needs to prove the span did not truncate the
+    denominator away.
 
     Raises :class:`SpanConstructionError` — never returns a degraded span.
     """
@@ -425,7 +425,7 @@ def extract_lead_span(
     head_id: str,
     scope_predicate: Any = None,
 ) -> dict[str, Any]:
-    """The ONE lead span a candidate head contributes to the ranking (§1.4d).
+    """The ONE lead span a candidate head contributes to the ranking.
 
     Locator order, each stamped in ``role`` so the fallback rate is auditable:
 
@@ -439,8 +439,8 @@ def extract_lead_span(
          ``*As of ...*`` stamp line (which is metadata, not a claim).
 
     Raises :class:`SpanConstructionError` when none of the three finds text —
-    a head with no locatable claim is a head this tier must not quote, and D-1
-    §3.6 says that is a construction failure, not a soft skip.
+    a head with no locatable claim is a head this tier must not quote, and that is a
+    construction failure, not a soft skip.
     """
     body = str(row.get("body") or "")
     if not body.strip():

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""CARRIED STATE EXPIRES (W11-F14) — a status nobody re-evidences stops reading as a status.
+"""CARRIED STATE EXPIRES — a status nobody re-evidences stops reading as a status.
 
 The defect, verified 2026-10-08: the semiconductor-flow unit read "degraded,
 held by border seizures" in 62 of 63 September and 16 of 16 October findings.
@@ -34,7 +34,7 @@ mark uses), or when no such read exists inside
 measured. The verdict is a TYPED ABSENCE (``carried_unsupported``), never a
 band: its proof names the last evidencing read and its age.
 
-A CHANGE REPORT IS ITS OWN RE-EVIDENCE (roll 65). A desk whose indicators are
+A CHANGE REPORT IS ITS OWN RE-EVIDENCE. A desk whose indicators are
 all change-shaped tripwires and that declares no level-shaped one can only be
 re-evidenced by a tripwire firing — on the top-job desk that happened 9 times
 in 885 reads over the 14 days to 2026-11-08, so a read reporting a chief of
@@ -86,7 +86,7 @@ from .indicator_shape import RE_EVIDENCE_JSONPATH, re_evidences
 
 logger = logging.getLogger(__name__)
 
-#: THE TUNABLE (docs/TUNABLES.md §3). A status no read re-evidenced inside this
+#: THE TUNABLE (docs/TUNABLES.md). A status no read re-evidenced inside this
 #: many of the unit's own cadence windows is carried, unsupported.
 CARRY_EXPIRY_WINDOWS_ENV = "LEGBA_CARRY_EXPIRY_WINDOWS"
 CARRY_EXPIRY_WINDOWS_DEFAULT = 3.0
@@ -120,7 +120,7 @@ CHANGE_SELF_EVIDENCE_MIN_SIGNALS = 3
 #: Why a verdict fired.
 CAUSE_NOT_RE_EVIDENCED = "status_not_re_evidenced"
 CAUSE_FALLBACK_TOO_OLD = "fallback_too_old"
-#: HEAD INTEGRITY (lane N-A): the same age bar on a LIVE basis head. Before it,
+#: HEAD INTEGRITY: the same age bar on a LIVE basis head. Before it,
 #: the bar ran only on superseded fallbacks, so an orphan head nobody superseded
 #: (CD escalation bb2ce5fc, 184 h) entered the basis as an ordinary head with
 #: ``stale: true`` gating nothing.
@@ -602,7 +602,7 @@ async def _change_fetch_map(
 ) -> dict[str, Any] | None:
     """The fetch times of the wire items the CHANGE-REPORTING rows cite, for
     :func:`change_self_evidence`. ``None`` when the read failed — the rule then
-    convicts exactly as it did before roll 65 (best-effort, never a failed
+    convicts exactly as it did before the self-evidence rule (best-effort, never a failed
     compose)."""
     ids = [sid for r in rows if reports_change(r) for sid in cited_signal_ids(r)]
     if not ids:

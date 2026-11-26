@@ -45,9 +45,8 @@ from legba.data.migrations import MIGRATIONS_DIR  # noqa: E402
 #: every swap, so "zero scans" is one rebuild's evidence and never a verdict.
 SWAP_BUILT_TABLES = frozenset({"graph_arcs"})
 
-#: Tables whose future is the owner's (lane P-8 brief, item 5: facts, the
-#: forecast generations, the alert and byte stores wait on a merged
-#: architecture recommendation) — a hygiene sweep leaves their indexes alone.
+#: Tables whose future is undecided (facts, the
+#: forecast generations, the alert and byte stores) — a hygiene sweep leaves their indexes alone.
 OWNER_HELD_TABLES = frozenset({
     "facts", "acute_forecasts", "forecast_ledger", "forecast_numbers",
     "forecast_resolutions", "forecast_resolution_proposals",
@@ -180,7 +179,7 @@ def classify(
             v, why = "keep", "its existence is pinned by " + ", ".join(pins[name][:2])
         elif int(r.get("table_rows") or 0) == 0:
             v, why = "keep", ("table is empty: the index costs one page and the "
-                              "table's fate is the owner's (inventory §3)")
+                              "table's fate is the owner's")
         else:
             v, why = "drop-candidate", f"0 scans in {days:.0f} d"
         out.append(IndexVerdict(

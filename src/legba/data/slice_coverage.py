@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The desk slice's WATERMARK WINDOW and its declared coverage gap (lane N-B).
+"""The desk slice's WATERMARK WINDOW and its declared coverage gap.
 
 THE DEFECT. A desk's cadence slice was ``geo && [code] ORDER BY fetched_at
 DESC LIMIT 120`` with no salience ranking. The US desk sees ~1,275 signals in

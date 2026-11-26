@@ -5,7 +5,7 @@
  * following a later tab request, the following (stance-seeded) page, the
  * mode gate, and the pin per tab and per drill (UI-B6's hook).
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactElement } from 'react'
@@ -50,7 +50,8 @@ import { SUBJECT_TABS } from '@/lib/subjectPage'
 import { requestPanelTab, resetPanelParams } from '@/state/panelParams'
 import { resetAmbientPins, resolveAmbientPin, useAmbientPins } from '@/lib/consultContext'
 import { useSelection } from '@/state/selection'
-import { resetScope } from '@/state/scope'
+import { LAST_SUBJECT_KEY, clearPoint, resetScope, useScope } from '@/state/scope'
+import { installDeskScopeBridge, scopeFromTarget } from '@/lib/scopeFromReport'
 
 function registration(subject: string | null): PanelRegistration {
   return {
@@ -156,7 +157,7 @@ describe('subject.page — the tabs', () => {
   })
 })
 
-describe('subject.page — the pin (UI-B6)', () => {
+describe('subject.page — the pin', () => {
   it('pins the subject; a drill re-pins to the unit read; a tab change pins the subject again', async () => {
     renderBound('country_g20_br')
     await screen.findByTestId('stub-brief')
@@ -192,6 +193,9 @@ describe('subject.page — unbound, the Subject stance\'s seed: it FOLLOWS the s
   })
 
   it('follows a selected subject, and keeps it when the reader drills off it', async () => {
+    // the shell's bridge: a selected subject becomes the point the page follows
+    const off = installDeskScopeBridge()
+    onTestFinished(off)
     renderFollowing()
     act(() => useSelection.getState().select({ kind: 'target', id: 'lane_hormuz', origin: 'test' }))
     expect(await screen.findByTestId('stub-brief')).toHaveAttribute('data-subject', 'lane_hormuz')
@@ -200,5 +204,25 @@ describe('subject.page — unbound, the Subject stance\'s seed: it FOLLOWS the s
     expect(screen.getByTestId('stub-brief')).toHaveAttribute('data-subject', 'lane_hormuz')
     act(() => useSelection.getState().select({ kind: 'target', id: 'country_g20_br', origin: 'test' }))
     await waitFor(() => expect(screen.getByTestId('stub-brief')).toHaveAttribute('data-subject', 'country_g20_br'))
+  })
+
+  it('follows THE POINT; with the point cleared it keeps its subject, says it is not the point, and does not pin it', async () => {
+    renderFollowing()
+    act(() => useScope.getState().setScope(scopeFromTarget('lane_hormuz', 'Strait of Hormuz')))
+    expect(await screen.findByTestId('stub-brief')).toHaveAttribute('data-subject', 'lane_hormuz')
+    expect(pinNow()?.pin.id).toBe('lane_hormuz')
+    act(() => clearPoint())
+    expect(screen.getByTestId('stub-brief')).toHaveAttribute('data-subject', 'lane_hormuz')
+    expect(screen.getByTestId('subject-page-not-point')).toHaveAttribute('data-why', 'kept')
+    expect(screen.queryByTestId('subject-page-following')).toBeNull()
+    expect(pinNow()).toBeNull()
+  })
+
+  it('never empty: with no point it shows the last subject looked at', async () => {
+    localStorage.setItem(LAST_SUBJECT_KEY, 'country_g20_br')
+    onTestFinished(() => localStorage.removeItem(LAST_SUBJECT_KEY))
+    renderFollowing()
+    expect(await screen.findByTestId('stub-brief')).toHaveAttribute('data-subject', 'country_g20_br')
+    expect(screen.getByTestId('subject-page-not-point')).toHaveAttribute('data-why', 'last')
   })
 })

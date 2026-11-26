@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Load ONE independent reference into ``unit_references`` (G1's input).
+"""Load ONE independent reference into ``unit_references`` (the grader's input).
 
 The correctness grader grades a country's published read against an INDEPENDENT
 reference for the same country and window — R3's shape: ``ref_developments[]``
 (summary, decisive_span, outlet, publish_date) plus a band per dimension, built
-BLIND to the substrate. Building one is track R2's job (``docs/SEAMS.md`` #55).
+BLIND to the substrate. Building one is a separate job (``docs/SEAMS.md`` #55).
 This script is how one gets into the database in the meantime: the deploy loads
-the reference Program 1 built by hand on 2026-09-16 so the job has something to
+the reference built by hand so the job has something to
 grade against on day one.
 
   PYTHONPATH=src LEGBA_DATA_PG_HOST=127.0.0.1 LEGBA_DATA_PG_DB=legba \\
       python3 scripts/load_unit_reference.py \\
-          planning/PROGRAM1_2026-09-16/step2/ref_IL_A.json \\
+          path/to/ref_IL_A.json \\
           --target country_watch_il
 
 IDEMPOTENT. ``(target_id, sha256)`` is unique, so re-running is a no-op and says
@@ -38,8 +38,8 @@ WHAT IS DERIVED AND WHAT IS NOT.
     passed with ``--span-verified-rate``; absent, the column stays NULL, which
     is not the same as zero and is printed as such.
 
-``--merge-into <reference_id>`` is the OPERATOR TOP-UP door (track R2). The
-core-plane lane builds a span-anchored skeleton for free and, as R1 measured,
+``--merge-into <reference_id>`` is the TOP-UP door. The
+core-plane lane builds a span-anchored skeleton for free and, as measured,
 under-covers: ~33% of a knowledgeable reader's major developments, with
 per-dimension counts flatter than the record. When the operator chooses to
 close that gap they run their own lane over the packet
@@ -57,7 +57,7 @@ rather than mutating the skeleton, for the same reason editing a file does: a
 reference a published share was computed against must stay readable exactly as
 it was.
 
-``--seed-calibration`` writes the PROGRAM 1 v4 GATE ROW into
+``--seed-calibration`` writes the v4 GATE ROW into
 ``grader_calibrations`` instead of loading a reference. The grader refuses to
 publish any number until such a row exists (see
 ``_correctness_calibration.py``), so this is a required deploy step and not an
@@ -135,10 +135,10 @@ RETURNING id
 """
 
 # ---------------------------------------------------------------------------
-# PROGRAM 1 v4 — the gate that passed, as a row
+# The v4 calibration gate that passed, as a row
 # ---------------------------------------------------------------------------
 #
-# planning/PROGRAM1_2026-09-16/VERDICT_P1v4.md, measured 2026-09-16 on a FRESH
+# Measured 2026-09-16 on a FRESH
 # draw of 30 atoms (0 overlap with v3), 0 UNPARSEABLE of 90 calls, 23/30 atoms
 # all-three-agree, 0/30 all-three-differ. Spend: OpenRouter $0.041, core $0,
 # Anthropic $0.
@@ -160,8 +160,7 @@ V4_PAIRWISE = [
 ]
 V4_N_ATOMS = 30
 V4_NOTES = (
-    "PROGRAM 1 v4 calibration gate, 2026-09-16 (planning/PROGRAM1_2026-09-16/"
-    "VERDICT_P1v4.md). Three families, ANNEX C v4, a FRESH 30-atom draw over "
+    "Calibration gate. Three families, a FRESH 30-atom draw over "
     "R3's frozen corpus with 0 overlap with the v3 draw. Pooled 0.8444 against "
     "a 0.75 bar; pairs 0.833 / 0.900 / 0.800 against a 0.70 floor; 0 "
     "UNPARSEABLE of 90 calls; 1 span flagged, label stood. Run by hand, "
@@ -436,7 +435,7 @@ async def merge_topup(args: argparse.Namespace) -> int:
     # --- step 5: bands, gaps, thin, rate, write ---------------------------
     merged = dict(base)
     merged["ref_developments"] = merged_devs
-    # A band outside the ladder (2026-09-25: a top-up lane wrote "severe")
+    # A band outside the ladder (e.g. a top-up wrote "severe")
     # would ride into the grader's comparison unrecognised; refuse it here,
     # where the file is still the operator's to fix.
     _refuse_off_ladder_bands(addition.get("ref_bands") or {})

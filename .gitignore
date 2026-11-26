@@ -14,6 +14,8 @@ build/
 .env.*
 !.env.example
 !.env.claude.example
+# The pre-push scanner's private term list (deployment names; never public).
+.prepush_terms.local
 
 # Runtime data
 backups/
@@ -41,28 +43,27 @@ mlruns/
 docs/archive/
 docs/feedback/
 
-# OP-1 + OP-2 secrets (per ops 2026-05-29)
+# Local signing key and bearer token
 .legba_signing_key
 .legba_bearer_token
 
-# UI v4 self-hosted basemap (large; operator-provided)
+# UI v4 self-hosted basemap (large; provided by the deployer)
 deploy/tiles/*.pmtiles
 
 # Generated screenshot OUTPUT from the dev render harness (the harness source is tracked)
 legba-ui-v3/tools/screenshot/shots/
 
-# Internal planning / tracking docs — NOT part of the release.
+# Private working notes — not part of the release.
 planning/
 
-# Operational research corpus (fork #1, execution-plan v2) — OPERATIONAL-ONLY.
-# Corpus DATA lives here on this host only: never tracked, never pushed, never
+# Operational research corpus — local only.
+# Corpus DATA lives on the deploying host only: never tracked, never pushed, never
 # seeded with the project, never baked into images. The loader CODE ships
 # in-repo (src/legba/data/seed/... + scripts/); the DATA does not. Per-chunk
 # license/provenance metadata is still recorded (hygiene + future options).
 corpora/
 
-# Curated seed DATA — OUR data, NOT part of the public project (per operator
-# 2026-07-09). The seed MACHINERY (src/legba/data/seed/**, scripts/seed*.py,
+# Curated seed DATA — not part of the public project. The seed MACHINERY (src/legba/data/seed/**, scripts/seed*.py,
 # the adapters) ships; the DATA does not. Provide your own — see seeds/README.md.
 seeds/*.yaml
 !seeds/*.example.yaml

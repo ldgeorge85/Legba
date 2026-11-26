@@ -1,9 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Which Consult calls think (lane T-1): one table, read by both consult paths.
+"""Which Consult calls think: one table, read by both consult paths.
 
-The owner (2026-11-14): "Deep is just thinking on … We should use it for a
-lot, especially consult." The consult descriptors declare
+Deep is just thinking on, and Consult uses it widely. The consult descriptors declare
 ``method.llm.thinking: "on"`` (``consult_default``, ``deep_consult``); the kind
 default is OFF, so hand-built deps and the bake-off arms' descriptors — which
 declare nothing — call exactly as before.

@@ -123,7 +123,7 @@ describe('the chain', () => {
     await waitFor(() => expect(screen.getAllByTestId('record-gap')[0]).toHaveTextContent(/no such record was found/))
   })
 
-  it('B-1: the evidence label is byte_path\'s, and a feed response opens the ITEM as received on demand', async () => {
+  it('The evidence label is byte_path\'s, and a feed response opens the ITEM as received on demand', async () => {
     const withEvidence = {
       ...RECEIPTS,
       records: [

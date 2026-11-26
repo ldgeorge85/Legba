@@ -48,7 +48,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft                       # KEYED — operator flips after vault load
-  owner: s2_keyed_sources
+  owner: owner@local
   created: "2026-06-09T00:00:00Z"
 
 scope:
@@ -58,7 +58,7 @@ scope:
   languages: [en]
   tags: [conflict, political_violence, protest, events, structured, global]
   source_class: analysis           # S1-T8 — research/data project (coded conflict-event data)
-  access_class: licensed_noncommercial          # Wave-E — ACLED's standard terms: free for academic/nonprofit use, paid licence for commercial redistribution
+  access_class: licensed_noncommercial          # ACLED's standard terms: free for academic/nonprofit use, paid licence for commercial redistribution
 
 acquisition: poll
 

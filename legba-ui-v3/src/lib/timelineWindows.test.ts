@@ -97,7 +97,7 @@ describe('itemColor', () => {
     expect(itemColor(shapeItem(item({ id: 'x', kind: 'fact' }), NOW)!)).toBe('#34d399')
     expect(itemColor(shapeItem(item({ id: 'y', kind: 'situation' }), NOW)!)).toBe('#fb7185')
   })
-  it('colors an event by its lifecycle-state badge (V3/P6)', () => {
+  it('colors an event by its lifecycle-state badge', () => {
     const s = shapeItem(
       item({ id: 'e', kind: 'event', status: 'evolving' }), NOW,
     )!

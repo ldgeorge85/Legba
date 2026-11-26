@@ -13,8 +13,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSelection } from '@/state/selection'
 import { chromeFolds, HoverCard, LayerCard, Legend, type HoverInfo } from './chrome'
+import { mapCoverage, type MapCoverage } from './coverage'
 import { GLOBE_CAPS } from './catalog'
-import { RING_STEPS, svgProject } from './prep'
+import { RING_STEPS, seriesPctSentence, seriesPctText, svgProject } from './prep'
 import { T } from './style'
 import {
   INSET_LAYERS,
@@ -42,7 +43,18 @@ function arcPath(cx: number, cy: number, r: number, share: number): string {
   return `M${cx} ${cy - r}A${r} ${r} 0 ${share > 0.5 ? 1 : 0} 1 ${x.toFixed(1)} ${y.toFixed(1)}`
 }
 
-export default function SvgWorld({ preset, active, reason }: { preset: GlobePreset; active: boolean; reason: string }) {
+export default function SvgWorld({
+  preset,
+  active,
+  reason,
+  onCoverage,
+}: {
+  preset: GlobePreset
+  active: boolean
+  reason: string
+  /** Told what the map can vouch for (the coverage strip under the Board's map). */
+  onCoverage?: (c: MapCoverage) => void
+}) {
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const [size, setSize] = useState<{ width: number; height: number } | null>(null)
   const [wrapH, setWrapH] = useState(0)
@@ -62,6 +74,17 @@ export default function SvgWorld({ preset, active, reason }: { preset: GlobePres
   const model = useGlobeModel(preset, active, size)
   const { on, setOn, out, figures, paths, selection, selectedAt, reads } = model
   const [hover, setHover] = useState<HoverInfo | null>(null)
+  const [layersOpen, setLayersOpen] = useState(false)
+  // Told on a change of what it says only (the reads object is new on every render).
+  const blanksUnreadable = !!reads.unreadable.blanks
+  const coverage = useMemo(
+    () => mapCoverage(out, { reads: reads.reads, subjects: reads.subjects }, { blanks: on.blanks }, blanksUnreadable ? { blanks: true } : {}),
+    [out, reads.reads, reads.subjects, on.blanks, blanksUnreadable],
+  )
+  const coverageKey = JSON.stringify(coverage)
+  const coverageCb = useRef(onCoverage)
+  coverageCb.current = onCoverage
+  useEffect(() => coverageCb.current?.(JSON.parse(coverageKey) as MapCoverage), [coverageKey])
   const W = size?.width ?? 0
   const H = size?.height ?? 0
   const P = (lon: number, lat: number) => svgProject(lon, lat, W, H)
@@ -229,16 +252,17 @@ export default function SvgWorld({ preset, active, reason }: { preset: GlobePres
               const taken: number[][] = []
               return out?.seriesGlyphs.map((g) => {
               const [x, y] = P(g.lon, g.lat)
-              const box = [x - 4, y - 8, x + 62, y + 8]
+              // the label's width in the 12 px mono face (about 7.3 px a character)
+              const box = [x - 4, y - 8, x + 12 + Math.ceil((seriesPctText(g.pct).length + (g.revised ? 2 : 0)) * 7.3), y + 8]
               const folded = taken.some((b) => box[0] < b[2] && box[2] > b[0] && box[1] < b[3] && box[3] > b[1])
               if (!folded) taken.push(box)
               return (
                 <g key={g.key} opacity={dim ? 0.45 : 1}>
                   <circle cx={x} cy={y} r="4" fill={STATUS[g.status]} stroke={T.ground} strokeWidth="1" />
-                  <title>{`${g.name}: ${g.latest} on ${g.day}, ${g.pct == null ? 'no baseline yet' : `${Math.round(g.pct)} % of the 30-day baseline`}`}</title>
+                  <title>{`${g.name}: ${g.latest} on ${g.day}, ${seriesPctSentence(g.pct).toLowerCase()}`}</title>
                   {!folded && (
                     <text x={x + 7} y={y + 4} fill={T.ink} style={{ font: '500 12px var(--font-mono)' }}>
-                      {g.pct == null ? '–' : `${Math.round(g.pct)} %`}
+                      {seriesPctText(g.pct)}
                       {g.revised ? ' r' : ''}
                     </text>
                   )}
@@ -252,8 +276,8 @@ export default function SvgWorld({ preset, active, reason }: { preset: GlobePres
           })()}
         </svg>
       )}
-      {size && <LayerCard on={on} figures={figures} onToggle={setOn} collapsedByDefault={chromeFolds(size.width, wrapH, preset === 'inset').layers} only={preset === 'inset' ? INSET_LAYERS : undefined} />}
-      <Legend on={on} figures={figures} out={out} seriesUnit={reads.seriesUnit} clusterNote={null} only={preset === 'inset' ? INSET_LAYERS : undefined} collapsedByDefault={chromeFolds(size?.width ?? 0, wrapH, preset === 'inset').legend} />
+      {size && <LayerCard on={on} figures={figures} onToggle={setOn} collapsedByDefault={chromeFolds(size.width, wrapH, preset === 'inset').layers} only={preset === 'inset' ? INSET_LAYERS : undefined} onOpenChange={setLayersOpen} />}
+      <Legend on={on} figures={figures} out={out} seriesUnit={reads.seriesUnit} clusterNote={null} only={preset === 'inset' ? INSET_LAYERS : undefined} collapsedByDefault={chromeFolds(size?.width ?? 0, wrapH, preset === 'inset').legend} room={layersOpen ? 'shared' : 'alone'} />
       <div className="pointer-events-none absolute bottom-3 right-3 z-10 max-w-[16rem] text-right text-label text-ink-3" data-testid="globe-fallback-note">
         Drawn map: {reason}
       </div>

@@ -20,6 +20,7 @@
  * Normalization lives in `@/lib/claimsModel` (pure + unit-tested).
  */
 
+import { useBelowAdminPassive as useBelowAdmin } from '@/auth/roles'
 import { useQuery } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 import { PanelChrome } from '@/components/PanelChrome'
@@ -56,7 +57,7 @@ function openLineage(kind: string, id: string) {
 /**
  * Bare tags the engine stamps for its own bookkeeping (a run's kind, the
  * component that wrote the row, a pipeline step). They are not topics a reader
- * filters by. U-1, target brief §5.
+ * filters by.
  */
 const MACHINE_BARE_TAGS = new Set([
   'meta',
@@ -334,6 +335,7 @@ function ClaimItem({
   expanded: boolean
   onToggle: () => void
 }) {
+  const belowAdmin = useBelowAdmin()
   // Uncorroborated: not yet scored, or scored with <2 independent sources.
   const uncorroborated = c.corroborationSources === null || c.corroborationSources < 2
   return (
@@ -356,7 +358,7 @@ function ClaimItem({
         >
           {c.statement}
         </span>
-        {/* P1-T6 freshness/decay indicator — a stale/expired claim fades + flags
+        {/* Freshness/decay indicator — a stale/expired claim fades + flags
             here so an aged claim is never silently surfaced as current. */}
         {c.decay.label !== 'fresh' && (
           <span
@@ -372,11 +374,11 @@ function ClaimItem({
         )}
         {uncorroborated && (
           <span
-            className="px-1 py-0.5 rounded bg-accent-warning/20 text-accent-warning text-label uppercase tracking-wide shrink-0"
+            className="px-1 py-0.5 rounded bg-accent-warning/20 text-accent-warning text-label shrink-0"
             title="fewer than 2 independent sources"
             data-testid={`target-claim-uncorrob-${c.id}`}
           >
-            uncorrob
+            {c.corroborationSources === null ? 'Not yet corroborated' : 'Single source'}
           </span>
         )}
         <span className="font-mono text-label text-slate-300 shrink-0" title="confidence">
@@ -387,7 +389,7 @@ function ClaimItem({
           title="corroborating sources"
           data-testid={`target-claim-corrob-${c.id}`}
         >
-          {c.corroborationSources === null ? '—' : `×${c.corroborationSources}`}
+          {c.corroborationSources === null || c.corroborationSources < 2 ? '' : `${c.corroborationSources} sources`}
         </span>
       </button>
       {expanded && (
@@ -400,7 +402,7 @@ function ClaimItem({
               subject has no live dispute (the common case → zero noise). */}
           <ContestedBadge subject={c.statement} />
 
-          {/* Wave P lane B — CROSS-FRAMING. The contested badge above answers
+          {/* CROSS-FRAMING. The contested badge above answers
               "does anything outside the tower disagree with this claim"; this
               answers the question beside it, which no surface answered:
               "what do the desk's OTHER units say about the same evidence, and
@@ -425,7 +427,7 @@ function ClaimItem({
             </button>
           )}
 
-          {/* P1-T6 why-NOT (verify path): the faithfulness verify pass flagged
+          {/* Why-NOT (verify path): the faithfulness verify pass flagged
               span(s) of this claim's prose as unsupported — surfaced inline,
               never silently dropped. The OTHER why-not path — a live dispute —
               is the ContestedBadge above. Absent verify block → nothing here. */}
@@ -435,13 +437,13 @@ function ClaimItem({
               data-testid={`target-claim-whynot-${c.id}`}
             >
               <div className="flex flex-wrap items-center gap-1 text-label font-semibold uppercase tracking-wide text-accent-warning">
-                why not — unsupported by verify
+                why flagged — not supported by its sources
                 {c.whyNot.faithfulnessScore !== null && (
                   <span className="font-mono normal-case text-slate-400">
-                    faithfulness {(c.whyNot.faithfulnessScore * 100).toFixed(0)}%
+                    {(c.whyNot.faithfulnessScore * 100).toFixed(0)}% supported
                   </span>
                 )}
-                {c.whyNot.judgeStatus && (
+                {!belowAdmin && c.whyNot.judgeStatus && (
                   <span className="font-mono normal-case text-slate-500">
                     · {c.whyNot.judgeStatus}
                   </span>
@@ -493,7 +495,7 @@ function ClaimItem({
             {c.corroborationSources !== null && ` · ${c.corroborationSources} independent source(s)`}
           </div>
 
-          {/* P1-T6 freshness/decay detail — rendered only when the row actually
+          {/* Freshness/decay detail — rendered only when the row actually
               carries a decay/temporal signal (degrade to nothing otherwise). */}
           {(c.decay.decay !== null || c.decay.validUntil || c.decay.expired) && (
             <div

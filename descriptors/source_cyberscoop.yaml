@@ -1,9 +1,9 @@
-# K-1 cyber desk (2026-11-14) — draft SourceDescriptor. Ships DRAFT (operator activates).
+# Draft SourceDescriptor. Ships DRAFT (operator activates).
 #
 # CyberScoop (Scoop News Group, Washington) — original reporting on
 # cybersecurity policy, U.S. government and intelligence-community cyber
 # activity, nation-state operations and major incidents. Chosen as one of
-# three trade outlets (lane report). Probed 2026-11-13 (one GET, generic
+# three trade outlets. Probed 2026-11-13 (one GET, generic
 # client identity): HTTP 200, application/rss+xml, 10 items over three days,
 # FULL TEXT in content:encoded (median ~4.9 KB) and a ~400-character summary.
 #
@@ -12,7 +12,7 @@
 # `User-agent: *` everything. Credibility: cyberscoop.com 0.78 / wire. Hourly.
 #
 # Desk routing: scope.classifications `geopolitics.topic:cyber` is stamped on
-# every signal (W10 TAX-2) — the cyber desk's tag arm (target_cyber.yaml).
+# every signal — the cyber desk's tag arm (target_theme_cyber.yaml).
 
 identity:
   id: source.cyberscoop.news
@@ -22,7 +22,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: cyber_desk_k1
+  owner: owner@local
   created: "2026-11-14T00:00:00Z"
 
 scope:

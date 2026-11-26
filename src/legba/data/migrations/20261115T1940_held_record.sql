@@ -3,10 +3,10 @@
 --
 -- 20261115T1940_held_record.sql
 --
--- THE HELD FAMILY (data-model lane 10, DM-C): the tables in which the record
+-- THE HELD FAMILY: the tables in which the record
 -- holds what it has established, over time. Database name `assertion`; on
--- screen the checked kind is a "statement" (the owner's decision 2026-11-15).
--- This is the persistence plan's statement layer (P1 §2.1, lane S1) with four
+-- screen the checked kind is a "statement".
+-- This is the statement layer with four
 -- changes: the type is a reference to the type registry (family
 -- `assertion_type`), a `basis` column (derived / declared / reserved
 -- extracted), real key columns on the support link (no kind+id pair except
@@ -62,7 +62,7 @@
 --
 -- SAFETY: CREATE ... IF NOT EXISTS / CREATE OR REPLACE only; no existing table
 -- is touched; no BEGIN/COMMIT (the runner wraps the file); forward-only.
--- Independent of 20261115T1829 (lane DM-G's graph drop) and sorts after it.
+-- Independent of 20261115T1829 (the graph drop) and sorts after it.
 
 CREATE OR REPLACE FUNCTION public.held_record_insert_only()
 RETURNS trigger LANGUAGE plpgsql AS $$
@@ -86,8 +86,8 @@ CREATE TABLE IF NOT EXISTS public.assertions (
     -- A declared assertion_type id (type registry); the writer refuses others.
     type_id            text NOT NULL CHECK (type_id ~ '^[a-z][a-z0-9_]{0,63}$'),
     -- derived: worked out by a run, through the gates. declared: entered by a
-    -- person or a loader (lane 11). extracted: RESERVED for the machine-read
-    -- triples, which stay in `facts` (lane DM-E); the writer refuses it.
+    -- person or a loader. extracted: RESERVED for the machine-read
+    -- triples, which stay in `facts`; the writer refuses it.
     basis              text NOT NULL CHECK (basis IN ('derived', 'declared', 'extracted')),
     -- The subject. entity: an entity_profiles id (also in subject_key);
     -- target: a target descriptor id; place: an ISO country code; surface: a
@@ -343,7 +343,7 @@ CREATE TABLE IF NOT EXISTS public.assertion_support (
     text_sha256            text CHECK (text_sha256 IS NULL OR text_sha256 ~ '^[0-9a-f]{64}$'),
     quote                  text,
     quote_found_in         text,                   -- page_text / feed_item / both (the G1 check's finding)
-    -- who is speaking inside the material, and how (lane DM-D fills these
+    -- who is speaking inside the material, and how (filled
     -- from the claim source class; NULL = not known at write).
     stance                 text,
     speaker                text,
@@ -372,8 +372,8 @@ CREATE TABLE IF NOT EXISTS public.assertion_support (
     CONSTRAINT assertion_support_finding_not_evidence CHECK (
         target_kind <> 'finding' OR role IN ('restates', 'background')),
     -- G8: the record's own derived statements are never NEW evidence for
-    -- another record; only a declared entry may be (lane DM-D adds the rule
-    -- for when: a person's own rating alone never makes it a confirming source).
+    -- another record; only a declared entry may be (a person's own rating
+    -- alone never makes it a confirming source).
     CONSTRAINT assertion_support_derived_not_evidence CHECK (
         target_kind <> 'assertion_version' OR role <> 'evidence' OR target_basis = 'declared'),
     CONSTRAINT assertion_support_batch_iff_replay CHECK ((origin = 'replay') = (batch IS NOT NULL))
@@ -394,7 +394,7 @@ CREATE INDEX IF NOT EXISTS assertion_support_batch_idx
 
 -- BEFORE INSERT: copy the target assertion's basis, refuse a record resting
 -- on itself, and refuse a fact promoted FROM a statement as support for that
--- statement (the owner's rule; promotion itself is not built).
+-- statement (promotion itself is not built).
 CREATE OR REPLACE FUNCTION public.assertion_support_guard()
 RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE

@@ -255,7 +255,7 @@ async def test_human_verdict_not_clobbered(pg_pool):
 
 
 # ---------------------------------------------------------------------------
-# P4 Class 6 Obs. 2 (QW1-D fix 3) — the OPTIONAL class_correction channel: the
+# The OPTIONAL class_correction channel: the
 # adjudicator routinely reasons past a WRONG upstream entity_class label it was
 # fed as ground truth (e.g. "Women's Africa Cup of Nations" typed `person` on
 # both sides) but had no field to SURFACE the correction. Covered here:

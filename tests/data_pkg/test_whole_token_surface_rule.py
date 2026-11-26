@@ -12,8 +12,7 @@ so on the live 72 h pool the matcher read the United States into *russia*,
 *Jerusalem*, which squeezes past ``usa`` (``jer-USA-lem``). ``United Kingdom``
 carries ``u.k`` and read Britain into *Ukraine* and *rebuked*.
 
-WHAT IT COST, measured read-only on 2026-09-09 and recorded in
-``planning/GEO_POLITY_INDEX_WHOLE_TOKEN_REPORT.md``:
+WHAT IT COST, measured read-only on the live pool:
 
 * the index put ``United States`` on 2,641 of 10,507 signal titles (25.1%) and
   ``United Kingdom`` on 663 (6.3%); after the repair, 996 and 359;

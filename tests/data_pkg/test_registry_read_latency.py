@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""R-1 — the console landing's read latency (``registry/read_latency.py``).
+"""The console landing's read latency (``registry/read_latency.py``).
 
 Pure tests (no database): the findings serialiser writes the bytes FastAPI
 wrote before, the TTL cache expires and computes once per key under
 concurrency, the conditional-GET middleware tags and 304s only what it should,
 the two cached routes reuse and stamp their answers and never cache a degraded
 one, migrations 0251 / 0257 and their CONCURRENTLY script carry the same
-indexes, the item-at-a-time page bytes (P-5) equal the whole-page bytes, and
+indexes, the item-at-a-time page bytes equal the whole-page bytes, and
 the module imports on the slim registry image. The SQL equivalence of the new
 source-firing read is pinned against the old one on a real database in
 ``test_registry_read_latency_db.py``.
@@ -91,7 +91,7 @@ def _pages() -> list[Any]:
 @pytest.mark.parametrize("which", range(4))
 async def test_fast_json_is_byte_identical_to_fastapis_own_path(which: int) -> None:
     """The bytes a ``response_model=None`` route wrote for a page model — the
-    findings route before R-1 — and the bytes ``fast_json_response`` writes
+    findings route before and the bytes ``fast_json_response`` writes
     are the same bytes, tricky floats included."""
     page = _pages()[which]
     app = FastAPI()
@@ -232,7 +232,7 @@ def test_ttl_cache_bounds_its_entries_and_refuses_a_zero_ttl() -> None:
 
 @pytest.mark.asyncio
 async def test_ttl_cache_serves_stale_while_exactly_one_refresh_runs() -> None:
-    """P-3 — past its TTL but inside ``stale_s`` an entry is answered AT ONCE
+    """Past its TTL but inside ``stale_s`` an entry is answered AT ONCE
     and one background refresh replaces it; past both it is gone."""
     clock = _Clock()
     cache: TTLCache[int] = TTLCache(30, stale_s=60, clock=clock)
@@ -647,7 +647,7 @@ def test_critique_reads_carry_the_indexed_predicates() -> None:
 
 
 def test_uncited_sort_carries_scalars_not_the_block() -> None:
-    """P-5: the GROUP BY reads only the second LATERAL's scalars."""
+    """The GROUP BY reads only the second LATERAL's scalars."""
     from legba.data.registry.judge_stats_api import _UNCITED_SQL
 
     head = _norm(_UNCITED_SQL).split(" FROM public.analyst_outputs o ")[0]
@@ -709,7 +709,7 @@ def test_changed_routes_import_without_the_runtime_stack() -> None:
 
 @pytest.mark.parametrize("which", range(4))
 def test_page_json_bytes_is_fast_json_response(which: int) -> None:
-    """P-5: the item-at-a-time page bytes are the whole-page bytes."""
+    """The item-at-a-time page bytes are the whole-page bytes."""
     page = _pages()[which]
     assert rl.page_json_bytes(page) == fast_json_response(page).body
 

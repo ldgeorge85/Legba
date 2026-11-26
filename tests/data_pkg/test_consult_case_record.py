@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""C-1b — the case RECORD: persisted, replayable without the model, stoppable.
+"""The case RECORD: persisted, replayable without the model, stoppable.
 
 Design C-1a §3 and acceptance 6, 8, 9. The record lives under the assistant
 turn's 0223 response bag, key ``case``; these tests write it through the real
@@ -104,7 +104,7 @@ async def test_a_stop_without_a_count_lands_after_the_last_contiguous_frame():
 
 
 async def test_a_stop_claiming_past_what_the_registry_saw_is_clamped_to_it():
-    """W5-F6 — the stop body is a claim; the record names only frames the registry holds."""
+    """The stop body is a claim; the record names only frames the registry holds."""
     none_seen = CaseFrameAccumulator(request_id="r", plane="core")
     assert none_seen.stop(3) == 0  # claims 3, no action frame arrived
     record = none_seen.compose()
@@ -124,11 +124,11 @@ async def test_a_stop_claiming_past_what_the_registry_saw_is_clamped_to_it():
 
 
 async def test_w10_f10_frames_the_stop_claim_covers_land_even_after_the_ack():
-    """W10-F10 — the workstation ran seq 1..2 (it executes only on a frame), but
+    """The workstation ran seq 1..2 (it executes only on a frame), but
     the frames reached the registry AFTER the stop's ack: the record still
     carries the two steps that ran; a frame past the claim stays out."""
     acc = CaseFrameAccumulator(request_id="r", plane="core")
-    assert acc.stop(2) == 0  # nothing seen yet at the ack (the W5-F6 clamp)
+    assert acc.stop(2) == 0  # nothing seen yet at the ack (the clamp)
     early = [_frame(1), _frame(2)]
     for f in early:
         acc.observe(f)
@@ -312,7 +312,7 @@ def _install_dapr(monkeypatch, *, nats: _Nats | None, captured: dict[str, Any],
                 try:
                     await asyncio.sleep(3600)  # drilling; the frames are in flight
                 except asyncio.CancelledError:
-                    # W10-F10 — the frames the workstation already ran reach the
+                    # The frames the workstation already ran reach the
                     # registry only after the stop's ack (core NATS is not
                     # ordered against the stop route).
                     for seq in range(1, frames_on_cancel + 1):
@@ -429,7 +429,7 @@ async def test_stop_mid_case_persists_a_stopped_record_and_nothing_after_it(pool
 
 
 async def test_w10_f10_a_stopped_case_persists_the_steps_that_ran_before_the_stop(pool, monkeypatch):
-    """W10-F10 on the real driver — the live row (10-04 04:35Z) read
+    """On the real driver — the live row (10-04 04:35Z) read
     ``stopped_after_seq: 3, actions: []``. A case stopped after step 2 whose two
     frames reach the registry only after the stop's ack persists BOTH steps,
     read back from consult_turns; seq 3 (past the claim) never lands."""
@@ -445,7 +445,7 @@ async def test_w10_f10_a_stopped_case_persists_the_steps_that_ran_before_the_sto
         r = await client.post(f"/api/v1/consult/runs/{rid}/stop",
                               json={"executed_through_seq": 2})
         assert r.status_code == 200, r.text
-        # At the ack the registry held no frame: the W5-F6 clamp says 0.
+        # At the ack the registry held no frame: the clamp says 0.
         assert r.json()["stopped_after_seq"] == 0
 
     # Read the persisted row back on the real driver.

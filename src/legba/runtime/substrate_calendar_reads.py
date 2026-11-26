@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The ``list_scheduled_events`` read (W11-F141), split out of the substrate
-query port (roll 59: the port sat past its module-size ceiling once survey
+"""The ``list_scheduled_events`` read, split out of the substrate
+query port (the port sat past its module-size ceiling once survey
 mode and the calendar both landed). The port delegates; behaviour is the
 method's, moved verbatim.
 """

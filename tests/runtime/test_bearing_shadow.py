@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W11-F108 — the bearing gate's decision-model SHADOW.
+"""the bearing gate's decision-model SHADOW.
 
 Driven directly (no DB, no network): the real :func:`run_bearing_pipeline`
 with a scripted chat gate, then the real :func:`run_bearing_shadow` with a
@@ -37,8 +37,8 @@ from legba.data.analysts.deterministic_handlers import bearing_shadow as bs
 
 _REPO = Path(__file__).resolve().parents[2]
 _MIGRATIONS = _REPO / "src" / "legba" / "data" / "migrations"
-_SHADOW_REF = "llm.decide.innoai_clef_flash"
-_GATE_REF = "llm.verify.innoai_gemma.openai_compat"
+_SHADOW_REF = "llm.decide.gateway_typed_choice"
+_GATE_REF = "llm.verify.gateway_judge.openai_compat"
 
 
 # ---------------------------------------------------------------------------
@@ -407,7 +407,7 @@ class _RecordingChat(_Gate):
 
 
 async def test_a_chat_component_shadows_with_the_gates_own_prompt(monkeypatch):
-    """W11-F148 — the roles swapped: a chat component as the SHADOW is asked
+    """the roles swapped: a chat component as the SHADOW is asked
     the chat gate's exact conversation and call, and its row carries the
     parsed yes/no with NULL p_yes and NULL confidence."""
     chat = _RecordingChat({"s-a": "YES", "s-b": "no — different desk"})
@@ -534,9 +534,9 @@ async def test_the_real_client_stamps_the_bearing_shadow_leg_on_the_receipt():
         instance_version = "0" * 16
         secrets = _Res()
         config = LLMProviderConfig(
-            api_endpoint=Property.Text.of("https://api.innoai.net/v1"),
-            api_key=Property.Secret.of("llm.innoai.api_key"),
-            model_name=Property.Text.of("clef-flash"),
+            api_endpoint=Property.Text.of("https://gateway.example.invalid/v1"),
+            api_key=Property.Secret.of("llm.gateway.api_key"),
+            model_name=Property.Text.of("decision-model"),
             max_tokens=Property.Number.of(1, minimum=1, maximum=10),
         )
 
@@ -553,7 +553,7 @@ async def test_the_real_client_stamps_the_bearing_shadow_leg_on_the_receipt():
         body = json.loads(request.content)
         states.append(body["state"])
         return httpx.Response(200, json={
-            "model": "clef-flash",
+            "model": "decision-model",
             "answers": {"bears": {"type": "choice", "choice": "no", "confidence": 0.7,
                                   "probabilities": {"yes": 0.3, "no": 0.7}}},
             "usage": {"input_tokens": 120, "output_tokens": 0},
@@ -562,7 +562,7 @@ async def test_the_real_client_stamps_the_bearing_shadow_leg_on_the_receipt():
     handler = DecisionProviderHandler()
     await handler.on_configure(_Ctx())
     handler._client = httpx.AsyncClient(  # noqa: SLF001
-        base_url="https://api.innoai.net", headers=handler._auth_headers(),  # noqa: SLF001
+        base_url="https://gateway.example.invalid", headers=handler._auth_headers(),  # noqa: SLF001
         transport=httpx.MockTransport(responder),
     )
     cand = _cand("s-real", desk="G20 — Australia [country_g20_au]")
@@ -595,7 +595,7 @@ def test_both_knobs_are_declared_in_the_claim_watch_catalog():
     assert specs["bearing_shadow_cap"].kind == "int"
     src = (_REPO / "src/legba/data/analysts/deterministic_handlers/claim_watch.py").read_text()
     for knob in ("bearing_shadow_ref", "bearing_shadow_cap"):
-        assert f'options.get("{knob}"' in src, f"claim_watch must read {knob} itself (X-1)"
+        assert f'options.get("{knob}"' in src, f"claim_watch must read {knob} itself"
 
 
 def test_claim_watch_threads_the_shadow_after_the_writes():
@@ -676,8 +676,8 @@ def test_the_report_summarizes_agreement_confusion_and_calibration():
 
 
 def test_the_report_reads_mixed_pairings_and_null_p_yes_rows():
-    """W11-F148 — a window spanning the 11-05 role swap: Gemma gate / Clef
-    shadow rows, then Clef gate / Gemma shadow rows (NULL p_yes, so they
+    """a window spanning the 11-05 role swap: Gemma gate / decision
+    shadow rows, then decision gate / Gemma shadow rows (NULL p_yes, so they
     reach no decile). Each group names its gate and its shadow FROM THE ROW,
     the total says the pairing is mixed, and agreement by day still computes."""
     from datetime import date
@@ -764,7 +764,7 @@ def _clear_pg_env(monkeypatch):
 
 
 def test_the_report_dsn_is_the_shared_resolver(monkeypatch):
-    """W11-F115 — the report connects with ``PostgresConfig.from_env().dsn``,
+    """the report connects with ``PostgresConfig.from_env().dsn``,
     the resolver the working host scripts use, not a private one."""
     import legba.data.config as data_config
 

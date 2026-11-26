@@ -1,10 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""legba.prompts.lens_diff — the chorus DIFF pass's persona (VOICES DL-7).
+"""legba.prompts.lens_diff — the chorus DIFF pass's persona.
 
-The FIFTH pass after the four faculties (planning/VOICES_PLAN_2026-07-21.md
-DL-7). One ``entry_kind='lens_diff'`` row per cycle: it reads all four faculty
-lens reads and narrates, per contested topic, where they AGREE, where they SPLIT,
+The FIFTH pass after the four faculties. One ``entry_kind='lens_diff'`` row per cycle:
+it reads all four faculty lens reads and narrates, per contested topic, where they AGREE, where they SPLIT,
 and where one is an OUTLIER — priors visible — and it NEVER merges the voices into
 a single consensus. Auto-collapse into "the chorus concluded X" is the failure
 mode; the diff is the product precisely because it keeps the disagreement legible.
@@ -13,21 +12,20 @@ This is NOT a faculty: it has no declared prior of its own. Its stance is the
 referee's — it reports the shape of the argument, it does not adjudicate who is
 right. It rides the SAME journal_assessor kind + JournalPayload + verify floor.
 The structured agreement matrix is computed deterministically BEFORE narrate and
-lands in ``data.matrix`` (VOICES_BUILD_DESIGN §3.3); this prose is the body.
+lands in ``data.matrix``; this prose is the body.
 
-Two j7 hardenings are HARD requirements here (planning/lenses.txt §j7-REVIEW):
+Two hardenings are HARD requirements here:
   1. COLLECTION HEALTH is declared FIRST, before any interpretation of agreement.
   2. Convergence over a CONTRADICTED / unsupported substrate claim is a WARNING
      band, never agreement-strength — the diff inherits the substrate's verdict.
 
-The APERTURE LINE is MANDATORY and VERBATIM (DL-7 / lenses.txt §"chorus
-trust-laundering"): a presented chorus implies "all reasonable views considered"
+The APERTURE LINE is MANDATORY and VERBATIM: a presented chorus implies "all reasonable views considered"
 exactly the way one view implied neutrality. It closes every diff, unchanged.
 """
 
 from __future__ import annotations
 
-# The aperture line — VERBATIM, MANDATORY, closes every diff (DL-7). Exposed as a
+# The aperture line — VERBATIM, MANDATORY, closes every diff. Exposed as a
 # module constant so the render test can assert its exact presence and the matrix
 # helper can stamp it into data alongside the prose.
 LENS_DIFF_APERTURE_LINE = (

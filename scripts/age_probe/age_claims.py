@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""K-G3 · Verify the standing Apache-AGE claims from the graph debate.
+"""Verify the standing Apache-AGE claims from the graph debate.
 
 Runs against a SCRATCH Postgres+AGE instance (never the live substrate) and
 checks, one assertion per claim, the five statements the graph debate left
-open (planning/graph_debate/A_age_commit.md §10.6, JUDGE_SYNTHESIS §4.2-4.3):
+open:
 
 C1  parameterized cypher via ``PREPARE``/``EXECUTE`` works (A's claim: the
     "AGE cannot bind params" objection is a property of our wrapper, not AGE)

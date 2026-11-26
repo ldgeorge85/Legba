@@ -17,6 +17,7 @@ import { useSelection, type SelectionKind } from '@/state/selection'
 import { emptyMembers, useScope, type Scope, type ScopeKind } from '@/state/scope'
 import { useWorldState } from '@/v4/world/worldState'
 import { spanPresetFor } from '@/lib/mapTime'
+import { parseAt, writeAtParam } from '@/lib/asOf'
 
 const VALID_KINDS: ReadonlySet<string> = new Set<SelectionKind>([
   'target',
@@ -262,7 +263,11 @@ export function useShareState(): void {
     // short form and leaves the param off rather than lying about it.
     const unsubWindow = useWorldState.subscribe((s, prev) => {
       if (s.spanMs !== prev.spanMs) writeWindowHash(s.spanMs)
+      if (s.asOfMs !== prev.asOfMs) writeAtParam(s.asOfMs)
     })
+    // 3c. As recorded: `?at=` restores the instant the link was looking at.
+    const at = parseAt(window.location.search)
+    if (at !== null && useWorldState.getState().asOfMs !== at) useWorldState.getState().setAsOf(at)
     // 4. Hash → selection/scope (manual edit / back-forward).
     window.addEventListener('hashchange', applyHash)
     return () => {

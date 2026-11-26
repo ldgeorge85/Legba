@@ -1,9 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W9 SPLIT-2 — the six political-lean lenses live in the geopolitics profile.
+"""The six political-lean lenses live in the geopolitics profile.
 
-DEC-14 (taken 2026-10-04 on planning/PLATFORM_VS_EXEMPLAR_2026-09-29.md §1):
-the leans' prose moved from ``src/legba/prompts/lens_*`` to the profile's own
+The leans' prose moved from ``src/legba/prompts/lens_*`` to the profile's own
 prompt package, ``profiles/geopolitics/prompts/legba_geopolitics/lens_*``; the
 five epistemic lenses stay in the platform. This file proves:
 

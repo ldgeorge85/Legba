@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""FastAPI launcher for the registry HTTP + WebSocket API (L-113).
+"""FastAPI launcher for the registry HTTP + WebSocket API.
 
 Wires every registry dependency (Postgres pool, NATS connection, descriptor
 + stack + credential vault, audit logger, vocabulary cache, dead-letter
 writer, optional conversion-webhook registry) into a single FastAPI app and
-mounts the L-113 router under `/api/v1/registry/`.
+mounts the registry router under `/api/v1/registry/`.
 
 Run modes:
 
@@ -88,7 +88,7 @@ def create_app(
     health poll runs; default False so unit / integration tests don't spin
     a probe thread unless they ask for it.
     """
-    # W11-F85: at LEGBA_REGISTRY_WORKERS > 1 each worker takes its share of
+    # At LEGBA_REGISTRY_WORKERS > 1 each worker takes its share of
     # the pool, so N workers hold what one did (an explicit config is kept).
     pg_cfg = pg_config or _workers.worker_pg_config(PostgresConfig.from_env())
     nats_cfg = nats_config or NatsConfig.from_env()
@@ -104,7 +104,7 @@ def create_app(
     # not hold reads its code literal (legba.data.taxon_families).
     install_vocabulary(vocab_cache)
 
-    # L-221: the registry's shared NATS emitter, threaded into every registry
+    # The registry's shared NATS emitter, threaded into every registry
     # component that publishes lifecycle events — the DLQ writer (per-row
     # ``legba.dlq.descriptor.{id}``), the stack registry (``stack.component.>``),
     # and the credential vault (``vault.secret.rotated.<id>`` — the rotation
@@ -130,8 +130,7 @@ def create_app(
         dlq=dlq,
     )
 
-    # L-112 may or may not be present (in-flight in parallel per the L-113
-    # brief). When the module is importable we wire it in; otherwise the API
+    # The conversion registry may or may not be present. When the module is importable we wire it in; otherwise the API
     # layer falls back to a raw-SQL shim over `conversion_webhooks`.
     conversion_registry: object | None = None
     try:
@@ -176,7 +175,7 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await pg_store.connect()
         await nats_store.connect()
-        # W11-F85 — ONCE-ONLY work (stream provisioning, the health loop) runs
+        # ONCE-ONLY work (stream provisioning, the health loop) runs
         # on the worker holding the advisory lock; at one worker the lease is
         # a no-op holder and this is the order it always was.
         once = _workers.OnceOnlyLease(pg_store)
@@ -239,7 +238,7 @@ def create_app(
     app = FastAPI(
         title="Legba Registry API",
         description=(
-            "L-113 HTTP + WebSocket surface for the descriptor, stack, "
+            "HTTP + WebSocket surface for the descriptor, stack, "
             "credential vault, conversion-webhook, dead-letter, audit and "
             "vocabulary registries."
         ),
@@ -281,7 +280,7 @@ def create_app(
     from .session_auth import SessionCookieMiddleware
     app.add_middleware(SessionCookieMiddleware)
 
-    # X4 GATE (W11-F75) — the BEARER stamp, added LAST so it is the OUTERMOST
+    # X4 GATE — the BEARER stamp, added LAST so it is the OUTERMOST
     # layer and runs first: it resolves the Authorization header (the SSE
     # relay's ?token=, the events socket's subprotocol) through the _deps
     # resolvers and stamps principal / principal_actor / legba_role =
@@ -296,38 +295,38 @@ def create_app(
     app.include_router(build_router(deps), prefix=API_PREFIX)
 
     # v3 telemetry surface — runtime actor health + optimizer candidate queue.
-    # Mounted under /api/v1/v3 so the UI's L-092 §3.5 S4/S6 panels resolve
+    # Mounted under /api/v1/v3 so the UI's telemetry panels resolve
     # against real substrate state without going through a separate runtime
     # HTTP service. See v3_api.py for the per-route shape contracts.
     from .v3_api import build_v3_router
     app.include_router(build_v3_router(deps), prefix="/api/v1/v3")
 
-    # P1-6 — "since last visit" diff + band trajectory (console / wall tile).
+    # "since last visit" diff + band trajectory (console / wall tile).
     # Mounted under the SAME /api/v1/v3 prefix beside the telemetry router;
     # registry-slim (no runtime/deterministic import — mirrored constants with
     # drift guards instead). See since_api.py for the envelope contracts.
     from .since_api import build_since_router
     app.include_router(build_since_router(deps), prefix="/api/v1/v3")
 
-    # S-1 — the signed-in person's own seen cursor (GET/PUT /me/seen); 404
+    # The signed-in person's own seen cursor (GET/PUT /me/seen); 404
     # with the sign-in switch off. Registry-slim. See me_seen_api.py.
     from .me_seen_api import build_me_seen_router
     app.include_router(build_me_seen_router(deps), prefix="/api/v1/v3")
 
-    # S-2 — acknowledge / snooze an alert episode (contributor+), and the
+    # Acknowledge / snooze an alert episode (contributor+), and the
     # episode's attention state + history (reader). Registry-slim. See
     # alert_ack_api.py.
     from .alert_ack_api import build_alert_ack_router
     app.include_router(build_alert_ack_router(deps), prefix="/api/v1/v3")
 
-    # P4-4 — validity-window timeline read surface (the `system.timeline`
+    # Validity-window timeline read surface (the `system.timeline`
     # panel): facts/situations/findings as RANGED items ([start, end|open) +
     # supersession-chain edges). Same /api/v1/v3 prefix beside the since router;
     # registry-slim (no runtime import). See timeline_api.py for the envelope.
     from .timeline_api import build_timeline_router
     app.include_router(build_timeline_router(deps), prefix="/api/v1/v3")
 
-    # c1 — the correctness GRADER's roster: every graded desk's correctness AND
+    # The correctness GRADER's roster: every graded desk's correctness AND
     # coverage over a trailing window, plus the roster totals (mean-of-desks and
     # claim-pooled, each labelled). Its own leaf module on the /api/v1/v3 prefix
     # rather than a section of v3_api: that file is one line under its
@@ -337,14 +336,14 @@ def create_app(
     from .grader_roster_api import build_grader_roster_router
     app.include_router(build_grader_roster_router(deps), prefix="/api/v1/v3")
 
-    # P3-1 — source assurance ledger read surface (A6 layers 1+2): current
+    # Source assurance ledger read surface: current
     # per-rater ratings + dossier, visibility-filtered (private annex rows
     # only on explicit opt-in). Same /api/v1/v3 prefix; see
     # source_assurance_api.py for the visibility seam contract.
     from .source_assurance_api import build_source_assurance_router
     app.include_router(build_source_assurance_router(deps), prefix="/api/v1/v3")
 
-    # C3 — the merged source-quality ledger (migration 0115): asserted
+    # The merged source-quality ledger (migration 0115): asserted
     # (Admiralty grade + host credibility) / earned (contested track record) /
     # computed (A7 freshness) as three TYPED sections that are never blended.
     # Supersedes the assurance route above and the /source_credibility reads,
@@ -354,7 +353,7 @@ def create_app(
     from .source_quality_api import build_source_quality_router
     app.include_router(build_source_quality_router(deps), prefix="/api/v1/v3")
 
-    # S-1 — the expected-vs-actual PRODUCTION gauge. Joins the /system/*
+    # The expected-vs-actual PRODUCTION gauge. Joins the /system/*
     # freshness family (staleness-debt / analyst-cadence / source-firing) and
     # answers what none of those can: not "is it running" but "did it produce
     # what its own descriptor and history promised". Same judgment function
@@ -365,7 +364,7 @@ def create_app(
     from .production_gauge_api import build_production_gauge_router
     app.include_router(build_production_gauge_router(deps), prefix="/api/v1/v3")
 
-    # GLASS-3 — the judge's verdict mix by SERVING PROVIDER. `served_by` has been
+    # The judge's verdict mix by SERVING PROVIDER. `served_by` has been
     # on every LLM receipt since 2026-08-16 and read by nothing, while a provider
     # change was measured to flip 13.6% of verdicts: an unannounced upstream input
     # to the faithfulness numbers the product is graded on. Read-only aggregate
@@ -375,7 +374,7 @@ def create_app(
     from .judge_stats_api import build_judge_stats_router
     app.include_router(build_judge_stats_router(deps), prefix="/api/v1/v3")
 
-    # D5 — the STANDING EXTERNAL AUDIT. The judge-stats route above measures how
+    # The STANDING EXTERNAL AUDIT. The judge-stats route above measures how
     # well we grade OURSELVES; this one is the only surface reporting a check
     # against the world outside the substrate. Two things live here that live
     # nowhere else: the auditor's own heartbeat (a run can end
@@ -387,14 +386,13 @@ def create_app(
     from .external_audit_api import build_external_audit_router
     app.include_router(build_external_audit_router(deps), prefix="/api/v1/v3")
 
-    # V3/P4a — the five pre-registered graph-engine trigger gauges
-    # (JUDGE_SYNTHESIS §4.2) for the 2026-11-03 sitting: each of E1-E5 reports
-    # its threshold + reading + distance, or an explicit "unreadable" with the
+    # The five pre-registered graph-engine trigger gauges (E1-E5): each
+    # reports its threshold + reading + distance, or an explicit "unreadable" with the
     # reason — a gauge that cannot be computed must say so, never return 0.
     from .graph_triggers_api import build_graph_triggers_router
     app.include_router(build_graph_triggers_router(deps), prefix="/api/v1/v3")
 
-    # V3/P4b — the cross-layer graph projection read. Plane-filtered bounded
+    # The cross-layer graph projection read. Plane-filtered bounded
     # ego/walk over graph_arcs with as_of, publishing the build stamp on every
     # response and refusing distinctly (projection_disabled / _empty /
     # _stale) — never found=False — while LEGBA_GRAPH_PROJECTION is off or the
@@ -402,44 +400,44 @@ def create_app(
     from .graph_arcs_api import build_graph_arcs_router
     app.include_router(build_graph_arcs_router(deps), prefix="/api/v1/v3")
 
-    # W9 VIEW-1 — the per-profile projection, one plane per profile, read off
+    # The per-profile projection, one plane per profile, read off
     # the profile_projector's whole-rebuild table; refuses by name
     # (projection_disabled / projection_empty / projection_stale, plane_unknown
     # / section_undeclared), never found=False. Registry-slim (the leaf only).
     from .projection_api import build_projection_router
     app.include_router(build_projection_router(deps), prefix=API_PREFIX)
 
-    # V3/P3 — the decision-time belief register ("what did Legba believe on
+    # The decision-time belief register ("what did Legba believe on
     # date D"). Bearer-gated, registry-slim, reads analyst_outputs directly.
     from .belief_api import build_belief_router
     app.include_router(build_belief_router(deps), prefix="/api/v1/v3")
 
-    # H13 — the receipt-chain external-timestamp ledger: one row per
+    # The receipt-chain external-timestamp ledger: one row per
     # (day, calendar) the receipt_anchor handler attested via OpenTimestamps.
     from .receipt_anchors_api import build_receipt_anchors_router
     app.include_router(build_receipt_anchors_router(deps), prefix="/api/v1/v3")
 
-    # RA-1 — the reader's narrow reads of two admin lists: the roster
+    # The reader's narrow reads of two admin lists: the roster
     # (subjects / analysts / sources) and the Watch's alert log.
     from .reader_reads_api import build_reader_reads_router
     app.include_router(build_reader_reads_router(deps), prefix="/api/v1/v3")
 
-    # ST0-C — the exogenous forecast ledger (migration 0242): every question,
+    # The exogenous forecast ledger (migration 0242): every question,
     # open first by due date, with every issuer's number and the resolution.
     from .forecast_ledger_api import build_forecast_ledger_router
     app.include_router(build_forecast_ledger_router(deps), prefix="/api/v1/v3")
-    # ST1 — the forecast scorecard (Brier per arm against the resolutions).
+    # The forecast scorecard (Brier per arm against the resolutions).
     from .forecast_scorecard_api import build_forecast_scorecard_router
     app.include_router(build_forecast_scorecard_router(deps), prefix="/api/v1/v3")
-    # U-11 — one question's resolution record (proposals with their evidence,
+    # One question's resolution record (proposals with their evidence,
     # and every act on them), for the console's resolution queue. Read-only.
     from .forecast_records_api import build_forecast_records_router
     app.include_router(build_forecast_records_router(deps), prefix="/api/v1/v3")
-    # E-3 — the published evaluation record (migration 0260): every version
-    # of every run the owner published, withdrawn ones marked. Read-only.
+    # The published evaluation record (migration 0260): every version
+    # of every run published, withdrawn ones marked. Read-only.
     from .eval_runs_api import build_eval_runs_router
     app.include_router(build_eval_runs_router(deps), prefix="/api/v1/v3")
-    # F-1 — deciding a forecast's outcome from the console (confirm / reject /
+    # Deciding a forecast's outcome from the console (confirm / reject /
     # judgement / correct, the same store calls as scripts/resolve_forecasts.py)
     # and the queue a person works; and a seal's inclusion proof in a daily
     # anchor (migration 0262).
@@ -447,27 +445,27 @@ def create_app(
     app.include_router(build_forecast_resolution_router(deps), prefix="/api/v1/v3")
     from .seal_proof_api import build_seal_proof_router
     app.include_router(build_seal_proof_router(deps), prefix="/api/v1/v3")
-    # U-4 — the map's two missing reads: a live series at its place (latest,
+    # The map's two missing reads: a live series at its place (latest,
     # 30-day baseline, revised flag, last 30 values) and incidents filed at sea.
     from .map_layers_api import build_map_layers_router
     app.include_router(build_map_layers_router(deps), prefix="/api/v1/v3")
 
-    # X1-A2 — last backup set + last passing restore drill (host status files).
+    # Last backup set + last passing restore drill (host status files).
     from .backup_status_api import build_backup_status_router
     app.include_router(build_backup_status_router(deps), prefix="/api/v1/v3")
 
-    # N-J — the Flow canvas's read-only routes: the semantic graph derived from
+    # The Flow canvas's read-only routes: the semantic graph derived from
     # the descriptor heads, one node's inspector, a stored version, one run.
     from .flow_api import build_flow_router
     app.include_router(build_flow_router(deps), prefix="/api/v1/v3")
 
-    # 7a — the contrary-evidence pass's records. A SIBLING of
+    # The contrary-evidence pass's records. A SIBLING of
     # `/api/v1/contention` (which serves fact_contention), never an extension of
     # it: different keys, different vocabulary, no winner and never one.
     from .contentions_api import build_contentions_router
     app.include_router(build_contentions_router(deps), prefix="/api/v1/v3")
 
-    # Program 6 L2 (7b-v) — the DIVERGENCE MAP read surface. The only reader of
+    # The DIVERGENCE MAP read surface. The only reader of
     # the layer_divergence receipt, which is where a QUIET run's series lives:
     # a run that fires nothing is suppressed to trace-only, so a surface reading
     # analyst_outputs alone would be blank on exactly the days the instrument
@@ -475,38 +473,38 @@ def create_app(
     # the fires. Registry-slim (only the stdlib-only layers._vocab leaf).
     from .layers_api import build_layers_router
     app.include_router(build_layers_router(deps), prefix="/api/v1/v3")
-    # 7b/k5 — TYPED ABSENCE as one named thing: the audit's scoped absence, the
-    # reads' insufficient evidence, Program 6's declared-absent layers, silent
+    # TYPED ABSENCE as one named thing: the audit's scoped absence, the
+    # reads' insufficient evidence, declared-absent layers, silent
     # units and silent sources answered for one desk, each with its proof
     # (`GET /v3/absence?scope=`). Registry-slim, defensive per kind.
     from .absence_api import build_absence_router
     app.include_router(build_absence_router(deps), prefix="/api/v1/v3")
-    # X1/B5 — search health: the degraded share per provider and per upstream
+    # Search health: the degraded share per provider and per upstream
     # engine over 7 d, by the same rule the absence kinds above are typed with.
     from .search_health_api import build_search_health_router
     app.include_router(build_search_health_router(deps), prefix="/api/v1/v3")
-    # I-1 — the ingestion intake's queue: depth by state and reason, refusals
+    # The ingestion intake's queue: depth by state and reason, refusals
     # by reason, per-host rates, oldest queued age. Registry-slim (the
     # stdlib-only intake_visibility leaf).
     from .intake_api import build_intake_router
     app.include_router(build_intake_router(deps), prefix="/api/v1/v3")
-    # W11-F271 — signals and findings landed in a window (the World KPI
+    # Signals and findings landed in a window (the World KPI
     # strip's "24h" cards): two count(*) statements. Registry-slim.
     from .window_counts_api import build_window_counts_router
     app.include_router(build_window_counts_router(deps), prefix="/api/v1/v3")
-    # D-1 — source drift: open flags with their dependants and changed
+    # Source drift: open flags with their dependants and changed
     # spans, counts by class and source, one address's version history, the
     # sources that edit after publication most. Registry-slim (the
     # stdlib-only evidence_drift_reads leaf).
     from .evidence_drift_api import build_evidence_drift_router
     app.include_router(build_evidence_drift_router(deps), prefix="/api/v1/v3")
-    # U-10 — the Record sheet's receipts, a version's stored text (bounded;
+    # The Record sheet's receipts, a version's stored text (bounded;
     # withheld from a reader and under a refusing licence) and a run's
     # integrity line. Registry-slim (the stdlib-only record_sheet_reads leaf).
     from .record_sheet_api import build_record_sheet_router
     app.include_router(build_record_sheet_router(deps), prefix="/api/v1/v3")
 
-    # 7g-2 — the ERA COVERAGE MAP: what a curated collection's manifest
+    # The ERA COVERAGE MAP: what a curated collection's manifest
     # DECLARES the provider holds for a desk, what `observations` actually
     # carries, and the holes between them (`GET /v3/collections/coverage?
     # scope=`). Shares ONE reader with the `history_gap` typed absence above,
@@ -515,14 +513,14 @@ def create_app(
     from .collections_api import build_collections_router
     app.include_router(build_collections_router(deps), prefix="/api/v1/v3")
 
-    # V3/P6 — the event read surface: the paged list (filters mirroring
+    # The event read surface: the paged list (filters mirroring
     # query_events + a route-only situation_id for the tracked-events read),
     # the one-event dossier, and the lifecycle ledger. Same live/as_of +
     # origin-class gate as the tool path.
     from .events_api import build_events_router
     app.include_router(build_events_router(deps), prefix="/api/v1/v3")
 
-    # Continuity P2 — the situation TRAJECTORY ledger read. Additive route, no
+    # The situation TRAJECTORY ledger read. Additive route, no
     # panel (the UI is Phase 3); it is what the situation_escalation alert links
     # to, and what makes "how did this frame get here" answerable without
     # reconstructing it from prose. Its own module rather than another block
@@ -530,7 +528,7 @@ def create_app(
     from .situation_trajectory_api import build_situation_trajectory_router
     app.include_router(build_situation_trajectory_router(deps), prefix="/api/v1/v3")
 
-    # P4-1/P4-2 — reified narratives + source-echo propagation graph (A11).
+    # Reified narratives + source-echo propagation graph (A11).
     # Read-only surface over the migration-0102 derived tables the
     # narrative_mapper analyst refreshes; the data surface for a future UI
     # narratives panel. Degrades to empty when 0102 is unapplied. Same
@@ -538,39 +536,38 @@ def create_app(
     from .narratives_api import build_narratives_router
     app.include_router(build_narratives_router(deps), prefix="/api/v1/v3")
 
-    # Substrate-read endpoints (E-1) — cross-target intelligence feeds
+    # Substrate-read endpoints — cross-target intelligence feeds
     # the redesigned UI's daily-driver panels consume.
     from .substrate_reads_api import build_substrate_reads_router
     app.include_router(
         build_substrate_reads_router(deps), prefix="/api/v1",
     )
 
-    # Lineage walk endpoint (E-2) — universal derived_from[] tracer.
+    # Lineage walk endpoint — universal derived_from[] tracer.
     from .lineage_api import build_lineage_router
     app.include_router(build_lineage_router(deps), prefix="/api/v1")
 
-    # Journal read surface (JOURNAL_ASSESSOR_PLAN §9 / Wave 3) — the open
-    # consolidation + recent entries, with every cited ref resolved to its
+    # Journal read surface — the open consolidation + recent entries, with every cited ref resolved to its
     # (kind, title) for the panel's per-claim provenance chips. Read-only;
     # off-chain (reads journal_entries directly, never the lineage catalog).
     from .journal_api import build_journal_router
     app.include_router(build_journal_router(deps), prefix="/api/v1")
 
-    # Journal propose-and-gate review surface (JOURNAL_ASSESSOR_PLAN §7.4 / Wave
-    # 4) — the operator queue: list/filter journal_proposals + accept (apply via
-    # the existing write/lifecycle path, idempotent) + reject (requires a reason).
+    # Journal propose-and-gate review surface — the review queue: list/filter
+    # journal_proposals + accept (apply via the existing write/lifecycle path,
+    # idempotent) + reject (requires a reason).
     # The journal SUGGESTS into the queue; a human DISPOSES here.
     from .journal_proposals_api import build_journal_proposals_router
     app.include_router(build_journal_proposals_router(deps), prefix="/api/v1")
 
-    # Labeled reference-set (gold) surface (P2-T4) — per-bounded-unit correctness
+    # Labeled reference-set (gold) surface — per-bounded-unit correctness
     # labels the Phase-2 scorer compares a unit's live read against. POST records
     # one (unit, target) gold answer grounded to canonical_source_ids; GET reads
     # them back filtered by unit/target. Backs unit_reference_labels (mig 0057).
     from .labels_api import build_labels_router
     app.include_router(build_labels_router(deps), prefix="/api/v1")
 
-    # Correctness gold-set labeling loop (P2-5) — the weekly worksheet the
+    # Correctness gold-set labeling loop — the weekly worksheet the
     # operator labels a handful of findings on (deterministic ISO-week sample,
     # pinned in goldset_week_samples) + the per-finding verdict upsert. Backs
     # correctness_labels (mig 0096); the per-unit operator aggregate overlays
@@ -578,19 +575,19 @@ def create_app(
     from .goldset_api import build_goldset_router
     app.include_router(build_goldset_router(deps), prefix="/api/v1/v3")
 
-    # Collection export (A10) — basket of findings + journal entries → one
+    # Collection export — basket of findings + journal entries → one
     # markdown/JSON document, composed server-side at full fidelity.
     from .export_api import build_export_router
     app.include_router(build_export_router(deps), prefix="/api/v1/v3")
 
-    # Watchlist v2 (P5-6) — operator-defined standing watches (entity / text /
+    # Watchlist v2 — user-defined standing watches (entity / text /
     # geo), the server-side personal layer the alert_trigger_scan's
     # watchlist_hit class evaluates. First WRITE surface in the v3 family;
     # deletes are soft (active=false). See watchlist_api.py.
     from .watchlist_api import build_watchlist_router
     app.include_router(build_watchlist_router(deps), prefix="/api/v1/v3")
 
-    # Collection requirements (R-2) — the operator review surface over
+    # Collection requirements — the operator review surface over
     # collection_gap's durable "we have a hole" proposals (mig 0113): list /
     # get / disposition-only PATCH (status + reviewed_by + note). Never a
     # write path to source_descriptors — registering/activating a source
@@ -610,7 +607,7 @@ def create_app(
         build_retention_policies_router(deps), prefix="/api/v1/v3"
     )
 
-    # Origins and origin groups (data-model lane 9): list, the assignment
+    # Origins and origin groups: list, the assignment
     # log, an admin's correction and the derived assignment.
     from .origins_api import build_origins_router
     app.include_router(build_origins_router(deps), prefix="/api/v1/registry")
@@ -634,7 +631,7 @@ def create_app(
     from .graph_walk_api import build_graph_walk_router
     app.include_router(build_graph_walk_router(deps), prefix="/api/v1")
 
-    # Runtime + analyst telemetry endpoints (E-3) — target/analyst
+    # Runtime + analyst telemetry endpoints — target/analyst
     # roster + per-actor source cursors + analyst run/output/critique
     # views. Paths are top-level under /api/v1, not /api/v1/v3.
     from .runtime_telemetry_api import build_runtime_telemetry_router
@@ -642,13 +639,13 @@ def create_app(
         build_runtime_telemetry_router(deps), prefix="/api/v1",
     )
 
-    # Budget endpoints (E-4) — ledger + envelope + demotion-event views.
+    # Budget endpoints — ledger + envelope + demotion-event views.
     from .budget_api import build_budget_router
     app.include_router(
         build_budget_router(deps), prefix="/api/v1/budget",
     )
 
-    # Source-credibility CRUD (E-5) — operator-curated surface.
+    # Source-credibility CRUD — operator-curated surface.
     from .source_credibility_api import build_source_credibility_router
     app.include_router(
         build_source_credibility_router(deps), prefix="/api/v1",
@@ -680,8 +677,12 @@ def create_app(
     # operator's user admin (`/api/v1/auth/*`, migration 0236).
     from .users_api import build_users_router
     app.include_router(build_users_router(deps), prefix="/api/v1")
+    # The console's Users page: list, invite, change role, disable / enable,
+    # end sessions — admin only, and only with the sign-in switch on.
+    from .users_admin_api import build_users_admin_router
+    app.include_router(build_users_admin_router(deps), prefix="/api/v1")
 
-    # Deep-consult submit + status (anchor §5 PIECE 4) — the DETACHED variant:
+    # Deep-consult submit + status — the DETACHED variant:
     # POST schedules the staged Dapr Workflow and returns a task id; GET polls
     # the produced finding. Schedules via the deep_consult actor over the
     # runtime sidecar (same transport as consult_api).
@@ -690,17 +691,16 @@ def create_app(
         build_deep_consult_router(deps), prefix="/api/v1",
     )
 
-    # Read telemetry (D2e) — the ONE plane that receipts a READ rather than a
+    # Read telemetry — the ONE plane that receipts a READ rather than a
     # write. Ingest (POST /read-events) is append-only into migration 0189 and
     # deliberately joins nothing; the rollup (GET /read-events/rollup) is the
-    # oracle wager's scoreboard. See read_events_api.py and
-    # planning/CAMPAIGN_2026-08-29/PREMISE_REASON_TO_EXIST.md §5 Option 1.
+    # scoreboard of read use. See read_events_api.py.
     from .read_events_api import build_read_events_router
     app.include_router(
         build_read_events_router(deps), prefix="/api/v1",
     )
 
-    # Prometheus /metrics exposition (resilience P2). App-level, no prefix
+    # Prometheus /metrics exposition. App-level, no prefix
     # and no bearer gate — Prometheus scrapers don't carry the operator
     # token, matching the unauthenticated /healthz convention below.
     from .metrics_api import build_metrics_router
@@ -812,7 +812,7 @@ def main() -> None:
         logger.info("legba-registry starting on %s:%d", host, port)
         uvicorn.run(app, host=host, port=port, log_config=None)
         return
-    # W11-F85: N workers need an import string, not an app object; each
+    # N workers need an import string, not an app object; each
     # worker builds its own app (pools, NATS, Redis) through app_factory.
     try:
         _workers.assert_multi_worker_safe(workers)

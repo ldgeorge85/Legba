@@ -1,12 +1,12 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The five consult sessions of 2026-09-28 as the divergence fixture and the
+"""Five consult sessions (synthetic, fictional subject) as the divergence fixture and the
 admission test for a tool-using role (W1 F-10).
 
-One question, run five times on 2026-09-28 against the live consult loop —
-Opus (``181a8bab``), the core model BEFORE the fixes (``96d7bfc2``), and three
-core-model proof runs AFTER them (``6dd39dfd``, ``2d026feb``, ``5d66ccbb``). The
-recorded rows live under ``fixtures/consult_divergence/2026-09-28/`` exactly as
+One question, run five times against the consult loop —
+model A (``7c3e91a2``), model B BEFORE the fixes (``4b08d5e1``), and three
+model-B proof runs AFTER them (``c2917f6a``, ``0e5a48b3``, ``93d1b7c4``). The
+recorded rows live under ``fixtures/consult_divergence/sample/`` exactly as
 exported. They are the model-divergence layer's first case, and this test is the
 admission bar any model must clear for a tool-using role: **every tool call it
 writes must pass** ``validate_args`` against ``TOOL_SCHEMAS`` — except that a
@@ -16,9 +16,9 @@ the INPUT belongs) must be refused, and refused under its own name,
 
 Two recorded calls are such fabrications:
 
-* ``96d7bfc2`` call 0 — ``list_situations`` with ``result`` / ``status: "ok"`` /
+* ``4b08d5e1`` call 0 — ``list_situations`` with ``result`` / ``status: "ok"`` /
   ``metadata`` written into its arguments. Pre-fix it RAN and returned count 0.
-* ``2d026feb`` call 0 — the same shape, ``result`` / ``status: "success"`` /
+* ``0e5a48b3`` call 0 — the same shape, ``result`` / ``status: "success"`` /
   ``cited_refs``. Post-fix the live loop BLOCKED it (the recorded result is the
   ``tool_blocked: result_shaped_arg`` message) and the model recovered on its
   next round. The brief for this fixture said every post-fix call must pass;
@@ -41,15 +41,15 @@ from legba.data.stack.llm.tool_rounds import (
     validate_args,
 )
 
-_FIXTURES = Path(__file__).resolve().parent / "fixtures" / "consult_divergence" / "2026-09-28"
+_FIXTURES = Path(__file__).resolve().parent / "fixtures" / "consult_divergence" / "sample"
 
 #: session prefix -> (who wrote it, the call indexes that are fabrications).
 _SESSIONS: dict[str, tuple[str, frozenset[int]]] = {
-    "181a8bab": ("opus", frozenset()),
-    "96d7bfc2": ("core_before_fixes", frozenset({0})),
-    "6dd39dfd": ("core_after_fixes_1", frozenset()),
-    "2d026feb": ("core_after_fixes_2", frozenset({0})),
-    "5d66ccbb": ("core_after_fixes_3", frozenset()),
+    "7c3e91a2": ("model_a", frozenset()),
+    "4b08d5e1": ("model_b_before_fixes", frozenset({0})),
+    "c2917f6a": ("model_b_after_fixes_1", frozenset()),
+    "0e5a48b3": ("model_b_after_fixes_2", frozenset({0})),
+    "93d1b7c4": ("model_b_after_fixes_3", frozenset()),
 }
 
 
@@ -112,9 +112,9 @@ def test_every_recorded_call_passes_or_is_a_named_fabrication(prefix):
 
 
 def test_the_pre_fix_fabrication_blocks_as_result_shaped_arg():
-    """96d7bfc2 call 0: the tool had not run, and the model wrote its result
+    """4b08d5e1 call 0: the tool had not run, and the model wrote its result
     into the call. It RAN at the time (count 0, refs 0) — that is the defect."""
-    call = _assistant("96d7bfc2")["tool_calls"][0]
+    call = _assistant("4b08d5e1")["tool_calls"][0]
     assert call["tool"] == "list_situations"
     assert {"result", "metadata"} <= set(call["args"])
     assert call["result"] == {"refs": 0, "count": 0}
@@ -124,9 +124,9 @@ def test_the_pre_fix_fabrication_blocks_as_result_shaped_arg():
 
 
 def test_the_post_fix_fabrication_was_blocked_live_for_the_same_cause():
-    """2d026feb call 0 is recorded as blocked by the live guard; replaying it
+    """0e5a48b3 call 0 is recorded as blocked by the live guard; replaying it
     names the same cause the loop recorded, and the very next call passes."""
-    row = _assistant("2d026feb")
+    row = _assistant("0e5a48b3")
     first, retry = row["tool_calls"][0], row["tool_calls"][1]
     assert isinstance(first["result"], str)
     assert first["result"].startswith(f"tool_blocked: {CAUSE_RESULT_SHAPED_ARG}")

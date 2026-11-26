@@ -532,11 +532,11 @@ def test_the_recovered_turn_records_its_own_response_bag(
         "model": body["model"],
         "context_compaction": None,
         "watch_minted": None,
-        # C-1b — the case key; None = the turn presented no case.
+        # The case key; None = the turn presented no case.
         "case": None,
         # C-2b-1 — the writes key; None = the turn was not armed for changes.
         "writes": None,
-        # Q-1 — the turn contract; None = the run carried none.
+        # The turn contract; None = the run carried none.
         "contract": None,
     }
 
@@ -544,7 +544,7 @@ def test_the_recovered_turn_records_its_own_response_bag(
 def test_the_recovered_turn_answers_with_and_stores_the_original_contract(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Q-1 — the recovery run opens no turn of its own, so it answers with the
+    """The recovery run opens no turn of its own, so it answers with the
     turn contract the ORIGINAL turn stored in its 0223 bag, and stores that
     same contract on the new turn (a reload shows what the POST showed)."""
     monkeypatch.setenv(API_TOKEN_ENV, TEST_TOKEN)

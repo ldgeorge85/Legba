@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Anthropic LLM provider handler (L-120).
+"""Anthropic LLM provider handler.
 
 Wraps the Anthropic Messages API (`POST /v1/messages`) per M-061/062 native
 tool-calling. Tool-arg translation: the unified OpenAI tool-spec shape
@@ -192,7 +192,7 @@ class AnthropicProviderHandler(LLMProviderHandler):
     MAX_OUTPUT_TOKENS_BY_PREFIX: ClassVar[Mapping[str, int]] = ANTHROPIC_MAX_OUTPUT_TOKENS_BY_PREFIX
     MAX_OUTPUT_TOKENS_DEFAULT: ClassVar[int] = ANTHROPIC_MAX_OUTPUT_TOKENS_DEFAULT
 
-    #: W11-F133 — the documented standard context window (input + output) of
+    #: The documented standard context window (input + output) of
     #: the current Claude models. This handler never sends the long-context
     #: beta header, so 200k is the window every call it makes runs in. Read by
     #: the consult loop to derive its input ceiling when the descriptor sets
@@ -254,7 +254,7 @@ class AnthropicProviderHandler(LLMProviderHandler):
         # List prices, platform.claude.com pricing page read 2026-11-05
         # (W11-F136(b)); cache_write is the 5-minute write. The 2026-09-16
         # table carried $15 / $75 "floors" for every Opus / Fable row, which
-        # overstated Opus 4.7 three-fold (bake-off design §0, defect A-F2).
+        # overstated Opus 4.7 three-fold.
         "claude-fable-5": ModelPrice(
             input_per_m=10.0, output_per_m=50.0,
             cache_read_per_m=0.25, cache_write_per_m=12.50,
@@ -428,7 +428,7 @@ class AnthropicProviderHandler(LLMProviderHandler):
 
     # ---- Context window: an API VALIDITY constraint, NOT an output cap ----
     #
-    # Roll 87. The Messages API requires ``max_tokens`` and REJECTS a request
+    # The Messages API requires ``max_tokens`` and REJECTS a request
     # whose input plus ``max_tokens`` exceeds the model's context window (400,
     # nothing generated). Sending the model's maximum (128,000) with a large
     # prompt (a late consult round: 100k+ tokens) would therefore fail the call
@@ -502,6 +502,11 @@ class AnthropicProviderHandler(LLMProviderHandler):
         """The documented maximum output of ``model`` (default: the configured one)."""
         name = model or str(getattr(getattr(self._cfg, "model_name", None), "raw", "") or "")
         return self._max_output_ceiling(name)
+
+    def max_output_tokens_by_alias(self) -> dict[str, int]:
+        """The configured model's documented maximum (this plane has one alias)."""
+        name = str(getattr(getattr(self._cfg, "model_name", None), "raw", "") or "")
+        return {name: self._max_output_ceiling(name)} if name else {}
 
     # ---- Prompt caching --------------------------------------------------
 

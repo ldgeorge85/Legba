@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.eurostat.unemployment_monthly": {
+      "source": "source_eurostat_unemployment_monthly.yaml",
+      "state": "draft"
+    }
+  }
+}

@@ -3,8 +3,7 @@
 --
 -- 0215_inquiry_ledger.sql
 --
--- Program 5 lane 1 — the inquiry ledger
--- (planning/PROGRAM5_INQUIRY_DESIGN_2026-09-24.md §3).
+-- The inquiry ledger.
 --
 -- An inquiry is STATEFUL (§1): it carries a brief, hypotheses each with a
 -- resolution test, questions it has dispatched into the platform's own
@@ -28,7 +27,7 @@
 -- cited_refs a later finding cites" — the citation IS the close-time warrant,
 -- never a decoration at open); `ledger_write` never takes it. `closed_by_entry`
 -- is a PLAIN uuid, NOT a self-FK (mirrors `journal_entries.superseded_by`,
--- migration 0048) — lane 2's journal-write path stamps it once a journal
+-- migration 0048) — the journal-write path stamps it once a journal
 -- entry narrates the close; this migration only carries the column.
 --
 -- `inquiry_ledger_closed_at_matches_status`: the row's own state machine —
@@ -57,7 +56,7 @@ CREATE TABLE IF NOT EXISTS public.inquiry_ledger (
     created_at      timestamptz NOT NULL DEFAULT now(),
     updated_at      timestamptz NOT NULL DEFAULT now(),
     closed_at       timestamptz,
-    -- the journal_entries row (lane 2) that narrated this row's close, if any.
+    -- the journal_entries row that narrated this row's close, if any.
     -- A plain uuid, not a self-FK — mirrors journal_entries.superseded_by.
     closed_by_entry uuid,
 

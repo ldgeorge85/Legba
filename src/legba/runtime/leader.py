@@ -118,7 +118,7 @@ def assert_singleton_safe() -> None:
         gate the singleton loops to one replica).
       * ``LEGBA_REPLICA_COUNT > 1`` + election OFF   → :class:`SingletonSafetyError`.
 
-    This is the interim guard from ``planning/SCALING.md`` §scaling-multinode:
+    This is an interim guard:
     it cannot count sibling replicas at runtime (no orchestrator introspection),
     so it trusts the operator-declared count — converting a *silently wrong*
     multi-replica deploy into a *loud refusal at boot*.
@@ -133,7 +133,7 @@ def assert_singleton_safe() -> None:
             "informer) on every replica. Set "
             f"{LEADER_ELECTION_ENV}=pg-advisory to enable Postgres-advisory-lock "
             f"leader election, or set {REPLICA_COUNT_ENV}=1 for a single-node "
-            "deployment. See docs/SEAMS.md + planning/SCALING.md."
+            "deployment. See docs/SEAMS.md."
         )
     logger.info(
         "leader.singleton_guard.ok replica_count=%d leader_election=%s",

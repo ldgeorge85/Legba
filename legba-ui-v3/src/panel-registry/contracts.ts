@@ -69,6 +69,12 @@ export interface PanelContract {
   binds: readonly BindType[]
   size: SizeClass
   home: ViewHome
+  /**
+   * The page an operator view opens on when it is opened from elsewhere (a
+   * page id, `lib/surfaces.ts`). Optional: without it an operator view that
+   * no page seeds opens on Investigate.
+   */
+  page?: string
   /** The actions beyond the three every view accepts. */
   actions: readonly PanelActionSpec[]
 }
@@ -174,9 +180,20 @@ const subjectNoun = PROFILE_UI.subject.singular
 
 export const READER_CONTRACTS: readonly PanelContract[] = [
   {
+    id: 'view:board_changed',
+    name: 'What changed',
+    description: 'What changed since you last looked, ranked: eight rows, then more; what was checked, the gaps and what is due as filters of the same list.',
+    group: 'Read',
+    side: 'reader',
+    binds: ['subject'],
+    size: 'stage',
+    home: 'stage',
+    actions: [SELECT],
+  },
+  {
     id: 'v4.morning_read',
     name: "Today's read",
-    description: 'What changed since you last looked, ranked, with the sentences that carry it.',
+    description: 'The full daily read: every change, check, gap and due call by subject, then the composed record.',
     group: 'Read',
     side: 'reader',
     binds: ['window'],
@@ -245,39 +262,6 @@ export const READER_CONTRACTS: readonly PanelContract[] = [
         args: [{ name: 'run', type: 'string', required: true, describe: "the run's id; it moves to the top" }],
       },
     ],
-  },
-  {
-    id: 'system.eval_scorecard',
-    name: 'Accuracy',
-    description: 'How good this system is: the track record, losses included.',
-    group: 'Forecasts and proof',
-    side: 'reader',
-    binds: [],
-    size: 'column',
-    home: 'panel',
-    actions: [],
-  },
-  {
-    id: 'system.alerts_watches',
-    name: 'Alerts and watches',
-    description: 'What you asked to be told about, what fired, and what was delivered.',
-    group: 'Watch',
-    side: 'reader',
-    binds: ['alert'],
-    size: 'column',
-    home: 'panel',
-    actions: [setTab(['watches', 'triggers', 'deliveries']), SELECT],
-  },
-  {
-    id: 'system.source_health',
-    name: 'Source health',
-    description: 'Which sources are answering, which are quiet, and since when.',
-    group: 'Watch',
-    side: 'reader',
-    binds: ['source'],
-    size: 'column',
-    home: 'panel',
-    actions: [SELECT],
   },
   // U-9 — the Watch surface's three views (`v4/watch/`, components attached
   // by `v4/watch/register.tsx`): the alert log on the stage, the silences and
@@ -491,6 +475,42 @@ export const SLOT_CONTRACTS: readonly PanelContract[] = [
  * actions on them (`scripts/gen_panel_action_catalog.py` reads this array).
  */
 export const OPERATOR_CONTRACTS: readonly PanelContract[] = [
+  // The instrument views a reader page used to offer as tabs (the roster-wide
+  // accuracy page, source health with its re-check flags, the watches' own
+  // definitions and triggers): the operator side's, beside the engine.
+  {
+    id: 'system.eval_scorecard',
+    name: 'Accuracy',
+    description: 'How good this system is: the track record, losses included.',
+    group: 'Forecasts and proof',
+    side: 'operator',
+    binds: [],
+    size: 'column',
+    home: 'panel',
+    actions: [],
+  },
+  {
+    id: 'system.alerts_watches',
+    name: 'Alerts and watches',
+    description: 'What you asked to be told about, what fired, and what was delivered.',
+    group: 'Watch',
+    side: 'operator',
+    binds: ['alert'],
+    size: 'column',
+    home: 'panel',
+    actions: [setTab(['watches', 'triggers', 'deliveries']), SELECT],
+  },
+  {
+    id: 'system.source_health',
+    name: 'Source health',
+    description: 'Which sources are answering, which are quiet, and since when.',
+    group: 'Watch',
+    side: 'operator',
+    binds: ['source'],
+    size: 'column',
+    home: 'panel',
+    actions: [SELECT],
+  },
   {
     id: 'view:resolutions',
     name: 'Forecast resolutions',

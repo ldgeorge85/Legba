@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""A CHANGE REPORT IS ITS OWN RE-EVIDENCE (``legba.data.carried_state``, roll 65).
+"""A CHANGE REPORT IS ITS OWN RE-EVIDENCE (``legba.data.carried_state``).
 
-The carry rule (W11-F14) drops a moderate-or-higher desk read whose indicators
+The carry rule drops a moderate-or-higher desk read whose indicators
 all read ``not_observed`` once the newest read whose indicators DID see
 something is older than 3 x the 11 h cadence. A desk with only change-shaped
 tripwires and no level-shaped indicator almost never re-evidences (the top-job
@@ -292,7 +292,7 @@ def _verdict(key: str, *, fetched: dict[str, Any] | None, after_h: float = 10.75
 def test_the_four_political_change_reads_survive(key: str) -> None:
     row = _row(key)
     assert cs.reports_change(row)
-    # Before roll 65 (no fetch map consulted) every one of them was dropped …
+    # Without the fetch map consulted, every one of them was dropped …
     convicted = _verdict(key, fetched=None)
     assert convicted is not None and convicted["cause"] == cs.CAUSE_NOT_RE_EVIDENCED
     assert convicted["last_evidence_age_h"] > 33.0
@@ -384,8 +384,7 @@ def test_items_fetched_after_the_read_do_not_count() -> None:
      "freeze holds", False),
     ("Haiti's coup vulnerability remains high because the state's street-security "
      "still rests on more than 2,000 Salvadoran troops", False),
-    # Mali's world block on 30c50710 — eligible for the restraint floor before
-    # roll 65 on the denied "defection" alone.
+    # Mali's world block — eligible for the restraint floor, absent the fetch map, on the denied "defection" alone.
     ("Repression of political critics remains this desk's driving instability "
      "vector, now coupled with the state's capacity test from a mass Guinea influx "
      "— and no mass protest, security-force defection, or elite fracture appears "

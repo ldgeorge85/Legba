@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 PRIMARY = "llm.primary.openai_compat"
-SECOND = "llm.verify.innoai_gemma.openai_compat"
+SECOND = "llm.verify.gateway_judge.openai_compat"
 
 BASE_CARDS = ("reader.md", "judge.md", "editor.md")
 

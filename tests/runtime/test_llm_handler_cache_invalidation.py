@@ -1,11 +1,10 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""S-2 — LLM handler cache invalidation on ``stack.component.>``.
+"""LLM handler cache invalidation on ``stack.component.>``.
 
 The defect these lock down: ``dapr_host._llm_handler_cache`` keyed a built
-handler by ``component_id`` alone, with no version and no invalidation, so the
-operator's 2026-08-01 timeout PUT (60→240s, mid-incident) stayed inert for 3.5 h
-until a container recreate. The registry was already publishing the change on
+handler by ``component_id`` alone, with no version and no invalidation, so a
+timeout change made through the stack component stayed inert until a container recreate. The registry was already publishing the change on
 ``stack.component.>``; nothing consumed it.
 
 What is asserted here:
@@ -80,7 +79,7 @@ def _isolate_registry():
     the informer evicts through it from outside any runtime closure), so leaking
     a test's cache into the next one would make failures order-dependent.
 
-    The PROCESS's registrations are put back exactly at teardown (W11-F112).
+    The PROCESS's registrations are put back exactly at teardown.
     They are made once, at module import (``bearing_gate`` / ``bearing_shadow``
     call ``register_handler_cache`` at top level), and nothing re-makes them —
     this fixture used to end on a bare clear, so every test after this module

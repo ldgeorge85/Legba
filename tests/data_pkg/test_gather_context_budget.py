@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W11-F91 — the multi-round GATHER evidence cap, its pre-flight and its receipt.
+"""the multi-round GATHER evidence cap, its pre-flight and its receipt.
 
 On 2026-10-16 the corpus_researcher sent ~124,000 characters of evidence into
 a 32,000-token input budget and got an empty completion back. These tests pin

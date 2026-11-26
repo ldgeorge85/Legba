@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""KW-3 — the ``claim_watch`` flag-only new-evidence-vs-open-question matcher.
+"""The ``claim_watch`` flag-only new-evidence-vs-open-question matcher.
 
 Pure tests (no DB): cosine, the fused-weight model (per-plane floors, the
 conservative threshold arithmetic), question age dampening. Ephemeral-DB
@@ -1244,7 +1244,7 @@ async def test_review_flags_only_for_live_traced_questions(
 
 
 async def test_review_flags_fire_from_the_REAL_producer_stamp(pg_pool, clean_slate):
-    """W1-C2 — the same flag, seeded the way PRODUCTION seeds it.
+    """The same flag, seeded the way PRODUCTION seeds it.
 
     The sibling test above hand-writes its ``output_consumption`` rows with
     ``context='composition_basis'`` / ``consumer_kind='meta_findings_

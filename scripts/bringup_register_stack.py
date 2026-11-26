@@ -32,11 +32,31 @@ LLM_API_ENDPOINT = os.environ.get("LEGBA_LLM_API_ENDPOINT", "https://llm.example
 NLP_API_ENDPOINT = os.environ.get("LEGBA_NLP_API_ENDPOINT", "https://nlp.example.internal")
 LLM_MODEL_NAME = os.environ.get("LEGBA_LLM_MODEL_NAME", "gpt-oss-120b")
 LLM_THINKING_MODEL_NAME = os.environ.get("LEGBA_LLM_THINKING_MODEL_NAME", "").strip()
+
+
+def _env_count(name: str) -> int | None:
+    """A positive whole number from the environment, or None when unset.
+    A malformed value stops registration rather than registering a guess."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return None
+    if not raw.isdigit() or int(raw) <= 0:
+        raise SystemExit(f"{name}={raw!r} is not a positive whole number")
+    return int(raw)
+
+
+# The primary model's own limits, as its endpoint states them: the maximum
+# output of the plain alias and of the thinking alias, and the context window.
+# Each one unset = the field is left out: no max_tokens is sent for that alias
+# (the endpoint's default applies) and the input budget falls back.
+LLM_MAX_OUTPUT_TOKENS = _env_count("LEGBA_LLM_MAX_OUTPUT_TOKENS")
+LLM_THINKING_MAX_OUTPUT_TOKENS = _env_count("LEGBA_LLM_THINKING_MAX_OUTPUT_TOKENS")
+LLM_CONTEXT_WINDOW_TOKENS = _env_count("LEGBA_LLM_CONTEXT_WINDOW_TOKENS")
 EMBED_MODEL_NAME = os.environ.get("LEGBA_EMBED_MODEL_NAME", "bge-m3")
 # The Anthropic consult plane (`llm.anthropic.opus_4_7`, the id historical) is
 # no longer an inline body here: its reviewable home is
 # descriptors/stack_component_llm_anthropic_opus_4_7.yaml, loaded through
-# `_STACK_DESCRIPTOR_FILES` below (lane W11-G1, 2026-11-05: pinned to Claude
+# `_STACK_DESCRIPTOR_FILES` below (pinned to Claude
 # Opus 5.5 for the bake-off). The old `LEGBA_CONSULT_MODEL_NAME` env default
 # (claude-opus-4-8) was two models stale and is gone with it.
 
@@ -70,7 +90,7 @@ COMPONENTS: list[tuple[str, dict]] = [
             "name": "gpt-oss-120b (OpenAI-compatible)",
             "schema_uri": "legba/stack/llm_provider/1.0.0",
             "state": "active",
-            "owner": "lewis@local",
+            "owner": "owner@local",
             "config": {
                 # Note: store the base host only. The LLM handler's
                 # _chat_endpoint_path() prepends `/v1/...`; trailing `/v1`
@@ -78,7 +98,8 @@ COMPONENTS: list[tuple[str, dict]] = [
                 "api_endpoint": _t(LLM_API_ENDPOINT),
                 "api_key": _s("llm.primary.api_key"),
                 "model_name": _t(LLM_MODEL_NAME),
-                "max_tokens": _n(16384),
+                **({"max_output_tokens": _n(LLM_MAX_OUTPUT_TOKENS)} if LLM_MAX_OUTPUT_TOKENS else {}),
+                **({"context_window_tokens": _n(LLM_CONTEXT_WINDOW_TOKENS)} if LLM_CONTEXT_WINDOW_TOKENS else {}),
                 "tier": _dd("primary", ["primary", "fallback", "cheap"]),
                 # Client-side concurrency cap (#21 headroom): at most 12
                 # in-flight completions from one process against the primary
@@ -95,6 +116,10 @@ COMPONENTS: list[tuple[str, dict]] = [
                     {"thinking_model_name": _t(LLM_THINKING_MODEL_NAME)}
                     if LLM_THINKING_MODEL_NAME else {}
                 ),
+                **(
+                    {"thinking_max_output_tokens": _n(LLM_THINKING_MAX_OUTPUT_TOKENS)}
+                    if LLM_THINKING_MODEL_NAME and LLM_THINKING_MAX_OUTPUT_TOKENS else {}
+                ),
             },
         },
     ),
@@ -109,7 +134,7 @@ COMPONENTS: list[tuple[str, dict]] = [
             "name": "Cerebras gemma-4-31b (cross-family verify judge, PAYG)",
             "schema_uri": "legba/stack/llm_provider/1.0.0",
             "state": "active",
-            "owner": "lewis@local",
+            "owner": "owner@local",
             "config": {
                 "api_endpoint": _t("https://api.cerebras.ai"),
                 "api_key": _s("llm.judge.cerebras.api_key"),
@@ -145,7 +170,7 @@ COMPONENTS: list[tuple[str, dict]] = [
             "name": "OpenRouter Nemotron-3-super-120b (cross-family judge, free lane)",
             "schema_uri": "legba/stack/llm_provider/1.0.0",
             "state": "active",
-            "owner": "lewis@local",
+            "owner": "owner@local",
             "config": {
                 "api_endpoint": _t("https://openrouter.ai/api"),
                 "api_key": _s("llm.judge.openrouter.api_key"),
@@ -192,7 +217,7 @@ COMPONENTS: list[tuple[str, dict]] = [
             "name": "OpenRouter Llama-3.3-70B (external-audit rater, fourth family)",
             "schema_uri": "legba/stack/llm_provider/1.0.0",
             "state": "draft",
-            "owner": "lewis@local",
+            "owner": "owner@local",
             "config": {
                 "api_endpoint": _t("https://openrouter.ai/api"),
                 "api_key": _s("llm.judge.openrouter.api_key"),
@@ -224,7 +249,7 @@ COMPONENTS: list[tuple[str, dict]] = [
             "name": "OpenRouter Nemotron-3-ultra-550b (judge matrix, free lane)",
             "schema_uri": "legba/stack/llm_provider/1.0.0",
             "state": "active",
-            "owner": "lewis@local",
+            "owner": "owner@local",
             "config": {
                 "api_endpoint": _t("https://openrouter.ai/api"),
                 "api_key": _s("llm.judge.openrouter.api_key"),
@@ -254,10 +279,9 @@ COMPONENTS: list[tuple[str, dict]] = [
         #
         # The handler's _chat_endpoint_path() prepends `/v1/...` and the base
         # client strips a trailing `/v1` defensively, so this endpoint
-        # normalizes to https://openrouter.ai/api on the wire. max_tokens
-        # feeds the BudgetEnforcer estimate only — the vLLM handler does not
-        # put it on the wire unless the caller opts in (send_max_tokens; the
-        # opt-in exists if the free lane needs a cap). FREE-TIER LIMITS:
+        # normalizes to https://openrouter.ai/api on the wire. max_tokens is
+        # read by nothing (kept so the stored row is unchanged); with no
+        # max_output_tokens declared, no max_tokens is sent. FREE-TIER LIMITS:
         # 20 RPM, ~50 requests/day (~1000/day after a $10 lifetime credit) —
         # the reason the verify path samples (J2). The key is the vault ref
         # loaded by bringup_vault_load.py from .env OPENROUTER_API_KEY.
@@ -270,7 +294,7 @@ COMPONENTS: list[tuple[str, dict]] = [
             ),
             "schema_uri": "legba/stack/llm_provider/1.0.0",
             "state": "active",
-            "owner": "lewis@local",
+            "owner": "owner@local",
             "config": {
                 "api_endpoint": _t("https://openrouter.ai/api/v1"),
                 "api_key": _s("llm.judge.openrouter.api_key"),
@@ -296,7 +320,7 @@ COMPONENTS: list[tuple[str, dict]] = [
             "name": "bge-m3 (vLLM /v1/embeddings)",
             "schema_uri": "legba/stack/embedding/1.0.0",
             "state": "active",
-            "owner": "lewis@local",
+            "owner": "owner@local",
             "config": {
                 "endpoint": _t(LLM_API_ENDPOINT),
                 "api_key": _s("llm.primary.api_key"),
@@ -320,7 +344,7 @@ COMPONENTS: list[tuple[str, dict]] = [
             "name": "Legba-models NLP service (translate/classify/extract/summarize)",
             "schema_uri": "legba/stack/nlp_service/1.0.0",
             "state": "active",
-            "owner": "lewis@local",
+            "owner": "owner@local",
             "config": {
                 "endpoint": _t(NLP_API_ENDPOINT),
                 "api_user": _s("nlp.local.legba_models.api_user"),
@@ -341,7 +365,7 @@ COMPONENTS: list[tuple[str, dict]] = [
             "name": "Qdrant cluster (main)",
             "schema_uri": "legba/stack/vector_store/1.0.0",
             "state": "active",
-            "owner": "lewis@local",
+            "owner": "owner@local",
             "config": {
                 "endpoint": _t("http://qdrant:6333"),
                 "collection_prefix": _t("legba_"),
@@ -357,7 +381,7 @@ COMPONENTS: list[tuple[str, dict]] = [
             "name": "NATS cluster (main, JetStream)",
             "schema_uri": "legba/stack/nats/1.0.0",
             "state": "active",
-            "owner": "lewis@local",
+            "owner": "owner@local",
             "config": {
                 "servers": _list(["nats://nats:4222"]),
                 "jetstream": _dd("enabled", ["enabled", "disabled"]),
@@ -371,7 +395,7 @@ COMPONENTS: list[tuple[str, dict]] = [
             "name": "Postgres + AGE (main substrate)",
             "schema_uri": "legba/stack/postgres/1.0.0",
             "state": "active",
-            "owner": "lewis@local",
+            "owner": "owner@local",
             "config": {
                 "host": _t("postgres"),
                 "port": _n(5432),
@@ -390,7 +414,7 @@ COMPONENTS: list[tuple[str, dict]] = [
             "name": "Local no-op proxy (dev)",
             "schema_uri": "legba/stack/proxy_pool/1.0.0",
             "state": "active",
-            "owner": "lewis@local",
+            "owner": "owner@local",
             "config": {
                 "provider": _dd("none",
                                 ["none", "bright_data", "oxylabs", "self_managed"]),
@@ -421,7 +445,7 @@ COMPONENTS: list[tuple[str, dict]] = [
             "name": "SearXNG metasearch (local)",
             "schema_uri": "legba/stack/search_provider/1.0.0",
             "state": "active",
-            "owner": "lewis@local",
+            "owner": "owner@local",
             "config": {
                 "subprovider": _dd(
                     "searxng",
@@ -468,8 +492,8 @@ COMPONENTS: list[tuple[str, dict]] = [
 # The THIRD-FAMILY GRADER (Mistral Large 3 on OpenRouter) is loaded the same
 # way, and for the same reason. It ships `state: draft` too: registering it
 # activates nothing, and it stays inert until the operator transitions it AND
-# repoints the three refs that name the unfunded Cerebras Gemma slot today
-# (planning/PROOF_ROUND_2026-09-12/GRADER_REPOINT.md). See that descriptor's
+# repoints the three refs that name the unfunded Cerebras Gemma slot today.
+# See that descriptor's
 # header for why the model family is declared in the fence's
 # `GRADER_FAMILY_BY_COMPONENT` map and not in the YAML: both stack schemas are
 # `extra="forbid"`, so a `family:` key would be a register-time validation
@@ -487,26 +511,26 @@ DESCRIPTORS_DIR = Path(__file__).resolve().parents[1] / "descriptors"
 _STACK_DESCRIPTOR_FILES = [
     "stack_component_search_brave.yaml",
     # stack_component_llm_judge_openrouter_mistral_large.yaml — RETIRED 2026-10-23
-    # (OpenRouter credits gone 10-17; the slot moved to the Lightning grader below).
+    # (OpenRouter credits gone 10-17; the slot moved to the Nemotron grader below).
     # The file stays as the reviewable history of that lane; a fresh bring-up
     # must not seed a dead paid lane.
     "stack_component_llm_anthropic_fable_5_1.yaml",
-    # W11-G1 (2026-11-05): the default consult plane and the bake-off's frontier
+    # The default consult plane and the bake-off's frontier
     # model — the id is historical, the YAML pins claude-opus-5-5.
     "stack_component_llm_anthropic_opus_4_7.yaml",
-    # Cutover 2026-10-22 (ai1 → the innoai gateway): the judge on the box, its
+    # Cutover 2026-10-22 (models host → the model gateway): the judge on the box, its
     # second family, and the third-family grader. Reviewable homes of the bodies.
-    "stack_component_llm_verify_innoai_gemma.yaml",
-    "stack_component_llm_judge_innoai_lightning_think.yaml",
-    # W11-G1: the bake-off GOLD DRAFTER (gemma-think, thinking on). Draft;
+    "stack_component_llm_verify_gateway_judge.yaml",
+    "stack_component_llm_judge_gateway_rung2_think.yaml",
+    # The bake-off GOLD DRAFTER (gemma-think, thinking on). Draft;
     # activated for the gold step only (scripts/bakeoff/README.md).
-    "stack_component_llm_verify_innoai_gemma_think.yaml",
-    "stack_component_llm_grader_innoai_lightning.yaml",
-    # W11-F108: the decision model (POST /decide), the bearing gate's shadow.
-    "stack_component_llm_decide_innoai_clef_flash.yaml",
-    # W11-F107: the NLP plane on the gateway (entities/relations/classify).
+    "stack_component_llm_verify_gateway_gold_drafter.yaml",
+    "stack_component_llm_grader_gateway_third_family.yaml",
+    # The decision model (POST /decide), the bearing gate's shadow.
+    "stack_component_llm_decide_gateway_typed_choice.yaml",
+    # The NLP plane on the gateway (entities/relations/classify).
     # Draft; the runtime binds it only when LEGBA_NLP_COMPONENT_ID names it.
-    "stack_component_nlp_innoai_gateway.yaml",
+    "stack_component_nlp_gateway_bearer.yaml",
 ]
 
 

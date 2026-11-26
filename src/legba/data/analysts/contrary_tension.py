@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""THE COMPOSITION TENSION RULE'S contrary-evidence leg (Program 7a).
+"""THE COMPOSITION TENSION RULE'S contrary-evidence leg.
 
 WHAT THE TENSION SECTION IS TODAY. Under the D-5/D-6 assembly regime a
 composition's ``## Tension`` section is DETERMINISTIC: ``assembly_payload.

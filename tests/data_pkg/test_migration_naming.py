@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""R-1 — collision-free migration names.
+"""Collision-free migration names.
 
 Numbered migrations (``NNNN_slug.sql``) are closed above ``LAST_NUMBERED`` and
 keep their order; new ones are time-named (``YYYYMMDDTHHMM_slug.sql``, UTC) and
@@ -36,8 +36,8 @@ def test_shipped_names_all_parse_and_keep_their_historic_order():
 
 
 def test_numbered_names_close_at_the_highest_numbered_file_present():
-    """The rule as it stands (roll 85): numbered names are closed above the
-    highest numbered migration present when R-1 merged, after lanes that had
+    """The rule as it stands: numbered names are closed above the
+    highest numbered migration present when merged, after branches that had
     already taken 0263-0268 (0266 one byte path and 0268 the desk-rows shadow
     keep their reserved numbers). No new file may be numbered, so the highest
     numbered file present stays exactly LAST_NUMBERED."""
@@ -126,7 +126,7 @@ async def test_two_lanes_add_migrations_independently_and_merge_without_renumber
     for name in ("0001_baseline.sql", "0257_indexes.sql", "0258_claim_host_class.sql"):
         (main / name).write_text(f"-- {name}\nSELECT 1;\n")
 
-    # Each lane names its migration from its own clock — no shared counter read.
+    # Each branch names its migration from its own clock — no shared counter read.
     lane_a = _lane(main, tmp_path / "lane_a", {
         new_migration_name("widget_table", datetime(2026, 11, 15, 9, 0, tzinfo=timezone.utc)):
             "CREATE TABLE IF NOT EXISTS widget (id int);\n"})
@@ -152,7 +152,7 @@ async def test_two_lanes_add_migrations_independently_and_merge_without_renumber
         mine = [p.name for p in ordered_migration_files(lane)]
         assert [n for n in order if n in mine] == mine
 
-    # A host that already ran lane A's file applies only lane B's on the merge,
+    # A host that already ran branch A's file applies only branch B's on the merge,
     # and a second run applies nothing: the ledger is keyed by name.
     conn = _FakeConn()
     first = await migrate.apply_files(conn, ordered_migration_files(lane_a))

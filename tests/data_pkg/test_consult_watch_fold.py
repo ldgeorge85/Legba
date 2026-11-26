@@ -1,15 +1,16 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W4-F1 — the consult watch fold made semantic, and DEC-19.
+"""The consult watch fold made semantic, and DEC-19.
 
 What is proven here, and on what:
 
-  * THE FOUR LIVE ROWS (pure, exact texts from country_watch_ir 2026-10-03):
+  * THE FOUR RECORDED ROWS (pure, indicator texts of one desk):
     the arms pair folds; the naval row and the enrichment row fold onto
     nothing — the brief's "two pairs" was measured to be ONE pair (the naval
     row's horizon is 7 days from every other row, and neither it nor the
     enrichment row is the same claim as anything else).
-  * WHY A CLAIM CORE (recorded vectors, the live ``embedding-inno1``): on the
+  * WHY A CLAIM CORE (vectors built in the test with the cosines a 1024-d
+    sentence embedder gave these texts): on the
     RAW texts the duplicate pair (0.712) scores BELOW a different claim
     (arms vs naval, 0.714); on the cores the duplicate is identical, a true
     paraphrase scores 0.947, every cross pair <= 0.57 and a negation 0.71.
@@ -49,12 +50,63 @@ from legba.data.provenance import AnalystContext
 from legba.data.provenance.models import ConsultResponsePayload, FindingPayload
 
 _REPO = Path(__file__).resolve().parents[2]
-_FIXTURE = Path(__file__).parent / "fixtures" / "consult_watch_fold_vectors.json"
+
+#: Pairwise cosines between ten texts (six claim cores, then the four raw
+#: indicator texts), in this order. The vectors the tests use are rebuilt from
+#: this matrix, so no embedding output is stored.
+_TEXTS = [
+    "major arms acquisition", "naval buildup", "enrichment level increase",
+    "major arms purchase", "no major arms acquisition",
+    "major arms acquisition indicator not observed",
+    "major-arms-acquisition indicator observed", "naval-buildup indicator observed",
+    "detection of a major arms acquisition (e.g., new missile system",
+    "evidence of an enrichment-level increase (e.g., higher-grade uranium",
+]
+_COSINES = [
+    [1.0, 0.565, 0.433, 0.947, 0.71, 0.717, 0.793, 0.485, 0.747, 0.462],
+    [0.565, 1.0, 0.512, 0.566, 0.449, 0.459, 0.506, 0.788, 0.521, 0.548],
+    [0.433, 0.512, 1.0, 0.444, 0.339, 0.371, 0.454, 0.471, 0.424, 0.7],
+    [0.947, 0.566, 0.444, 1.0, 0.707, 0.693, 0.748, 0.477, 0.713, 0.441],
+    [0.71, 0.449, 0.339, 0.707, 1.0, 0.81, 0.589, 0.399, 0.539, 0.327],
+    [0.717, 0.459, 0.371, 0.693, 0.81, 1.0, 0.832, 0.616, 0.611, 0.424],
+    [0.793, 0.506, 0.454, 0.748, 0.589, 0.832, 1.0, 0.714, 0.712, 0.526],
+    [0.485, 0.788, 0.471, 0.477, 0.399, 0.616, 0.714, 1.0, 0.567, 0.591],
+    [0.747, 0.521, 0.424, 0.713, 0.539, 0.611, 0.712, 0.567, 1.0, 0.606],
+    [0.462, 0.548, 0.7, 0.441, 0.327, 0.424, 0.526, 0.591, 0.606, 1.0],
+]
+_DIM = 1024
+
+
+def _vectors_from_cosines() -> list[list[float]]:
+    """Unit vectors in ``_DIM`` dimensions whose pairwise cosines are
+    ``_COSINES``: a Cholesky factor of the matrix, laid on a seeded orthonormal
+    basis. Deterministic."""
+    import random
+
+    n = len(_COSINES)
+    chol = [[0.0] * n for _ in range(n)]
+    for i in range(n):
+        for j in range(i + 1):
+            acc = _COSINES[i][j] - sum(chol[i][k] * chol[j][k] for k in range(j))
+            chol[i][j] = math.sqrt(acc) if i == j else acc / chol[j][j]
+    rng = random.Random(20261125)
+    basis: list[list[float]] = []
+    while len(basis) < n:
+        v = [rng.gauss(0.0, 1.0) for _ in range(_DIM)]
+        for b in basis:
+            dot = sum(x * y for x, y in zip(v, b))
+            v = [x - dot * y for x, y in zip(v, b)]
+        norm = math.sqrt(sum(x * x for x in v))
+        basis.append([x / norm for x in v])
+    return [
+        [round(sum(chol[i][k] * basis[k][d] for k in range(i + 1)), 5) for d in range(_DIM)]
+        for i in range(n)
+    ]
 
 H17 = datetime(2026, 10, 17, tzinfo=timezone.utc)
 H10 = datetime(2026, 10, 10, tzinfo=timezone.utc)
 
-#: The four live rows on country_watch_ir (2026-10-03), their marker
+#: Four recorded rows on one desk, their marker
 #: ``resolution_test`` verbatim, their horizon and their mint time.
 LIVE = {
     "e6227510": ("major-arms-acquisition indicator observed", H17,
@@ -73,7 +125,13 @@ def _cos(a: Sequence[float], b: Sequence[float]) -> float:
 
 
 def _recorded() -> dict[str, Any]:
-    return json.loads(_FIXTURE.read_text(encoding="utf-8"))
+    vecs = dict(zip(_TEXTS, _vectors_from_cosines()))
+    return {
+        "component": "embed.primary.openai_compat",
+        "dim": _DIM,
+        "cores": {t: vecs[t] for t in _TEXTS[:6]},
+        "raw": {t: vecs[t] for t in _TEXTS[6:]},
+    }
 
 
 def _retro_fold(vectors: dict[str, list[float]] | None) -> dict[str, str | None]:

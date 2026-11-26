@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """legba.prompts.lens_capability — the capability-weigher faculty's persona + prior.
 
-VOICES v1 faculty (planning/VOICES_FACULTY_PRIORS.md § lens_capability; DL-3). One
+VOICES v1 faculty. One
 of four function-typed lenses on the journal_assessor kind. This faculty weights
 material facts — what actors physically CAN do — over what they say they will do;
 the order of battle is the argument. It is the designed OPPOSITE of lens_intent.
@@ -10,7 +10,7 @@ the order of battle is the argument. It is the designed OPPOSITE of lens_intent.
 The prior below is the reconciled, falsifiable prior VERBATIM (RECONCILIATION
 STAMP 2026-07-21 — blind-spot gate REPAIRED, trigger now the record-visible
 diplomacy-advancing-while-posture-static condition). Single source of truth for
-the consistency judge; the descriptor's content hash IS the prior version (DL-2).
+the consistency judge; the descriptor's content hash IS the prior version.
 Shared tower-only task + narrate contract in ``legba.prompts.lens_common``.
 """
 

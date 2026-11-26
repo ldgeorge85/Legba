@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""ONE process-wide concurrency bound on the core-plane model (lane T-1).
+"""ONE process-wide concurrency bound on the core-plane model.
 
 Why
 ---
-The owner serves the core model from his own gateway and asked one thing of
-it (2026-11-14): "just don't send too many concurrent". Before this module
+The core model is served from a self-run gateway that needs the number of
+concurrent requests kept modest. Before this module
 the only client-side bound was the component's ``max_concurrent``, held as an
 asyncio semaphore on each HANDLER INSTANCE and each event loop
 (``vllm.py``'s ``_concurrency_sems``). That is not a process bound: the

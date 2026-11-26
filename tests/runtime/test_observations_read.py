@@ -245,7 +245,7 @@ async def test_every_row_carries_its_own_provenance_and_a_citable_ref(pg_pool):
 
 
 async def test_an_unloaded_collection_is_not_readable(pg_pool):
-    """The operator's approval is the gate. A holding still in `reviewed` has
+    """Approval is the gate. A holding still in `reviewed` has
     rows in the table and must not be readable through the front door."""
     async with pg_pool.acquire() as conn:
         await _seed(conn, state="reviewed")

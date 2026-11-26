@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""F-1 — the anchor's Merkle tree, inclusion proofs, and the seal-proof route.
+"""The anchor's Merkle tree, inclusion proofs, and the seal-proof route.
 
   * ONE fold: the handler's ``merkle_root`` is ``anchor_proof.merkle_root``;
   * a path for every leaf of every tree size 1..33 folds to the root; a

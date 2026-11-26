@@ -65,7 +65,7 @@ async def test_guarded_transport_rejects_private_url():
 
 
 # ---------------------------------------------------------------------------
-# A7 — opt-in internal-host allowlist (RSSHub lane sidecar).
+# Opt-in internal-host allowlist (RSSHub sidecar).
 # ---------------------------------------------------------------------------
 
 
@@ -95,7 +95,7 @@ def test_allowlisted_internal_host_permitted(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Wave O / o1 — the transport owns the handshake.
+# The transport owns the handshake.
 #
 # httpx reads `verify=` and `http2=` off the TRANSPORT, and this module is what
 # mounts one. Before o1 the transport was built with NO arguments, so both were
@@ -157,7 +157,7 @@ async def test_pinned_context_is_shared_not_per_host(monkeypatch):
 async def test_caller_kwargs_reach_the_transport(monkeypatch):
     """A caller that names `verify=`/`http2=` gets exactly what it asked for.
 
-    This is the regression the lane exists for: these two used to be accepted
+    This is the regression this test exists for: these two used to be accepted
     by `httpx.AsyncClient` and then ignored, because a mounted transport owns
     them.
     """

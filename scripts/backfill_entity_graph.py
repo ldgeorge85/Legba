@@ -167,7 +167,12 @@ async def main() -> None:
                 INSERT INTO proposed_edges
                     (source_entity, target_entity, relationship_type, confidence,
                      evidence_text, status)
-                VALUES ($1,$2,'co_occurs',0.4,$3,'pending')
+                SELECT $1::text, $2::text, 'co_occurs', 0.4, $3::text, 'pending'
+                 WHERE NOT EXISTS (
+                     SELECT 1 FROM proposed_edge_markers m
+                      WHERE m.source_key = lower($1::text)
+                        AND m.target_key = lower($2::text)
+                        AND m.relationship_type = 'co_occurs')
                 ON CONFLICT (lower(source_entity), lower(target_entity), relationship_type)
                 DO UPDATE SET confidence = LEAST(1.0, proposed_edges.confidence + 0.05)
                 """,

@@ -107,7 +107,7 @@ describe('SystemStatusPanel — Acquisition freshness column', () => {
   })
 })
 
-describe('SystemStatusPanel — Infra backup line (X1-A2)', () => {
+describe('SystemStatusPanel — Infra backup line', () => {
   function stub(backup: unknown) {
     const fetchMock = vi.fn().mockImplementation((url: string) => {
       if (url.includes('/v3/system/backup-status')) {

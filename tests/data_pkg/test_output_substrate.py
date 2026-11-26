@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""L-190 substrate-write surface tests.
+"""Substrate-write surface tests.
 
-Reuses the L-001 ``migrated_pg`` fixture (see ``tests/data_pkg/conftest.py``)
+Reuses the ``migrated_pg`` fixture (see ``tests/data_pkg/conftest.py``)
 so writes land in the same fresh test database as the rest of the
 ``legba.data`` suite. Real Postgres — no asyncpg mocks; this is the typed
 facade over the substrate write path and contract value comes from a real
@@ -150,7 +150,7 @@ async def test_write_finding_happy_path_typed_payload(pg_conn):
         "br_energy_test_l190",
         analyst_id,
         FindingPayload(
-            title="L-190 finding",
+            title="finding",
             body="extracted observation",
             evidence=["e1", "e2"],
         ),
@@ -168,7 +168,7 @@ async def test_write_finding_happy_path_typed_payload(pg_conn):
         new_id,
     )
     assert fetched["kind"] == "finding"
-    assert fetched["title"] == "L-190 finding"
+    assert fetched["title"] == "finding"
     assert fetched["body"] == "extracted observation"
     assert fetched["analyst_id"] == analyst_id
     assert fetched["target_id"] == "br_energy_test_l190"
@@ -298,7 +298,7 @@ async def test_write_situation_happy_path(pg_conn):
         new_id,
     )
     assert fetched["name"] == "Brazil energy spike"
-    # W9 TAX-4: the column holds a REGISTERED classification or ``unclassified``;
+    # The column holds a REGISTERED classification or ``unclassified``;
     # "energy" is no registered class, so the column reads unclassified and the
     # producer's word is kept byte for byte as data.category_raw (the topic key).
     assert fetched["category"] == "unclassified"

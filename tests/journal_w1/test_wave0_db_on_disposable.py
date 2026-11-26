@@ -8,7 +8,7 @@ The Wave-0 suites live under tests/data_pkg, whose conftest hardwires the live
 ``legba`` / ``legba-postgres-1``) we re-import their test functions here, where
 the journal_w1 conftest supplies a ``migrated_pg`` / ``pg_conn`` pointed at the
 disposable 5544 instance. The asserted behavior is IDENTICAL — this module only
-redirects the DB the same tests run against, proving Wave 1 did not regress the
+redirects the DB the same tests run against, proving the instrument tools did not regress the
 off-chain invariant or the consolidation supersession machinery.
 """
 

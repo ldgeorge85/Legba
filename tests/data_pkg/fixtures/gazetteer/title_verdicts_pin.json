@@ -1,11 +1,11 @@
 {
- "_about": "CANON-1 verdict-parity fixture: 50 live signal titles (public headlines, read-only SELECT 2026-10-04: 15 source.gdelt.files CAMEO codings, 25 officeholder-shaped titles, 10 colon titles) with the verdicts the PIN fcbafb2e computed through _CAMEO_TITLE_RE, the machine-structured row screen, the officeholder extractor, the stale-leader guard, the cross-target leak guard (four desks) and the V-B claim-scope resolver.",
+ "_about": "CANON-1 verdict-parity fixture: 50 invented signal titles (15 machine-coded event titles, 25 officeholder-shaped titles, 10 other) with the verdicts the classifier, the machine-structured row screen, the officeholder extractor, the stale-leader guard, the cross-target leak guard (four desks) and the claim-scope resolver return. Persons, clubs and companies are invented; country names are real because the gazetteer keys on them.",
  "pin": "fcbafb2e",
  "rows": [
   {
    "sample": "gdelt",
    "source_id": "source.gdelt.files",
-   "title": "CHINA <-> LIBERATION ARMY: fight in Zhongping, Jilin, China",
+   "title": "CHINA <-> RIVER AUTHORITY: fight in Exampleton, Northprov, China",
    "verdicts": {
     "cameo_title": true,
     "cross_target_leak": {
@@ -29,7 +29,7 @@
   {
    "sample": "gdelt",
    "source_id": "source.gdelt.files",
-   "title": "CHINA <-> LIBERATION ARMY: fight in He Qing, Guangdong, China",
+   "title": "CHINA <-> HARBOUR POLICE: fight in Sampleburg, Southprov, China",
    "verdicts": {
     "cameo_title": true,
     "cross_target_leak": {
@@ -77,7 +77,7 @@
   {
    "sample": "gdelt",
    "source_id": "source.gdelt.files",
-   "title": "POLICE <-> NORTH WEST: fight in Ghazab, Balochistan, Pakistan",
+   "title": "POLICE <-> EAST DISTRICT: fight in Testabad, Midprov, Pakistan",
    "verdicts": {
     "cameo_title": true,
     "cross_target_leak": {
@@ -101,7 +101,7 @@
   {
    "sample": "gdelt",
    "source_id": "source.gdelt.files",
-   "title": "DHAKA <-> AIRLINE: coerce in Dubai, Dubayy, United Arab Emirates",
+   "title": "TRADER <-> FERRY OPERATOR: coerce in Dubai, Dubayy, United Arab Emirates",
    "verdicts": {
     "cameo_title": true,
     "cross_target_leak": {
@@ -125,7 +125,7 @@
   {
    "sample": "gdelt",
    "source_id": "source.gdelt.files",
-   "title": "PRISONER: coerce",
+   "title": "CLERK: coerce",
    "verdicts": {
     "cameo_title": true,
     "cross_target_leak": {
@@ -148,7 +148,7 @@
   {
    "sample": "gdelt",
    "source_id": "source.gdelt.files",
-   "title": "POLICE <-> CHICAGO: fight in Chicago, Illinois, United States",
+   "title": "POLICE <-> DOCKSIDE: fight in Chicago, Illinois, United States",
    "verdicts": {
     "cameo_title": true,
     "cross_target_leak": {
@@ -171,7 +171,7 @@
   {
    "sample": "gdelt",
    "source_id": "source.gdelt.files",
-   "title": "POLICE <-> HOSPITAL: assault",
+   "title": "POLICE <-> CLINIC: assault",
    "verdicts": {
     "cameo_title": true,
     "cross_target_leak": {
@@ -194,7 +194,7 @@
   {
    "sample": "gdelt",
    "source_id": "source.gdelt.files",
-   "title": "AUSTRALIA <-> TEL AVIV: fight in Melbourne, Victoria, Australia",
+   "title": "AUSTRALIA <-> FREIGHT AGENT: fight in Melbourne, Victoria, Australia",
    "verdicts": {
     "cameo_title": true,
     "cross_target_leak": {
@@ -218,7 +218,7 @@
   {
    "sample": "gdelt",
    "source_id": "source.gdelt.files",
-   "title": "EMBASSY: fight in Athens, AttikíR, Greece",
+   "title": "CONSULATE: fight in Athens, Attica, Greece",
    "verdicts": {
     "cameo_title": true,
     "cross_target_leak": {
@@ -242,7 +242,7 @@
   {
    "sample": "gdelt",
    "source_id": "source.gdelt.files",
-   "title": "DETECTIVE <-> GOVERNMENT OFFICIAL: coerce",
+   "title": "INSPECTOR <-> MINISTRY OFFICIAL: coerce",
    "verdicts": {
     "cameo_title": true,
     "cross_target_leak": {
@@ -265,7 +265,7 @@
   {
    "sample": "gdelt",
    "source_id": "source.gdelt.files",
-   "title": "INVESTOR: assault in Australia",
+   "title": "SUPPLIER: assault in Australia",
    "verdicts": {
     "cameo_title": true,
     "cross_target_leak": {
@@ -289,7 +289,7 @@
   {
    "sample": "gdelt",
    "source_id": "source.gdelt.files",
-   "title": "BUDDHIST MONK: coerce in Sri Lanka",
+   "title": "PORT WORKER: coerce in Sri Lanka",
    "verdicts": {
     "cameo_title": true,
     "cross_target_leak": {
@@ -313,7 +313,7 @@
   {
    "sample": "gdelt",
    "source_id": "source.gdelt.files",
-   "title": "KOLKATA: assault in Taltala, West Bengal, India",
+   "title": "BROKER: assault in Exampleton, West Province, India",
    "verdicts": {
     "cameo_title": true,
     "cross_target_leak": {
@@ -337,7 +337,7 @@
   {
    "sample": "gdelt",
    "source_id": "source.gdelt.files",
-   "title": "ITHACA <-> COLLEGE: assault in Alexandria, Al Iskandariyah, Egypt",
+   "title": "UNION <-> WAREHOUSE: assault in Alexandria, Al Iskandariyah, Egypt",
    "verdicts": {
     "cameo_title": true,
     "cross_target_leak": {
@@ -360,21 +360,20 @@
   },
   {
    "sample": "office",
-   "source_id": "source.france24.english",
-   "title": "Russian strike hits Kyiv amid Chancellor Merz visit",
+   "source_id": "source.example.wire",
+   "title": "Missile strike hits Kyiv amid Chancellor Varden visit",
    "verdicts": {
     "cameo_title": false,
     "cross_target_leak": {
-     "country_g20_cn": true,
-     "country_g20_de": true,
-     "country_g20_us": true,
-     "country_watch_ua": true
+     "country_g20_cn": false,
+     "country_g20_de": false,
+     "country_g20_us": false,
+     "country_watch_ua": false
     },
     "machine_structured": false,
     "officeholder_claims": [],
     "slice_scope": [
      "america",
-     "russia",
      "u.s.",
      "united states",
      "usa"
@@ -384,8 +383,8 @@
   },
   {
    "sample": "office",
-   "source_id": "source.anadolu.english",
-   "title": "German Chancellor Merz arrives in Ukraine for unannounced visit",
+   "source_id": "source.example.gazette",
+   "title": "German Chancellor Varden arrives in Ukraine for unannounced visit",
    "verdicts": {
     "cameo_title": false,
     "cross_target_leak": {
@@ -409,8 +408,8 @@
   },
   {
    "sample": "office",
-   "source_id": "source.aljazeera.world",
-   "title": "Fury to invite US President Trump to lead ring walk before Joshua fight",
+   "source_id": "source.example.notes",
+   "title": "Boxer to invite US President Calloway to lead ring walk before title bout",
    "verdicts": {
     "cameo_title": false,
     "cross_target_leak": {
@@ -423,7 +422,7 @@
     "officeholder_claims": [
      [
       "president",
-      "Trump",
+      "Calloway",
       "US",
       [
        "united states",
@@ -444,8 +443,8 @@
   },
   {
    "sample": "office",
-   "source_id": "source.kyivindependent.news",
-   "title": "German Chancellor Merz arrives in Kyiv, pledges further support for Ukraine",
+   "source_id": "source.example.customs",
+   "title": "German Chancellor Varden arrives in Kyiv, pledges further support for Ukraine",
    "verdicts": {
     "cameo_title": false,
     "cross_target_leak": {
@@ -469,8 +468,8 @@
   },
   {
    "sample": "office",
-   "source_id": "source.japantimes.news",
-   "title": "Latvian Prime Minister Andris Kulbergs wins election held under shadow of Ukraine war",
+   "source_id": "source.example.dispatch",
+   "title": "Latvian Prime Minister Janis Orvalds wins election held under shadow of Ukraine war",
    "verdicts": {
     "cameo_title": false,
     "cross_target_leak": {
@@ -494,8 +493,8 @@
   },
   {
    "sample": "office",
-   "source_id": "source.anadolu.english",
-   "title": "Trump praises Turkish President Erdogan when pressed on delay in lifting sanctions on Ankara",
+   "source_id": "source.example.wire",
+   "title": "Calloway praises Turkish President Demirel when pressed on delay in lifting sanctions on Ankara",
    "verdicts": {
     "cameo_title": false,
     "cross_target_leak": {
@@ -519,8 +518,8 @@
   },
   {
    "sample": "office",
-   "source_id": "source.anadolu.english",
-   "title": "Swiss President Guy Parmelin to step down at end of 2026",
+   "source_id": "source.example.gazette",
+   "title": "Swiss President Anton Brelmer to step down at end of 2026",
    "verdicts": {
     "cameo_title": false,
     "cross_target_leak": {
@@ -543,8 +542,8 @@
   },
   {
    "sample": "office",
-   "source_id": "source.anadolu.english",
-   "title": "UK's Manchester City formally appeals guilty verdict in Premier League financial case",
+   "source_id": "source.example.notes",
+   "title": "UK's Eastmere United formally appeals guilty verdict in league financial case",
    "verdicts": {
     "cameo_title": false,
     "cross_target_leak": {
@@ -567,8 +566,8 @@
   },
   {
    "sample": "office",
-   "source_id": "source.lemonde.english",
-   "title": "Swiss President Guy Parmelin to leave government at end of 2026",
+   "source_id": "source.example.customs",
+   "title": "Swiss President Anton Brelmer to leave government at end of 2026",
    "verdicts": {
     "cameo_title": false,
     "cross_target_leak": {
@@ -591,8 +590,8 @@
   },
   {
    "sample": "office",
-   "source_id": "source.euronews.news",
-   "title": "Switzerland's President Guy Parmelin says he will quit government at end of year",
+   "source_id": "source.example.dispatch",
+   "title": "Switzerland's President Anton Brelmer says he will quit government at end of year",
    "verdicts": {
     "cameo_title": false,
     "cross_target_leak": {
@@ -615,8 +614,8 @@
   },
   {
    "sample": "office",
-   "source_id": "source.cna.all",
-   "title": "Man City appeal Premier League financial ruling",
+   "source_id": "source.example.wire",
+   "title": "Eastmere United appeal league financial ruling",
    "verdicts": {
     "cameo_title": false,
     "cross_target_leak": {
@@ -638,8 +637,8 @@
   },
   {
    "sample": "office",
-   "source_id": "source.cna.all",
-   "title": "Man City confirm appeal after Premier League charges verdict",
+   "source_id": "source.example.gazette",
+   "title": "Eastmere United confirm appeal after league charges verdict",
    "verdicts": {
     "cameo_title": false,
     "cross_target_leak": {
@@ -661,8 +660,8 @@
   },
   {
    "sample": "office",
-   "source_id": "source.meduza.english",
-   "title": "German retailer Globus stayed in Russia after the full-scale invasion. Now its Russian arm has put former German Chancellor Gerhard Schröder on its supervisory board.",
+   "source_id": "source.example.notes",
+   "title": "German retailer Northvale stayed in Russia after the full-scale invasion. Now its Russian arm has put former German Chancellor Hartwig Lenz on its supervisory board.",
    "verdicts": {
     "cameo_title": false,
     "cross_target_leak": {
@@ -686,8 +685,8 @@
   },
   {
    "sample": "office",
-   "source_id": "source.jpost.frontpage",
-   "title": "Indian flydubai pilot who opened cockpit door shares story with Prime Minister Narendra Modi",
+   "source_id": "source.example.customs",
+   "title": "Indian airline pilot who opened cockpit door shares story with Prime Minister Raghav Mehra",
    "verdicts": {
     "cameo_title": false,
     "cross_target_leak": {
@@ -710,8 +709,8 @@
   },
   {
    "sample": "office",
-   "source_id": "source.gcaptain.all",
-   "title": "Premier Alliance Prepares for Asia-N Europe Services Return to Suez",
+   "source_id": "source.example.dispatch",
+   "title": "Northvale Alliance prepares for Asia-N Europe services return to Suez",
    "verdicts": {
     "cameo_title": false,
     "cross_target_leak": {
@@ -733,8 +732,8 @@
   },
   {
    "sample": "office",
-   "source_id": "source.batimes.news",
-   "title": "Reports: US Vice-President JD Vance to visit Argentina in November",
+   "source_id": "source.example.wire",
+   "title": "Reports: US Vice-President Dana Whitlock to visit Argentina in November",
    "verdicts": {
     "cameo_title": false,
     "cross_target_leak": {
@@ -757,8 +756,8 @@
   },
   {
    "sample": "office",
-   "source_id": "source.theloadstar.news",
-   "title": "Premier Alliance prepares for Asia-N Europe services return to Suez",
+   "source_id": "source.example.gazette",
+   "title": "Northvale Alliance prepares for Asia-N Europe services return to Suez route",
    "verdicts": {
     "cameo_title": false,
     "cross_target_leak": {
@@ -780,8 +779,8 @@
   },
   {
    "sample": "office",
-   "source_id": "source.jpost.frontpage",
-   "title": "Iran will 'never' shy away from dialogue with US, says Iranian President Pezeshkian",
+   "source_id": "source.example.notes",
+   "title": "Iran will 'never' shy away from dialogue with US, says Iranian President Kamran Tabrizi",
    "verdicts": {
     "cameo_title": false,
     "cross_target_leak": {
@@ -804,8 +803,8 @@
   },
   {
    "sample": "office",
-   "source_id": "source.antara.english",
-   "title": "President Prabowo swears in Suyudi Ario Seto as new police chief",
+   "source_id": "source.example.customs",
+   "title": "President Suharto Wibowo swears in Surya Pratama as new police chief",
    "verdicts": {
     "cameo_title": false,
     "cross_target_leak": {
@@ -827,8 +826,8 @@
   },
   {
    "sample": "office",
-   "source_id": "source.splash247.news",
-   "title": "Premier Alliance joins accelerating return to Suez",
+   "source_id": "source.example.dispatch",
+   "title": "Northvale Alliance joins accelerating return to Suez",
    "verdicts": {
     "cameo_title": false,
     "cross_target_leak": {
@@ -850,8 +849,8 @@
   },
   {
    "sample": "office",
-   "source_id": "source.cna.all",
-   "title": "President Prabowo replaces Indonesia police chief Listyo Sigit with narcotics agency head",
+   "source_id": "source.example.wire",
+   "title": "President Suharto Wibowo replaces Indonesia police chief with narcotics agency head",
    "verdicts": {
     "cameo_title": false,
     "cross_target_leak": {
@@ -874,8 +873,8 @@
   },
   {
    "sample": "office",
-   "source_id": "source.lemonde.english",
-   "title": "Argentinian President Javier Milei seeks investors to support a struggling economy",
+   "source_id": "source.example.gazette",
+   "title": "Argentinian President Marta Quiroga seeks investors to support a struggling economy",
    "verdicts": {
     "cameo_title": false,
     "cross_target_leak": {
@@ -897,8 +896,8 @@
   },
   {
    "sample": "office",
-   "source_id": "source.aawsat.english",
-   "title": "Etihad to Seek Legal Advice After Premier League’s Man City Findings",
+   "source_id": "source.example.notes",
+   "title": "Gulf carrier to seek legal advice after league's Eastmere United findings",
    "verdicts": {
     "cameo_title": false,
     "cross_target_leak": {
@@ -920,8 +919,8 @@
   },
   {
    "sample": "office",
-   "source_id": "source.cna.all",
-   "title": "Etihad to seek legal advice after Premier League’s Man City findings",
+   "source_id": "source.example.customs",
+   "title": "Gulf carrier to seek legal advice after league's findings on Eastmere United",
    "verdicts": {
     "cameo_title": false,
     "cross_target_leak": {
@@ -943,8 +942,8 @@
   },
   {
    "sample": "office",
-   "source_id": "source.anadolu.english",
-   "title": "ECB President Lagarde signals possible departure months before term ends in 2027",
+   "source_id": "source.example.dispatch",
+   "title": "Central bank President Elin Corvane signals possible departure months before term ends in 2027",
    "verdicts": {
     "cameo_title": false,
     "cross_target_leak": {
@@ -966,8 +965,8 @@
   },
   {
    "sample": "other",
-   "source_id": "source.hindustantimes.world",
-   "title": "Trump's Ohio rally: How gas prices and AI data centres could shape November 2026 midterm elections",
+   "source_id": "source.example.wire",
+   "title": "Calloway's Ohio rally: How gas prices and chip plants could shape November 2026 midterm elections",
    "verdicts": {
     "cameo_title": false,
     "cross_target_leak": {
@@ -989,8 +988,8 @@
   },
   {
    "sample": "other",
-   "source_id": "source.hindustantimes.world",
-   "title": "Elon Musk backs SpaceXSI rebrand as Trump pushes ‘SI’ over ‘AI’: What it means for Grok",
+   "source_id": "source.example.gazette",
+   "title": "Tech founder backs rebrand as Calloway pushes new label over old: What it means for a chatbot",
    "verdicts": {
     "cameo_title": false,
     "cross_target_leak": {
@@ -1012,7 +1011,7 @@
   },
   {
    "sample": "other",
-   "source_id": "source.aljazeera.world",
+   "source_id": "source.example.notes",
    "title": "Somali president: Ethiopia can access our port, but must negotiate",
    "verdicts": {
     "cameo_title": false,
@@ -1036,8 +1035,8 @@
   },
   {
    "sample": "other",
-   "source_id": "source.anadolu.english",
-   "title": "4 civilians killed in RSF drone strikes in Sudan’s South Kordofan: Medical group",
+   "source_id": "source.example.customs",
+   "title": "4 civilians killed in drone strikes in Sudan's South Kordofan: Medical group",
    "verdicts": {
     "cameo_title": false,
     "cross_target_leak": {
@@ -1060,7 +1059,7 @@
   },
   {
    "sample": "other",
-   "source_id": "source.lemonde.english",
+   "source_id": "source.example.dispatch",
    "title": "French high school protests: Up to 500 schools to be totally or partly closed Monday",
    "verdicts": {
     "cameo_title": false,
@@ -1084,8 +1083,8 @@
   },
   {
    "sample": "other",
-   "source_id": "source.amap.news",
-   "title": "Tombouctou : L’Imam de la Mosquée Sankoré, Abderrahmane Ben Alhakoum Al Aquib Seyfou est décédé samedi",
+   "source_id": "source.example.wire",
+   "title": "Exampleville : L'Imam de la Mosquee Centrale est decede samedi",
    "verdicts": {
     "cameo_title": false,
     "cross_target_leak": {
@@ -1107,8 +1106,8 @@
   },
   {
    "sample": "other",
-   "source_id": "source.amap.news",
-   "title": "Koutiala : des positions de groupes armés terroristes ciblées et frappées par les FAMa",
+   "source_id": "source.example.gazette",
+   "title": "Exampleville : des positions de groupes armes ciblees et frappees par l'armee",
    "verdicts": {
     "cameo_title": false,
     "cross_target_leak": {
@@ -1130,8 +1129,8 @@
   },
   {
    "sample": "other",
-   "source_id": "source.amap.news",
-   "title": "Koulikoro : La CANAM sensibilise les entreprises et les structures publiques à l’AMO et au RAMU",
+   "source_id": "source.example.notes",
+   "title": "Samplecity : La caisse sensibilise les entreprises et les structures publiques a l'assurance",
    "verdicts": {
     "cameo_title": false,
     "cross_target_leak": {
@@ -1153,8 +1152,8 @@
   },
   {
    "sample": "other",
-   "source_id": "source.lefaso.news",
-   "title": "Nécrologie : L'auteur de « L'Aventure ambiguë », Cheikh Hamidou Kane, est décédé",
+   "source_id": "source.example.customs",
+   "title": "Necrologie : L'auteur du roman Le Voyage inacheve est decede",
    "verdicts": {
     "cameo_title": false,
     "cross_target_leak": {
@@ -1176,8 +1175,8 @@
   },
   {
    "sample": "other",
-   "source_id": "source.nws.active_alerts",
-   "title": "Flood Warning issued October 3 at 7:50PM CDT until October 5 at 8:00PM CDT by NWS Omaha/Valley NE",
+   "source_id": "source.example.dispatch",
+   "title": "Flood Warning issued October 3 at 7:50PM CDT until October 5 at 8:00PM CDT by NWS Exampleton/Valley NE",
    "verdicts": {
     "cameo_title": false,
     "cross_target_leak": {

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane G-4: every spec in ``legba/data/rounds/specs/`` is validated and run.
+"""Every spec in ``legba/data/rounds/specs/`` is validated and run.
 
 Parametrised over the folder: a new spec dropped there is picked up with no
 test edit. Each one must validate, run to its end with synthetic seats,

@@ -4,7 +4,7 @@
 -- 0239_signal_enrichment_pending_index.sql
 --
 -- The partial scan index for the `reenrich_pending` deterministic sub-handler
--- (W11-F118) — the standing sweep over signals the source actor wrote
+-- — the standing sweep over signals the source actor wrote
 -- UNENRICHED.
 --
 -- WHY

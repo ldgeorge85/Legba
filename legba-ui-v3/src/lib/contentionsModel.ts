@@ -1,6 +1,6 @@
 /**
  * contentionsModel — the contrary-evidence pass's records, on the reader
- * surface (Program 7a).
+ * surface.
  *
  * WHAT A ROW IS, AND THE ONE THING IT IS NOT. Every other retrieval this
  * platform runs points AT a claim: the standing auditor searches for the

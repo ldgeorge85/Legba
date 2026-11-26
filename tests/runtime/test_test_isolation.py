@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Wave B prereq #3 — test isolation fixtures.
+"""Test isolation fixtures.
 
 Smoke tests for the per-test-session daprd isolation fixtures in conftest.py.
 Don't talk to daprd at all — just verify the fixtures yield well-shaped

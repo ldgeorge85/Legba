@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""G1 — THE RUBRIC, and the digest that makes it an identity.
+"""THE RUBRIC, and the digest that makes it an identity.
 
 The rubric is loaded from :mod:`legba.data.analysts.rubrics` (a data file in the
 tree, not a Python string) and its sha256 is checked AT IMPORT against the value
@@ -21,7 +21,7 @@ and a fresh passing ``grader_calibrations`` row for the new sha
 (``scripts/correctness_regate.py``). Any one of the three alone fails loud.
 
 The LABEL VOCABULARY and the SPAN POLICY are READ OUT OF the rubric text — never
-hardcoded — carried from ``planning/PROGRAM1_2026-09-16/grade_p1.py``. A script
+hardcoded. A script
 that pinned ``contains/contradicts/silent`` would keep passing the day the
 rubric moved, which is the staleness this whole module exists to prevent.
 """
@@ -32,15 +32,25 @@ import hashlib
 import os
 import re
 
+from ...grading_text import CLAIM_EVIDENCE_RULES, PASTED_TEXT_IS_DATA
 from ..rubrics import RUBRICS_DIR
 
-#: The rubric this build grades under. Its digest is pinned below.
-RUBRIC_NAME = "ANNEX_C_v4.md"
+#: The rubric this build grades under. Its digest is pinned below. ``v4`` stays
+#: in the tree: every row graded under it carries its sha, and those rows are
+#: read against that file.
+RUBRIC_NAME = "ANNEX_C_v5.md"
 RUBRIC_PATH = os.path.join(RUBRICS_DIR, RUBRIC_NAME)
 
-#: sha256 of ``ANNEX_C_v4.md``, verbatim from the file Program 1's gate passed
-#: on (planning/PROGRAM1_2026-09-16/VERDICT_P1v4.md names it as ``1b51d7f5…``).
-RUBRIC_SHA256 = "1b51d7f5187c7f93af2e2cccc0775e21ab7efc41678bc28c4a2dcbe287fe7d8c"
+#: sha256 of ``ANNEX_C_v5.md``. v5 reads scale and limiting words as part of
+#: the core claim (a smaller-scale report of the same kind of event contradicts
+#: a large-scale claim and contains its denial), lets a broader development
+#: contain a claim only when it names the same actor and event, names the core
+#: claim of a compound assertion, says "subject" for the read's subject, and
+#: orders the output contract so the core claim and span come before the
+#: verdict. No grading-gate row exists for this sha yet: the calibration gate
+#: refuses to grade under it until ``scripts/correctness_regate.py`` records a
+#: passing one. (v4 was ``1b51d7f5…``.)
+RUBRIC_SHA256 = "954c4ac59280a089c09a0c41c80eb829df556b786fb153ed46cf65ac8d83ccfb"
 
 #: The note that goes in front of the rubric in the system message, keyed to the
 #: rubric VERSION exactly as ``build_p1_sample.NOTES_BY_RUBRIC_VERSION`` keys it.
@@ -52,7 +62,17 @@ NOTE_V4 = (
     "reply. You cannot browse; grade the assertion from the committed "
     "reference's developments exactly as written and from nothing else."
 )
-NOTES_BY_RUBRIC_VERSION: dict[str, str] = {"v4": NOTE_V4}
+#: v5's note adds the pasted-text rule and the shared claim-and-evidence rules,
+#: so this grader reads scale words, plans and party statements the same way
+#: every other grader does.
+NOTE_V5 = (
+    NOTE_V4
+    + " "
+    + PASTED_TEXT_IS_DATA
+    + "\n\n"
+    + CLAIM_EVIDENCE_RULES
+)
+NOTES_BY_RUBRIC_VERSION: dict[str, str] = {"v4": NOTE_V4, "v5": NOTE_V5}
 
 _RUBRIC_VERSION_RE = re.compile(r"^ANNEX_C_(v\d+)\.md$")
 
@@ -86,7 +106,7 @@ if _ACTUAL_SHA != RUBRIC_SHA256:
 
 
 def rubric_version(rubric_name: str = RUBRIC_NAME) -> str:
-    """``v4`` — read off the rubric's OWN filename (build_p1_sample's rule).
+    """``v5`` — read off the rubric's OWN filename (build_p1_sample's rule).
 
     The version selects the note, which lands in the packet's bytes. Reading it
     from the file being shipped means the two can never disagree; a flag could.
@@ -187,6 +207,7 @@ __all__ = [
     "NOTES_BY_RUBRIC_VERSION",
     "NOTE_TO_GRADER",
     "NOTE_V4",
+    "NOTE_V5",
     "OUTPUT_CONTRACT",
     "RUBRIC_NAME",
     "RUBRIC_PATH",

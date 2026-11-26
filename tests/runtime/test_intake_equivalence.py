@@ -3,7 +3,7 @@
 """I-1 — an intake request lands EXACTLY the rows a poll of the same page
 lands (no second write path).
 
-The way the sink lane proved its move (tests/runtime/test_signal_sink_
+The way the signal-sink move was proved (tests/runtime/test_signal_sink_
 equivalence.py): the same live-shaped fixture is run twice, each against its
 own recording pool and NATS recorder —
 

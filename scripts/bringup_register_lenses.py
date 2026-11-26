@@ -1,18 +1,17 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Register the VOICES faculty-lens analyst descriptors (LV-1).
+"""Register the VOICES faculty-lens analyst descriptors.
 
 Reads the five ``descriptors/analyst_lens_*.yaml`` files and POSTs them to the
 registry. Idempotent: if a head row is already present we report it and exit 0
 without re-posting (use the PUT /descriptors/analyst/<id> route to UPDATE an
 existing head — bringup POST is create-only).
 
-This wires the VOICES faculty-lens tier (plan planning/VOICES_PLAN_2026-07-21.md,
-build spec planning/VOICES_BUILD_DESIGN.md): four function-typed faculty ids on
+This wires the VOICES faculty-lens tier: four function-typed faculty ids on
 the journal_assessor kind (lens_trend / lens_baserate / lens_capability /
 lens_intent) — each reads the VERIFIED tower top through ONE declared falsifiable
 prior (living in its persona module; the descriptor content hash IS the prior
-version, DL-2) and writes an interpretive read into ``journal_entries``
+version) and writes an interpretive read into ``journal_entries``
 (entry_kind='lens'), the V1 faithfulness verify grading it post-persist — plus a
 fifth id (lens_diff) that reads the four reads and narrates agree/split/outlier
 (entry_kind='lens_diff'). All five run on staggered weekly Monday crons

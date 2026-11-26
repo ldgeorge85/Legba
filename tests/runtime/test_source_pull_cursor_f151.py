@@ -1,11 +1,10 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W11-F151 — seven live feeds lost items to the pull cursor; replayed here.
+"""seven feeds lost items to the pull cursor; replayed here.
 
-Each test replays one feed's measured failure (consult dig 01, 2026-11-05)
-against a fixture trimmed from the LIVE document captured that evening
-(``tests/fixtures/pull_cursor/``; bodies shortened, dates / ids / links
-verbatim), through the real handler and the real ``SourceCore.pull_once``:
+Each test replays one feed shape's failure against a fixture that keeps the
+feed's structure, dates and ids but carries invented titles, summaries and
+hosts (``tests/fixtures/pull_cursor/``), through the real handler and the real ``SourceCore.pull_once``:
 
   * the loss is reproduced on the historical mechanism (the strict ``since``
     filter at the cursor the old policy persisted, or the legacy policy run
@@ -294,17 +293,17 @@ async def test_isw_week_replay_loses_posts_on_date_and_keeps_all_on_date_gmt(mon
     old_cfg = dict(new_cfg, timestamp_path="date", cursor_lookback_hours=0)
     old = await _isw_week(monkeypatch, old_cfg)
     assert len(old) <= 5, sorted(old)            # the loss, reproduced
-    assert expected - old                        # e.g. Iran Update Nov 4
+    assert expected - old                        # e.g. the Nov 4 update
 
     new = await _isw_week(monkeypatch, new_cfg)
     # Every post; the look-back also reconsiders the one post from 10-29
     # 01:33Z, before the replay's starting cursor (S-4 absorbs it live).
-    assert new == expected | {"Russian Offensive Campaign Assessment, October 28, 2026"}
+    assert new == expected | {"Example Campaign Assessment, October 28, 2026"}
 
 
 @pytest.mark.asyncio
 async def test_isw_single_window_reproduces_the_drop_and_stamps_utc(monkeypatch):
-    """One poll window, the 11-04 20:30Z one: the Korean Peninsula Update
+    """One poll window, the 11-04 20:30Z one: the regional update
     (published 18:33:33Z, ``date`` 13:33:33) is the only post in it."""
     clock = _Clock(_t("2026-11-04T20:30:00+00:00"))
     prior = {"last_pulled_at": "2026-11-04T14:30:00+00:00"}
@@ -380,7 +379,7 @@ async def test_stategov_reissued_middle_east_advisories(monkeypatch):
 # ---------------------------------------------------------------------------
 
 _ICG = _read("crisisgroup_latest.xml")
-_ICG_FR = "Centrafrique\u00a0: contenir les effets de la guerre au Soudan"
+_ICG_FR = "Exampleland\u00a0: contenir les effets d'une crise voisine"
 
 
 def _undated_fr(i, block: str) -> str:
@@ -433,8 +432,8 @@ async def test_icg_undated_entry_no_longer_advances_the_cursor(monkeypatch):
 _KREMLIN = _read("kremlin_events.atom")
 _LATE = {
     # title prefix -> (event time, posted/updated time), both UTC
-    "Presenting state decorations": ("2026-11-04T13:40:00", "2026-11-05T06:56:14"),
-    "Meeting of interdepartmental working group": ("2026-11-02T14:00:00", "2026-11-05T13:26:06"),
+    "Presenting state awards": ("2026-11-04T13:40:00", "2026-11-05T06:56:14"),
+    "Meeting of the port safety working group": ("2026-11-02T14:00:00", "2026-11-05T13:26:06"),
 }
 
 
@@ -472,7 +471,7 @@ async def test_kremlin_items_posted_after_their_event_time(monkeypatch):
 # ---------------------------------------------------------------------------
 
 _MARITIME = _read("maritime_executive.xml")
-_MARITIME_POISON = "Australian Authorities Bust Shipment of Meth Dissolved in Coconut Water"
+_MARITIME_POISON = "Port Authorities Bust Shipment of Contraband Hidden in Cooking Oil"
 
 
 def _maritime_at_0809(i, block: str) -> str:
@@ -537,14 +536,14 @@ async def test_taipei_times_next_day_edition_dated_ahead(monkeypatch):
 
 
 _HRW = _read("hrw_news.xml")
-_HRW_EMBARGO = "Hong Kong: Joshua Wong Gets Nearly 10 More Years in Prison"
-_HRW_LOST = "UK Expands Human Rights Sanctions Regime"
+_HRW_EMBARGO = "Eastmere: Union Leader Gets Nearly 10 More Years in Prison"
+_HRW_LOST = "Halden Expands Human Rights Sanctions Regime"
 
 
 @pytest.mark.asyncio
 async def test_hrw_embargoed_item_dated_ahead(monkeypatch):
-    """04:52Z: HRW served the Joshua Wong item dated 16:30Z (+11.6 h); the
-    cursor sat at 16:30Z and the 13:00Z "UK Expands ..." item was dropped."""
+    """04:52Z: HRW served the embargoed item dated 16:30Z (+11.6 h); the
+    cursor sat at 16:30Z and the 13:00Z "Halden Expands ..." item was dropped."""
     t1, t2 = _t("2026-11-05T04:52:01+00:00"), _t("2026-11-05T16:52:00+00:00")
     doc1 = _doc(_HRW, lambda i, e: _entry_dt(e) <= t1 or e.title == _HRW_EMBARGO)
     doc2 = _doc(_HRW, lambda i, e: _entry_dt(e) <= t2)

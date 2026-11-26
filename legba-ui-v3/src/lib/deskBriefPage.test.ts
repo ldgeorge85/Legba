@@ -461,7 +461,7 @@ describe('readingLimits', () => {
   })
 })
 
-describe('W11-F14 — a unit the register names carried, unsupported (the brief\'s unit block)', () => {
+describe('A unit the register names carried, unsupported (the brief\'s unit block)', () => {
   it('takes the carried state off the register and says what was last re-evidenced', () => {
     const rows = deriveEvidenceTable({
       coverage: [
@@ -520,7 +520,7 @@ describe('W11 — the quoted read the composition marked stale (the brief\'s uni
 // X1/D1 — compositionIndex: the headline and the as-of off ONE row
 // ---------------------------------------------------------------------------
 
-describe('compositionIndex (X1/D1)', () => {
+describe('compositionIndex', () => {
   it('headlines the row’s own title and dates it from the assembly', () => {
     const ix = compositionIndex(
       { title: 'country_g20_br, 2026-10-08 — “A change…”', produced_at: '2026-10-08T11:30:02.837972Z' },

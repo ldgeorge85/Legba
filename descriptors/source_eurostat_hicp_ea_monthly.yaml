@@ -1,19 +1,18 @@
-# I-5 series-kind capabilities (2026-11-14) — Eurostat's HICP all-items annual
+# Eurostat's HICP all-items annual
 # rate of change for the euro area (dataset prc_hicp_manr, coicop CP00,
 # geo EA), monthly, as a SERIES. Ships DRAFT; the reference host walks it to
 # CONFIGURED (descriptors/LIFECYCLE.md), never active — activation is the
-# owner's call. Kind: series_api, `format: jsonstat`.
+# operator's call. Kind: series_api, `format: jsonstat`.
 #
-# WHY: euro-area inflation (the review's row 2, "add"). X-1 could not write
-# it: the API answers in JSON-stat (a dimension/value cube), which no reader
-# took; I-5's closed JSON-stat 2.0 reader turns each cell into a row whose
+# WHY: euro-area inflation. The API answers in JSON-stat
+# (a dimension/value cube); the closed JSON-stat 2.0 reader turns each cell into a row whose
 # fields are the dimension ids (category codes), `value` and `status`.
 #
 # THE ENDPOINT. Eurostat dissemination API,
 # /api/dissemination/statistics/1.0/data/prc_hicp_manr with geo=EA,
-# coicop=CP00 and lastTimePeriod (the review's parameters; it asked for 1 and
-# 2 periods, this asks for 24). Checked 2026-11-14 by the source-expansion
-# review (two GETs, generic client identity): 200, application/json, ~3.1 KB;
+# coicop=CP00 and lastTimePeriod (the checked parameters; the check asked for 1 and
+# 2 periods, this asks for 24). Checked 2026-11-14
+# (two GETs, generic client identity): 200, application/json, ~3.1 KB;
 # the checker recorded the first eight top-level keys — version, class,
 # label, source, updated, value, id, size — i.e. a JSON-stat dataset. The
 # reader refuses anything but `class: dataset`, version 2.0, and refuses a
@@ -30,7 +29,7 @@
 # mid-month: a daily poll re-reads 45 + 400 days, so a revised month is a new
 # vintage and an unchanged re-read writes nothing. A monthly series is always
 # `insufficient` under series_change's daily band; no rule is proposed for it
-# (whether a new print is itself an event is the owner's call).
+# (whether a new print is itself an event is the operator's call).
 #
 # robots.txt allows the path for `*`. Class: official (the EU statistical
 # office).
@@ -43,7 +42,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: i5_series_kind_capabilities
+  owner: owner@local
   created: "2026-11-14T00:00:00Z"
 
 scope:

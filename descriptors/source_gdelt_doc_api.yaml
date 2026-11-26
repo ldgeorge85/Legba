@@ -36,7 +36,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: retired
-  owner: source_bringup
+  owner: owner@local
   created: "2026-06-09T00:00:00Z"
 
 scope:
@@ -45,7 +45,7 @@ scope:
   languages: [en]
   tags: [news, world, geopolitical, global, conflict]
   source_class: reporting          # S1-T8 — news-derived event/full-text aggregator
-  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
+  access_class: public          # free no-auth feed, no separate reuse agreement
 
 acquisition: poll
 

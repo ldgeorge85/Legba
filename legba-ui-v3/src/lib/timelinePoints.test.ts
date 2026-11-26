@@ -101,7 +101,7 @@ const ev: TLEvent[] = [
 ]
 const NOW_MS = new Date('2026-06-05T00:00:00Z').getTime()
 
-describe('eventPoints (V3/P6)', () => {
+describe('eventPoints', () => {
   it('lands on band 4, anchors time_start with produced_at fallback, drops unplaceable', () => {
     const pts = eventPoints(ev)
     expect(pts).toHaveLength(3)
@@ -116,7 +116,7 @@ describe('eventPoints (V3/P6)', () => {
   })
 })
 
-describe('eventSpans (V3/P6)', () => {
+describe('eventSpans', () => {
   it('spans time_start → time_end with the lifecycle badge', () => {
     const s = eventSpans(ev, NOW_MS).find((x) => x.id === 'ev1')!
     expect(s.start).toBe(new Date('2026-06-01T00:00:00Z').getTime())

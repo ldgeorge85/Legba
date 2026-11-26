@@ -22,16 +22,12 @@
  *       (`/v3/system/source-firing`, `/v3/system/analyst-cadence`): signal
  *       volume + sub-hour source liveness + stale analysts + source errors.
  *
- * Cursor lifecycle (X1/D1): resolved ONCE per PAGE LOAD (`wallVisitForPage`)
- * and shared by every Wall surface, so the Overview quadrant, the Movers tab
- * and the standalone tile diff from one anchor and can never disagree; the
- * stored `localStorage.legba_wall_cursor` advances to a response's
- * `server_now` (never backwards) only when the movers list has been SHOWN —
- * its tile visible and the document visible (`useMarkWallRead`) — so a page
- * load, or a Wall mounted in a background tab, never stamps "read". All
- * non-DOM logic lives in `lib/wallModel.ts`.
+ * The since-time is the page load's ONE "since" (`lib/morningReadBands::
+ * pageVisit`), the same cursor and the same words as the Board list, the
+ * rail's change counts and the map's change layer — the Wall keeps no cursor
+ * of its own. All non-DOM logic lives in `lib/wallModel.ts`.
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowDownRight, ArrowUpRight, Minus } from 'lucide-react'
 import { PanelChrome } from '@/components/PanelChrome'
@@ -39,14 +35,14 @@ import { SeverityBadge } from '@/components/SeverityBadge'
 import { apiGet, getSystemAnalystCadence, getSystemSourceFiring } from '@/lib/api'
 import { ANALYST_CADENCE_KEY, SLOW_STALE_MS, SOURCE_FIRING_KEY } from '@/lib/queryKeys'
 import { relTime } from '@/lib/evalOps'
+import { pageVisit } from '@/lib/morningReadBands'
+import { sinceWords } from '@/v4/read/boardData'
 import {
   bandChangeDeskLabel,
   buildMovers,
   healthRollup,
-  markWallRead,
   sincePath,
   topSevereVerified,
-  wallVisitForPage,
   type BandChange,
   type SinceResponse,
   type SituationChange,
@@ -58,7 +54,6 @@ import { resolveNumberProvenance, type ProvenanceState } from '@/lib/provenance'
 import type { Severity } from '@/v4/world/types'
 import type { PanelProps } from '@/types'
 import { PROFILE_UI, readTiers, subjectTierIds } from '@/lib/profileUi'
-import { useDockviewPanelApi } from '@/components/DockviewPanelApiContext'
 
 const SINCE_POLL_MS = 60_000
 const HEALTH_POLL_MS = 30_000
@@ -167,48 +162,21 @@ function BandGridQuadrant() {
 // ---------------------------------------------------------------------------
 
 /**
- * The `/v3/since` fetch + cursor lifecycle — exported so a standalone mount
- * of just the movers content (the boot-grid "Movers since last visit" tile,
- * `system.wall_movers` / `panels/system/WallMovers.tsx`) shares the EXACT
- * same cursor semantics as the full Wall: both read/advance the same
- * `legba_wall_cursor` localStorage key via `wallModel.ts`, so a desk never
- * sees two different "since" answers depending on which tile it opened.
+ * The `/v3/since` read, on the page load's one cursor (`pageVisit`) — the
+ * same request, under the same key, as the Board list's (`v4/read/boardData`).
+ * Exported for the standalone movers tile (`WallMovers.tsx`).
  */
 export function useSince() {
-  // X1/D1 — ONE anchor per page load, shared by every Wall surface (so the
-  // Overview and the Movers tab ask the same question under one query key).
-  // The fetch never stamps the stored cursor; `useMarkWallRead` does, and
-  // only when the movers were on screen.
-  const visit = useMemo(() => wallVisitForPage(), [])
+  const visit = useMemo(() => {
+    const v = pageVisit()
+    return { cursor: v.cursor, firstVisit: v.firstVisit }
+  }, [])
   const q = useQuery<SinceResponse>({
-    queryKey: ['wall-since', visit.cursor],
+    queryKey: ['morning-judgment', 'since', visit.cursor],
     queryFn: () => apiGet<SinceResponse>(sincePath(visit.cursor)),
     refetchInterval: SINCE_POLL_MS,
   })
   return { visit, ...q }
-}
-
-/**
- * X1/D1 — advance the stored cursor to `serverNow` only on a REAL read: the
- * movers were rendered, the tile is the visible one in its Dockview group
- * (outside a tile — a standalone render — it counts as visible), and the
- * document is not hidden. A background tab's poll is not a read.
- */
-function useMarkWallRead(serverNow: string | undefined) {
-  const api = useDockviewPanelApi()
-  const [tileVisible, setTileVisible] = useState<boolean>(() => (api ? api.isVisible : true))
-  useEffect(() => {
-    if (!api) return
-    setTileVisible(api.isVisible)
-    const sub = api.onDidVisibilityChange((e: { isVisible: boolean }) => setTileVisible(e.isVisible))
-    return () => sub.dispose()
-  }, [api])
-  useEffect(() => {
-    markWallRead(serverNow, {
-      tileVisible,
-      documentVisible: typeof document === 'undefined' || document.visibilityState !== 'hidden',
-    })
-  }, [serverNow, tileVisible])
 }
 
 const TONE_TEXT: Record<'bad' | 'good' | 'neutral', string> = {
@@ -277,10 +245,8 @@ export interface MoversContentProps {
  * cosmetic double-chrome the U-3 merges flagged — see registry.ts's
  * `system.wall_movers` comment).
  */
-export function MoversContent({ since, cursor, loading, error }: MoversContentProps) {
+export function MoversContent({ since, cursor, firstVisit, loading, error }: MoversContentProps) {
   const movers = since ? buildMovers(since) : null
-  // Rendered movers on a visible tile = read; the next page load diffs from here.
-  useMarkWallRead(since?.server_now)
   return (
     <>
       {loading && <div className="py-4 text-center text-label text-ink-3">diffing…</div>}
@@ -289,7 +255,7 @@ export function MoversContent({ since, cursor, loading, error }: MoversContentPr
       )}
       {movers && movers.isEmpty && (
         <div className="py-4 text-center text-label text-ink-3" data-testid="wall-movers-empty">
-          nothing changed since {new Date(cursor).toLocaleString()}
+          nothing changed {sinceWords({ cursor, firstVisit })}
         </div>
       )}
       {movers && !movers.isEmpty && (
@@ -339,7 +305,7 @@ export function MoversContent({ since, cursor, loading, error }: MoversContentPr
 }
 
 function MoversQuadrant({ since, cursor, firstVisit, loading, error }: MoversContentProps) {
-  const sinceLabel = firstVisit ? 'first visit — last 24h' : `since ${relTime(cursor)}`
+  const sinceLabel = sinceWords({ cursor, firstVisit })
   return (
     <Quadrant title="Movers since last visit" aside={sinceLabel} testid="wall-movers">
       <MoversContent since={since} cursor={cursor} firstVisit={firstVisit} loading={loading} error={error} />

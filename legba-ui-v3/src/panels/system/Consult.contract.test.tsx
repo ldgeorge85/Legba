@@ -9,12 +9,13 @@
  *    marked as a PARTIAL answer; a part the server did not send draws nothing.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import ConsultPanel from './Consult'
 import { useConsultSessions } from '@/state/consultSession'
 import type { PanelRegistration } from '@/types'
 import { resetScope } from '@/state/scope'
 import { useSelection } from '@/state/selection'
+import { useWorldState } from '@/v4/world/worldState'
 
 function reg(): PanelRegistration {
   return {
@@ -94,34 +95,31 @@ const CONTRACT = {
 }
 
 describe('Consult sends the turn contract inputs', () => {
-  it('sends the default 168 h window and the default grounding mode', async () => {
+  it("sends the time band's window — its absolute ends — and shows it read-only", async () => {
+    const end = Date.parse('2026-11-14T08:00:00Z')
+    useWorldState.getState().setWindow(end - 24 * 3_600_000, end)
     render(<ConsultPanel registration={reg()} scope={{}} mode="personal" />)
-    expect(screen.getByTestId('consult-point-window').textContent).toMatch(/7d/)
+    expect(screen.getByTestId('consult-point-window').textContent).toMatch(/window 24h/)
     const body = await ask(answer())
-    expect(body.window).toMatchObject({ hours: 168 })
-    expect(Number.isFinite(Date.parse(body.window.end))).toBe(true)
+    expect(body.window).toEqual({ start: '2026-11-13T08:00:00.000Z', end: '2026-11-14T08:00:00.000Z', label: 'console time band' })
     expect(body.grounding_mode).toBe('default')
   })
 
-  it('sends what the user chose: 24 h and record only (and remembers it)', async () => {
+  it('follows the band when it changes; a window an older console stored is ignored; there is no window selector', async () => {
+    localStorage.setItem('legba_consult_window', '720h')
+    const end = Date.parse('2026-11-14T08:00:00Z')
+    useWorldState.getState().setWindow(end - 24 * 3_600_000, end)
     render(<ConsultPanel registration={reg()} scope={{}} mode="personal" />)
-    fireEvent.change(screen.getByTestId('consult-window'), { target: { value: '24h' } })
+    expect(screen.queryByTestId('consult-window')).toBeNull()
+    act(() => useWorldState.getState().setWindow(end - 7 * 86_400_000, end))
+    expect(screen.getByTestId('consult-point-window').textContent).toMatch(/window 7d/)
     fireEvent.click(screen.getByTestId('consult-grounding'))
     expect(screen.getByTestId('consult-grounding')).toHaveAttribute('aria-checked', 'true')
-    expect(screen.getByTestId('consult-point-window').textContent).toMatch(/24h/)
-    const body = await ask(answer())
-    expect(body.window).toMatchObject({ hours: 24 })
-    expect(body.grounding_mode).toBe('record_only')
-    expect(localStorage.getItem('legba_consult_window')).toBe('24h')
-    expect(localStorage.getItem('legba_consult_grounding')).toBe('record_only')
-  })
-
-  it('the time band choice sends its absolute ends', async () => {
-    render(<ConsultPanel registration={reg()} scope={{}} mode="personal" />)
-    fireEvent.change(screen.getByTestId('consult-window'), { target: { value: 'band' } })
     const body = await ask(answer())
     expect(Object.keys(body.window).sort()).toEqual(['end', 'label', 'start'])
-    expect(Date.parse(body.window.start)).toBeLessThan(Date.parse(body.window.end))
+    expect(Date.parse(body.window.end) - Date.parse(body.window.start)).toBe(7 * 86_400_000)
+    expect(body.grounding_mode).toBe('record_only')
+    expect(localStorage.getItem('legba_consult_grounding')).toBe('record_only')
   })
 })
 

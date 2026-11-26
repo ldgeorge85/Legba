@@ -1,12 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""FRAME-2 — THE CARRY: the WINDOW LEDGER, and the memory section it joins.
+"""THE CARRY: the WINDOW LEDGER, and the memory section it joins.
 
-``planning/FRAME_PROGRAM_2026-08-20.md`` §2, ratified 2026-08-21. FRAME-1 made
-the COMPOSITION stop forgetting the fortnight; this train makes the READS stop
+The composition no longer forgets the fortnight; this makes the READS stop
 forgetting it. The defect is one sentence long — **a 72-hour pipeline forgets
-its own window** — and the ATTRIBUTION's H-FRAME table puts the largest single
-class of missed majors on it: ≈12 of 23, *outside-72h-and-continuity-dropped*.
+its own window** — and the largest single
+class of missed majors traced to it: ≈12 of 23, *outside-72h-and-continuity-dropped*.
 The desks printed "mass protest: not_observed" (AR), "State of emergency –
 not_observed" (GB), "no new or tightened sanctions" (UA) for a fortnight that
 contained exactly those things, because the memory they were handed was ONE
@@ -18,7 +17,7 @@ from rows that already exist: no new table, no new writer, no new analyst kind
 — four SELECT-and-a-render idiom, exactly like
 ``unit_grounding.gather_unit_grounding_rows``. It is the continuity chain made
 CUMULATIVE: today's chain carries one prior body, the ledger carries ~20 dated
-one-line assertions spanning 14 days. The decisive check (§1.5) is that the
+one-line assertions spanning 14 days. The decisive check is that the
 missed majors were ALREADY in the desks' own verified heads — AR's "mass
 protests over property bill raise internal instability" (severity elevated,
 7 August) is an ``analyst_outputs`` row the internal_stability unit wrote and
@@ -291,7 +290,7 @@ async def read_window_ledger(
     unit layer passes its own id); ``None`` is DESK scope (the country
     composition), which is the only place cross-dimension synthesis belongs — a
     unit answers one bounded question and handing it its siblings' dimensions
-    invites the scope creep its descriptor forbids (§2.2).
+    invites the scope creep its descriptor forbids.
 
     The admissibility is the house pattern verbatim — ``kind='finding'``, the
     INNER lateral to the latest ``Faithfulness verify%`` critique (so an
@@ -516,7 +515,7 @@ def ledger_block_lines(
     # memory is. UNIT SCOPE ONLY, and that is deliberate on both legs.
     #
     # WHY THE UNIT: the carry defect the fence exists to stop is the unit
-    # tier's (consult review §A — the France ``leadership_transition`` head
+    # tier's (the France ``leadership_transition`` head
     # asserting a hand-over "on 28 September 2026" that no signal in its
     # 120-row slice names, re-fed for three months by this block and the prior
     # read). The DESK-scoped form is the composition floor's, and adding the
@@ -675,7 +674,7 @@ CONTINUITY_SITUATIONS_RECEIPT: str = "continuity_situations_ref"
 CONTINUITY_LEDGER_RECEIPT: str = "continuity_window_ledger_ref"
 """Receipt key: 1 when the WINDOW LEDGER ref entered the slice, else 0. A
 silently-absent carry is exactly what this receipt exists to make visible — the
-§2.2 requirement, and the difference between "this desk had no fortnight" and
+difference between "this desk had no fortnight" and
 "the gather failed and nobody noticed"."""
 
 CONTINUITY_PRIOR_LOOKBACK_HOURS: int = 168
@@ -705,7 +704,7 @@ size."""
 SITUATION_REGISTER_TRAJECTORY_DEPTH: int = 3
 """How many SIGNIFICANT dated deltas per frame the register carries.
 
-FRAME-2 (§2.3.1) changed what these three ARE, not how many. They used to be the
+The register changed what these three ARE, not how many. They used to be the
 newest three ledger rows of ANY kind, and the tracker writes multiple
 ``unchanged_checkpoint`` rows a day — so at the round's T0 the three rendered AR
 lines were three same-day "unchanged_checkpoint: no coercive economic measures
@@ -857,7 +856,7 @@ REGISTER_STALE_LABEL: str = "STALE-NO-NEW-EVIDENCE"
 #: corroborated it just now" must never render alike.
 REGISTER_NO_CORROBORATION: str = "NEVER-CORROBORATED"
 
-#: THE ANTI-SELF-CORROBORATION RULE (H1, CORRECTNESS-R2 §1 recommendation 1).
+#: THE ANTI-SELF-CORROBORATION RULE.
 #:
 #: The register is ``[N]``-citable, which is what makes the loop possible: the
 #: standing "no claim may rest on orientation alone" clause does not reach a
@@ -967,7 +966,7 @@ def _render_situation_register_lines(
             f"{_render_evidence_age(s)} open_for={age_txt}"
             + (f" trajectory={state}" if state else "")
         )
-        # CONTINUITY P2 — the frame's own DATED deltas. FRAME-2 (§2.3.1): these
+        # The frame's own DATED deltas. These
         # are now the SIGNIFICANT deltas first (escalates / de_escalates /
         # broadens), with at most one trailing checkpoint line, so the record of
         # MOVEMENT is what the model reads instead of the day's checkpoint

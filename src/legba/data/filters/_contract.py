@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Filter/enrichment-kind handler contract (L-102 §3) — minimal Protocol surface.
+"""Filter/enrichment-kind handler contract — minimal Protocol surface.
 
 The full runtime context type lives in L-103 (not yet landed). Until then
 this module declares the structural-typing surface that filter handlers
@@ -64,7 +64,7 @@ class FilterContext(BaseModel):
     # handlers that want to filter or restrict by language / geo.
     scope_geo: list[str] = Field(default_factory=list)
     scope_languages: list[str] = Field(default_factory=list)
-    # Lane N-O: the source's ``scope.source_class``. ``official`` + a declared
+    # The source's ``scope.source_class``. ``official`` + a declared
     # ``scope_geo`` makes the geocoder treat the declared country as the
     # issuing state (always in geo; text countries added beside it).
     source_class: str | None = None
@@ -101,7 +101,7 @@ class FilterHealth(BaseModel):
 
 @runtime_checkable
 class StreamHandler(Protocol):
-    """Structural-typing surface for filter/enrichment kinds. L-102 §3.
+    """Structural-typing surface for filter/enrichment kinds.
 
     A concrete handler exposes:
 

@@ -51,8 +51,12 @@ export function rootPxFor(viewportWidth: number): number {
 /** The rail, open and shut (rem). */
 export const RAIL_OPEN_REM = 15
 export const RAIL_SHUT_REM = 3
-/** Below this width the rail starts shut (it can still be opened). */
-export const RAIL_OPEN_FROM = 1600
+/**
+ * Below this width the rail starts shut (it can still be opened): under it
+ * the rail's 15 rem is taken from the stage and the map, which a first look
+ * needs more than the subject list.
+ */
+export const RAIL_OPEN_FROM = 1680
 
 /** The centre's reading measure: clamp(min, vw share, max), in rem / fraction. */
 export const CENTRE_MIN_REM = 36

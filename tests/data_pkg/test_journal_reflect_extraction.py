@@ -232,7 +232,7 @@ async def test_reflect_claims_byte_identical_on_live_journal_entries(tmp_path) -
         old_result = old_reflect_claims(body)
         new_result = new_journal_reflect._reflect_claims(body)
         if je.NESTED_REF_GROUP_RE.search(body):
-            # Lane N-U: REFLECT now reads the nested ``[[ref:a] [ref:b]]``
+            # REFLECT now reads the nested ``[[ref:a] [ref:b]]``
             # group the pre-extraction code missed — a deliberate superset:
             # every old ref kept, every new one a nested-group member.
             nested = {

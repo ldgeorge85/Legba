@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W11-F259 — a redirected page's receipt is linked to its request.
+"""A redirected page's receipt is linked to its request.
 
 The receipt writer keys a version by the address the bytes came FROM (the
-final URL of a redirect). Roll 79's Federal Register request was redirected
+final URL of a redirect). A Federal Register request was redirected
 to unblock.federalregister.gov, so the lookup under the requested address
 found nothing and the request's ``result_version_id`` stayed null. The run
 now falls back to the final address, matched on the page's own body hash,

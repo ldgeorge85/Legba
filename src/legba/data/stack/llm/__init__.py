@@ -11,7 +11,7 @@ Three concrete chat subproviders, and one decision client:
 
   * `AnthropicProviderHandler` — Anthropic Messages API (Claude family).
   * `VLLMProviderHandler`      — OpenAI-compatible vLLM endpoint. Used for
-                                 gpt-oss-120b at `llm.example.internal`.
+                                 the core model at `llm.example.internal`.
   * `OpenAIProviderHandler`    — OpenAI Chat Completions API (GPT-5, o3, …).
   * `DecisionProviderHandler`  — a DECISION model's `POST /decide` (typed
                                  answers about a state; no chat surface).

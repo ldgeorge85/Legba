@@ -1,7 +1,7 @@
-# Integrity Sweep analyst descriptor (DIRECTION §9).
+# Integrity Sweep analyst descriptor.
 #
 # The events-free successor to the pre-pivot `integrity_verification` handler
-# (deleted in review 2.4 because its first check anchored on the dropped `events`
+# (deleted because its first check anchored on the dropped `events`
 # table, aborted the whole sweep, and emitted a zeroed "no issues" finding —
 # fake success). This re-homes ONLY the checks that run against live pivot-era
 # tables (signal_entity_links, proposed_edges, facts, analyst_outputs) and
@@ -45,7 +45,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: active
-  owner: integrity_sweep
+  owner: owner@local
 
 subscription:
   # No `targets` block → META analyst: one global sweep per cadence tick over the

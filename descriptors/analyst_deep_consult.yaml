@@ -20,7 +20,7 @@ identity:
     input_type: legba.runtime.ConsultQuestion
     output_type: legba.runtime.Finding
   state: active
-  owner: p4_deep_consult
+  owner: owner@local
 
 subscription:
   substrate:
@@ -38,26 +38,21 @@ method:
     # deep_consult are the ONLY Anthropic users). TO REVERT to the core plane:
     # set raw back to llm.primary.openai_compat.
     #
-    # 2026-08-15: max_tokens is the OPERATIVE per-call output budget for the
-    # workflow's analyze stage (the deps builder threads it into
-    # max_analyze_tokens via resolve_output_budget; LEGBA_CONSULT_MAX_TOKENS
-    # demoted to a loudly-logged emergency override). 32768 is enabled by the
-    # Anthropic handler streaming every generation; well under the Opus
-    # line's documented 128k per-request output ceiling (handler clamps +
-    # logs past it).
+    # max_tokens is the analyze stage's output-token ESTIMATE (the workflow's
+    # budget pre-check reads it as max_analyze_tokens); it is never sent and
+    # bounds nothing — every handler sends the model's own maximum output.
     primary:
       factory_kind: stack_ref
-      raw: llm.primary.openai_compat   # 2026-10-03 DEC-17a: the free core plane is the default (shared resolver with consult); Opus/Fable by explicit pick
+      raw: llm.primary.openai_compat   # the free core plane is the default (shared resolver with consult); Opus/Fable by explicit pick
       expected_family: llm_provider
     max_tokens: 32768
-    # T-1 (2026-11-14): the plan stage and the analyze stage's consult loop
+    # The plan stage and the analyze stage's consult loop
     # (rounds + synthesis) think on the core plane; candidate extraction and
     # the repair call do not (data/analysts/consult_thinking.py).
     thinking: "on"
-  # W11-F133 — consult 6cd91190 (2026-10-29): the actor's default transient
-  # retry (3 attempts) re-ran a whole consult from scratch on the same request
-  # id after its forced final died on a network error — 19 more rounds, 162
-  # tool calls, re-spent unasked. An operator consult runs ONCE; a failure goes
+  # The actor's default transient retry (3 attempts) would re-run a whole
+  # consult from scratch on the same request id (every round and tool call
+  # re-spent unasked). An operator consult runs ONCE; a failure goes
   # back to the operator, never into a silent second run.
   retry:
     transient:
@@ -72,7 +67,7 @@ cadence:
 # Agency grant — substrate_read (the acquire stage's tool calls are resolved +
 # governed + ledgered through the agency plane, same as consult).
 #
-# R-3d — `web_access` is the GRANT leg only, mirroring consult. Same honest
+# `web_access` is the GRANT leg only, mirroring consult. Same honest
 # limit: dapr_workflow/deep_consult_workflow.py builds ONE AgencyToolBinding
 # over substrate_read, so the grant is INERT until the acquire stage binds the
 # web_access pack too.

@@ -289,7 +289,7 @@ async def web_fetch_tool(
 
     cfg = _tool_config(pack, "web_fetch")
     timeout = float(cfg.get("timeout_seconds") or _DEFAULT_TIMEOUT_SECONDS)
-    # W11-F138 — the per-host fetch policy is consulted BEFORE the client is
+    # The per-host fetch policy is consulted BEFORE the client is
     # built: a registered host's ``impersonate``/``http2`` resolve into the
     # construction kwargs, ``max_retries``/``backoff_s`` extend the
     # timeout-retry bound; an unlisted host's kwargs are today's exactly.

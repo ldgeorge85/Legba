@@ -57,7 +57,7 @@ async def _resolve_critic_context(
     """Resolve the critic-kind's per-run ``options`` dict.
 
     The critic kind's :func:`run_method` needs four runtime-supplied
-    options keys (per L-105 / L-175):
+    options keys:
 
       * ``rubric`` — the analyzed analyst's ``descriptor.eval.rubric``;
       * ``analyzed_model`` — primary LLM stack-ref of the analyzed
@@ -66,7 +66,7 @@ async def _resolve_critic_context(
         row being graded;
       * ``allow_self_correlated`` — the analyzed analyst's
         ``descriptor.eval.allow_self_correlated`` (typed schema field
-        per L-105 §3 / Wave-B integration; legacy
+ / Wave-B integration; legacy
         ``eval.optimizer["allow_self_correlated"]`` is accepted as a
         fall-through for descriptors that predate the typed field).
 
@@ -174,7 +174,7 @@ def _critic_descriptor_pinned_analyst_id(descriptor: AnalystDescriptor) -> str |
 
     A critic descriptor that exclusively grades one analyst can stamp
     the target via ``eval.optimizer["analyzed_analyst_id"]`` (mirrors
-    the L-176 optimizer's analyzed-target pointer).  Returns ``None``
+    the optimizer's analyzed-target pointer).  Returns ``None``
     when unset.
     """
     eval_block = getattr(descriptor, "eval", None)
@@ -188,7 +188,7 @@ def _critic_descriptor_pinned_analyst_id(descriptor: AnalystDescriptor) -> str |
 
 
 # ---------------------------------------------------------------------------
-# P0-T2 — MANDATORY faithfulness verify, persisted as a critique (the gate)
+# MANDATORY faithfulness verify, persisted as a critique (the gate)
 # ---------------------------------------------------------------------------
 
 
@@ -310,7 +310,7 @@ async def _resolve_journal_citation_bridge(
     #    resolver journal_api._REF_TABLES): situations / facts / nexuses /
     #    hypotheses. For these row kinds the composed label IS the substance
     #    (a fact's triple is its whole content), so it serves as source_text.
-    #    journal_entries stays DELIBERATELY absent (§3.5 + B0-8 de-echo: a
+    #    journal_entries stays DELIBERATELY absent (a
     #    prior entry is the journal's own memory, not substrate evidence — a
     #    fact claim resting only on self-citation is honestly unsupported).
     for sql in (
@@ -351,7 +351,7 @@ async def _resolve_journal_citation_bridge(
     return entries
 
 
-#: B6 — a claim about ANOTHER subject is no evidence about this one; 0.0 is under
+#: A claim about ANOTHER subject is no evidence about this one; 0.0 is under
 #: every composition floor (admission is ``>= floor``).
 OFF_SUBJECT_CEILING = 0.0
 
@@ -359,7 +359,7 @@ OFF_SUBJECT_CEILING = 0.0
 def _flag_off_subject_claims(
     report: Any, *, title: str, body: str, target_id: str | None,
 ) -> int:
-    """B6 (W11-F13): flag each claim whose named subject is a HOMONYM of the
+    """Flag each claim whose named subject is a HOMONYM of the
     desk's subject ("Khyber Pakhtunkhwa" on the North Korea desk) as
     ``off_subject`` — an additive span + ledger row + ``off_subject_claims``
     counter — and cap the finding through the T7 ceiling idiom (``gate_score``
@@ -403,10 +403,10 @@ async def verify_inline_target_finding(
     Handles TWO citation conventions through the single generalized verify pass
     (name retained for its callers):
 
-      * ``inline_target`` — the unit ``[N]`` → signal bridge (P0-T2), ALWAYS
+      * ``inline_target`` — the unit ``[N]`` → signal bridge, ALWAYS
         verified (a finding with no citations floors honestly-low).
       * ``meta_findings_synthesizer`` — the per-country COMPOSITION's
-        ``[[ref:<uuid>]]`` → sub-claim bridge (P3-T3/T7). Verified only when the
+        ``[[ref:<uuid>]]`` → sub-claim bridge. Verified only when the
         payload carries a ``data['citations']`` key: an honest-EMPTY composition
         (no citations key) and the GLOBAL meta (never sets one) are no-ops. The
         composition path additionally passes ``finding_confidence`` so the T7
@@ -449,9 +449,9 @@ async def verify_inline_target_finding(
     # kind (BOTH tiers: entry + consolidation share identity.kind). The entry's
     # ``[[ref:<uuid>]]``-cited FACT claims are re-shaped into the standard
     # ``[N]`` + citations-bridge form and graded by the SAME floor + judge;
-    # ``perspective`` claims never enter the document (§10 flag-never-strip —
+    # ``perspective`` claims never enter the document (flag-never-strip —
     # the entry itself is NEVER mutated; the verdict is a side critique row).
-    # CONTINUITY P2 — ``situation_tracker`` rides the COMPOSITION branch, not a
+    # ``situation_tracker`` rides the COMPOSITION branch, not a
     # branch of its own, because its bridge IS the composition bridge: it cites
     # verified ``analyst_outputs`` sub-claims by ``[[ref:N]]`` ordinal with
     # ``ref_kind='finding'``, and the T7 hedge-laundering / shared-lineage cap
@@ -459,7 +459,7 @@ async def verify_inline_target_finding(
     # second-order claim over first-order findings, and its confidence must not
     # exceed the ceiling of the rows it rests on. A cycle with nothing to say
     # emits no citations key and no-ops here, same as an honest-empty compose.
-    # D-5 (DEMOTION_D1_SPEC §4.1) — THE DETERMINISTIC ROLLUP IS NOT GRADED.
+    # THE DETERMINISTIC ROLLUP IS NOT GRADED.
     # A ``region_rollup.v1`` row contains no sentence written for it: every
     # quoted span is its member country assembly's own block object, carried
     # forward unchanged, still pointing at the desk head that wrote it. There is
@@ -484,7 +484,7 @@ async def verify_inline_target_finding(
     is_composition = kind in (
         "meta_findings_synthesizer", "cross_analyst_correlator", "situation_tracker",
     )
-    # Program 5: the `inquiry` kind writes the SAME JournalPayload through the
+    # The `inquiry` kind writes the SAME JournalPayload through the
     # same off-chain path, so its cited FACT claims are reshaped by the same
     # helper and judged on the same V1 profile. A second arm here would be a
     # copy of build_journal_verify_inputs's contract that drifts.
@@ -545,7 +545,7 @@ async def verify_inline_target_finding(
     )
     from ..data.provenance.writes import write_critique
 
-    # J2 (2026-08-15) — the SAMPLING GATE inputs, descriptor-driven. The two
+    # J2 — the SAMPLING GATE inputs, descriptor-driven. The two
     # options ride the X-1 channel (method.options → validated kind catalog →
     # merged run options → this seam). No rate ⇒ no policy ⇒ no gate: the
     # verify pass judges everything, byte-identical to pre-J2. The decision
@@ -628,7 +628,7 @@ async def verify_inline_target_finding(
             # headroom and no seam, so the assembly arms had to reach verify
             # through a caller that already reads ``data``. ``None`` for every
             # unit finding; a LEGACY-regime composition passes the block through
-            # and the arms decline it on the regime (§5.2 stamps the label on
+            # and the arms decline it on the regime (stamps the label on
             # every composition row, flag on or off). Either way the four arms
             # are a no-op and the pass is byte-identical.
             assembly=data.get("assembly") if isinstance(data, Mapping) else None,
@@ -661,7 +661,7 @@ async def verify_inline_target_finding(
         )
         return None
 
-    # B6 (W11-F13) — SUBJECT RELEVANCE, before the verdict is persisted.
+    # SUBJECT RELEVANCE, before the verdict is persisted.
     _flag_off_subject_claims(report, title=title, body=body, target_id=target_id)
 
     # Identity of the analyzed analyst (the finding's producer) + the judge.
@@ -669,7 +669,7 @@ async def verify_inline_target_finding(
     analyzed_analyst_version = str(deps.descriptor.identity.version)
     analyzed_model = _extract_primary_model_ref(deps.descriptor)
     judge_model = str(getattr(deps.verify_judge, "subprovider", "") or "deterministic-floor")
-    # P2-4: the RESOLVED judge stack-ref (the JudgeRoute the host wired behind
+    # The RESOLVED judge stack-ref (the JudgeRoute the host wired behind
     # deps.verify_judge). Stamped into the critique row (``judge_llm_ref``) so
     # provenance records which model judged, forever. "" = floor-only (no judge
     # wired); judge_status in the report says whether the judge actually graded.
@@ -709,7 +709,7 @@ async def verify_inline_target_finding(
     )
     if chain_extras:  # sparse: absent on every pass rung 1 answered
         payload.setdefault("data", {}).setdefault("verification", {}).update(chain_extras)
-    # X4 / ESC (W11-F52) - the uncited-sentence share, measured on the BODY the
+    # X4 / ESC - the uncited-sentence share, measured on the BODY the
     # floor itself reads (so it is the same number on the judge path and the
     # floor path). UNITS only: the field is read per analyzed unit per day by
     # ``GET /v3/system/judge-stats`` (``uncited_by_unit_day``).
@@ -835,9 +835,9 @@ async def verify_journal_before_publish(
     declares_verify: bool,
     trace_steps: list[dict[str, Any]] | None = None,
 ) -> tuple[UUID | None, dict[str, Any] | None, Any]:
-    """Lane N-D — the journal verify, moved IN FRONT of the write.
+    """The journal verify, moved IN FRONT of the write.
 
-    Lane N-G — the EVIDENCE GATE runs first, for every journal-family row
+    The EVIDENCE GATE runs first, for every journal-family row
     whether or not its descriptor declares a verify: a draft with model control
     text, no cited refs, or fewer than 80 % of its refs resolving to a stored
     row is not published as written. The declared "No entry this window" row

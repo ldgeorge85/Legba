@@ -3,7 +3,7 @@
 """Tests for the manual-ingest batch format + per-kind schemas (S4-T1).
 
 Pure validation-layer tests — NO DB (the loader adapter S4-T2 is what writes).
-Covers (planning/MANUAL_INGESTION_AND_RAG_PLAN §A + PORTFOLIO plan S4-T1):
+Covers:
 
   * a valid fixture batch round-trips through ``validate_batch`` — all five
     lanes parse into their typed records with the sketched natural keys.

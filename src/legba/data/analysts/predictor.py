@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """L-174 — Predictor analyst kind.
 
-Topology §5.5 / kind contracts §5. The `predictor` kind takes a window of
+The `predictor` kind takes a window of
 recent `signals` rows (event counts, optional per-signal sentiment), fits a
 lightweight statistical forecaster, and wraps the numeric forecast in an
 LLM-generated narrative that cites the input signals.
@@ -113,7 +113,7 @@ OUTPUT_KIND: _OutputKind = _OutputKind.PREDICTION
 # the default signals slice caps at 50 raw rows by recency, collapsing a
 # high-volume target's daily series to 1-2 buckets. See the READ_SLICE def.
 
-# Wave B prereq #4 — DSPy module path for the OPTIONAL narrative wrapper.
+# DSPy module path for the OPTIONAL narrative wrapper.
 # The predictor's stat core is deterministic Python; the LLM call only
 # happens to write the "why this number" paragraph and is itself optional
 # (PredictorDeps.llm = None bypasses this module entirely).
@@ -123,7 +123,7 @@ PROMPT_MODULE_PATH: str = "legba.prompts.predictor.v1"
 def build_prompt_module() -> Any:
     """Construct and return the DSPy module for the predictor's narrative.
 
-    Wave B prereq #4: returns a real
+    Returns a real
     :class:`legba.prompts.predictor.v1.PredictorNarrative`.  The DSPy
     module wraps the OPTIONAL narrative LLM call only — the stat core
     (AutoARIMA + naive-mean fallback) is pure Python and lives in
@@ -143,7 +143,7 @@ def build_prompt_module() -> Any:
 
 
 DEFAULT_HORIZON_DAYS = 7
-"""Forecast horizon — one operator-week ahead. Matches L-174 spec."""
+"""Forecast horizon — one week ahead."""
 
 DEFAULT_CI_LEVEL = 80
 """Default confidence-interval percentage emitted with the forecast."""

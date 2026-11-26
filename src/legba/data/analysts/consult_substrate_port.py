@@ -35,7 +35,7 @@ class SubstrateQueryPort(Protocol):
     a ``"refs"`` list of substrate UUIDs whenever rows were returned so
     the kind can build :attr:`ConsultResponsePayload.cited_substrate_refs`.
 
-    ``known_at`` on the raw readers (lane E0) is the record-time cut only the
+    ``known_at`` on the raw readers is the record-time cut only the
     evaluation harness passes; :mod:`legba.data.raw_reader_known_at` classifies
     every raw reader. Implementations need not accept it: the dispatcher sends
     it only when it is set.
@@ -258,7 +258,7 @@ class SubstrateQueryPort(Protocol):
         known_at: Any = None,
     ) -> dict[str, Any]: ...
 
-    # W11-F141 — the scheduled-events calendar (migration 0240): the
+    # The scheduled-events calendar (migration 0240): the
     # operator-entered register of FUTURE dated things (summits, votes,
     # deadlines, strikes). window_start/window_end bound the read by overlap
     # (default now → +14 days); the result's ``coverage`` block makes an
@@ -274,7 +274,7 @@ class SubstrateQueryPort(Protocol):
         limit: int = 50,
     ) -> dict[str, Any]: ...
 
-    # W11-F162 — the forecast ledger's due-date reader (migrations 0242/0244):
+    # The forecast ledger's due-date reader (migrations 0242/0244):
     # questions due within the horizon, their resolver, every issuer's number,
     # the newest rule proposal and the judgement it waits on.
     async def list_due_resolvers(
@@ -285,7 +285,7 @@ class SubstrateQueryPort(Protocol):
         limit: int = 50,
     ) -> dict[str, Any]: ...
 
-    # Journal self-instrument readers (Journal Assessor Wave 1, plan §5). The
+    # Journal self-instrument readers. The
     # journal narrates over the whole organism INCLUDING ITSELF: recent
     # assessments, the graph's shape + tension, critic scores, calibration (incl.
     # the segregated acute-forecast pilot), what fired vs went quiet, source

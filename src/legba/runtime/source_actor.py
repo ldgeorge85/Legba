@@ -29,12 +29,12 @@ upstream watch at activation. The actor calls
 Cursor policy (``pull_once``): the ``since`` cursor advances along REAL
 forward progress — to the last processed entry's logical timestamp, never a
 bare NOW; a hard error keeps the prior position; a zero-yield pull keeps it; a
-first-ever pull seeds NOW. W11-F103: an entry skipped for a TRANSIENT reason
+first-ever pull seeds NOW. An entry skipped for a TRANSIENT reason
 (enrichment timeout / NLP unavailable) is not progress — the advance holds at
 ``max(since, min(last_processed, earliest_skipped - 1µs))`` so the next pull
 re-yields it, the rest of that poll bypasses the NLP chain (written unenriched,
 ``payload.enrichment_pending``), and an entry skipped on 3 consecutive polls is
-written unenriched. Mechanism: :mod:`.source_enrich_hold`. W11-F151: the
+written unenriched. Mechanism: :mod:`.source_enrich_hold`. The
 cursor is never later than now (feed timestamps clamped, a future stored
 cursor healed on read), a dated-feed handler (rss, json_api) is handed
 ``since - lookback`` with a ledger of already-judged entries, and an undated
@@ -387,7 +387,7 @@ def resolve_poll_bounds(
     return float(budget), max(1, int(entries))
 
 
-#: B0-11 Fix-1 / W11-F151 — the cursor policy (future clamp, look-back,
+#: B0-11 Fix-1 / The cursor policy (future clamp, look-back,
 #: judged-entry ledger) lives in :mod:`.source_cursor`; these names stay
 #: importable from here for existing callers.
 _MAX_FUTURE_SKEW = CURSOR_FUTURE_TOLERANCE
@@ -740,7 +740,7 @@ class SourceCore:
         # used to advance the cursor to where we STOPPED (not NOW) on a capped
         # pull, so a backlog is resumed rather than skipped (Fix A).
         last_processed_ts: datetime | None = None
-        hold = EnrichHold(cursor_raw)  # W11-F103: transient skips hold the cursor
+        hold = EnrichHold(cursor_raw)  # Transient skips hold the cursor
         age_cap = FirstPollAgeCap(handler, first_poll=since is None)  # W11-F265
         order = WalkOrder()  # a capped newest-first walk holds the cursor
         # R5 — per-source bounds (descriptor config > handler advertisement >
@@ -801,7 +801,7 @@ class SourceCore:
                         await self._publish([sig])
                         await receipts.link(conn, "signal", sig.signal_id, link)
         except asyncio.CancelledError:
-            # W11-F169 — a poll cut mid-walk (a roll's bounded drain cancels the
+            # A poll cut mid-walk (a roll's bounded drain cancels the
             # turns still running at LEGBA_RUNTIME_DRAIN_SECONDS) did NOT reach
             # the end of its walk: record it as capped so the cursor policy
             # holds where a capped walk holds (a newest-first walk keeps its
@@ -840,10 +840,10 @@ class SourceCore:
             # First-ever pull (no prior cursor, since is None): there is no
             # window to protect, so a zero-yield pull seeds the cursor at NOW to
             # avoid re-walking from epoch on the next cycle.
-            # W11-F103: a TRANSIENT skip (enrichment timeout) holds the advance
+            # A TRANSIENT skip (enrichment timeout) holds the advance
             # at max(since, min(last processed, earliest skipped - 1µs)) — see
             # source_enrich_hold; permanent drops still count as processed.
-            # W11-F151: never later than now; a dated handler's cursor never
+            # Never later than now; a dated handler's cursor never
             # moves backwards, and a capped walk that was not oldest-first
             # holds it (see source_cursor.advance / WalkOrder).
             cursor_ts = advance_cursor(

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """STRONG ACTIVITY OUTSIDE THE ROSTER — named in the world read's aperture.
 
-THE GAP (``planning/reviews/WORLD_READ_DIG_2026-11-07`` item 7). The world read
+THE GAP. The world read
 can name only roster units, so a country with no unit is invisible to it however
 loud its week was. On 2026-11-07 Paraguay had 75 signals (an impeachment, an
 arrest, a new president sworn in; 61 above the mass floor) and the voice was

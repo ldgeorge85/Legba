@@ -12,9 +12,9 @@ collapse. :func:`legba.runtime.source_actor.write_canonical_signal` now, before
 inserting, records the re-serve on the freshest existing same-(source_id,
 content_hash) row and SKIPS the insert.
 
-B-1 (2026-08-03) — WHAT the collapse records. It used to advance the surviving
+WHAT the collapse records. It used to advance the surviving
 row's ``fetched_at``. That is a lie about when we fetched the content, and it
-cost us the 08-03 freshness incident (MASTER_PLAN §32.7): the 5 rsshub AP-topic
+cost us a freshness incident: the 5 rsshub AP-topic
 feeds froze upstream and re-served the same 39-item snapshot every poll for six
 days, so 201 signals reported ``fetched_at = today`` while carrying 07-28
 content — and because the substrate slice windows AND orders on ``fetched_at``,
@@ -241,7 +241,7 @@ async def test_identical_source_hash_collapses_without_touching_fetched_at(
 
 @pytest.mark.asyncio
 async def test_frozen_feed_never_advances_fetched_at(monkeypatch):
-    """The 08-03 incident, replayed: a feed that re-serves one identical item
+    """The freshness incident, replayed: a feed that re-serves one identical item
     every poll for six days must leave its ``fetched_at`` on day one.
 
     Before B-1 this row read ``fetched_at = day 6`` — which is what put a 07-28

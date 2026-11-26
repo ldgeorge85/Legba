@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Holes-B / P3-2 — the contested-claims arbiter TAIL (#101).
+"""The contested-claims arbiter TAIL (#101).
 
 Soak gate -> deterministic WEIGHTED tie-break (+ A6 earned-record seam) ->
 coexistence semantics + surfacing -> reversibility. DETECT-ONLY (B15) still

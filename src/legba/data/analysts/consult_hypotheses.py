@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Competing explanations as a TYPED block (lane Q-1, rule B) — pure, no I/O.
+"""Competing explanations as a TYPED block — pure, no I/O.
 
-THE DEFECT. The reviewed consult (2026-11-14) gave its competing explanations
+THE DEFECT. A reviewed consult gave its competing explanations
 probabilities about PROXY events — "0.75 that no US agency states a malicious
 cause for either A or B by 2026-12-31" — where the reader needed the
 probability that each explanation is TRUE. Those are different quantities: an
@@ -37,14 +37,13 @@ A SEALABLE FORECAST is derived from each test line (:func:`forecast_proposals`)
 the turn's data, never written to the ledger here (sealing needs the operator's
 number), and it never stands in for the cause probability.
 
-PROBABILITY WORDS. The tree defines two vocabularies. The forecast ledger is
-numeric (``forecast_ledger.clamp_p``: 0.01–0.99, three decimals) and the
-console renders numbers through the ICD-203 seven-band scale
-(``legba-ui-v3/src/lib/verdictModel.ts`` ``LIKELIHOOD_CUTS``); this module uses
-that scale (:func:`likelihood_band`) so a rendered word and the console's badge
-can never disagree. The other vocabulary — the analytic preamble's three tiers
-(``_tradecraft`` clause 4: assess / likely / possibly) — is a confidence
-register for prose, not a probability scale, and is not used here.
+PROBABILITY WORDS. The forecast ledger is numeric (``forecast_ledger.clamp_p``:
+0.01–0.99, three decimals) and the console renders numbers through a
+seven-band scale (``legba-ui-v3/src/lib/verdictModel.ts`` ``LIKELIHOOD_CUTS``).
+This module uses that scale (:func:`likelihood_band`, over
+``consult_answer_format.LIKELIHOOD_BANDS``), and the analytic standards give
+the model the same words, so a word in a prompt, a rendered word and the
+console's badge can never disagree.
 """
 
 from __future__ import annotations
@@ -54,11 +53,14 @@ import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Mapping, Sequence
 
+from .consult_answer_format import LIKELIHOOD_BANDS
+
 __all__ = [
     "CONTRACT_FENCE",
     "HYPOTHESES_PLACEHOLDER",
     "SUM_TOLERANCE",
     "check_hypotheses",
+    "contract_block_text",
     "extract_contract_block",
     "forecast_proposals",
     "likelihood_band",
@@ -80,16 +82,13 @@ _DATED_OBSERVABLE_RE = re.compile(
     re.IGNORECASE,
 )
 
-#: ICD-203 likelihood bands — the console's ``LIKELIHOOD_CUTS`` (upper bounds, exclusive).
-_BANDS: tuple[tuple[float, str], ...] = (
-    (0.05, "almost no chance"), (0.2, "very unlikely"), (0.45, "unlikely"),
-    (0.55, "roughly even chance"), (0.8, "likely"), (0.95, "very likely"),
-    (1.01, "almost certain"),
-)
+#: The likelihood bands — the console's ``LIKELIHOOD_CUTS`` (upper bounds,
+#: exclusive), from the one table every prompt's likelihood words come from.
+_BANDS: tuple[tuple[float, str], ...] = LIKELIHOOD_BANDS
 
 
 def likelihood_band(p: Any) -> str:
-    """The ICD-203 word for ``p`` (the console's own cut), ``unstated`` otherwise."""
+    """The likelihood word for ``p`` (the console's own cut), ``unstated`` otherwise."""
     try:
         value = float(p)
     except (TypeError, ValueError):
@@ -220,21 +219,49 @@ def check_hypotheses(
     return problems
 
 
+def contract_block_text(answer: str) -> str | None:
+    """The raw text inside the LAST ```contract block, or ``None`` when absent.
+
+    The same block :func:`extract_contract_block` reads; kept separately so a
+    repair of a block that is not valid JSON can show the model what it wrote.
+    """
+    matches = list(_BLOCK_RE.finditer(answer or ""))
+    return matches[-1].group(1).strip() if matches else None
+
+
 def repair_messages(block: Mapping[str, Any] | None, raw_error: str | None,
-                    problems: Sequence[str]) -> tuple[str, list[dict[str, str]]]:
-    """``(system, messages)`` for the ONE bounded repair request."""
+                    problems: Sequence[str], *, raw_block: str | None = None,
+                    today: date | None = None) -> tuple[str, list[dict[str, str]]]:
+    """``(system, messages)`` for the ONE bounded repair request.
+
+    ``raw_block`` is the block as the model wrote it; it is shown when the
+    block could not be parsed, so the repair can keep its explanations and
+    refs. ``today`` is the date the checks measured "already past" against.
+    """
+    today = today or datetime.now(timezone.utc).date()
     system = (
-        "You repair a consult answer's typed contract block. Reply with ONLY the corrected "
-        "```contract fenced JSON block and nothing else. Keep every explanation's meaning and "
-        "every cited ref; change only what the problems name. Each explanation's p is the "
-        "probability that the EXPLANATION IS TRUE; the explanations' p plus something_else_p "
-        "sum to 1; each item carries test {observable, by: YYYY-MM-DD, optional p_observable} "
-        "— the observable that would confirm or refute it, and (optionally) the probability "
-        "the observable occurs by that date, which is a different quantity from p."
+        "You repair the typed contract block of an answer. "
+        f"Today is {today.isoformat()} (UTC). "
+        "Reply with only the corrected ```contract block.\n"
+        "Fields: window_used, wider_reach, hypotheses [{explanation, p, for, against, "
+        "test {observable, by, p_observable}}], something_else_p.\n"
+        "Keep every explanation's meaning and every cited id. Fix only the listed problems:\n"
+        "- If the p values plus something_else_p do not sum to 1, change only "
+        "something_else_p; if it would go below 0, set it to 0 and scale the explanations' "
+        "p to sum to 1.\n"
+        "- If a test has no date, or its date is past, set `by` to the earliest date after "
+        "today on which the observable could be seen; if you cannot name one, remove that "
+        "item and add its p to something_else_p.\n"
+        "p is the probability the explanation is true; p_observable is the probability the "
+        "observable occurs by the date. They are different quantities."
     )
-    shown = json.dumps(block, ensure_ascii=False, indent=1) if block is not None else "(unparseable)"
+    if block is not None:
+        shown = json.dumps(block, ensure_ascii=False, indent=1)
+    else:
+        shown = raw_block if raw_block else "(unparseable)"
     body = (
         "The block below failed the contract.\n"
+        f"Today (UTC): {today.isoformat()}\n"
         + (f"Parse error: {raw_error}\n" if raw_error else "")
         + "Problems:\n- " + "\n- ".join(problems or ["(none listed)"])
         + f"\n\nBlock:\n```contract\n{shown}\n```"

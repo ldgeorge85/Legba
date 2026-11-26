@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The ``sse`` transport: Server-Sent Events over HTTP (lane I-4).
+"""The ``sse`` transport: Server-Sent Events over HTTP.
 
 WHY SSE FIRST: it is plain HTTP, so it needs no new dependency (httpx is
 already the fetch client), it goes through the SAME SSRF egress guard and

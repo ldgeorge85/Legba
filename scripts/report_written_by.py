@@ -3,8 +3,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """For the last N days (default 7), per class-(b) table of
 ``legba.data.write_attribution``: how many rows were written, and which KIND
-of principal each would have named had ``written_by`` existed — READ-ONLY
-(data-model lane 9).
+of principal each would have named had ``written_by`` existed — READ-ONLY.
 
 Before the migration lands nothing records the principal, so each table's
 writer is reconstructed from what the row (or the audit log) already says:
@@ -105,17 +104,17 @@ QUERIES: dict[str, str] = {
     "forecast_numbers": "SELECT 'number', 'rule', NULL, count(*) FROM forecast_numbers WHERE issued_at >= $1",
     "forecast_resolutions": "SELECT 'resolution', 'actor', resolved_by, count(*) FROM forecast_resolutions WHERE resolved_at >= $1 GROUP BY 3",
     "inquiry_ledger": "SELECT 'entry', 'agent', NULL, count(*) FROM inquiry_ledger WHERE updated_at >= $1",
-    # Created by this lane's migration: nothing exists before it.
+    # Created by the migration: nothing exists before it.
     "origins": None,
     "origin_groups": None,
     "origin_assignment_log": None,
-    # Citations as rows (lane DM-A): created with written_by from the start.
+    # Citations as rows created with written_by from the start.
     "finding_sentences": None,
     "citation_support": None,
     "citation_unresolved": None,
     "run_handed": None,
     "finding_citation_receipts": None,
-    # The held family (lane DM-C): written_by NOT NULL from the start.
+    # The held family: written_by NOT NULL from the start.
     "assertions": None,
     "assertion_versions": None,
     "assertion_support": None,

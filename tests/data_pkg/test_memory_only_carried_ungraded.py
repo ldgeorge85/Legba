@@ -57,8 +57,7 @@ from legba.data.provenance.verify import verify_finding_faithfulness
 from legba.data.registry.export_api import _finding_verify
 
 # ---------------------------------------------------------------------------
-# The 809fdee1 fixture (planning/waves/R1/evidence/memory_only_findings.json),
-# evidence_text trimmed to the header + the BLUF the carry rests on.
+# The 809fdee1 fixture: evidence_text trimmed to the header + the BLUF the carry rests on.
 # ---------------------------------------------------------------------------
 
 GOLDEN_ID = UUID("809fdee1-8514-435f-830d-3a21d33f94f7")

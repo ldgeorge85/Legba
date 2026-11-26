@@ -222,7 +222,7 @@ def test_every_measured_condition_is_in_the_shipped_predicate() -> None:
     assert "dmetaphone(" in sql and "dmetaphone_alt(" in sql  # (4) primary AND alt
     assert "generate_subscripts(" in sql                     # (4) PER TOKEN
     assert "entity_class = 'person'" in sql                  # scope
-    # Never resurrect a GC'd row (the DQ P4 re-animation guard) — the same rule
+    # Never resurrect a GC'd row (the re-animation guard) — the same rule
     # the two probes above it carry.
     assert "merged_into IS NULL" in sql
     assert "NOT IN ('merged', 'junk')" in sql

@@ -44,7 +44,7 @@ def _drop(subject: str, predicate: str, value: str) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# P2 — fact junk gate (fragment / possessive / employment-inversion)
+# Fact junk gate (fragment / possessive / employment-inversion)
 # ---------------------------------------------------------------------------
 
 
@@ -54,7 +54,7 @@ def _drop(subject: str, predicate: str, value: str) -> str | None:
      "dozens", "millions", "billions", "halves"],
 )
 def test_bare_plural_quantity_noun_is_quantity_phrase(surface: str) -> None:
-    # The singular _NUMBER_WORDS set missed these; the DQ-P5 _QUANTITY_NOUNS set
+    # The singular _NUMBER_WORDS set missed these; the _QUANTITY_NOUNS set
     # now makes the quantity gate catch them ('Thousands located in South Africa').
     assert _is_quantity_phrase(surface) is True
 
@@ -133,17 +133,17 @@ def test_bare_quantity_noun_dropped_by_quantity_gate(surface: str) -> None:
     ],
 )
 def test_d6_keeps_real_facts(subject, predicate, value) -> None:
-    # None of the DQ-P5 gates may fire on a legitimate fact shape. (Leadership is
+    # None of the gates may fire on a legitimate fact shape. (Leadership is
     # dropped by _is_junk_triple upstream, not by _d6_drop_reason, so it is not
     # asserted here.)
     reason = _drop(subject, predicate, value)
     assert reason not in {
         "possessive_fragment", "employment_country_subject", "junk_entity",
-    }, f"unexpected DQ-P5 drop {reason!r} for {subject}/{predicate}/{value}"
+    }, f"unexpected drop {reason!r} for {subject}/{predicate}/{value}"
 
 
 # ---------------------------------------------------------------------------
-# P5 — citation-residue strip on nexus endpoints
+# Citation-residue strip on nexus endpoints
 # ---------------------------------------------------------------------------
 
 
@@ -188,7 +188,7 @@ def test_coerce_typing_strips_bracket_endpoints() -> None:
 
 
 # ---------------------------------------------------------------------------
-# P3 — nexus exact-1.0 sentinel floor
+# Nexus exact-1.0 sentinel floor
 # ---------------------------------------------------------------------------
 
 
@@ -213,7 +213,7 @@ def test_coerce_typing_keeps_genuine_subone_confidence() -> None:
 
 
 # ---------------------------------------------------------------------------
-# P4 — two-tier sports gate (r2): UNAMBIGUOUS alone, DUAL-USE only with an anchor
+# Two-tier sports gate (r2): UNAMBIGUOUS alone, DUAL-USE only with an anchor
 # ---------------------------------------------------------------------------
 
 
@@ -274,7 +274,7 @@ def test_coerce_typing_sports_downgrade_over_match_report() -> None:
 
 
 def test_coerce_typing_sports_downgrade_over_face_with_fixture() -> None:
-    # The original P4 World-Cup leak ("DR Congo face England with nothing to
+    # The original World-Cup leak ("DR Congo face England with nothing to
     # lose") — the "<team> face <Team> with …" framing IS still gated to a
     # neutral co-occurrence (downgraded, not a signed -1 hostility).
     p = _coerce_typing(
@@ -319,7 +319,7 @@ def test_coerce_typing_real_hostility_not_downgraded(subject, object_, evidence)
 
 
 # ---------------------------------------------------------------------------
-# P7 — ingestion noisy-OR ceiling never LOWERS an already-higher genuine fact
+# Ingestion noisy-OR ceiling never LOWERS an already-higher genuine fact
 # ---------------------------------------------------------------------------
 
 
@@ -341,7 +341,7 @@ def _noisy_or_combine(existing: float, incoming: float) -> float:
 
 def test_noisy_or_floor_does_not_lower_genuine_fact() -> None:
     # A genuine 0.9 fact corroborated by a floor (0.5) observation STAYS >= 0.9 —
-    # the 0.75 ceiling must not drag it down (the P7 nit).
+    # the 0.75 ceiling must not drag it down.
     assert _noisy_or_combine(0.9, 0.5) == pytest.approx(0.9)
     assert _noisy_or_combine(0.99, 0.5) == pytest.approx(0.99)
 
@@ -363,7 +363,7 @@ def test_noisy_or_genuine_corroboration_still_raises() -> None:
 
 
 # ---------------------------------------------------------------------------
-# P6 — rel_type CamelCase → lowercase canon (write-path convergence)
+# rel_type CamelCase → lowercase canon (write-path convergence)
 # ---------------------------------------------------------------------------
 
 

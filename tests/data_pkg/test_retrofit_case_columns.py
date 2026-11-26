@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W9 TAX-4 — the case-bearing columns resolve to a registered value or
+"""The case-bearing columns resolve to a registered value or
 ``unclassified``.
 
 * ``legba.data.case_columns``: a desk (subject) id in a category column moves

@@ -1,0 +1,85 @@
+# Draft SourceDescriptor. Ships DRAFT; the reference host walks it to
+# CONFIGURED (descriptors/LIFECYCLE.md), never active — activation is an
+# admin's call.
+#
+# Council of the European Union and European Council — press releases:
+# decisions, sanctions listings, summit declarations and statements, media
+# advisories. OFFICIAL, a primary source for what the EU's member-state body
+# decided. Beside the European Commission press feed (source.eucommission.press):
+# the Council is where sanctions packages, military-aid decisions and
+# enlargement steps are adopted.
+#
+# Checked 2026-11-25 (one GET, generic client identity):
+# https://www.consilium.europa.eu/en/rss/pressreleases.ashx -> HTTP 200,
+# text/xml, ~13 KB, RSS 2.0 with the Atom namespace; 20 items, newest first,
+# the newest 2026-11-25. Per item: guid (a numeric id, isPermaLink false),
+# link, title, description (a sentence or two, sometimes with `&nbsp;`),
+# `a10:updated` (an ISO 8601 date-time with offset, in place of a pubDate) and
+# zero or more `category` elements. About a dozen releases on a busy day.
+#
+# Licence: the Council's legal-notice page answered with a challenge page from
+# the data-centre address and could not be read, so the terms are NOT STATED
+# here; the conservative class for unreviewed terms
+# (`permissive_feed_unreviewed`) is set until they are read. robots.txt was
+# not read.
+#
+# No declared geo: a release names its own countries. Every two hours in the
+# working day is ample for a feed that publishes on weekdays.
+
+identity:
+  id: source.consilium.press_releases
+  name: Council of the EU — press releases
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: owner@local
+  created: "2026-11-25T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: [en]
+  tags: [eu, gov, press, sanctions, policy]
+  source_class: official
+  license_class: permissive_feed_unreviewed   # terms page unreadable from here
+  access_class: public          # free no-auth feed, no separate reuse agreement
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "41 6-20/2 * * *"
+  cooldown_seconds: 300
+  jitter_seconds: 120
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://www.consilium.europa.eu/en/rss/pressreleases.ashx"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 604800
+  delivery: lossy
+
+subscription_policy: open

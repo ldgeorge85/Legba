@@ -766,5 +766,5 @@ class TestURLListSourceDeferred:
         handler = CountryListDiscovery()
         cfg = CountryListDiscoveryConfig(list_source="url:https://example.com/c.json")
         ctx = _ctx_for(cfg)
-        with pytest.raises(NotImplementedError, match="Wave C"):
+        with pytest.raises(NotImplementedError, match="reserved for a later release"):
             await _drain(handler, ctx)

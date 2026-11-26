@@ -4,7 +4,7 @@
 -- 0251_signals_source_created_at.sql
 --
 -- `idx_signals_source_created_at` (source_id, created_at): the per-source
--- freshness index `GET /v3/system/source-firing` reads (lane R-1, the
+-- freshness index `GET /v3/system/source-firing` reads (the
 -- console landing's read latency).
 --
 -- WHY

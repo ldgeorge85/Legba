@@ -3,7 +3,7 @@
 --
 -- 0048_journal.sql
 --
--- Journal Assessor (planning/JOURNAL_ASSESSOR_PLAN.md §3.3 / §7.3 / §8) — the
+-- Journal Assessor — the
 -- 11th OutputKind `journal`. The journal is Legba's first-person reflective
 -- voice: the ONE analyst pointed at the whole organism (including itself). It
 -- writes EXACTLY ONE row family — `journal` (entry | consolidation) — into the
@@ -13,20 +13,20 @@
 -- claim is a *perspective over* the provenance chain, never a *member of* it.
 -- Letting the journal write facts/nexuses would pollute the temporal-supersession
 -- and grounding machinery with lyrical, perspective-laden assertions. The off-
--- chain invariant (§3.1) is the single most important property in the design and
+-- chain invariant is the single most important property in the design and
 -- is enforced two ways: (1) at the grant layer (the analyst is granted ONLY the
 -- journal read pack) and (2) at the chain layer — journal rows carry an
 -- ALWAYS-EMPTY `derived_from` and the table is deliberately NOT registered in the
 -- lineage catalog (`lineage_api._SUBSTRATE_TABLES`), so a downstream lineage walk
--- FROM a fact/situation/nexus can NEVER surface a journal node (§3.5).
+-- FROM a fact/situation/nexus can NEVER surface a journal node.
 --
--- Both `journal_entries` (§8) and `journal_proposals` (§7.3) are created here even
--- though the propose_* toolset is Wave 4 — the plan pins both in 0048.
+-- Both `journal_entries` and `journal_proposals` are created here even
+-- though the propose_* toolset comes later.
 --
 -- WHAT (idempotent — CREATE ... IF NOT EXISTS only; additive, no data migration).
 
 -- ---------------------------------------------------------------------------
--- journal_entries — the one append-only, supersession-tracked store (§8).
+-- journal_entries — the one append-only, supersession-tracked store.
 -- The old Redis (working set) + OpenSearch (archive) split collapses into one
 -- provenance-tracked store: the append-only table IS the permanent record.
 -- ---------------------------------------------------------------------------
@@ -35,11 +35,11 @@ CREATE TABLE IF NOT EXISTS public.journal_entries (
     entry_kind      TEXT        NOT NULL,            -- 'entry' | 'consolidation' (the discriminator)
     title           TEXT        NOT NULL,
     body            TEXT        NOT NULL,            -- the narrative (markdown w/ inline [[ref:uuid]] markers)
-    claims          JSONB       NOT NULL DEFAULT '[]'::jsonb,   -- per-claim binding: [{text_span, refs[], kind}] (§3.6)
+    claims          JSONB       NOT NULL DEFAULT '[]'::jsonb,   -- per-claim binding: [{text_span, refs[], kind}]
     cited_substrate_refs UUID[] NOT NULL DEFAULT '{}',          -- flat union of all refs (query convenience)
     period_start    TIMESTAMPTZ NOT NULL,
     period_end      TIMESTAMPTZ NOT NULL,
-    honesty_flags   TEXT[]      NOT NULL DEFAULT '{}',          -- forced deterministically (§10)
+    honesty_flags   TEXT[]      NOT NULL DEFAULT '{}',          -- forced deterministically
     -- temporal supersession (consolidation only) — mirrors facts/nexuses
     valid_from      TIMESTAMPTZ NOT NULL DEFAULT now(),
     valid_until     TIMESTAMPTZ,                     -- closed when a newer consolidation supersedes
@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS public.journal_entries (
     analyst_id      TEXT,
     analyst_version TEXT,
     produced_at     TIMESTAMPTZ NOT NULL,
-    -- ALWAYS EMPTY for journal rows (§3.5): the direction-asymmetric lineage node.
+    -- ALWAYS EMPTY for journal rows: the direction-asymmetric lineage node.
     -- Citations live ONLY in `claims` / `cited_substrate_refs` (the UP-only walk).
     derived_from    UUID[]      NOT NULL DEFAULT '{}',
     schema_uri      TEXT        NOT NULL DEFAULT 'iglu:legba/journal/jsonschema/1-0-0',
@@ -83,11 +83,11 @@ CREATE INDEX IF NOT EXISTS idx_journal_entries_period
     ON public.journal_entries (period_end DESC);
 
 -- ---------------------------------------------------------------------------
--- journal_proposals — the human-gated review queue (§7.3). Created now (the
--- propose_* toolset is Wave 4); NO producer writes it in Wave 0. The journal's
--- two-things-only rule (§7.1): it writes ONLY entries + consolidations directly;
+-- journal_proposals — the human-gated review queue. Created now (the
+-- propose_* toolset comes later); NO producer writes it yet. The journal's
+-- two-things-only rule: it writes ONLY entries + consolidations directly;
 -- everything else it wants to affect it PROPOSES into this queue, never to a live
--- table. A human always sits between the journal's voice and any change (§7.5).
+-- table. A human always sits between the journal's voice and any change.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.journal_proposals (
     id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -1,4 +1,4 @@
-# P3-6 Wave-A (A1) — draft SourceDescriptor. Ships DRAFT (operator activates).
+# Draft SourceDescriptor. Ships DRAFT (operator activates).
 #
 # CGTN World (English) — Chinese state broadcaster. Knowingly ingested for the CN desk as labeled state_media FRAMING (fills retired Xinhua + quiet Global Times), consistent with the existing source.xinhua.world / source.globaltimes.all knowing-ingest pattern. The house rule permits Chinese state media ONLY for the CN desk — this is that desk.
 # Verified live 2026-07-03. Keyless. No fact_extractor (framing, not a fact source).
@@ -15,7 +15,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: p3_6_wave_a
+  owner: owner@local
   created: "2026-07-27T00:00:00Z"
 
 scope:
@@ -24,7 +24,7 @@ scope:
   languages: [en]
   tags: [news, state_media, china, asia, wave_a]
   source_class: state_media
-  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
+  access_class: public          # free no-auth feed, no separate reuse agreement
 
 acquisition: poll
 

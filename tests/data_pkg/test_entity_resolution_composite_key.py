@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Migration 0035 + SLM-disambiguator wiring (entity-resolution Wave 1).
+"""Migration 0035 + SLM-disambiguator wiring.
 
 Three layers, mirroring the package's test conventions:
 

@@ -105,10 +105,12 @@ from datetime import datetime, timezone
 from typing import Any, Mapping, Sequence
 from uuid import UUID, uuid4
 
+from ...grading_text import ORIGINATORS, PASTED_TEXT_IS_DATA
 from ...provenance import AnalystContext, write_analyst_output
 from ...provenance.kinds import OutputKind
 from ...provenance.models import AlertPayload, CritiquePayload, FindingPayload
 from ....runtime.analyst_method import AnalystMethodResult
+from ._external_audit_grader import search_result_line
 from ._external_audit_sampling import (
     ALERT_TRIGGER_CLASS,
     CHECKED_VERDICTS,
@@ -167,6 +169,12 @@ DEFAULT_SEARCH_LIMIT = 5
 #: wedged plane cannot hold the run, and an output cap. (The vLLM handler drops
 #: ``max_tokens`` from the wire by default — a self-hosted server serves its own
 #: budget — so this is the hosted-endpoint safety net, not the live control.)
+#: How much of a read's body the extract call sees: all of it. A finding body
+#: is at most 65,536 characters (``FindingPayload.body``), about 16,000 tokens
+#: by the house estimate, which the grader's window holds many times over; the
+#: old 12,000-character cut sized the prompt for a small window and dropped the
+#: tail of long reads. If a body is ever longer, the message says it was cut.
+EXTRACT_BODY_CHARS = 65_536
 EXTRACT_MAX_TOKENS = 900
 JUDGE_MAX_TOKENS = 1200
 LLM_TIMEOUT_SECONDS = 90.0
@@ -204,90 +212,100 @@ _VERDICT_SAMPLE_CAP = 25
 # ---------------------------------------------------------------------------
 
 _EXTRACT_SYSTEM = (
-    "You are the claim-extraction leg of an EXTERNAL AUDIT. You are given one "
-    "analytical read this system published about the world. Your ONLY job is "
-    "to lift out the claims that an independent person could CHECK against "
-    "public reporting, and to write the search query that would check each.\n"
+    "You are the claim-extraction leg of an external audit. You are given one "
+    "analytical read this system published. Your only job is to lift out the "
+    "claims that an independent person could check against public reporting, "
+    "and to write the search query that would check each.\n"
     "\n"
-    "A CHECKABLE claim asserts a concrete state of the world: an event that "
+    "A checkable claim asserts a concrete state of the world: an event that "
     "happened, a policy that was announced, a figure that was published, a "
-    "position someone took. It is NOT checkable if it is a forecast, a "
+    "position someone took. It is not checkable if it is a forecast, a "
     "judgement, an assessment of intent, a probability, or a statement about "
-    "this system's own coverage. Prefer the claim the read leans on hardest — "
-    "the one that, if false, would make the read wrong.\n"
+    "this system's own coverage.\n"
     "\n"
-    "Write each claim as a SELF-CONTAINED sentence: whoever checks it will not "
+    "Write each claim as a self-contained sentence: whoever checks it will not "
     "see the document you read, so resolve every pronoun and name every actor, "
-    "place and date. The query is what you would type into a search engine — "
+    "place and date. The query is what you would type into a search engine: "
     "short, specific, keyword-shaped, no boolean syntax.\n"
     "\n"
-    "Respond with STRICT JSON and nothing else — no prose, no code fences:\n"
+    + PASTED_TEXT_IS_DATA
+    + "\n\n"
+    "Respond with strict JSON and nothing else, no prose, no code fences:\n"
     '{"claims": [{"claim": "<self-contained checkable sentence>", '
     '"query": "<search query that would verify or refute it>"}]}\n'
-    "Return an EMPTY claims array if the read contains nothing checkable. That "
-    "is a legitimate answer and a useful one; inventing a claim to fill the "
-    "quota is not."
+    "The message says how many claims you may return at most: return the ones "
+    "the read leans on hardest, whose falsehood would make the read wrong. "
+    "Return an empty claims array if nothing is checkable."
 )
 
 _JUDGE_SYSTEM = (
-    "You are the verdict leg of an EXTERNAL AUDIT. You are given ONE claim this "
-    "system published, and the results of ONE external web search. Decide "
-    "whether the search results SUPPORT the claim, CONTRADICT it, or simply do "
+    "You are the verdict leg of an external audit. You are given one claim "
+    "this system published, and the results of one external web search. "
+    "Decide whether the search results support the claim, contradict it, or do "
     "not settle it.\n"
     "\n"
     "  SUPPORTED    — a result states or clearly entails the claim.\n"
     "  CONTRADICTED — a result states something incompatible with the claim.\n"
     "  NOT_FOUND    — the results do not settle it either way.\n"
     "\n"
-    "NOT_FOUND IS THE DEFAULT AND IT IS NOT A FAILURE. Search covers the "
-    "engines that answered, not the world; results that are merely adjacent, "
-    "about a different date, or about a different actor settle NOTHING. Never "
-    "reach for SUPPORTED because a result is on the same topic, and never reach "
-    "for CONTRADICTED because a result omits the claim — absence in a search is "
-    "not evidence of absence in the world.\n"
+    "Not found is the normal answer when the results do not settle the claim. "
+    "Search covers the engines that answered, not the world; results that are "
+    "merely adjacent, about a different date, or about a different actor "
+    "settle nothing. Never reach for SUPPORTED because a result is on the same "
+    "topic, and never reach for CONTRADICTED because a result omits the claim: "
+    "absence in a search is not evidence of absence in the world.\n"
     "\n"
-    "Every SUPPORTED or CONTRADICTED verdict MUST quote the text that carries "
-    "it and cite the URL that text came from. Use ONLY the URLs listed in the "
-    "results below — a URL you did not see in those results will be discarded "
-    "and your verdict downgraded, because a fabricated source is the exact "
-    "failure this audit exists to catch.\n"
+    "If a result only reports that a party said something, SUPPORTED applies "
+    "to the claim that the party said it, not to the thing said. "
+    + ORIGINATORS
+    + " Note in the rationale whether the supporting text comes from the same "
+    "originator the claim relied on.\n"
     "\n"
-    "Respond with STRICT JSON and nothing else — no prose, no code fences:\n"
-    '{"verdict": "SUPPORTED|CONTRADICTED|NOT_FOUND", '
+    "Every SUPPORTED or CONTRADICTED verdict must quote the text that carries "
+    "it and cite the URL that text came from. Use only the URLs listed in the "
+    "results: a URL you did not see in those results is discarded and the "
+    "verdict downgraded.\n"
+    "\n"
+    + PASTED_TEXT_IS_DATA
+    + "\n\n"
+    "Respond with strict JSON and nothing else, no prose, no code fences:\n"
+    '{"evidence": [{"url": "<a url from the results>", '
+    '"quote": "<the exact sentence from that result carrying the verdict>"}], '
     '"rationale": "<one or two sentences: what the evidence shows and why it '
     'settles or fails to settle the claim>", '
-    '"evidence": [{"url": "<a url from the results>", '
-    '"quote": "<the exact sentence from that result carrying the verdict>"}]}'
+    '"verdict": "SUPPORTED|CONTRADICTED|NOT_FOUND"}'
 )
 
 
-def _extract_prompt(head: SampledHead) -> str:
+
+def _extract_prompt(head: SampledHead, *, cap: int = DEFAULT_MAX_CLAIMS_PER_HEAD) -> str:
     delta = head.severity_delta or "not stated"
+    body = head.body or ""
+    cut = len(body) > EXTRACT_BODY_CHARS
     return (
-        f"READ: {head.title}\n"
+        f"Return at most {cap} claims.\n\n"
+        f"READ: {json.dumps(head.title, ensure_ascii=False)}\n"
         f"DESK: {head.desk_key}   ANALYST: {head.analyst_id}\n"
         f"SEVERITY: {head.severity or 'not stated'}   "
         f"SEVERITY_DELTA: {delta}\n"
-        f"\n{head.body[:12000]}\n"
+        f"\n{body[:EXTRACT_BODY_CHARS]}\n"
+        + ("(the read continues beyond this point; it was cut for length)\n"
+           if cut else "")
     )
 
 
 def _judge_prompt(claim: CheckableClaim, results: Sequence[Mapping[str, Any]],
                   search_status: Mapping[str, Any]) -> str:
     lines = [
-        f"CLAIM: {claim.claim}",
-        f"QUERY RUN: {claim.query}",
+        f"CLAIM: {json.dumps(claim.claim, ensure_ascii=False)}",
+        f"QUERY RUN: {json.dumps(claim.query, ensure_ascii=False)}",
         "",
         "SEARCH RESULTS:",
     ]
     if not results:
         lines.append("(none)")
     for i, r in enumerate(results, start=1):
-        lines.append(f"[{i}] {r.get('title') or '(untitled)'}")
-        lines.append(f"    url: {r.get('url') or ''}")
-        snippet = str(r.get("snippet") or "").strip().replace("\n", " ")
-        if snippet:
-            lines.append(f"    text: {snippet[:800]}")
+        lines.append(search_result_line(i, r, snippet_chars=800))
     warning = str(search_status.get("absence_warning") or "").strip()
     if warning:
         lines += ["", f"SEARCH-PLANE WARNING: {warning}"]
@@ -484,7 +502,7 @@ async def _extract_claims(
     try:
         response = await asyncio.wait_for(
             llm.chat_complete(
-                [{"role": "user", "content": _extract_prompt(head)}],
+                [{"role": "user", "content": _extract_prompt(head, cap=cap)}],
                 max_tokens=EXTRACT_MAX_TOKENS,
                 temperature=None,  # the component default (1.0) — the house rule and the gateway's recommended sampling; 0.0 was a determinism habit from the OpenRouter grader era
                 system=_EXTRACT_SYSTEM,

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Origins and origin groups over HTTP (data-model lane 9).
+"""Origins and origin groups over HTTP.
 
   * ``GET  /api/v1/registry/origins`` — every origin with its group, the rule
     that put it there and whether an admin corrected it (any signed-in role).
@@ -32,7 +32,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
-from ..origins import OriginCorrectionError, correct_origin, sync_derived
+from ..origins import OriginCorrectionError, correct_origin, derived_assignments, sync_derived
+from ..owner_map import load_owner_map
 from ..principals import handle_for_actor
 from .api import RegistryAPIDeps, require_bearer
 
@@ -177,7 +178,8 @@ def build_origins_router(deps: RegistryAPIDeps) -> APIRouter:
         the request is the admin's (logged)."""
         _writer(principal)
         async with deps.descriptor_registry.pg.acquire() as conn:
-            counts = await sync_derived(conn)
+            counts = await sync_derived(
+                conn, await derived_assignments(conn, owner_map=load_owner_map()))
         return {"counts": counts}
 
     return router

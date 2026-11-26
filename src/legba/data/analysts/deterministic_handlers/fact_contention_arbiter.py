@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""``fact_contention_arbiter`` sub-handler — Holes-B Wave 2 (DETECT-ONLY).
+"""``fact_contention_arbiter`` sub-handler (DETECT-ONLY).
 
 The contested-claims referee (#101). When two credible sources disagree on a
 ``(subject, predicate)`` value, both rows already coexist OPEN (the open-triple
@@ -16,14 +16,14 @@ or rewrites a ``facts`` row: it touches ZERO of ``valid_until`` /
 ``superseded_by`` / ``value`` / ``confidence``, and never calls
 ``supersede_prior_facts``. The only ``facts`` writes are the three marker columns
 (``contested`` / ``contention_id`` / ``surfaced_winner``); everything else lands
-in the sidecar tables. The write-path coexistence change is a separate,
-flag-gated Wave 4 — not here.
+in the sidecar tables. The write-path coexistence change is separate and
+flag-gated, not part of this handler.
 
 Pipeline (idempotent, safe to re-run hourly; the scan IS the backfill):
   1. Scan OPEN facts (``valid_until IS NULL AND superseded_by IS NULL``), grouped
      by ``(lower(subject), normalize_predicate(lower(predicate)))``.
-  2. Cluster each group's values with the shared fuzzy clusterer (Wave 3 —
-     canon + tight normalized-Levenshtein), so "Russia"/"Russian" and
+  2. Cluster each group's values with the shared fuzzy clusterer (canon +
+     tight normalized-Levenshtein), so "Russia"/"Russian" and
      "Kyiv"/"Kiev" are ONE value, not two.
   3. JUNK-GATE every cluster by reusing the ``fact_extractor`` gates
      (``is_junk_entity`` / ``_is_inverted_relation`` / ``_is_reflexive_after_canon``
@@ -52,10 +52,10 @@ Output ``data`` keys (the cadence receipt the operator reads):
     abstained         int — open groups where the arbiter surfaced NO winner
     junk_excluded     int — junk clusters recorded (is_junk=true), operator-reportable
     llm_tiebreaks     int — near-tie abstains the LLM tie-break RESOLVED this pass
-                            (Wave 2b — 0 unless ``LEGBA_FACT_CONTENTION_LLM_TIEBREAK``
+                            (0 unless ``LEGBA_FACT_CONTENTION_LLM_TIEBREAK``
                             is set AND a vLLM handler is wired)
 
-Wave 2b — LLM tie-break on ABSTAIN (decision #2). The deterministic ``Q·C·R·F``
+LLM tie-break on ABSTAIN. The deterministic ``Q·C·R·F``
 arbiter stays the default. There are TWO abstain causes at :func:`_select_winner`:
 (1) the best cluster is genuinely WEAK (``best_score < MIN_SURFACE_SCORE``) — the
 LLM is NEVER consulted, the abstain stands; (2) a NEAR-TIE between >= 2 non-junk
@@ -130,6 +130,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 from uuid import UUID
 
+from ...grading_text import ORIGINATORS, PASTED_TEXT_IS_DATA
 from ..._entity_canon import is_junk_entity
 from ...filters.fact_extractor import (
     _is_capital_metonymy,             # CW-6 — capital-as-government gate
@@ -160,7 +161,7 @@ ARBITER_VERSION = "fact_contention_arbiter/1.1.0"
 #: Surface gate (decisions B10/B11). The winner is surfaced only when its score
 #: clears this floor AND dominates the runner-up by the ratio below; otherwise
 #: the group stays contested with NO surfaced winner (abstain — an honest
-#: deadlock, refined by the LLM tie-break in the later Wave 2b).
+#: deadlock, refined by the optional LLM tie-break).
 MIN_SURFACE_SCORE = 0.15
 DOMINANCE_RATIO = 1.25
 
@@ -203,8 +204,8 @@ DEFAULT_EARNED_WEIGHT = 0.0
 #: so the cap can never be exceeded).
 SURFACE_HISTORY_CAP = 50
 
-#: Wave 2b — LLM tie-break flag (decision #2). OFF by default: behavior is
-#: byte-for-byte the deterministic Wave-2 arbiter (no LLM, current abstain). ON
+#: LLM tie-break flag. OFF by default: behavior is
+#: byte-for-byte the deterministic arbiter (no LLM, current abstain). ON
 #: only consults the LLM on a NEAR-TIE abstain (cause 2), never a weak abstain.
 LLM_TIEBREAK_ENV = "LEGBA_FACT_CONTENTION_LLM_TIEBREAK"
 
@@ -662,7 +663,7 @@ def _abstain_cause(aggs: list[_ValueAgg], scores: dict[str, float]) -> str | Non
                           genuinely thin, surfacing anything would be noise.
       * ``"near_tie"`` — both top clusters clear ``MIN_SURFACE_SCORE`` but the
                           best fails to dominate the runner-up by
-                          ``DOMINANCE_RATIO`` (cause 2). The ONLY case Wave 2b's
+                          ``DOMINANCE_RATIO`` (cause 2). The ONLY case the
                           LLM tie-break may run.
     """
     if not aggs:
@@ -733,8 +734,7 @@ def _earned_track_record_weight(agg: _ValueAgg) -> float:
 
     Adds the source-assurance ledger's layer 3 signal — the EARNED per-source
     track record computed from our own contention/corroboration outcomes
-    (source_track_record.py; planning/PROGRAM_RECOMMENDATIONS_2026-07-24.md
-    §A6) — as a bounded, damped, NON-NEGATIVE per-side weight.
+    (source_track_record.py) — as a bounded, damped, NON-NEGATIVE per-side weight.
 
     ``agg.earned_weight`` is the damped signal in ``[0, 1]`` the arbiter pass
     attaches via :func:`_attach_earned_weights` (lagged + acyclicity-guarded)
@@ -926,14 +926,14 @@ class _SurfaceDecision:
 
 
 # ---------------------------------------------------------------------------
-# Wave 2b — bounded LLM tie-break on a NEAR-TIE abstain (decision #2)
+# Bounded LLM tie-break on a NEAR-TIE abstain
 # ---------------------------------------------------------------------------
 
 
 def _llm_tiebreak_enabled() -> bool:
     """``LEGBA_FACT_CONTENTION_LLM_TIEBREAK`` truthy? (default OFF).
 
-    OFF → the arbiter is byte-for-byte the deterministic Wave-2 handler: no LLM,
+    OFF → the arbiter is byte-for-byte the deterministic handler: no LLM,
     the near-tie abstain stands.
     """
     return os.getenv(LLM_TIEBREAK_ENV, "").strip().lower() in (
@@ -942,16 +942,20 @@ def _llm_tiebreak_enabled() -> bool:
 
 
 _TIEBREAK_SYSTEM_PROMPT = (
-    "You are a deterministic intelligence-analysis referee resolving a NEAR-TIE "
-    "between competing claimed values for one (subject, predicate). The candidates "
-    "are statistically too close for the rule-based scorer to separate. Weigh "
-    "distinct-source corroboration, source credibility share, recency, source "
-    "types, and the representative phrasings. Pick the SINGLE best-supported "
-    "value_key, or ABSTAIN if they remain a genuine tie. Be conservative: when "
-    "in doubt, ABSTAIN. Reply with ONE JSON object and nothing else: "
-    "{\"winner\": \"<value_key>\", \"why\": \"<one short sentence>\"} or "
-    "{\"winner\": \"ABSTAIN\", \"why\": \"<one short sentence>\"}. Never invent "
-    "a value_key not listed."
+    "Several sources give different values for the same fact (one subject, one "
+    "predicate), and the scorer could not separate them. For each value "
+    "consider: (a) does it come from a party with first-hand knowledge, or does "
+    "it repeat another source; (b) is it about the same date as the others, or "
+    "a later state of the same thing; (c) is it one party's own claim that the "
+    "other values contradict. Choose a value only if it is first-hand and "
+    "current and the others repeat it or are older. A choice that rests only on "
+    "how many sources give a value is not a choice: answer ABSTAIN. "
+    + ORIGINATORS
+    + " When in doubt, ABSTAIN.\n"
+    + PASTED_TEXT_IS_DATA
+    + "\nReply with one JSON object and nothing else: "
+    '{"why": "<one short sentence>", "winner": "<a listed value_key or '
+    'ABSTAIN>"}. Never name a value_key that is not listed.'
 )
 
 
@@ -962,33 +966,42 @@ def _build_tiebreak_prompt(
     scores: dict[str, float],
     now: datetime,
 ) -> str:
-    """Render the competing clusters + their evidence as a strict tie-break prompt.
+    """Render the competing values and their evidence for the tie-break call.
 
-    Gives the model exactly the deterministic factors (distinct_source_count,
-    credibility share, recency, source_types, representative value) so its call is
-    grounded in the SAME evidence the scorer used — not free-form speculation."""
+    The model sees each value, a representative phrasing, how many distinct
+    sources give it, their credibility share, the source types and the date it
+    was last asserted. It does NOT see the scorer's own score or confidence
+    mean: shown those, a model picks the top number and the call adds nothing.
+    ``scores`` stays in the signature for the caller's logging. Every pasted
+    value is JSON-encoded so a quote mark or line break in it cannot break the
+    list."""
+    del scores  # deliberately not shown to the model (see above)
     group_cred_total = sum(a.cred_sum for a in aggs)
     lines: list[str] = [
-        f"subject: {subject_key}",
-        f"predicate: {predicate_key}",
+        f"subject: {json.dumps(subject_key, ensure_ascii=False)}",
+        f"predicate: {json.dumps(predicate_key, ensure_ascii=False)}",
         "",
-        "Candidate values (value_key — evidence):",
+        "Candidate values (value_key, then its evidence):",
     ]
     for agg in aggs:
         cred_share = _credibility_share(agg.cred_sum, group_cred_total)
-        recency = _recency(agg.latest_asserted_at, now)
+        latest = (
+            agg.latest_asserted_at.date().isoformat()
+            if agg.latest_asserted_at is not None
+            else "unknown"
+        )
         types = ", ".join(sorted(agg.source_types)) or "unknown"
         lines.append(
-            f"- {agg.value_key!r}: representative={agg.representative_value!r}; "
+            f"- {json.dumps(agg.value_key, ensure_ascii=False)}: "
+            f"representative={json.dumps(agg.representative_value, ensure_ascii=False, default=str)}; "
             f"distinct_source_count={agg.distinct_source_count}; "
-            f"credibility_share={cred_share:.3f}; recency={recency:.3f}; "
-            f"confidence_mean={agg.confidence_mean:.3f}; source_types=[{types}]; "
-            f"score={scores.get(agg.value_key, 0.0):.4f}"
+            f"credibility_share={cred_share:.3f}; last_asserted={latest}; "
+            f"source_types=[{types}]"
         )
     lines.append("")
     lines.append(
-        'Reply with ONE JSON object: {"winner": "<value_key>", "why": "<one '
-        'short sentence>"} or {"winner": "ABSTAIN", "why": "<one short sentence>"}.'
+        'Reply with one JSON object: {"why": "<one short sentence>", '
+        '"winner": "<a listed value_key or ABSTAIN>"}.'
     )
     return "\n".join(lines)
 
@@ -1820,9 +1833,9 @@ def _new_counts() -> dict[str, int]:
 async def _run_arbiter(pool: Any, llm: Any | None = None) -> dict[str, int]:
     """One full arbiter pass over the open facts. Idempotent.
 
-    ``llm`` — the OPTIONAL self-hosted vLLM tie-break handler (Wave 2b). When it
+    ``llm`` — the OPTIONAL self-hosted vLLM tie-break handler. When it
     is ``None`` (flag off / not wired) the pass is byte-for-byte the deterministic
-    Wave-2 arbiter. When present, a NEAR-TIE abstain (cause 2) may be resolved by
+    arbiter. When present, a NEAR-TIE abstain (cause 2) may be resolved by
     a bounded LLM call, capped at ``MAX_LLM_TIEBREAKS`` per pass. A WEAK abstain
     (cause 1) NEVER calls the LLM."""
     counts = _new_counts()
@@ -1974,7 +1987,7 @@ def _build_finding(counts: Mapping[str, int], target_id: str | None) -> FindingP
 
 def _resolve_tiebreak_llm(deps: Any | None) -> Any | None:
     """Pull the self-hosted vLLM tie-break handler off ``deps.extras`` iff the
-    Wave-2b flag is ON.
+    LLM tie-break flag is ON.
 
     Returns ``None`` (no tie-break) when the flag is OFF, ``deps`` is absent, or
     no handler was wired — keeping the off-path behavior byte-for-byte

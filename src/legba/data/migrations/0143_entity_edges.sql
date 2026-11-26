@@ -3,9 +3,8 @@
 --
 -- 0143_entity_edges.sql
 --
--- K-G1 step 1 — the id-keyed edge store. THE unanimous irreversible from the
--- three-way graph debate (planning/graph_debate/JUDGE_SYNTHESIS.md §4.1): A, B
--- and C proposed three different engines and the same table. This file is that
+-- The id-keyed edge store. Three candidate graph engines were weighed and all
+-- needed the same table. This file is that
 -- table, plus its unresolved-endpoint park, plus the merge-fold function. It
 -- creates NO readers and NO writers — `entity_edges` lands empty and stays empty
 -- until 0144/0145 backfill it and the dual-write lands. Existing readers stay on

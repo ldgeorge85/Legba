@@ -29,7 +29,7 @@
  *    `kind='finding'` and takes `analyst_id`, so both the spine and the
  *    Assessment are served on day one by the read path that already exists.
  *
- * ── WHICH INTERPRETIVE VOICE (Program 3, lane C) ──────────────────────────────
+ * ── WHICH INTERPRETIVE VOICE ─────────────────────────────────────────────────
  * The Assessment shipped as a constant — `world_assessment`, one voice, hard
  * against the world spine. A constant cannot say "this tier has no voice", so a
  * country or thematic read fell through to the newest world Assessment and
@@ -247,8 +247,8 @@ function GateBanner({ assembly, row }: { assembly: AssemblyPayload; row: ReadFin
         ? ` · coverage completeness ${score(badge.coverageCompleteness)}`
         : ''}
       {` · ${badge.dropCount} dropped · ${plural(badge.blocks, 'block')}.`} This record carries no
-      faithfulness score: a composed number that can read 1.00 on a page containing a fact its own
-      desk denies is not a badge.
+      single score for how well it holds against its sources: one composed number can read 1.00 on
+      a page that contains a fact its own sources deny.
     </p>
   )
 }
@@ -566,7 +566,7 @@ export default function MorningRead({ analystId = SPINE_ANALYST }: MorningReadPr
               <h2>The record</h2>
               <div className="read-rule" />
               <span className="read-band-note">
-                {plural(assembly.blocks.length, 'block')} &middot; canonical &middot; quotation spine
+                {plural(assembly.blocks.length, 'block')} &middot; quoted from the record
               </span>
             </div>
 

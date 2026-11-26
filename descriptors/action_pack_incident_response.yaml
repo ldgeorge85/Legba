@@ -1,4 +1,4 @@
-# P-11 — incident_response action pack (PIVOT §4.8 seed pack).
+# incident_response action pack (seed pack).
 #
 # Grants the `escalate` + `create_incident` tools, which emit to the pack's
 # CHANNELS via the existing output-kind surface (alert / nats_stream / webhook /
@@ -19,7 +19,7 @@ identity:
   version: "<content-hash stamped at register time>"
   abstraction_level: L1
   state: active
-  owner: p11_agency
+  owner: owner@local
   created: "2026-06-03T00:00:00Z"
 
 tools:

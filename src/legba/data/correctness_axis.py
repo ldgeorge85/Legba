@@ -244,7 +244,7 @@ def assert_not_pooled(payload: Mapping[str, Any], *, what: str) -> None:
         raise AssertionError(
             f"{what} carries operator-correctness key(s) {leaked}: the operator "
             "gold-set axis is judge-independent and must never be pooled into a "
-            "faithfulness / calibration aggregate (labels_api P2-5)."
+            "faithfulness / calibration aggregate."
         )
 
 

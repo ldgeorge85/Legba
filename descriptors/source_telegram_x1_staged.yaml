@@ -1,9 +1,8 @@
-# X-1 source expansion (2026-11-14) — STAGED Telegram channels.
+# STAGED Telegram channels.
 #
-# ROLL 83 (2026-11-14): all ten channels below were MOVED
-# into source_telegram_monitor.yaml (handles and classes, labels kept). This
-# file now holds none; the review notes below stay as the record of why each
-# was added and how it is classed.
+# All ten channels below were MOVED into source_telegram_monitor.yaml (handles
+# and classes, labels kept). This file now holds none; the review notes below
+# stay as the record of why each was added and how it is classed.
 # kind: telegram_channel, the SAME platform account (the same three vault refs)
 # as source.telegram.org_channels. Ships DRAFT; the reference host walks it to
 # CONFIGURED (descriptors/LIFECYCLE.md) and it must NEVER go active as itself.
@@ -12,10 +11,10 @@
 # is a protocol constraint (docs/DATA_SOURCES.md): a second concurrent client on
 # the same session trips Telegram's AUTH_KEY_DUPLICATED and kills the session.
 # The 28 live channels therefore ride ONE descriptor
-# (source_telegram_monitor.yaml), and the 2026-07-29 Ansar Allah decision
-# retired the separate-descriptor-per-batch approach for anything that RUNS.
+# (source_telegram_monitor.yaml); a separate descriptor per batch is not used
+# for anything that RUNS.
 # But adding these handles to that live descriptor would activate all ten on
-# the next roll, and activation is the owner's call per channel. So the ten
+# the next deploy, and activation is a per-channel operator decision. So the ten
 # reviewed channels are held here, registered and configured (a configured
 # head creates no actor and opens no client — runtime/dapr_host.py skips
 # draft/configured), with their classes already decided:
@@ -26,7 +25,7 @@
 #   on the live session. tests/data_pkg/test_source_expansion_x1.py pins that
 #   its lifecycle row stays `configured`.
 #
-# Reviewed 2026-11-14 by the source-expansion review on each channel's public
+# Reviewed on each channel's public
 # web preview (t.me/s/<handle>: existence, subscribers, timestamps of the
 # newest <=20 posts). Read as TEXT only (include_media: false — media is
 # never downloaded), exactly as the live channels are.
@@ -77,13 +76,13 @@
 
 identity:
   id: source.telegram.x1_staged_channels
-  name: Telegram — staged channels (X-1, configured only; activate by moving into org_channels)
+  name: Telegram — staged channels (configured only; activate by moving into org_channels)
   kind: telegram_channel
   schema_uri: legba/source/1.0.0
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft                       # LIFECYCLE walks it to configured — never active
-  owner: x1_source_expansion
+  owner: owner@local
   created: "2026-11-14T00:00:00Z"
 
 scope:
@@ -115,9 +114,8 @@ config:
   session_secret:
     factory_kind: secret
     raw: "source.telegram.session"
-  # 2026-11-14 (roll 83): all ten channels moved into
-  # source_telegram_monitor.yaml; this descriptor holds
-  # none now and stays configured, ready for the next reviewed batch.
+  # All ten channels moved into source_telegram_monitor.yaml; this descriptor
+  # holds none now and stays configured, ready for the next reviewed batch.
   channels:
     factory_kind: list
     item_kind: text

@@ -2,13 +2,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """legba.prompts.inquiry — the INQUIRY voice: an investigator with continuity.
 
-Program 5 archetype 2 (planning/PROGRAM5_INQUIRY_DESIGN_2026-09-24.md §1/§2).
 A lens is STATELESS — the same declared prior applied to today's delta, no memory
 of what it said yesterday, no question it is carrying. An inquiry is STATEFUL: it
 carries a BRIEF (what it is looking into), a LEDGER of what it has found and what
 it expects, open hypotheses each with a resolution test, and questions it has
 raised into the platform's own machinery and is waiting on. Its output is still a
-journal row (off the fact/finding chain, §3.1); its value is what it can say a
+journal row (off the fact/finding chain); its value is what it can say a
 week later that it could not say today.
 
 Like every journal-family persona this module exports plain-string constants (NOT
@@ -18,7 +17,7 @@ resolved by the descriptor's
 (``module:ATTR`` — a dotted path silently falls back to the kind default and
 loses the whole stance). Authored WITHOUT ``_tradecraft.with_preamble``: the
 JSON-only / BLUF / estimative register is the anti-voice the journal family's
-§4.2 headline fix exists to keep out.
+headline fix exists to keep out.
 
 DELIBERATELY STANDALONE (like the chronicle and the lenses, unlike the
 consolidator): the inquiry does NOT import the diary's ``_PERSONA`` /
@@ -218,7 +217,7 @@ never emit a JSON object as your prose):
 
 # ---------------------------------------------------------------------------
 # The composed system prompt the descriptor resolves + run_method threads into
-# EVERY LLM call. Authored WITHOUT with_preamble (the §4.2 headline fix).
+# EVERY LLM call. Authored WITHOUT with_preamble (the journal family's headline fix).
 # ---------------------------------------------------------------------------
 
 INQUIRY_SYSTEM = "\n\n".join([

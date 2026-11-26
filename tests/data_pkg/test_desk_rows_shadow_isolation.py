@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The contract-v2 desk shadow changes NOTHING a reader sees (lane D-1).
+"""The contract-v2 desk shadow changes NOTHING a reader sees.
 
 The proof, in four parts:
 
@@ -79,10 +79,10 @@ def test_no_module_but_the_writer_names_the_shadow_table():
         n = len(_TABLE_SQL_RE.findall(text)) + text.count(f"'{LEDGER_TABLE}'") + text.count(f'"{LEDGER_TABLE}"')
         if n:
             hits[str(p.relative_to(REPO))] = n
-    # write_attribution.py (data-model lane 9) only CLASSIFIES the table's
+    # write_attribution.py only CLASSIFIES the table's
     # writer for the who-writes guard; it reads and writes nothing.
-    # held_record_feed.py and scripts/held_record_replay.py (data-model lane
-    # 10) READ the ledger to feed the held family, behind
+    # held_record_feed.py and scripts/held_record_replay.py READ the
+    # ledger to feed the held family, behind
     # LEGBA_HELD_RECORD_SHADOW (off) / a dry-run script: they write only the
     # held family's tables, which no reader surface reads
     # (test_held_record.py holds that), so nothing a reader sees changes.
@@ -112,7 +112,7 @@ def test_the_shadow_writes_only_its_ledger_and_reads_only_entity_links():
     gates = "".join((SRC / "data" / f"desk_rows_{m}.py").read_text()
                     for m in ("gates", "render", "contract", "computed", "surface"))
     assert not re.search(r"\b(?:INSERT|UPDATE|DELETE|SELECT)\b\s", gates), "the row modules do no I/O"
-    # D-2: the ONE roster read is a SELECT in its own leaf, and writes nothing
+    # The ONE roster read is a SELECT in its own leaf, and writes nothing
     roster = (SRC / "data" / "desk_rows_roster.py").read_text()
     assert not re.search(r"\b(?:INSERT\s+INTO|UPDATE\s+\w|DELETE\s+FROM|CREATE|ALTER|DROP)\b", roster)
     assert "source_poll_outcomes" in roster and "target_descriptors" in roster

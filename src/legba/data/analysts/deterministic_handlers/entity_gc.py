@@ -961,6 +961,26 @@ async def _repoint_proposed_edges(conn: Any, loser: str, keeper: str) -> int:
             """,
             new_s, new_t, row["relationship_type"], row["id"],
         )
+        if collide is None:
+            # No live row holds the destination pair, but a finally refused
+            # pair keeps only a marker (its full row is removed). Moving this
+            # row onto it would re-open a pair that was already refused, so the
+            # row is closed as merged instead; the marker already says no.
+            refused = await conn.fetchval(
+                """
+                SELECT 1 FROM proposed_edge_markers
+                 WHERE source_key = lower($1) AND target_key = lower($2)
+                   AND relationship_type = $3
+                """,
+                new_s, new_t, row["relationship_type"],
+            )
+            if refused:
+                await conn.execute(
+                    "UPDATE proposed_edges SET status = $2, reviewed_at = now() "
+                    "WHERE id = $1",
+                    row["id"], PROPOSED_EDGE_MERGED_STATUS)
+                touched += 1
+                continue
         if collide is not None:
             # Fold FIRST — the evidence has to reach the survivor before this
             # row leaves the work-set, or the merge silently costs a citation.
@@ -994,7 +1014,44 @@ async def _repoint_proposed_edges(conn: Any, loser: str, keeper: str) -> int:
                 "target_entity = $3 WHERE id = $1",
                 row["id"], new_s, new_t)
         touched += 1
+    await _repoint_proposed_edge_markers(conn, lo, keeper)
     return touched
+
+
+async def _repoint_proposed_edge_markers(conn: Any, lo: str, keeper: str) -> None:
+    """Move the markers of finally refused pairs that name the merged-away
+    entity ``lo`` (lowercase) onto its keeper, the way the full rows are moved,
+    so a refused pair stays refused under the keeper's name. A pair that would
+    become a self-loop is dropped; one whose keeper pair is already marked keeps
+    the existing marker."""
+    k = keeper.lower()
+    rows = await conn.fetch(
+        """
+        SELECT source_key, target_key, relationship_type, final_status,
+               reached_at, confidence
+          FROM proposed_edge_markers
+         WHERE source_key = $1 OR target_key = $1
+        """,
+        lo,
+    )
+    for m in rows:
+        new_s = k if m["source_key"] == lo else m["source_key"]
+        new_t = k if m["target_key"] == lo else m["target_key"]
+        await conn.execute(
+            "DELETE FROM proposed_edge_markers WHERE source_key = $1 "
+            "AND target_key = $2 AND relationship_type = $3",
+            m["source_key"], m["target_key"], m["relationship_type"])
+        if new_s != new_t:
+            await conn.execute(
+                """
+                INSERT INTO proposed_edge_markers
+                    (source_key, target_key, relationship_type, final_status,
+                     reached_at, confidence)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                ON CONFLICT DO NOTHING
+                """,
+                new_s, new_t, m["relationship_type"], m["final_status"],
+                m["reached_at"], m["confidence"])
 
 
 async def _repoint_facts(conn: Any, loser: str, keeper: str) -> int:

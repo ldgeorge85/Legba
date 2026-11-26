@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""P0-T2 / P0-T3 — faithfulness verify pass + the (now-active) confidence gate.
+"""faithfulness verify pass + the (now-active) confidence gate.
 
 These tests are DETERMINISTIC: the optional LLM judge is OFF by default
 (``LEGBA_VERIFY_LLM_JUDGE`` unset → the code default-off floor) or mocked. No
@@ -718,9 +718,10 @@ def test_marker_to_evidence_legacy_branch_keeps_600_cap():
 
 
 async def test_unit_judge_prompt_carries_two_mode_source_framing(monkeypatch):
-    """F1: the unit judge prompt instructs BOTH modes — a COMPLETE source demotes an
-    absent claim; an EXCERPT demotes only a CONTRADICTED claim — plus the catch that
-    a summary-only fact the source contradicts is unsupported."""
+    """The unit judge prompt instructs BOTH modes — a specific missing from a
+    COMPLETE source is unsupported; a claim whose specifics are not in an EXCERPT
+    is unverifiable_excerpt (neither passed nor called false) — and that the
+    analyst summary never supplies missing text."""
     monkeypatch.setenv("LEGBA_VERIFY_LLM_JUDGE", "1")
     captured: dict[str, str] = {}
 
@@ -741,8 +742,8 @@ async def test_unit_judge_prompt_carries_two_mode_source_framing(monkeypatch):
     await verify_finding_faithfulness(body=body, citations=citations, judge_llm=_RecordingJudge())
     p = captured["prompt"]
     assert "authoritative excerpt" in p                     # excerpt mode described
-    assert "CONTRADICTS it" in p                            # excerpt demotes only on contradiction
-    assert "does NOT itself validate a claim" in p          # summary never validates
+    assert "the verdict is unverifiable_excerpt" in p       # excerpt cannot pass by default
+    assert "never supplies missing text" in p               # summary never validates
 
 
 # ---------------------------------------------------------------------------
@@ -782,7 +783,7 @@ def test_critique_payload_carries_gate_keys_and_verification():
 
 
 # ---------------------------------------------------------------------------
-# P0-T3 — the gate fold + the findings API verification block
+# The gate fold + the findings API verification block
 # ---------------------------------------------------------------------------
 
 
@@ -813,7 +814,7 @@ def _hydration_row(confidence: float, critic_score: Any, verification: Any) -> d
 
 
 # ---------------------------------------------------------------------------
-# P3-T3 / P3-T7 — the COMPOSITION ([[ref:N]] → sub-claim) verify branch.
+# The COMPOSITION ([[ref:N]] → sub-claim) verify branch.
 #
 # The SAME verify pass self-detects the composition bridge (a citation carrying
 # ``ref_kind='finding'`` / a ``[[ref:`` marker) and switches to the ordinal-keyed

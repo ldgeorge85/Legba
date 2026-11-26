@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { prepare, ringStep, seriesStatus, slimWorld, svgCountryPaths, washStep, type PrepInput, type PrepSeries, type World } from './prep'
+import { prepare, ringStep, seriesPctSentence, seriesPctText, seriesStatus, slimWorld, svgCountryPaths, washStep, type PrepInput, type PrepSeries, type World } from './prep'
 import { GLOBE_CAPS, GLOBE_LAYERS, defaultGlobeLayers, globeLayersFromWorld } from './catalog'
 import { subjectsFromRoster } from './data'
 
@@ -60,7 +60,7 @@ describe('the globe prep', () => {
     expect(out.subjectCenters.s_none).toBeUndefined()
   })
 
-  it('hatches "not covered" only where the roster SAYS no source (roll 86: the summary roster said nothing, every place was hatched)', () => {
+  it('hatches "not covered" only where the roster SAYS no source (the summary roster said nothing, every place was hatched)', () => {
     const subjects = subjectsFromRoster([
       { descriptor_id: 's_ye', body: { scope: { geo: ['YE'] }, declared_sources: 3 } },
       { descriptor_id: 's_om', body: { scope: { geo: ['OM'] } } },
@@ -151,5 +151,21 @@ describe('the globe catalogue', () => {
     expect(next.change).toBe(false)
     expect(next.series).toBe(rest.series) // not drivable: unchanged
     expect(next.drift).toBe(false)
+  })
+})
+
+describe('a series place as printed', () => {
+  it('a percentage; ten times the baseline or more as a multiple; no percentage as "no baseline"', () => {
+    expect(seriesPctText(98.7)).toBe('99 %')
+    expect(seriesPctText(0)).toBe('0 %')
+    expect(seriesPctText(999.4)).toBe('999 %')
+    expect(seriesPctText(1000)).toBe('≥10×')
+    expect(seriesPctText(5000)).toBe('≥10×')
+    expect(seriesPctText(null)).toBe('no baseline')
+    expect(seriesPctText(-1)).toBe('no baseline')
+    expect(seriesPctText(Number.NaN)).toBe('no baseline')
+    expect(seriesPctSentence(1000)).toBe('Ten times its 30-day baseline or more')
+    expect(seriesPctSentence(null)).toBe('No usable 30-day baseline')
+    expect(seriesPctSentence(57)).toBe('57 % of its 30-day baseline')
   })
 })

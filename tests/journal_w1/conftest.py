@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Conftest for the Journal Assessor Wave 1 instrument-tool tests.
+"""Conftest for the Journal Assessor instrument-tool tests.
 
-ISOLATION (per the Wave-1 brief): these tests run against a DISPOSABLE throwaway
+ISOLATION: these tests run against a DISPOSABLE throwaway
 Postgres+AGE container the operator/CI spins up — NEVER the live ``legba`` /
 ``legba-postgres-1``. The container host:port is configurable via
 ``LEGBA_W1_PG_HOST`` / ``LEGBA_W1_PG_PORT`` (defaults 127.0.0.1:5544 — a port the

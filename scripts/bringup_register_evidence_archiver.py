@@ -7,10 +7,10 @@ Idempotent: if a head row is already present we report it and exit 0 without
 re-posting.
 
 This wires the ``evidence_archiver`` deterministic sweep as a DRAFT analyst
-(P2-1 cited-evidence archival — program §A3). Once the operator activates it,
+(cited-evidence archival). Once the operator activates it,
 the runtime's reconciler spins up a deterministic actor that, on its cadence,
 archives the next budgeted batch of signals CITED by verified findings:
-original bytes fetched (SSRF egress guard + the P2-2 license gate), stored
+original bytes fetched (SSRF egress guard + the license gate), stored
 content-addressed at ``{LEGBA_ARCHIVE_ROOT}/{sha256[:2]}/{sha256}``, the
 ``evidence_archive`` sidecar upserted, and ``signals.object_ref`` stamped with
 ``cas:sha256/<hex>`` so the receipt chain terminates in OUR verifiable copy.

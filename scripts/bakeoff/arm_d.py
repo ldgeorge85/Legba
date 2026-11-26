@@ -27,7 +27,7 @@ run time and stored under ``<out>/archive/<sha256>.bin`` with its sha256, so
 the grader opens the same bytes (§2: "the URLs the answer cites, each fetched
 once ... and archived"). A receipt whose page states a publication date after
 T is flagged ``after_as_of`` (§2 leakage control). The fetch is injectable; the
-G0 lane exercises it on fixtures only — this lane makes NO call of any kind.
+tests exercise it on fixtures only — this module makes NO call of any kind.
 """
 
 from __future__ import annotations

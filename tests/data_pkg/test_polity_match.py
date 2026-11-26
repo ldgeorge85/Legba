@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""A-0 — the shared polity matcher, and the BYTE-IDENTITY PROOF for its move.
+"""The shared polity matcher, and the BYTE-IDENTITY PROOF for its move.
 
 ``_coverage_floor_scan``'s matcher moved to :mod:`legba.data._polity_match` and
 picked up the MECH-6 fold at its single normalisation site on the way. The
@@ -37,14 +37,14 @@ from legba.data.analysts.deterministic_handlers import _coverage_floor_scan as c
 
 
 # ---------------------------------------------------------------------------
-# The PRE-FOLD implementation, reproduced from the commit before A-0. This is
+# The PRE-FOLD implementation, reproduced from the commit before the move. This is
 # the reference the byte-identity claim is made against; if it is ever edited
 # to make a test pass, the claim is worthless.
 #
 # IT CARRIES ONE DELIBERATE RE-BASE, and it is stated here rather than buried.
 # The 2026-09-09 whole-token repair changed the multi-word SURFACE RULE (both
 # legs now respect token boundaries — see ``SQUEEZE_TOKEN_MAX_CHARS``). These
-# tests exist to isolate ONE variable, the A-0 FOLD, so the reference below
+# tests exist to isolate ONE variable, the FOLD, so the reference below
 # keeps the pre-fold NORMALISER verbatim and takes the surface rule from the
 # module under test. Leaving the old containment rule in it would have made
 # every assertion here measure the token repair instead of the fold, which is
@@ -115,7 +115,7 @@ _PROSE_CORPUS = [
 
 
 def test_polity_match_fold_is_byte_identical_on_ascii():
-    """THE byte-identity proof for the A-0 move.
+    """THE byte-identity proof for the move.
 
     Every ASCII input the matcher can see normalizes to the SAME string under
     the pre-fold implementation and the folded one. The fold's NFKC is a no-op
@@ -132,7 +132,7 @@ def test_polity_match_fold_is_byte_identical_on_ascii():
         if _old_normalize_prose(s) != pm.normalize_prose(s)
     ]
     assert mismatched == [], (
-        f"the A-0 fold changed {len(mismatched)} ASCII normalisations: "
+        f"the fold changed {len(mismatched)} ASCII normalisations: "
         f"{mismatched[:5]}"
     )
 
@@ -154,7 +154,7 @@ def test_represented_by_is_byte_identical_on_the_live_prose_corpus():
             new = pm.represented_by(polity, prose)
             if old != new:
                 diffs.append((polity, prose, old, new))
-    assert diffs == [], f"the A-0 fold changed {len(diffs)} verdicts: {diffs[:5]}"
+    assert diffs == [], f"the fold changed {len(diffs)} verdicts: {diffs[:5]}"
 
 
 def test_home_country_exclusion_is_byte_identical_over_every_fleet_desk():

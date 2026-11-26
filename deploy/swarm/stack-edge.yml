@@ -5,8 +5,8 @@
 #
 # ############################################################################
 # ##  DRAFT — NOT DEPLOYABLE YET. Phase-1 validation pending.               ##
-# ##  See deploy/swarm/README.md + planning/SWARM_CONVERSION_ASSESSMENT_    ##
-# ##  2026-07-25.md before touching this with `docker stack deploy`.        ##
+# ##  See deploy/swarm/README.md before touching this with                 ##
+# ##  `docker stack deploy`.                                                ##
 # ############################################################################
 #
 # Translation of legba-ui-build (one-shot SPA publisher) + legba-caddy from
@@ -21,7 +21,7 @@
 #     the Docker 29 validator too; behavior parity is a phase-1 verify item.)
 #   * legba-caddy CANNOT gate on its completion. First-ever deploy: caddy may
 #     serve 404s for the seconds until dist/ lands (file_server on an empty
-#     /srv/legba-ui). Fix options (assessment §3): (a) tolerate the transient,
+#     /srv/legba-ui). Fix options: (a) tolerate the transient,
 #     (b) caddy entrypoint wait-for /srv/legba-ui/index.html (wait TO ADD —
 #     not modified in the draft phase), (c) LONG-TERM: bake dist/ into a
 #     derived caddy image and delete the shared-volume pattern entirely —
@@ -30,7 +30,7 @@
 # PORTS: caddy is the ONLY published surface in all three stacks. `mode: host`
 # (NOT ingress): binds 80/443 on the runtime node only — the routing mesh
 # would open 80/443 on EVERY node and hide client IPs behind the mesh SNAT.
-# This preserves the single public entrypoint the B-1 perimeter assumes.
+# This preserves the single public entrypoint the perimeter assumes.
 
 x-logging: &default-logging
   driver: json-file
@@ -56,7 +56,7 @@ services:
   legba-caddy:
     image: caddy:2-alpine
     logging: *default-logging
-    # OP-1 parity: caddy expands {$LEGBA_REGISTRY_API_TOKEN} +
+    # Same as the compose edge: caddy expands {$LEGBA_REGISTRY_API_TOKEN} +
     # {$LEGBA_BASIC_AUTH_HASH} from its env. env_file is read client-side at
     # deploy and baked into the spec (see stack-runtime.yml header caveat).
     env_file: ../../.env

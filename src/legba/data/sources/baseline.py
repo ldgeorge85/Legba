@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Per-source baseline pipeline — modality-branched (P-06, PIVOT §4.6).
+"""Per-source baseline pipeline — modality-branched (P-06, PIVOT).
 
 The baseline runs **once per signal, at the source** (not per consuming
 target): a source pulls/ingests raw payloads, the baseline enriches each one
@@ -27,7 +27,7 @@ Two axes drive the baseline:
   Tier 3 (on-demand, analyst-driven ``process_media``) is the async job plane
   (P-07) and is out of this module's scope; this module owns tiers 1 + 2.
 
-The extractor library is the legitimately incremental surface (PIVOT §4.6:
+The extractor library is the legitimately incremental surface (PIVOT:
 "Handlers fill in per modality as endpoints come online — extension point,
 not stub"). This module ships the complete *mechanism* (the eager branch
 dispatches by modality to a registered extractor) plus the no-op
@@ -130,7 +130,7 @@ def default_extractor_registry() -> dict[str, MediaExtractor]:
 def _coerce_tag(value: Any) -> str | None:
     """Coerce a raw tag value to the tag shape, or drop.
 
-    W10 TAX-2 (W8-F1): a FAMILY-SHAPED ``<family>:<value>`` within the tag shape
+    W10 TAX-2: a FAMILY-SHAPED ``<family>:<value>`` within the tag shape
     (``source_classification.preserved_tag``) is kept VERBATIM — the value's case
     included, because ``bind_tag`` compares a profile's values exactly and a
     profile value may be upper-case. Everything else is a bare value, flattened
@@ -358,7 +358,7 @@ async def run_baseline(
             if corroborated:
                 signal.geo = corroborated
             else:
-                # Lane N-B: content naming NO country at all takes the
+                # Content naming NO country at all takes the
                 # publisher's home as a MARKED low-confidence tag
                 # (payload.geo_fallback) rather than reaching no desk.
                 from ._geo_origin_fallback import origin_fallback

@@ -137,7 +137,7 @@ describe('panel_open (real Dockview × App.tsx COMPONENTS)', () => {
     expect(subjectsFor('panel_open')).toEqual(['system.provenance'])
   })
 
-  it('a consult TILE is an ordinary panel_open; consult_open belongs to the Consult column (U-2)', async () => {
+  it('a consult TILE is an ordinary panel_open; consult_open belongs to the Consult column', async () => {
     // Consult is a fixed column since U-2, never a tile: the shell emits
     // \`consult_open\` once, with the landing (App.readTelemetry.test.tsx).
     const api = await mountDock()
@@ -265,7 +265,7 @@ describe('lineage_walk (real Provenance panel)', () => {
     expect(subjectsFor('lineage_walk')).toEqual(['why', 'lineage'])
   })
 
-  it('does NOT count Fan-out — joining the wrapper did not widen the event (UI-B1/merges)', async () => {
+  it('does NOT count Fan-out — joining the wrapper did not widen the event', async () => {
     render(wrap(<ProvenanceMerged registration={reg()} scope={{}} mode="personal" />))
     fireEvent.click(screen.getByTestId('provenance-tab-fanout'))
     await waitFor(() => expect(screen.getByTestId('provenance-tab-fanout')).toHaveAttribute('aria-selected', 'true'))

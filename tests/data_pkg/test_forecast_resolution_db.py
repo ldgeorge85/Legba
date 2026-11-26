@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""ST1-A on a migrated test DB — the 0244 guards the fakes cannot prove.
+"""On a migrated test DB — the 0244 guards the fakes cannot prove.
 
   * the migration re-applies with zero change;
   * the real store writes a proposal (idempotent on the fingerprint), a

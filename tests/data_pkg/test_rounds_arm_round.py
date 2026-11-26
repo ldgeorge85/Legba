@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane G-5: ``scripts/bakeoff/arm_round.py`` without a network.
+"""``scripts/bakeoff/arm_round.py`` without a network.
 
 The route assertion refuses a priced, an Anthropic and a non-gateway plane
 before any call; the thinking alias is overlaid on the READ row only (a GET,
@@ -25,12 +25,18 @@ sys.path.insert(0, str(ROOT / "src"))
 import arm_round  # noqa: E402
 
 CORE = arm_round.CORE_COMPONENT
-JUDGE = "llm.verify.innoai_gemma.openai_compat"
+JUDGE = "llm.verify.gateway_judge.openai_compat"
+GATEWAY = "gateway.example.invalid"
+
+
+@pytest.fixture(autouse=True)
+def _gateway_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(arm_round.GATEWAY_ENDPOINT_ENV, f"https://{GATEWAY}/v1")
 
 
 def _facts(**kw: Any) -> dict[str, Any]:
     base = {"subprovider": "vllm", "model_name": "m", "thinking_model_name": None,
-            "endpoint_host": arm_round.GATEWAY_HOST, "component_price": None,
+            "endpoint_host": GATEWAY, "component_price": None,
             "config_price_fields": {}, "price_table_entries": 0}
     base.update(kw)
     return base
@@ -55,8 +61,16 @@ def test_routes_refuse_priced_anthropic_or_off_gateway(comp, bad):
         arm_round.assert_routes(facts)
 
 
+def test_the_gateway_host_comes_from_the_core_endpoint_and_fails_closed(monkeypatch):
+    assert arm_round.gateway_host() == GATEWAY
+    monkeypatch.delenv(arm_round.GATEWAY_ENDPOINT_ENV)
+    assert arm_round.gateway_host() == ""
+    with pytest.raises(SystemExit, match="ROUTE ASSERTION FAILED"):
+        arm_round.assert_routes({CORE: _facts(), JUDGE: _facts()})
+
+
 def test_a_decision_plane_is_held_to_the_same_route_checks():
-    dec = "llm.decide.innoai_clef_flash"
+    dec = "llm.decide.gateway_typed_choice"
     out = arm_round.assert_routes({CORE: _facts(), dec: _facts(subprovider="decide")})
     assert all(out[dec].values())
     with pytest.raises(SystemExit, match="ROUTE ASSERTION FAILED"):

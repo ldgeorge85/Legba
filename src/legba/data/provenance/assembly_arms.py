@@ -10,7 +10,7 @@ raises rather than emitting one that does not resolve (D-1 §3.6). These four
 arms are the INDEPENDENT AUDIT of that construction, run over the PUBLISHED
 payload by the same verify pass that grades everything else.
 
-WHAT THAT MAKES THEM, and the distinction is the whole design (ratified F-12).
+WHAT THAT MAKES THEM, and the distinction is the whole design.
 **They are an audit, not a withhold.** Verify runs POST-PERSIST — there is no
 "do not publish" branch for a finding anywhere in this tree, which is precisely
 why D-1 §3.6 put the real enforcement at ASSEMBLE time, where a publish decision
@@ -361,7 +361,7 @@ COUNTERS: tuple[str, ...] = (
     "assembly_quote_origin_truncated",
     "assembly_quote_origin_unresolved",
     "assembly_quote_sha_unverifiable",
-    # Lane N-D: a span whose origin sha256 WAS compared over a complete capture
+    # A span whose origin sha256 WAS compared over a complete capture
     # and matched. ``ok`` alone counts spans that passed containment; only these
     # passed the full check, and the page states fidelity as "k of n checked".
     "assembly_quote_sha_verified",
@@ -418,7 +418,7 @@ COVERAGE_STATUSES: tuple[str, ...] = (
     "below_floor",
     "unverified",
     "no_head_in_horizon",
-    # W11-F14 — a head whose status is carried, not re-evidenced
+    # A head whose status is carried, not re-evidenced
     # (``legba.data.carried_state``); a typed absence, never a band.
     "carried_unsupported",
 )
@@ -1438,9 +1438,9 @@ def quote_fidelity_coverage(result: ArmResult) -> tuple[int, int]:
     """``(fully_checked, spans)`` — how many spans passed the WHOLE check
     (offsets, containment AND the origin sha over a complete capture).
 
-    Lane N-D, measured 2026-11-11: world record fd6584eb read quote fidelity
-    1.00 = 16/16 while 12 of those 16 spans came from heads over the 4,000-char
-    capture, so their sha was never compared. ``quote_fidelity_score`` stays
+    Measured: one world record read quote fidelity 1.00 = 16/16 while 12 of
+    those 16 spans came from heads over the 4,000-char capture, so their sha
+    was never compared. ``quote_fidelity_score`` stays
     the containment ratio it always was; THIS is the number a page may print as
     "k of n checked", and it never rounds an unchecked span up to a pass.
     """

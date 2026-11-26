@@ -4,7 +4,7 @@
 
 Exercises ``build_runtime_telemetry_router`` against the live substrate
 via the ``migrated_pg`` fixture from ``conftest.py``. No mocks — same
-hard rule as L-110 / L-111 / L-113.
+hard rule as the other registry tests.
 
 Coverage:
 
@@ -700,7 +700,7 @@ async def test_analyst_runs_pagination(api_app, client: AsyncClient):
 
 
 # ---------------------------------------------------------------------------
-# /outputs — P-8: light by default, full by name.
+# /outputs — light by default, full by name.
 # ---------------------------------------------------------------------------
 
 
@@ -737,7 +737,7 @@ async def test_analyst_outputs_default_is_light_and_full_is_by_name(
 async def test_analyst_outputs_default_page_stays_under_its_byte_budget(
     api_app, client: AsyncClient,
 ):
-    """P-8 — 50 desk-width outputs (a ~100 KB document and a 12 KB body each,
+    """50 desk-width outputs (a ~100 KB document and a 12 KB body each,
     as world_assessor's rows are on live) at the default weight stay under
     ``list_weights``' budget for the route."""
     from legba.data.registry.list_weights import LIST_ROUTES

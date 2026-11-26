@@ -176,9 +176,11 @@ async def test_deps_build_resolves_two_distinct_handlers():
     # DIFFERENT handler INSTANCES (the split resolves via two independent
     # factory calls) even though both now carry the SAME component id.
     assert kind_deps.llm is not kind_deps.narrate_llm()
-    # The split flips on the gather Reasoning:high + threads the narrate cap.
+    # The split flips on the gather Reasoning:high. The definition declares no
+    # max_tokens any more; the value threaded is the kind default, an argument
+    # no handler sends (the model's own maximum applies).
     assert kind_deps.gather_reasoning_high is True
-    assert kind_deps.narrate_tokens() == 16384
+    assert kind_deps.narrate_tokens() == 4096
 
 
 @pytest.mark.asyncio
@@ -200,7 +202,7 @@ async def test_deps_build_consolidator_resolves_two_distinct_handlers():
     assert kind_deps.narrate_llm().component_id == "llm.primary.openai_compat"
     assert kind_deps.llm is not kind_deps.narrate_llm()
     assert kind_deps.gather_reasoning_high is True
-    assert kind_deps.narrate_tokens() == 24576
+    assert kind_deps.narrate_tokens() == 4096  # inert: never sent
 
 
 @pytest.mark.asyncio

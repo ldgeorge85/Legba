@@ -104,7 +104,7 @@ async def test_apply_merges_the_losers(pg_pool):
 
 
 # ---------------------------------------------------------------------------
-# P4 Class 6 Obs. 2 (QW1-D fix 3) — the class_correction COUNTER + the
+# The class_correction COUNTER + the
 # apply-gated row-level hint, exercised through the FULL orchestration.
 # generate_candidates is monkeypatched to a single controlled GRAY pair (real
 # blocking/banding heuristics are out of scope here — Class 6's own adjudicate

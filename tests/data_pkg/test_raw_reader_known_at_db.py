@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane E0 — a row that entered the record after K is invisible to a cut read.
+"""A row that entered the record after K is invisible to a cut read.
 
 Database-backed (isolated test stack). Two signals carry the same unique token;
 one was created before K, one after. Through the production port and the

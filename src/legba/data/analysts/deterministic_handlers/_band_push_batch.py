@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""X4 ALERTS (W11-F17) — the band moves of one trigger tick are ONE push.
+"""X4 ALERTS — the band moves of one trigger tick are ONE push.
 
 WHY. The banding tick moves bands on many desks at once, and each move was its
 own alert row AND its own push: review C watched NINE ``Band deterioration /

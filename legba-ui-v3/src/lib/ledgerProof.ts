@@ -68,7 +68,7 @@ export const ISSUER_WORDS: Readonly<Record<string, string>> = {
   seat: 'Panel seat',
   actor_model: 'Actor model',
   frontier_arm: 'Frontier model',
-  clef_arm: 'Clef model',
+  clef_arm: 'Decision model',
 }
 
 const ISSUER_ORDER = ['operator', 'tower', 'consult', 'synthesis', 'seat', 'actor_model', 'frontier_arm', 'clef_arm']
@@ -778,7 +778,7 @@ export function evalRunFacts(run: EvalRun): string[] {
     const classes = (run.question_classes ?? []).map((c) => `${c.class.toLowerCase()} ${c.n}`)
     out.push(`${run.question_count} questions${classes.length ? ` in ${countWord(classes.length)} classes (${classes.join(', ')})` : ''}`)
   }
-  if (run.grader) out.push(`Graded by ${run.grader}${run.temperature != null ? ` · answering temperature ${run.temperature}` : ''}`)
+  if (run.grader) out.push(`Marked by ${run.grader}${run.temperature != null ? ` · answering temperature ${run.temperature}` : ''}`)
   if (run.gold_versions?.length) out.push(`Gold answers: ${run.gold_versions.join('; ')}`)
   const d = run.design
   if (d?.version || d?.prereg_sha256) {

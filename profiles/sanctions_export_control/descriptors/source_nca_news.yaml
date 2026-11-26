@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# Sanctions / export-control profile SKELETON (PROFILE-1; DEC-11; Review B §1.2 F1).
-# From the source annex planning/DOMAIN_EXPANSION_SOURCES_2026-07-03.md (crime
-# section), verified there 2026-07-03 and NOT re-probed since: the operator
-# probes before activating. Ships DRAFT — registering it never schedules it.
-# UK enforcement practice (question 5); keep the exact Joomla query-string URL.
+# Sanctions / export-control profile SKELETON.
+# From a domain-expansion source annex (crime section), verified 2026-07-03 and
+# NOT re-probed since: probe
+# before activating. Ships DRAFT — registering it never schedules it.
+# UK enforcement practice; keep the exact Joomla query-string URL.
 
 identity:
   id: source.nca.news

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Un-alias the FALSE tier-1 collapses of valueless-identifier URLs — ONCE, dry-run first.
 
-Lane N-U. ``canonical_url()`` used to drop every valueless query key, so the
+``canonical_url()`` used to drop every valueless query key, so the
 SPIP CMS's ``/spip.php?article<N>`` canonicalised to ``/spip.php`` and ingest
 tier 1 aliased every lefaso.net article to the first one (live 11-13: 1,505
 of 1,508 rows pointing at 6bd8e160, ``reason='ingest_url'``). The rule now

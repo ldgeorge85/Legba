@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""L-178 tests for the consult_on_demand analyst kind.
+"""Tests for the consult_on_demand analyst kind.
 
 Covers:
   * Identity constants — KIND_NAME, SCHEMA_VERSION, HANDLER_VERSION,
@@ -244,7 +244,7 @@ class _SubstrateStub:
         ))
         if self.raise_on == "search_context":
             raise RuntimeError("substrate down")
-        # W2-T4 ref honesty (mirrors the real port): chunk refs come back
+        # Ref honesty (mirrors the real port): chunk refs come back
         # ctx:-prefixed — non-substrate, excluded from lineage coercion — with
         # the parallel context_refs list.
         refs = [f"ctx:{r}" for r in self.context_refs]
@@ -535,7 +535,7 @@ class _SubstrateStub:
 
 def test_kind_identity_constants():
     """KIND_NAME, SCHEMA_VERSION, HANDLER_VERSION, PROMPT_MODULE_PATH, +
-    MAX_TOOL_ROUNDS match the L-178 contract."""
+    MAX_TOOL_ROUNDS match the contract."""
     assert KIND_NAME == "consult_on_demand"
     assert SCHEMA_VERSION == "legba/analyst.consult_on_demand/1-0-0"
     assert HANDLER_VERSION == "0.1.0"
@@ -545,7 +545,7 @@ def test_kind_identity_constants():
 
 def test_kind_in_analyst_kind_registry():
     """The enum + open-taxonomy registry knows about consult_on_demand
-    (L-241 made AnalystKind extensible, but the built-in value lives in
+    (AnalystKind is extensible, but the built-in value lives in
     the enum already)."""
     from legba.data.schemas.analyst import (
         ANALYST_KIND_REGISTRY,
@@ -640,7 +640,7 @@ async def test_happy_path_substrate_resolvable_question():
     assert "reason" in phases
     assert "act" in phases
     assert phases.count("reason") == 2          # two LLM rounds
-    # W11-F93: the judge runs at the SETTLE POINT, after the narrate frames —
+    # The judge runs at the SETTLE POINT, after the narrate frames —
     # the turn's last frame is its verification, then the answer it judged.
     assert phases[-1] == "verify" and phases[-2] == "narrate"
 
@@ -810,10 +810,10 @@ async def test_round_cap_forces_final_turn():
     # forced final).
     assert len(llm.calls) == MAX_TOOL_ROUNDS + 1
 
-    # The forced-final turn had a different system prompt (carries the
-    # "tool-round cap" guidance).
+    # The forced-final turn had a different system prompt (says the tool
+    # budget is used up).
     forced_call = llm.calls[-1]
-    assert "tool-round cap" in (forced_call["system"] or "")
+    assert "The tool budget is used up" in (forced_call["system"] or "")
 
     # The intermediate_steps trace records the forced_final reason step.
     kinds = [s.get("kind") for s in result.intermediate_steps]
@@ -911,7 +911,8 @@ async def test_self_correction_on_unparseable_midloop():
     # prompt.
     second_msgs = llm.calls[1]["messages"]
     last_user = next(m for m in reversed(second_msgs) if m["role"] == "user")
-    assert "strict-JSON" in last_user["content"]
+    assert "Your last reply could not be read:" in last_user["content"]
+    assert "reply with one JSON object only" in last_user["content"]
 
 
 # ---------------------------------------------------------------------------
@@ -1261,7 +1262,7 @@ def test_sentinel_final_with_no_body_is_not_a_final():
 def test_truncated_sentinel_final_degrades_to_a_cut_answer():
     """THE POINT of the contract. A max_tokens cut mid-prose used to leave an
     unclosed JSON envelope → parse failure → the loop re-asked for the WHOLE
-    answer under the SAME cap (the 30k→36k ratchet in p6 §1.6). With no
+    answer under the SAME cap (a 30k→36k ratchet). With no
     envelope there is nothing to close: the metadata already landed (headers
     lead) and the prose is simply short."""
     cut = (
@@ -1367,7 +1368,7 @@ async def test_forced_final_salvages_prose_with_a_stray_sentinel():
 
 
 def test_consult_response_payload_schema_invariants():
-    """ConsultResponsePayload enforces the shape L-178 specifies."""
+    """ConsultResponsePayload enforces the specified shape."""
     p = ConsultResponsePayload(
         question="Q?",
         answer="A.",
@@ -1391,12 +1392,12 @@ def test_consult_response_payload_schema_invariants():
 
 
 # ---------------------------------------------------------------------------
-# DSPy module (Wave B prereq #4 — backfilled 2026-05-21)
+# DSPy module
 # ---------------------------------------------------------------------------
 
 
 def test_build_prompt_module_returns_dspy_module():
-    """Wave B prereq #4: build_prompt_module returns a real dspy.Module
+    """build_prompt_module returns a real dspy.Module
     instance (the per-round ReAct step) instead of raising ``not yet wired``.
 
     The outer ReAct loop in run_method() still orchestrates tool dispatch
@@ -1626,27 +1627,25 @@ async def test_override_resolve_failure_fails_closed():
 
 
 def test_system_prompt_is_broad_first():
-    # The strategy now leads with the platform's OWN finished intelligence
-    # (findings/situations) and falls back to a broad raw-substrate survey to
-    # verify / fill gaps rather than re-derive from scratch.
-    assert "list_findings / list_situations" in _SYSTEM_PROMPT
-    assert "survey broadly" in _SYSTEM_PROMPT
+    # A broad question opens with the situations and the one-row-per-target
+    # survey; the platform's earlier readings are where to look, not sources.
+    assert 'list_situations (no filters, limit 25) and list_findings(mode="survey")' in _SYSTEM_PROMPT
+    assert "model-written readings of sources, not sources" in _SYSTEM_PROMPT
 
 
 def test_system_prompt_keeps_loop_protocol():
     # The loop-protocol contract the parser depends on must survive: JSON for
     # tool rounds, the sentinel + markdown for the final.
-    assert "Loop protocol:" in _SYSTEM_PROMPT
+    assert "How to reply. Every reply is one of two kinds." in _SYSTEM_PROMPT
     assert '{"tool": "<name>", "args": {...}}' in _SYSTEM_PROMPT
     assert FINAL_SENTINEL in _SYSTEM_PROMPT
     assert "uncertainty:" in _SYSTEM_PROMPT
     assert "cited_refs:" in _SYSTEM_PROMPT
     assert "unanswered_aspects:" in _SYSTEM_PROMPT
-    # Output-discipline (JSON only, no fences) lives in the shared tradecraft
-    # preamble composed into _SYSTEM_PROMPT — and the task block must say, out
-    # loud, that the FINAL reply overrides it. Without that the two contradict.
-    assert "no prose, no markdown fences" in _SYSTEM_PROMPT
-    assert "OVERRIDES the preamble's output-discipline rule" in _SYSTEM_PROMPT
+    # The Consult gets the shared standards without the JSON output rule, so
+    # there is no rule for the answer format to override.
+    assert "no prose before or after it, no markdown fences" not in _SYSTEM_PROMPT
+    assert "OVERRIDES the preamble" not in _SYSTEM_PROMPT
 
 
 # ---------------------------------------------------------------------------
@@ -1755,7 +1754,7 @@ async def test_step_publish_mirrors_intermediate_steps():
     assert collected == result.intermediate_steps
     # Sanity: the trace actually has the loop phases.
     phases = [s["phase"] for s in collected]
-    assert "plan" in phases and "act" in phases and phases[-1] == "verify"  # W11-F93
+    assert "plan" in phases and "act" in phases and phases[-1] == "verify"
 
 
 @pytest.mark.asyncio
@@ -2067,7 +2066,7 @@ async def test_finished_intelligence_tools_are_known_and_dispatchable():
         "list_targets", "list_sources",
     ):
         assert name in _KNOWN_TOOLS
-    # W11-F150: the predictions feed is frozen (2026-07-01); the consult is no
+    # The predictions feed is frozen; the consult is no
     # longer offered the tool (the port method stays for other callers).
     assert "query_predictions" not in _KNOWN_TOOLS
 
@@ -2182,7 +2181,7 @@ async def test_search_context_is_known_and_dispatchable():
          "country": "ir", "k": 4},
     )
 
-    # W2-T4 ref honesty: the ctx:-prefixed chunk refs are EXCLUDED from
+    # Ref honesty: the ctx:-prefixed chunk refs are EXCLUDED from
     # substrate lineage by the loop's UUID coercion — a search_context read
     # can never masquerade as a citable substrate row.
     from legba.data.analysts.consult_on_demand import _refs_from_tool_result
@@ -2669,23 +2668,21 @@ async def test_tool_trace_surfaced_in_consult_data():
 
 def test_system_prompt_advertises_batch_shape():
     assert '{"tools":' in _SYSTEM_PROMPT
-    assert "run concurrently" in _SYSTEM_PROMPT
+    assert "Batch only calls that do not need each other's results" in _SYSTEM_PROMPT
 
 
 def test_system_prompt_mandates_situation_survey_for_broad():
-    assert "SURVEY THEN DRILL" in _SYSTEM_PROMPT
-    assert "never called list_situations is INCOMPLETE" in _SYSTEM_PROMPT
+    assert "Broad or open question: list_situations" in _SYSTEM_PROMPT
 
 
 def test_system_prompt_requires_markdown_answer():
-    assert "MARKDOWN prose" in _SYSTEM_PROMPT
-    assert "The FINAL round" in _SYSTEM_PROMPT
-    assert "is NOT JSON" in _SYSTEM_PROMPT
+    assert "the answer, in markdown" in _SYSTEM_PROMPT
+    assert "2. Answering: not JSON." in _SYSTEM_PROMPT
 
 
 def test_system_prompt_no_longer_teaches_the_nested_envelope():
     """The old contract carried a WRONG/RIGHT example whose "wrong" arm was a
-    literal nested {"final": ...} string — p6_consult.md §1.6 notes models
+    literal nested {"final": ...} string — models
     reproduced exactly that (which is why _unwrap_double_envelope exists). The
     markdown contract must not reintroduce the example it wants avoided."""
     assert 'nested {"final": ...} envelope' not in _SYSTEM_PROMPT

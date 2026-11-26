@@ -17,7 +17,7 @@ round:
       reads: [{from: input.subject}, {from: input.as_of}]
       output: frozen_scope/1
       deadline_s: 30
-    generator:      # 3-6, mutually exclusive
+    generator:      # up to six, mutually exclusive
       kind: model
       card: cards/hypothesis_generator.md
       plane: llm.primary.openai_compat
@@ -37,12 +37,12 @@ round:
       output: evidence_rows/1
       gates: [handed_rows, quote_in_source]
       deadline_s: 120
-    assessor:       # is any row diagnostic: consistent with this hypothesis and inconsistent with another?
+    assessor:       # is any row diagnostic: consistent with this hypothesis and not explained by another? (sees the whole set)
       kind: model
       card: cards/diagnosticity_assessor.md
       plane: llm.primary.openai_compat
       thinking: on
-      reads: [{from: item.hypothesis}, {from: seeker, view: rows}]
+      reads: [{from: item.hypothesis}, {from: generator}, {from: seeker, view: rows}]
       output: assessment/1
       deadline_s: 120
     matrix:
@@ -65,7 +65,7 @@ round:
     verifier:
       kind: judge
       card: cards/verifier.md
-      plane: llm.verify.innoai_gemma.openai_compat
+      plane: llm.verify.gateway_judge.openai_compat
       family_rule: {differs_from: [adjudicator, deep_adjudicator]}
       reads: [{from: rule, view: sentence_table}]
       output: verdict/1

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Wave B prereq #2 — `signals.confidence` default + Pydantic default.
+"""`signals.confidence` default + Pydantic default.
 
 Two rails:
 
@@ -10,7 +10,7 @@ Two rails:
     deleted — migration 0024 dropped `signals.confidence` and the
     `predictions` table outright in the source-first re-cut).
 
-Both rails defend against the Wave A Gate-9 failure mode where the
+Both rails defend against an earlier failure mode where the
 predictor's narrative-time SignalPayload construction omitted
 ``confidence`` and the asyncpg INSERT raised ``NotNullViolation``.
 """

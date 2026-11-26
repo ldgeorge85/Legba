@@ -61,6 +61,7 @@ import {
   type PendingTurn,
 } from '@/state/consultSession'
 import type { PanelRegistration } from '@/types'
+import { openConsultMenu } from '@/test/consultMenu'
 
 /** The store key a singleton consult panel gets — see `App.tsx`. */
 const CONSULT_PANEL_ID = 'singleton:system.consult'
@@ -376,6 +377,7 @@ describe('consult panel inside the real Dockview runtime', () => {
     await screen.findByTestId('consult-question')
     expect(screen.getByTestId('consult-answer')).toHaveTextContent('a1')
     expect(screen.getByTestId('consult-turn-user')).toHaveTextContent('q1')
+    openConsultMenu()
     expect(screen.getByTestId('consult-pin-chip')).toHaveTextContent('Finding One')
   })
 
@@ -498,7 +500,7 @@ describe('recovery from a reload', () => {
     )
     // And the panel stopped claiming a turn was in flight.
     expect(screen.queryByTestId('consult-live-steps')).not.toBeInTheDocument()
-    expect(screen.getByTestId('consult-submit')).toHaveTextContent('Send')
+    expect(screen.getByTestId('consult-submit')).toHaveTextContent('Ask')
   })
 
   it('stops waiting on a turn the server never threaded to a session', async () => {
@@ -517,7 +519,7 @@ describe('recovery from a reload', () => {
         /Stopped waiting/,
       ),
     )
-    expect(screen.getByTestId('consult-submit')).toHaveTextContent('Send')
+    expect(screen.getByTestId('consult-submit')).toHaveTextContent('Ask')
 
     // The operator can clear the stranded turn away.
     fireEvent.click(screen.getByTestId('consult-pending-dismiss'))

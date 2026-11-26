@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Run arms A, A-r, B and C of the bake-off — one JSON record per (question, arm).
 
-planning/reviews/BAKEOFF_DESIGN.md v1.1 (re-stamped 2026-11-05; ``design.load_design``
+The design file ``BAKEOFF_DESIGN.md`` (``design.load_design``
 checks its hash) is the specification. This script BUILDS each arm's answer and
 records it; it never grades, and it spends money only through the paid gate
 (``common.PaidGate``): arms B and C build their actor request in full and then
@@ -35,7 +35,7 @@ THE COST STOP, END TO END
   3. Ledger: the record's cost is the meter's ``verified_usd``; when the actor
      fails and no meter comes back, the question is charged its FULL hard stop
      (the money may have been spent and the harness cannot see it).
-  4. A CUT call (W11-F132/F133: a round or the synthesis cut by its deadline,
+  4. A CUT call (a round or the synthesis cut by its deadline,
      a dropped stream, a provider error) delivers the text it had written as
      the answer (``synthesis_status: partial``) — recorded ``partial``, never an
      error — but its usage never reached the meter. Each cut the trace names is
@@ -51,9 +51,8 @@ clock, ends a long run. The bake-off descriptors carry
 ``method.retry.transient.max_attempts: 1``: the actor never re-runs (re-bills)
 a question.
 
-G1 — WHAT THE OPERATOR DOES (this lane never does any of it)
+WHAT THE OPERATOR DOES (this script never does any of it)
   1. Verify the prices against the invoice; write the prices file
-     (done 2026-11-05: ``planning/reviews/bakeoff_prices_2026-11-05.json``)
      (``{"verified_against_invoice": true, "verified_by": "...",
      "models": {"<model_name the opus_4_7 component serves>": {"input": ..,
      "output": .., "cache_read": .., "cache_write": ..}},
@@ -62,7 +61,7 @@ G1 — WHAT THE OPERATOR DOES (this lane never does any of it)
      ``action_pack_substrate_read_raw.yaml``, ``action_pack_substrate_read_verified.yaml``,
      ``analyst_consult_bakeoff_raw.yaml``, ``analyst_consult_bakeoff_verified.yaml``
      (POST /api/v1/registry/descriptors/<family>, then transition to active),
-     on a runtime rolled with this lane's code.
+     on a runtime running this code.
   3. Freeze T and run A and A-r for the 36 (free), then B, C (this script),
      D (``arm_d.py``) and E (``arm_e.py``) with ``--execute --run-ceiling-usd
      <N> --prices <file>`` — all inside the 12-hour slot from T (§2, arm D).
@@ -74,11 +73,11 @@ G1 — WHAT THE OPERATOR DOES (this lane never does any of it)
   The exact command lines, in order: ``scripts/bakeoff/README.md``.
 
 USAGE
-    python3 scripts/bakeoff/run_arm.py --design <planning/reviews/BAKEOFF_DESIGN.md> \\
+    python3 scripts/bakeoff/run_arm.py --design <BAKEOFF_DESIGN.md> \\
         --as-of 2026-10-09T12:00:00Z --out <dir> --arm A --question HE04
     python3 scripts/bakeoff/run_arm.py ... --arm B --all      # dry run: refuses at the call
     python3 scripts/bakeoff/run_arm.py ... --arm B --all --execute \\
-        --run-ceiling-usd 110 --prices planning/reviews/bakeoff_prices_2026-11-05.json   # G1 only
+        --run-ceiling-usd 110 --prices <prices.json>   # paid run only
 """
 
 from __future__ import annotations
@@ -113,7 +112,7 @@ ACTOR_TYPE = "AnalystActor"
 #: The harness's read timeout on the actor invoke. ≥ the registry's derived
 #: floor (``consult_runs.invoke_timeout_seconds``: total budget 3600 + final
 #: floor 900 + 300 margin = 4800 s on the live clocks): a 10-round Opus consult
-#: plus its synthesis can run well past the 900 s this was at roll 46.
+#: plus its synthesis can run well past the earlier 900 s.
 INVOKE_TIMEOUT_S = 4800.0
 #: Trace step kinds that mark a model call whose usage never reached the meter
 #: (the call was cancelled or died mid-stream). ``degraded_final`` counts only

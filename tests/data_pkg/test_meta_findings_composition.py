@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""P3-T2 — per-COUNTRY composition READ_SLICE: target-scope + verify-floor.
+"""Per-COUNTRY composition READ_SLICE: target-scope + verify-floor.
 
 The glass-tower COMPOSITION leg runs the EXISTING meta_findings_synthesizer kind
 target-scoped (a descriptor with a ``subscription.targets`` block → the runtime
 fans it out one worker per G20 country with ``target_filter`` set). This asserts
-the two P3-T2 code changes to ``READ_SLICE`` / ``read_other_analyst_findings``:
+the two code changes to ``READ_SLICE`` / ``read_other_analyst_findings``:
 
   * a TARGET-SCOPED run (``target_filter`` set) scopes the slice to that country
     (``f.target_id = $N``) AND applies the verify-floor gate (an INNER JOIN to the
@@ -163,7 +163,7 @@ async def test_direct_reader_target_only_no_verify_join():
 
 
 # ---------------------------------------------------------------------------
-# P4 content-audit fix (2026-07-01) — composition reads fold to ONE HEAD per
+# Composition reads fold to ONE HEAD per
 # (unit, country): superseded prior-cycle findings excluded + DISTINCT ON dedup,
 # so ``derived_from`` can't double-count a single unit across stale dupes.
 # ---------------------------------------------------------------------------
@@ -237,7 +237,7 @@ def test_resolve_verify_floor_bad_env_falls_back(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# P3 composition PROMPT slice — options["target_id"]-gated, in-kind (the global
+# Composition PROMPT slice — options["target_id"]-gated, in-kind (the global
 # meta stays byte-for-byte). Covers: prompt selection, the [[ref:N]] ordinal
 # handle + finding_id surfacing in the render, [[ref:N]] ordinal extraction +
 # out-of-range rejection, the end-to-end citation stamp, and the honest-empty path.
@@ -391,7 +391,7 @@ def test_extract_ref_markers_empty_body():
     assert synth._extract_ref_markers("", 3) == ([], 0)
 
 
-# --- _defuse_child_ref_markers: child-ref pollution (P2 gallery finding #2) --
+# --- _defuse_child_ref_markers: child-ref pollution --
 
 
 def test_defuse_child_ref_markers_rewrites_to_unambiguous_form():
@@ -430,11 +430,11 @@ def test_defuse_child_ref_markers_never_touches_bare_bracket_or_ref_strings():
     assert "(child ref 3)" in out
 
 
-# --- child-ref pollution: end-to-end render (P2 gallery live artifact) ------
+# --- child-ref pollution: end-to-end render (live artifact) ------
 
 
 def test_render_user_prompt_defuses_child_ref_in_body_and_evidence():
-    """Live artifact fixture (P2 gallery §4, the world tier reading the
+    """Live artifact fixture (the world tier reading the
     escalation_composition's own block): the CHILD tier's body cites its OWN
     [[ref:16]]/[[ref:27]]/[[ref:28]] ordinals — over a COMPLETELY different
     28-block evidence set than the parent (world) tier's 6-block bundle. Left
@@ -554,7 +554,7 @@ async def test_composition_run_selects_prompt_and_stamps_only_resolved_citations
 
 @pytest.mark.asyncio
 async def test_composition_citations_carry_verify_evidence_for_the_verifier():
-    """P3-T3/T7: each stamped citation carries the sub-claim's ``evidence_text``,
+    """Each stamped citation carries the sub-claim's ``evidence_text``,
     ``effective_confidence`` and ``derived_from`` (captured point-in-time) so the
     downstream composition VERIFY runs DB-free (checks each composed clause
     against the exact evidence the model saw)."""
@@ -764,7 +764,7 @@ async def test_composition_honest_empty_no_llm_no_citations():
 
 
 # ---------------------------------------------------------------------------
-# P3-T5 — the GLOBAL/world composition (target_filter=None BUT the descriptor
+# The GLOBAL/world composition (target_filter=None BUT the descriptor
 # DECLARES method.llm.verify): READ_SLICE takes the global-composition branch
 # (include_meta=True + verify-floor), the kind selects the WORLD prompt off the
 # `composition` option, cites the COUNTRY reads [[ref:uuid]], and (T4) surfaces
@@ -909,7 +909,7 @@ async def test_read_open_contention_empty_short_circuits():
 
 @pytest.mark.asyncio
 async def test_read_open_contention_default_floor_suppresses_ner_noise():
-    """The live 2026-07-31 P2 gallery capture, used as the fixture: recency
+    """The live capture, used as the fixture: recency
     ordering was serving pure NER-relation-extraction noise ("zionist |
     member of | hamas", arbiter_score 0.10) as though it were a live
     geopolitical dispute, while the highest score system-wide (~0.37) never

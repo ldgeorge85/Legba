@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""T-1 — declare the core plane's thinking alias on ``llm.primary.openai_compat``.
+"""Declare the core plane's thinking alias on ``llm.primary.openai_compat``.
 
-The owner's gateway serves the core model as ``fast`` (thinking off) and
+The gateway serves the core model as ``fast`` (thinking off) and
 ``deep`` (thinking on). Legba resolves a thinking call to the component's
 ``thinking_model_name`` (``src/legba/data/stack/llm/thinking.py``); this script
 writes a NEW HEAD of the live component with that one field set and every
 other field carried over unchanged. The reasoning-budget pair stays unset
-(SEAMS #88): nothing new is sent on a thinking-off call, and a thinking call
+(see docs/SEAMS.md): nothing new is sent on a thinking-off call, and a thinking call
 sends only the alias.
 
-ORDER: the registry, runtime and workflow worker must already run the T-1
+ORDER: the registry, runtime and workflow worker must already run this
 code. The schema change is ``extra="forbid"``; a head carrying the new field
 does not parse on an older image (a dead component, not a config change).
 The body is validated through ``LLMProvider`` before any PUT. A
@@ -39,8 +39,8 @@ from _token import resolve_token  # noqa: E402
 from legba.data.schemas.stack import LLMProvider  # noqa: E402
 
 CORE_ID = "llm.primary.openai_compat"
-#: The gateway's thinking-on alias of the core model (the owner, 2026-11-14:
-#: "Deep is just thinking on"). Registry data from here on, never code.
+#: The gateway's thinking-on alias of the core model (thinking on, same model).
+#: Registry data from here on, never code.
 THINKING_ALIAS = "deep"
 
 

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W2 — a declared cross-unit tension is ONE VARIABLE, not a shared word.
+"""A declared cross-unit tension is ONE VARIABLE, not a shared word.
 
 The two mismatched pairs are the verbatim BLUF spans of world_assessor record
 e30e67d3 (world read 64f74201, 2026-11-07), where 48 of 392 examined pairs were

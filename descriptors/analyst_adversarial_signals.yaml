@@ -1,4 +1,4 @@
-# W1-E BIND — Adversarial Signals analyst descriptor (L-203 migration of
+# Adversarial Signals analyst descriptor (migration of
 # legba.maintenance.adversarial; deterministic_handlers/adversarial_signals.py).
 #
 # Coordinated-inauthentic-behavior detection over the shared raw signal pool:
@@ -32,7 +32,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: draft
-  owner: w1e_built_but_unbound
+  owner: owner@local
 
 subscription:
   # No `targets` block -> META analyst: ONE global sweep per cadence tick

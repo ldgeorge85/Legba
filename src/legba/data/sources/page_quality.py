@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The page kind's QUALITY GATES — in code, each with a named reason.
 
-Lane I-2. A fetched page becomes a document only when it is an article-like
+A fetched page becomes a document only when it is an article-like
 page; otherwise it is REFUSED with one reason from :data:`REFUSALS` (the
 fetch receipt still keeps the bytes — they are the evidence of what the
 address answered — but no signal is written). A page that passes may still
@@ -24,7 +24,7 @@ The gates, in the order they are checked (the first that applies decides):
     A page on a WALL HOST (an ``unblock.``/``captcha.`` subdomain) is refused
     here whatever it says, and so is a redirect that left the requested host
     and landed on a page carrying any wall or challenge tell, at any length
-    (W11-F259: www.federalregister.gov answered with a 200 redirect to
+    (www.federalregister.gov answered with a 200 redirect to
     unblock.federalregister.gov's "Request Access" CAPTCHA page, which passed
     every other gate).
 ``wall_page``
@@ -43,7 +43,7 @@ The gates, in the order they are checked (the first that applies decides):
 ``paywall``
     HTTP 402; or a page that declares ``isAccessibleForFree: false`` AND
     yields a short text; or a short text carrying a subscribe-to-read
-    phrase. A paywall is never routed around (FETCH_REVIEW §3(e)). A page
+    phrase. A paywall is never routed around. A page
     that declares the paywall but serves its full text is LANDED with the
     flag ``paywall_declared``.
 ``too_little_text``

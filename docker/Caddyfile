@@ -2,9 +2,9 @@
 # .env.example). For a real domain, TLS is automatic via Let's Encrypt; host
 # binds :80 + :443. Falls back to `localhost` (Caddy internal CA) when unset.
 #
-# Two-layer auth (2026-06-01):
-#   1. Browser-prompt perimeter gate via caddy basic_auth.  Lewis
-#      types the password once per session; browser caches.
+# Two-layer auth:
+#   1. Browser-prompt perimeter gate via caddy basic_auth.  The
+#      operator types the password once per session; browser caches.
 #   2. Registry bearer-token gate (`LEGBA_REGISTRY_API_TOKEN`).
 #      Caddy injects the bearer for upstream after basic_auth
 #      validates, so the SPA never needs to know the token.  This
@@ -16,7 +16,7 @@
 # basic_auth validates → `header_up` replaces with Bearer → registry
 # receives the right token.  WebSocket upgrades same path.
 #
-# TWO MODES PER REQUEST (X3-B3, 2026-10-08 — local users + sign-in):
+# TWO MODES PER REQUEST (local users + sign-in):
 #   A. NO `legba_session` cookie → the PERIMETER OPERATOR, exactly as before:
 #      basic_auth validates, the operator bearer is injected upstream, the
 #      registry sees the operator.
@@ -64,7 +64,7 @@
 	}
 }
 
-# CONSOLE PERIMETER SWITCH (2026-11-15). `LEGBA_EDGE_PERIMETER` (default 1)
+# CONSOLE PERIMETER SWITCH. `LEGBA_EDGE_PERIMETER` (default 1)
 # decides whether the console's routes sit behind the basic_auth perimeter.
 #   1: the perimeter is the outer wall, as it always was (sign-in on or off).
 #   0: no perimeter password; the registry's own sign-in is the only gate.
@@ -206,7 +206,7 @@
 	# a short-lived WS ticket minted behind /api/*, never dropping the gate.
 	handle /api/v1/registry/events* {
 		import console_perimeter_{$LEGBA_EDGE_PERIMETER:1}_{$LEGBA_AUTH_SIGNIN:0}
-		# Mode B (X3-B3): a signed-in browser — strip the perimeter header,
+		# Mode B: a signed-in browser — strip the perimeter header,
 		# inject nothing; the cookie rides the upgrade.
 		@legba_session header_regexp Cookie `(^|;\s*)legba_session=[^;\s]+`
 		handle @legba_session {
@@ -234,7 +234,7 @@
 	# is needed for the health request itself.
 	handle /api/* {
 		import console_perimeter_{$LEGBA_EDGE_PERIMETER:1}_{$LEGBA_AUTH_SIGNIN:0}
-		# Mode B (X3-B3): a signed-in browser — strip the perimeter header,
+		# Mode B: a signed-in browser — strip the perimeter header,
 		# inject nothing; the registry resolves the `legba_session` cookie.
 		@legba_session header_regexp Cookie `(^|;\s*)legba_session=[^;\s]+`
 		handle @legba_session {
@@ -254,7 +254,7 @@
 
 	handle /ws/* {
 		import console_perimeter_{$LEGBA_EDGE_PERIMETER:1}_{$LEGBA_AUTH_SIGNIN:0}
-		# Mode B (X3-B3) / mode A, as for /api/* above.
+		# Mode B / mode A, as for /api/* above.
 		@legba_session header_regexp Cookie `(^|;\s*)legba_session=[^;\s]+`
 		handle @legba_session {
 			reverse_proxy legba-registry:8090 {

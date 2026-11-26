@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane narrative (Program 7 piece 7e) — the ``narrative_coordination`` unit's
+"""The ``narrative_coordination`` unit's
 deterministic SPREAD BLOCK.
 
 Covers the brief's five assertions:
@@ -269,7 +269,7 @@ def test_absent_spread_block_param_is_byte_identical_to_pre_lane_render():
 
 
 # ---------------------------------------------------------------------------
-# End to end through run_method — the real X-1 option-catalog binding path,
+# End to end through run_method — the real option-catalog binding path,
 # mirroring tests/data_pkg/test_wire_pair_collapse.py's own run_method proof.
 # ---------------------------------------------------------------------------
 
@@ -323,7 +323,7 @@ class _CapturingLLM:
 
 @pytest.mark.asyncio
 async def test_run_method_engages_the_spread_block_only_when_the_descriptor_opts_in():
-    """The real X-1 gate: ``options["spread_block"]`` is what
+    """The real gate: ``options["spread_block"]`` is what
     ``_merge_descriptor_options`` would have set from
     ``method.options.spread_block`` on the live descriptor. ``deps.pg`` is
     unset (no substrate in this test), so class mix degrades to "unknown" —

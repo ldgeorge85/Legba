@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""P2-5 — deterministic weekly gold-set sampling (pure, DB-free).
+"""Deterministic weekly gold-set sampling (pure, DB-free).
 
 Covers the sampler's contract: determinism (same week → same sample,
 candidate-order independent), stratification (per-unit coverage + a high/low

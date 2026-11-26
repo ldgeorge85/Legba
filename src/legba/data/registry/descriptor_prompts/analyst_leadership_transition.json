@@ -1,8 +1,8 @@
 {
   "prompts": {
     "leadership_transition": {
-      "chars": 23560,
-      "sha256": "3dcdfb7a37aedd0069ecf7bfd85de2fe67b0e6ff01bfb21264bd1e4a49473b14",
+      "chars": 25334,
+      "sha256": "90cc879613e4c4bb3b734ef9f5bb6db73a41ec373351371e2532a64e7cb36d14",
       "source": "analyst_leadership_transition.yaml"
     }
   },

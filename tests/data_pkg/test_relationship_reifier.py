@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""PIECE A — relationship_reifier producer + the dormant refinement consumers.
+"""``relationship_reifier`` producer + the dormant refinement consumers.
 
 Three layers, all without a live model (the typing LLM is a canned stub):
 
@@ -346,7 +346,7 @@ async def test_reifier_types_and_writes_nexus(pg_pool):
             "AND valid_until IS NULL AND superseded_by IS NULL"
         )
     assert row is not None, "a signed typed nexus row must be written"
-    # Phase B item 5: rel_type is stored in the canonical lowercase-spaced form.
+    # rel_type is stored in the canonical lowercase-spaced form.
     # The polarity sign is resolved upstream from the CamelCase rel_type
     # (POLARITY map) BEFORE the write, so the sign is unaffected.
     assert row["rel_type"] == "supplies weapons to"
@@ -377,7 +377,7 @@ async def test_reifier_degrades_not_drops_on_llm_failure(pg_pool):
 
 
 def _ctx() -> AnalystContext:
-    # W3-A: `relationship_reifier`, NOT `seed.reifier`. `edge_family_for()` maps
+    # `relationship_reifier`, NOT `seed.reifier`. `edge_family_for()` maps
     # the `seed.` prefix to the `reference` tier — the imported lattice — and
     # `structural_balance` excludes that tier from the balance ratio by design
     # (86% of the open signed edge set is imported Wikidata IGO membership at
@@ -395,7 +395,7 @@ def _ctx() -> AnalystContext:
 async def _seed_nexus(pool, *, subject, object_, polarity, rel_type,
                       intermediary=None, created_days_ago=0):
     async with pool.acquire() as conn:
-        # W3-A: `graph_mining` / `structural_balance` read `entity_edges`, and
+        # `graph_mining` / `structural_balance` read `entity_edges`, and
         # the dual-write PARKS a nexus whose endpoint name resolves to no
         # entity rather than guessing one. So the endpoints have to exist as
         # profiles for the edge to land — which is the id-keyed store's whole

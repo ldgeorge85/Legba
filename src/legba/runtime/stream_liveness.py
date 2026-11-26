@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The liveness watchdog's view of SUBSCRIBED sources (lane I-4).
+"""The liveness watchdog's view of SUBSCRIBED sources.
 
 A subscribed source writes the poll ledger's row once per window
 (``runtime/stream_ingest.py``), so the watchdog's existing per-source checks

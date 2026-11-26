@@ -2,8 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The FROZEN bake-off design, read and verified — the harness's only source of truth.
 
-``planning/reviews/BAKEOFF_DESIGN.md`` (v1.2, re-stamped 2026-11-11; v1.1 2026-11-05; v1.0 frozen
-2026-10-09) is pre-registered: line 1 carries the
+The design file (``BAKEOFF_DESIGN.md``) is pre-registered: line 1 carries the
 sha256 of every byte after it. The harness never retypes anything the design
 fixes. It reads the design file, refuses unless the computed hash equals both
 the stamped one and :data:`PINNED_SHA256` (the version this harness was built
@@ -16,7 +15,7 @@ to), and then takes from the HASHED bytes:
 
 The census is enforced (§9: HEADLINE 9, LONG-MEMORY 10, SLOW-CHANGE 9,
 INSUFFICIENT 8): a design that parses to anything else is refused, never
-"mostly" run. planning/ is gitignored, so the path is always an argument.
+"mostly" run. The design file is not in the repo, so the path is always an argument.
 """
 
 from __future__ import annotations
@@ -180,7 +179,7 @@ def load_design(path: str | Path, *, pinned: str = PINNED_SHA256) -> Design:
     for arm, usd in re.findall(r"\|\s*([A-E])\s*\|\s*\$(\d+(?:\.\d+)?)\s*\|", ceil):
         stops[arm] = float(usd)
     if set(stops) != {"B", "C", "D", "E"}:
-        raise DesignError(f"§7 hard-stop table parsed to {stops}")
+        raise DesignError(f"hard-stop table parsed to {stops}")
 
     flat = _unwrap(text)  # the prompts wrap across lines in the markdown
     prompt_ar = _between(
@@ -193,7 +192,7 @@ def load_design(path: str | Path, *, pinned: str = PINNED_SHA256) -> Design:
             raise DesignError(f"fixed prompt {name} did not parse: {val!r}")
     titles = dict(re.findall(r"^### Arm ([A-E]) — (.+)$", text, re.M))
     if set(titles) != {"A", "B", "C", "D", "E"}:
-        raise DesignError(f"§2 arm headings parsed to {sorted(titles)}")
+        raise DesignError(f"arm headings parsed to {sorted(titles)}")
     return Design(
         path=p, sha256=computed, version=version,
         questions=tuple(questions), hard_stops=stops,

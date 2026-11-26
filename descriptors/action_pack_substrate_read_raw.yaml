@@ -1,6 +1,6 @@
-# X3/G0 — substrate_read_raw: the bake-off's ARM B read surface (DRAFT).
+# substrate_read_raw: the bake-off's ARM B read surface (DRAFT).
 #
-# planning/reviews/BAKEOFF_DESIGN.md v1.0 §2, arm B — "frontier consult over the
+# Arm B — "frontier consult over the
 # RAW corpus": only what the sources said, nothing the analysis plane derived.
 # Exactly the six raw readers; every finding/situation/event/hypothesis/
 # prediction/graph reader, the fact store, the curated background corpora and
@@ -16,8 +16,8 @@
 # like substrate_read (no applies_to_tags, no predicate; self-allowed on the
 # consult binding).
 #
-# DRAFT. NOT in scripts/bringup_register_action_packs.py. The operator registers
-# it for the bake-off window (G1) and retires it after — the G1 steps are in
+# DRAFT. NOT in scripts/bringup_register_action_packs.py. Register
+# it for the bake-off window and retire it after — the steps are in
 # scripts/bakeoff/run_arm.py's module docstring.
 
 identity:
@@ -27,7 +27,7 @@ identity:
   version: "<content-hash stamped at register time>"
   abstraction_level: L1
   state: draft
-  owner: x3_g0_bakeoff
+  owner: owner@local
   created: "2026-10-09T00:00:00Z"
 
 tools:

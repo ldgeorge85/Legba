@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Holes-B Wave 2b — LLM tie-break on a NEAR-TIE abstain (#101, decision #2).
+"""LLM tie-break on a NEAR-TIE abstain (#101).
 
-The deterministic ``Q·C·R·F`` arbiter (Wave 2) stays the default. An LLM may
+The deterministic ``Q·C·R·F`` arbiter stays the default. An LLM may
 break a tie ONLY on a NEAR-TIE abstain (two non-junk clusters that both clear
 ``MIN_SURFACE_SCORE`` but neither dominates the other by ``DOMINANCE_RATIO``) —
 NEVER on a genuinely weak abstain (best < ``MIN_SURFACE_SCORE``) and never when

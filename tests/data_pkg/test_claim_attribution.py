@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""C-2 — the ``claim_as_fact`` attribution check, MEASURED (pure; no model).
+"""The ``claim_as_fact`` attribution check, MEASURED (pure; no model).
 
 The labelled set (``fixtures/claim_attribution_set.psv``, 220 invented
 sentences: 166 the rule was tuned on, 54 written after tuning) pins the

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Typing a desk sentence PIECE BY PIECE — one seat call per sentence, one
-draft and one gate report per piece (lane S-4; S-5 additions below).
+draft and one gate report per piece.
 
 The sentence is split by code first (:func:`statement_split.split_sentence`).
 The seat is shown the sentence WITH its ``[N]`` markers (``[N]`` is ROW N),
@@ -17,8 +17,6 @@ Each piece is then assembled and gated exactly as a whole sentence is
 a quote from a row the piece does not cite is ``row_not_on_sentence``. A piece
 with no attached citation is not typed and says so (``uncited``, with the
 figures it states).
-
-S-5.
 
 * ACTORS. Each piece is offered, besides the desk's subjects, the actors the
   entity layer links to the rows THAT PIECE cites and that the piece names
@@ -82,7 +80,7 @@ PIECE_NOT_TYPED = "piece_not_typed"
 #: Cited rows shown for a sentence typed piece by piece (each piece cites its own).
 PIECE_MAX_ROWS = 6
 
-#: The five outcomes a piece ends as (S-5), counted apart in the tally.
+#: The five outcomes a piece ends as, counted apart in the tally.
 ESTABLISHED_ELIGIBLE = "established_eligible"
 ASSESSMENT = "assessment"
 ABSENCE = "absence"
@@ -103,7 +101,7 @@ class PieceResult:
     result: TypingResult | None
     reason: str | None = None
     detail: Mapping[str, Any] = field(default_factory=dict)
-    #: S-5 — the narrowed piece that was typed, when the seat narrowed it.
+    #: The narrowed piece that was typed, when the seat narrowed it.
     narrowed: Piece | None = None
 
     @property
@@ -241,8 +239,8 @@ def build_piece_prompt(item: TypingInput, pieces: Sequence[Piece],
     else:
         lines += ["PIECES: the whole sentence is one piece (P1). If it makes SEVERAL separate",
                   "claims (several figures, or several distinct assertions), you may split it:",
-                  "give each piece's start and end character offsets into SENTENCE and its",
-                  "text copied EXACTLY from SENTENCE. Otherwise return one piece."]
+                  "give each piece's text copied EXACTLY from SENTENCE (code finds where it",
+                  "sits). Otherwise return one piece."]
         if allowed and pieces and pieces[0].index in allowed and len(allowed[pieces[0].index]) < len(item.subjects):
             lines.append(f"  P1 · subjects {_ids(allowed[pieces[0].index])}")
     lines += ["", "SUBJECTS (answer with one id offered for the piece, or null):"]
@@ -470,7 +468,7 @@ def tally_pieces(results: Iterable[SentenceTyping]) -> dict[str, Any]:
     """Counts only: sentences, pieces, how they were split, each piece's
     OUTCOME (established-eligible / assessment / absence / restatement /
     failed — counted apart), the plain reasons the failed ones failed, and
-    the S-5 detail (actor subjects offered / taken / declined, narrowings,
+    the actor detail (actor subjects offered / taken / declined, narrowings,
     which text quotes were found in)."""
     results = list(results)
     reasons: dict[str, int] = {}

@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from ..claim_support import claim_judge_line, claim_of
+from ..outside_text import inert_frames
 from .absence_slice import _is_machine_structured_row
 
 
@@ -55,9 +56,9 @@ def _verify():
 #: The caveat prefix, riding OUTSIDE the evidence cap for the same reason the
 #: OUTLET line does: it is one short line and it is the whole point.
 _MACHINE_CODED_LINE = (
-    "MACHINE-CODED: this entry is a GDELT/CAMEO structured event record — a "
-    "machine coding of a news report, not the report's own words. It is not "
-    "testimony and cannot contradict a claim.\n"
+    "MACHINE-CODED: this entry is an automatically coded record of a news "
+    "report, not the report's own words. It is not testimony and cannot refute "
+    "a claim.\n"
 )
 
 
@@ -177,7 +178,10 @@ def _marker_to_evidence(citations: Any) -> dict[int, str]:
             or entry.get("evidence_text")
             or entry.get("summary")
         )
-        title_txt = title.strip() if isinstance(title, str) and title.strip() else ""
+        # The article's own words are outside text: a frame token inside them
+        # ("SOURCE (authoritative):", "CLAIMS:") is made inert so it cannot
+        # pose as a section of the judge's prompt. The labels below are ours.
+        title_txt = inert_frames(title.strip()) if isinstance(title, str) and title.strip() else ""
         # V-H1: the OUTLET. An attribution claim ("near-identical framing across
         # CBC, NPR and the BBC [1][16][54]") names WHO published, and the judge's
         # evidence view carried title/snippet/source-URL but never the outlet ref,
@@ -200,9 +204,9 @@ def _marker_to_evidence(citations: Any) -> dict[int, str]:
         claim = claim_of(entry)
         if claim is not None:
             outlet_txt = claim_judge_line(claim) + outlet_txt
-        snip_txt = snippet.strip() if isinstance(snippet, str) and snippet.strip() else ""
+        snip_txt = inert_frames(snippet.strip()) if isinstance(snippet, str) and snippet.strip() else ""
         src_full = (
-            source_text.strip()
+            inert_frames(source_text.strip())
             if isinstance(source_text, str) and source_text.strip()
             else ""
         )

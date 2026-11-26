@@ -67,9 +67,9 @@
 #   --verify-import MODULE  `python -c "import MODULE"` must succeed inside ALL
 #                           THREE containers post-deploy. Repeatable. For code
 #                           outside the legba package — a profile's prompt
-#                           package (W9 SPLIT-2), e.g.
+#                           package, e.g.
 #                           --verify-import legba_geopolitics.lens_left
-#   --drain-seconds N       W11-F84: give the OLD runtime N seconds (1-60) after
+#   --drain-seconds N       Give the OLD runtime N seconds (1-60) after
 #                           SIGTERM before docker SIGKILLs it at the runtime
 #                           recreate (passed as `up --timeout N`; the compose
 #                           default is 10 s). It drains only if that container
@@ -83,7 +83,7 @@
 #                           container and warns when it is unset (that roll
 #                           cannot drain; the next one can). Default 0: the
 #                           compose default, as before.
-#   --walk                  W11-F161: run the descriptor walker
+#   --walk                  Run the descriptor walker
 #                           (scripts/bringup_register_descriptors.py --profile
 #                           <walk-profile> --family action_pack --family
 #                           analyst, in a one-off registry container: the
@@ -96,9 +96,9 @@
 #                           periodic resync, ~5 min after start) and read it:
 #                           any `pack_staleness.stale` line -> restart the
 #                           runtime ONCE and read the next sweep; still stale
-#                           -> exit 8. Roll 59 recreated the runtime before
-#                           the walker minted substrate_read 4552f78e, and
-#                           consult_default served the old pack for hours.
+#                           -> exit 8. A runtime recreated before
+#                           the walker minted the new substrate_read serves
+#                           the old pack for hours.
 #   --walk-profile DIR      The profile the walker registers from. Default:
 #                           profiles/geopolitics.
 #   --stale-watch-seconds N How long to wait for a staleness sweep after the
@@ -164,7 +164,7 @@
 #                           roll, in GB. Default 4 (see BUILD_CACHE_KEEP_GB).
 #   LEGBA_DEPLOY_ACTOR (env) Who rolls (forced_by=); default $SUDO_USER/$USER.
 #
-# THE NIGHTLY GATE (X1-A4, step 0 — before any build, and ENFORCED UNDER
+# THE NIGHTLY GATE (step 0 — before any build, and ENFORCED UNDER
 # --dry-run too: a gate a dry run waves through proves nothing)
 #   scripts/host_nightly_suite.sh appends one `NIGHTLY_VERDICT` line per run
 #   (sha=, verdict=PASS|FAIL, phases=, dirty=). The gate takes the NEWEST
@@ -242,18 +242,18 @@ ROLL_SERVICES=(registry runtime worker)
 DO_MIGRATE=1
 DEPLOY_LOG_ARMED=0
 DEPLOY_LOG_RESULT=""
-# BUILD-CACHE CAP (roll 65). After a successful roll the build cache is pruned
+# BUILD-CACHE CAP. After a successful roll the build cache is pruned
 # down to this many GB (`docker builder prune --max-used-space`; images are
 # never touched — a builder prune removes build-cache records only, so no image
-# a container runs on can go). NOT `--reserved-space` (roll 87: 8.8 GB of
+# a container runs on can go). NOT `--reserved-space` (measured: 8.8 GB of
 # reclaimable cache, the prune reclaimed 0 B, on Docker 29.2.1 / buildx
 # 0.31.1 / BuildKit 0.27.1): in BuildKit's current GC `--reserved-space` is a
 # FLOOR ("always allowed to keep") and a prune given only a floor has no
 # ceiling to prune down to, so it deletes nothing; `--max-used-space`
 # ("maximum allowed to keep") is the ceiling. A builder whose prune has no
 # --max-used-space predates that GC, and there `--keep-storage` was the
-# ceiling. WHY 4, MEASURED on roll 65 (the first roll of the cap, built
-# from an empty cache): one full registry + runtime + worker build leaves
+# ceiling. WHY 4, MEASURED on a roll built
+# from an empty cache: one full registry + runtime + worker build leaves
 # 4.2 GB of build cache, 2.24 GB of it private (the rest shared with the
 # images): the largest records are the two runtime /install layers (1.35 +
 # 1.34 GB), the registry ones (284 + 256 MB), the builder apt layer (346 MB)
@@ -436,7 +436,7 @@ guard_image_ages() {
   fi
 }
 
-# --- the NIGHTLY GATE (X1-A4): a red nightly blocks the roll ----------------
+# --- the NIGHTLY GATE: a red nightly blocks the roll ----------------
 # _field KEY LINE — the value of `KEY=` in a NIGHTLY_VERDICT line ("" if absent;
 # never a non-zero status, which `set -e` would turn into an aborted roll).
 _field() { { grep -oE "(^| )$1=[^ ]*" <<<"$2" | head -1 | sed -E "s/^ ?$1=//"; } || true; }
@@ -510,7 +510,7 @@ wait_healthy() {
   abort 3 "${svc} did not report Health=healthy within ${HEALTH_TIMEOUT_S}s (last seen: '${health:-unknown}')"
 }
 
-# --- W11-F84: does the RUNNING runtime drain at SIGTERM? --------------------
+# --- does the RUNNING runtime drain at SIGTERM? --------------------
 # The drain bound is read by the old process at its start, so it is the
 # container being replaced whose env decides this roll. Warn, never abort: the
 # roll is still correct without a drain, it only loses the in-flight turns.
@@ -533,9 +533,9 @@ drain_env_check() {
   esac
 }
 
-# --- W11-F161: the descriptor walk, BEFORE the runtime recreate -------------
+# --- the descriptor walk, BEFORE the runtime recreate -------------
 # A pack PUT never rebinds the analysts that already cached the old pack (no
-# reverse index; RIDER #236), so the runtime must START on the new heads.
+# reverse index), so the runtime must START on the new heads.
 walk_descriptors() {
   phase "descriptor walk: ${WALK_FAMILIES[*]} heads (${WALK_PROFILE}) — before the runtime recreate"
   local fam fam_args=()
@@ -608,7 +608,7 @@ check_pack_staleness() {
   ok "pack staleness: 0 stale bindings after the restart"
 }
 
-# --- roll 65: cap the build cache after a successful roll ------------------
+# --- cap the build cache after a successful roll ------------------
 # _cache_total — the build cache's total size as `docker buildx du` prints it.
 _cache_total() { docker buildx du 2>/dev/null | awk '/^Total:/{print $2}' | tail -1 || true; }
 
@@ -938,7 +938,7 @@ main() {
     fi
   fi
 
-  # W11-F161 — the walk lands the new pack/analyst heads BEFORE the runtime
+  # The walk lands the new pack/analyst heads BEFORE the runtime
   # that will cache them starts.
   if [ "${DO_WALK}" -eq 1 ]; then
     WALK_STARTED_AT="$(ts)"
@@ -949,7 +949,7 @@ main() {
     phase "runtime: recreate"
     RUNTIME_STARTED_AT="$(ts)"
     if [ "${DRAIN_SECONDS}" -gt 0 ]; then
-      # W11-F84: the old actor host keeps its in-flight turns for up to D s after
+      # The old actor host keeps its in-flight turns for up to D s after
       # SIGTERM (uvicorn's graceful shutdown); docker SIGKILLs only after N s.
       drain_env_check
       info "drain: the old runtime gets ${DRAIN_SECONDS}s after SIGTERM to finish in-flight actor turns"
@@ -983,7 +983,7 @@ main() {
     verify_markers
   fi
 
-  # 5b — W11-F161: the runtime's first staleness sweep reads clean. Under t1
+  # 5b — the runtime's first staleness sweep reads clean. Under t1
   # the runtime was not recreated: read the first sweep after the walk (it
   # restarts the runtime once only if a pack binding is stale), then the
   # parse check.
@@ -1007,7 +1007,7 @@ main() {
     run dcp runtime,ui restart "${CADDY_SVC}"
   fi
 
-  # Post-roll: three rolls left 23 GB of build cache (09-28); roll 65 caps it at
+  # Post-roll: three rolls once left 23 GB of build cache; the cap trims it to
   # BUILD_CACHE_KEEP_GB and logs what it reclaimed. (A t0/t1 roll builds
   # nothing, so it has nothing to prune.)
   if [ "${TIER_USED}" = "full" ] || [ "${did_build}" -eq 1 ] || [ "${DO_UI}" -eq 1 ]; then

@@ -53,7 +53,7 @@ async def _scoped(agen: Any, log: CaptureLog | None, posture: ProtocolPosture | 
 
 
 def sink_summary(sink_counts: dict[str, Any]) -> str:
-    """The ``sinks=`` field of ``source_actor.pull.done`` (lane N-R): ``-`` for a
+    """The ``sinks=`` field of ``source_actor.pull.done``: ``-`` for a
     document source, else ``observation:written=W,revised=R,unchanged=U,rejected=X``
     per family — so an observation-only poll logs its completion too."""
     if not sink_counts:

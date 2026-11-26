@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """COVERAGE — statements about what the collection holds or how its reporting
-framed something (lane S-6).
+framed something.
 
 A desk writes "covered by three outlets", "the framing spans 16.9 hours
 across six distinct outlets", "this window's 38 signals", "reporting framed
@@ -12,7 +12,7 @@ as an event or a level it can only fail; typed as an absence it is refused
 for stating none. S-5 measured these as a top failure class.
 
 WHAT IT IS — A BEHAVIOUR CLASS, BESIDE ABSENCE. The merged architecture
-recommendation (DATA_LAYERS 2026-11-14, 04 §1.5 point 2, §4.1 point 3) keeps a
+recommendation (DATA_LAYERS 2026-11-14, 04 point 2 point 3) keeps a
 closed list of behaviour classes in code, each fixing what may establish a
 thing, what it is checked against and how it ages; statement, assessment and
 absence are separate classes and a restatement is a link. Coverage is a

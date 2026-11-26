@@ -10,8 +10,7 @@ on cache miss.  Three of that bundle's fields are kind-specific:
     callable (or an ``AnalystRunFn``-shaped wrapper for the LLM-bearing
     backward-compat path);
   * ``kind_deps`` — the kind's deps dataclass / Protocol-shaped object
-    threaded as the third positional argument to ``run_method`` (per
-    L-102 §5);
+    threaded as the third positional argument to ``run_method``;
   * ``output_kind`` — the :class:`OutputKind` enum value the analyst-
     output dispatcher writes for this kind (FINDING / PREDICTION /
     CRITIQUE / PROMPT_MODULE_CANDIDATE).
@@ -50,6 +49,7 @@ from ..data.principals import seat_handle
 from ..data.provenance.kinds import OutputKind
 from ..data.provenance.receipts import RuntimeReceiptChain
 from ..data.schemas.analyst import AnalystDescriptor
+from ..data.schemas.env_refs import EnvRefError, resolve_config_env_refs, resolve_token_count
 from ..data.schemas.stack import LLMProviderConfig
 from ..data.stack.llm import LLM_HANDLERS
 from ..data.stack.llm.base import LLMProviderHandler, TelemetryHandle
@@ -148,10 +148,10 @@ async def build_analyst_run_method(
     embedding_service: Any | None = None,
     qdrant_client: Any | None = None,
     nlp_client: Any | None = None,
-    source_enrichment_factory: Any | None = None,  # W11-F118 — reenrich_pending only
+    source_enrichment_factory: Any | None = None,  # Reenrich_pending only
     tools_registry: Mapping[str, Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]] | None = None,
     consult_agency_binding: Any | None = None,
-    consult_provider_bindings: Mapping[str, Any] | None = None,  # C-1b, C-2a §7 — runtime/consult_bindings.py
+    consult_provider_bindings: Mapping[str, Any] | None = None,  # runtime/consult_bindings.py
     inline_target_agency_binding: Any | None = None,
     inline_target_budget_precheck: Callable[[], Awaitable[bool]] | None = None,
 ) -> tuple[
@@ -225,7 +225,7 @@ async def build_analyst_run_method(
         Resolved LAZILY inside ``_wire_reenrich_ner`` (only for that bound
         sub-handler), so no other analyst pays a registry round-trip for a client it
         never uses. ``None`` (NLP plane not provisioned) → the sweep no-ops per tick.
-        ``reenrich_pending`` (W11-F118) takes it too, for its fallback chain.
+        ``reenrich_pending`` takes it too, for its fallback chain.
     source_enrichment_factory:
         The host's per-source ``pipeline.enrichment`` factory (``sd -> stage``),
         threaded ONLY onto the ``reenrich_pending`` sweep so it re-runs a row's
@@ -247,7 +247,7 @@ async def build_analyst_run_method(
         default; CRITIQUE / PREDICTION / PROMPT_MODULE_CANDIDATE for
         kinds that override).
       * ``receipt_chain`` — the per-analyst
-        :class:`RuntimeReceiptChain` (L-107 §7). Hydrated lazily from
+        :class:`RuntimeReceiptChain`. Hydrated lazily from
         ``analyst_traces`` on first ``record()``; the actor's run path
         calls ``record()`` after every successful analyst-output write
         so the chain links each run via ``prev_receipt_hash``. Cached
@@ -276,7 +276,7 @@ async def build_analyst_run_method(
 
     # Build a closure the per-kind branches call when they need an LLM. The
     # by-id form lets a kind resolve a SECOND handler (the per-phase LLM split —
-    # journal §4.1: an Opus narrate handler alongside the gpt-oss/vLLM primary).
+    # an Opus narrate handler alongside the core-model / vLLM primary).
     async def _resolve_llm_component(component_id: str) -> LLMProviderHandler:
         if llm_handler_factory is not None:
             return await llm_handler_factory(component_id)
@@ -374,7 +374,7 @@ async def build_analyst_run_method(
             _resolve_primary_llm,
             substrate_query_port=substrate_query_port,
             agency_binding=consult_agency_binding,
-            provider_bindings=consult_provider_bindings,  # C-1b, C-2a §7 — per-pack bindings
+            provider_bindings=consult_provider_bindings,  # per-pack bindings
             pg_pool=pg_pool,  # F-4: the watch mint's write surface
             # F1 model picker: thread the by-id resolver so the kind's run_method
             # can build a per-request handler for the operator's chosen plane.
@@ -386,12 +386,12 @@ async def build_analyst_run_method(
             descriptor, handler, deep_consult_client=deep_consult_client,
         )
     elif kind in ("journal_assessor", "inquiry"):
-        # The journal runs on the in-actor llm_planner envelope (NOT deep_consult
-        # — plan §4.1). It reuses the inline_target deps shape + GATHER loop but
+        # The journal runs on the in-actor llm_planner envelope (NOT deep_consult).
+        # It reuses the inline_target deps shape + GATHER loop but
         # emits a JournalPayload (off-chain). The GATHER binding (for the
-        # journal_read pack) is wired by the host's §4.9-generalized gate and
+        # journal_read pack) is wired by the host's generalized gate and
         # threaded through the same `inline_target_agency_binding` channel.
-        # Program 5's `inquiry` kind is the SAME deps shape — same envelope, same
+        # The `inquiry` kind is the SAME deps shape — same envelope, same
         # per-phase LLM split, same JournalPayload — differing only in its
         # run_method and in which read pack the host binds as its GATHER default
         # (substrate_read rather than journal_read). A second builder here would
@@ -424,7 +424,7 @@ async def build_analyst_run_method(
             descriptor, handler, _resolve_primary_llm, pg_pool=pg_pool, deps=deps,
         )
     elif kind == "situation_tracker":
-        # Continuity P2 — the trajectory ledger's one writer. Same shape as
+        # The trajectory ledger's one writer. Same shape as
         # signal_salience (a global META sweep that BOTH calls the $0-plane LLM
         # and reads/writes the substrate directly), with one difference that
         # matters: its output is a GRADED claim, so the host wires it a verify
@@ -604,7 +604,7 @@ async def _build_inline_target(
         getattr(descriptor.method, "timeout_seconds", 180) or 180
     )
     # Honour the descriptor's declared system prompt (previously decorative for
-    # this kind). P2-T1 (unit-factory): a bounded reasoning unit is JUST a
+    # this kind). A bounded reasoning unit is JUST a
     # descriptor — its OWN system prompt drives synthesis. Resolve a
     # ``method.prompt_module`` ("module:attr") to its prompt constant; when that
     # is unset/unresolvable, fall back to an INLINE ``method.system_prompt``
@@ -664,7 +664,7 @@ async def _build_inline_target(
         max_rounds=max_rounds,
         invoke_timeout_seconds=invoke_timeout_seconds,
         budget_precheck=budget_precheck,
-        # V3/P2 — the substrate pool for the event-citation expansion.
+        # The substrate pool for the event-citation expansion.
         pg=pg_pool,
         llm_gather=llm_gather,
         # D-1 — the contract-v2 SHADOW: None (the desk byte-identical) unless
@@ -692,31 +692,31 @@ async def _build_journal_assessor(
     qdrant_client: Any | None = None,
     resolve_role_llm: Callable[[str], Awaitable[Any]] | None = None,
 ) -> tuple[Callable[..., Any], Any | None, OutputKind]:
-    """journal_assessor — Legba's first-person reflective voice (plan §4.8).
+    """journal_assessor — Legba's first-person reflective voice.
 
     The journal runs on the in-actor llm_planner envelope (NOT the deep_consult
-    Dapr workflow — §4.1). It reuses the ``InlineTargetDeps`` bundle + the GATHER
+    Dapr workflow). It reuses the ``InlineTargetDeps`` bundle + the GATHER
     loop, but dispatches its OWN ``run_method`` (3-arg) which emits a
     ``JournalPayload`` off-chain. Returns the trio
     ``(run_method, InlineTargetDeps, OutputKind.JOURNAL)``.
 
-    THE HEADLINE FIX (§4.2): the journal's system prompt is the JOURNAL persona
+    THE HEADLINE FIX: the journal's system prompt is the JOURNAL persona
     (legba.prompts.journal_assessor:JOURNAL_SYSTEM) threaded VERBATIM — it is
     NEVER wrapped by ``_tradecraft.with_preamble`` / ``with_preamble_if_absent``
     (the JSON-only / BLUF / estimative anti-voice). That wrapping is what would
     quietly kill the voice; we author the journal-specific narrate contract
     inside JOURNAL_SYSTEM instead.
 
-    PER-PHASE LLM SPLIT (§4.1): the heavy GATHER loop runs on the PRIMARY handler
-    (``method.llm.primary`` → the gpt-oss / vLLM plane, ``Reasoning: high``) while the VOICE
+    PER-PHASE LLM SPLIT: the heavy GATHER loop runs on the PRIMARY handler
+    (``method.llm.primary`` → the core-model / vLLM plane, ``Reasoning: high``) while the VOICE
     (the field-notes seam + NARRATE) runs on the SECOND handler resolved from the
     OPTIONAL ``method.llm.narrate`` ref (→ Opus). When ``method.llm.narrate`` is
     absent (or no ``resolve_llm_component`` is supplied), ``llm_narrate`` stays
     None and the voice falls back to the primary handler — the prior behavior,
-    byte-for-byte. ``method.max_tokens`` now governs ONLY the Opus narrate output
-    (the gpt-oss/vLLM gather plane never receives max_tokens — vLLM serves its own
-    budget, vllm.py:119), so it is threaded as the narrate cap; it is inert on the
-    primary handler's gather calls.
+    byte-for-byte. ``method.llm.max_tokens`` bounds nothing on either plane: no
+    handler sends a caller's ``max_tokens`` (the Anthropic voice plane sends the
+    model's documented maximum, the gateway the alias's declared maximum), so
+    the value threaded below is an inert argument.
     """
     from ..data.analysts.inline_target import InlineTargetDeps
 
@@ -727,7 +727,7 @@ async def _build_journal_assessor(
     # only when the descriptor sets ``method.llm.narrate.raw`` AND a by-id resolver
     # was threaded. Absent → None → the voice falls back to the primary handler
     # (zero-regression). ``gather_reasoning_high`` is set IFF the split is active
-    # (the journal's heavy gather plane is the gpt-oss/vLLM plane, which honors the directive);
+    # (the journal's heavy gather plane is the core-model / vLLM plane, which honors the directive);
     # without a split there is no separate gather plane, so leave it off.
     narrate_component_id = _narrate_llm_component_id(descriptor)
     llm_narrate: LLMProviderHandler | None = None
@@ -739,8 +739,8 @@ async def _build_journal_assessor(
         llm_narrate = _bind_role(
             await resolve_llm_component(narrate_component_id), descriptor, ROLE_NARRATE,
         )
-        # method.max_tokens now caps ONLY the Opus narrate output (the gather plane
-        # serves its own vLLM budget); thread it as the narrate cap.
+        # Passed to the voice calls, which never send it (the handler sends the
+        # model's own maximum); it limits nothing.
         narrate_max_tokens = int(max_tokens)
         gather_reasoning_high = True
         logger.info(
@@ -757,7 +757,7 @@ async def _build_journal_assessor(
         getattr(descriptor.method, "timeout_seconds", 180) or 180
     )
     # Resolve the journal persona system prompt. DELIBERATELY NOT wrapped by
-    # with_preamble — that is the §4.2 headline fix. Unset → None → the
+    # with_preamble — that is the headline fix. Unset → None → the
     # run_method falls back to the kind default (which it loads itself).
     #
     # K-3: this is the sharpest instance of the swallowed-resolution bug in the
@@ -774,7 +774,7 @@ async def _build_journal_assessor(
     if system_prompt is None:
         # Reached only when the descriptor declares NO prompt_module at all.
         # The KIND's own persona is the right default for that case; it is no
-        # longer reachable by a broken reference. Program 5: an `inquiry`
+        # longer reachable by a broken reference. An `inquiry`
         # descriptor defaults to the INQUIRY voice, never the diary's — handing
         # a stateful investigator the journal's first-person apparatus persona
         # is the same silent mis-voicing K-3 closed for the lenses.
@@ -786,7 +786,7 @@ async def _build_journal_assessor(
             system_prompt = JOURNAL_SYSTEM
     # The journal may still opt into Tier-1 grounding (it's a META analyst over
     # the global slice) — the GROUND preamble corrects stale-cutoff drift before
-    # it narrates (§4.5 point 3). Off (None) unless the descriptor opts in.
+    # it narrates. Off (None) unless the descriptor opts in.
     grounding_hook = _build_grounding_hook(
         descriptor, pg_pool=pg_pool, embedder=embedding_service,
         qdrant=qdrant_client,
@@ -1219,7 +1219,7 @@ async def _build_meta_findings_synthesizer(
     handler: KindHandler,
     resolve_llm: Callable[[], Awaitable[LLMProviderHandler]],
     *,
-    # V3/P2 — the substrate pool, threaded onto the deps carrier so the
+    # The substrate pool, threaded onto the deps carrier so the
     # composition path's [[event:<uuid>]] expansion can read
     # signal_event_links when LEGBA_EVENT_CITATIONS is on.
     pg_pool: "asyncpg.Pool | None" = None,
@@ -1446,7 +1446,7 @@ async def _build_situation_tracker(
     pg_pool: "asyncpg.Pool | None" = None,
     deps: StandardDeps,
 ) -> tuple[Callable[..., Any], Any | None, OutputKind]:
-    """situation_tracker (continuity P2) — the trajectory ledger writer.
+    """situation_tracker — the trajectory ledger writer.
 
     A global META sweep that BOTH calls the LLM (delta adjudication on the $0
     core plane) AND reads/writes the substrate directly (open situations + their
@@ -1583,7 +1583,7 @@ async def _build_deterministic(
         signal bodies on the CORE plane ($0). Wired whenever the bound
         sub-handler is ``signal_summarizer`` AND the descriptor declares
         ``method.llm.primary``. Key: ``signal_summarizer.LLM_DEPS_EXTRA_KEY``.
-      * ``fact_contention_arbiter`` (Wave 2b, #101) — FLAG-GATED
+      * ``fact_contention_arbiter`` — FLAG-GATED
         (``LEGBA_FACT_CONTENTION_LLM_TIEBREAK``, default OFF). Breaks a NEAR-TIE
         abstain with a bounded vLLM call. Key:
         ``fact_contention_arbiter.LLM_DEPS_EXTRA_KEY``.
@@ -1711,7 +1711,7 @@ async def _build_deterministic(
             descriptor, deps, embedding_service=embedding_service,
         )
 
-    # reenrich_ner / reenrich_translation / reenrich_pending (W11-F118) — the
+    # reenrich_ner / reenrich_translation / reenrich_pending — the
     # re-enrichment sweeps (no LLM). Each gets the hosted NlpServiceClient
     # resolved from the process-lifetime source; reenrich_pending also gets the
     # registry + the host's source-enrichment factory so it re-runs a row's own
@@ -2044,7 +2044,7 @@ def _build_deep_consult(
     *,
     deep_consult_client: Any | None,
 ) -> tuple[Callable[..., Any], Any | None, OutputKind]:
-    """deep_consult — the actor→workflow bridge (anchor §5 PIECE 4).
+    """deep_consult — the actor→workflow bridge.
 
     THIN: the kind's ``run_method`` only SCHEDULES the deep-consult Dapr
     Workflow (detached) and returns the task id.  The deps carry the
@@ -2063,9 +2063,9 @@ def _build_deep_consult(
     budget_tokens_per_day = getattr(
         descriptor.method, "budget_tokens_per_day", None
     )
-    # The analyze stage's per-call output budget is DESCRIPTOR-governed
-    # (method.llm.max_tokens), same governance as the chat consult plane;
-    # LEGBA_CONSULT_MAX_TOKENS stays available as a loud emergency override.
+    # The analyze stage's output-token ESTIMATE (method.llm.max_tokens): the
+    # workflow's budget pre-check reads it; no handler sends it, so it bounds
+    # no output. LEGBA_CONSULT_MAX_TOKENS overrides it, logged loudly.
     descriptor_cap = _read_method_llm_option(
         descriptor, "max_tokens", default=None,
     )
@@ -2137,10 +2137,10 @@ async def _build_consult_on_demand(
         override_resolver = _bind_override_resolver(
             resolve_llm_component, LLM_OVERRIDE_ALLOWLIST,
         )
-    # Per-call output budget: DESCRIPTOR-governed (method.llm.max_tokens —
-    # 32768 on the deployed consult descriptors, streamed on the wire by the
-    # Anthropic handler). LEGBA_CONSULT_MAX_TOKENS is demoted to an emergency
-    # override inside resolve_output_budget (logged loudly when it wins).
+    # Per-call output-token ESTIMATE (method.llm.max_tokens): the bake-off
+    # spend projection reads it. No handler sends it — the wire carries the
+    # alias's own maximum — and the input ceiling no longer subtracts it.
+    # LEGBA_CONSULT_MAX_TOKENS overrides it inside resolve_output_budget.
     descriptor_cap = _read_method_llm_option(
         descriptor, "max_tokens", default=None,
     )
@@ -2222,8 +2222,8 @@ async def build_llm_handler_from_stack_component(
          :data:`legba.data.stack.llm.LLM_HANDLERS` and instantiate it.
       5. Call ``on_configure`` so the handler resolves the vault secret
          + populates its model list.  ``on_activate`` is intentionally
-         NOT called — that's the actor's lifecycle responsibility per
-         L-102 §1, and calling it eagerly would open an httpx pool the
+         NOT called — that's the actor's lifecycle responsibility,
+         and calling it eagerly would open an httpx pool the
          actor must later close.
 
     Raises :class:`AnalystDepsBuildError` on registry lookup failures,
@@ -2251,6 +2251,13 @@ async def build_llm_handler_from_stack_component(
             f"stack-component {component_id!r}: body.config is missing or "
             f"non-mapping (got {type(raw_config).__name__})"
         )
+    # Fields written as ${env:NAME} (endpoint, model name) take their value
+    # from this process's environment here, at use time, so the stored row
+    # and its hash stay instance-neutral. Unset or empty fails loudly.
+    try:
+        raw_config = resolve_config_env_refs(raw_config, component_id=component_id)
+    except EnvRefError as exc:
+        raise AnalystDepsBuildError(str(exc)) from exc
     try:
         cfg = LLMProviderConfig.model_validate(dict(raw_config), strict=False)
     except Exception as exc:
@@ -2351,13 +2358,13 @@ async def build_search_handler_from_stack_component(
 def infer_llm_subprovider(component_id: str, *, endpoint: str) -> str:
     """Pick the :data:`LLM_HANDLERS` key for a stack-component.
 
-    Resolution priority (most specific → most generic); rung 0 (W11-F108):
+    Resolution priority (most specific → most generic); rung 0:
     an id containing ``.decide.`` → ``decide``, the ``POST /decide`` client.
 
       1. Component id contains ``.anthropic.`` or starts with
          ``llm.anthropic`` → ``anthropic``.
       2. Component id ends in ``.openai_compat`` (the in-house
-         convention for vLLM / gpt-oss-120b endpoints) → ``vllm``.
+         convention for vLLM / the core model endpoints) → ``vllm``.
       3. Component id contains ``.openai.`` or starts with ``llm.openai``
          → ``openai``.
       4. Endpoint hostname is ``api.anthropic.com`` → ``anthropic``.
@@ -2474,7 +2481,7 @@ def _primary_llm_component_id(descriptor: AnalystDescriptor) -> str | None:
 def _narrate_llm_component_id(descriptor: AnalystDescriptor) -> str | None:
     """Extract the StackRef ``raw`` from ``descriptor.method.llm.narrate`` (or None).
 
-    The OPTIONAL second LLM ref for the per-phase split (journal §4.1): the voice
+    The OPTIONAL second LLM ref for the per-phase split: the voice
     (field-notes + NARRATE) plane. ``method.llm`` is an open ``dict[str, Any]``
     (schemas/analyst.py), so the ``narrate`` key needs NO schema change. Absent
     → None, silently (zero-regression); the caller leaves the voice on the
@@ -2492,7 +2499,7 @@ def _narrate_llm_component_id(descriptor: AnalystDescriptor) -> str | None:
 def _verify_llm_component_id(descriptor: AnalystDescriptor) -> str | None:
     """Extract the StackRef ``raw`` from ``descriptor.method.llm.verify`` (or None).
 
-    The OPTIONAL judge LLM ref for the P0-T2 faithfulness verify pass: the
+    The OPTIONAL judge LLM ref for the faithfulness verify pass: the
     cross-family 8B judge plane (the live ``slm.internal`` Llama-3.1-8B at deploy).
     ``method.llm`` is an open ``dict[str, Any]`` (schemas/analyst.py), so the
     ``verify`` key needs NO schema change. Absent → None, silently
@@ -2510,7 +2517,7 @@ def _verify_llm_component_id(descriptor: AnalystDescriptor) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# P2-4 — the JUDGE ROUTE (build for the absent second model)
+# The JUDGE ROUTE (build for the absent second model)
 # ---------------------------------------------------------------------------
 #
 # Today the faithfulness judge resolves the SAME stack ref as the producer:
@@ -2700,8 +2707,10 @@ async def resolve_llm_budget_params(
         component (anthropic / openai / vllm: the PRICE_TABLE dispatch keys);
       * model — the component config's ``model_name``;
       * estimate — ``method.budget_tokens_per_run`` (explicit per-run
-        budget) → ``method.llm["max_tokens"]`` (per-call output cap) → the
-        component config's ``max_tokens`` → 0.
+        figure) → the component's declared maximum output for its plain alias
+        (one call's worst case) → 0. An ESTIMATE for the throttle projection
+        only; the descriptor's ``method.llm.max_tokens`` is not read, and
+        nothing here bounds a call.
 
     Best-effort: any failure degrades to ``("", "", est)`` with a warning —
     budget observability must never block analyst deps build. Deterministic
@@ -2712,12 +2721,6 @@ async def resolve_llm_budget_params(
         per_run = getattr(descriptor.method, "budget_tokens_per_run", None)
         if per_run:
             est = int(per_run)
-        else:
-            llm_max = _read_method_llm_option(
-                descriptor, "max_tokens", default=None,
-            )
-            if llm_max:
-                est = int(llm_max)
     except Exception:  # pragma: no cover — malformed descriptor knobs
         est = 0
 
@@ -2732,13 +2735,17 @@ async def resolve_llm_budget_params(
         raw_config = body.get("config") if isinstance(body, dict) else None
         if not isinstance(raw_config, Mapping):
             return "", "", est
+        raw_config = resolve_config_env_refs(raw_config, component_id=component_id)
         cfg = LLMProviderConfig.model_validate(dict(raw_config), strict=False)
         provider = infer_llm_subprovider(
             component_id, endpoint=cfg.api_endpoint.raw,
         )
         model = str(cfg.model_name.raw)
-        if est == 0:
-            est = int(cfg.max_tokens.raw or 0)
+        if est == 0 and cfg.max_output_tokens is not None:
+            est = resolve_token_count(
+                cfg.max_output_tokens.raw, component_id=component_id,
+                field="max_output_tokens",
+            )
         return provider, model, est
     except Exception as exc:
         logger.warning(
@@ -2869,7 +2876,7 @@ class _LLMOnlyDeps:
 
     def __init__(
         self, llm: LLMProviderHandler, *, temperature: float | None = None,
-        # V3/P2 — optional substrate pool for the event-citation expansion
+        # Optional substrate pool for the event-citation expansion
         # (LEGBA_EVENT_CITATIONS). Only the meta_findings carrier sets it;
         # every other construction passes None and behaves identically.
         pg: "asyncpg.Pool | None" = None,

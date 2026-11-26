@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""0256 — the subscribe acquisition's tables on the REAL driver (lane I-4).
+"""0256 — the subscribe acquisition's tables on the REAL driver.
 
 * the migration is idempotent: ``source_poll_outcomes.stream`` is one
   nullable jsonb, ``source_stream_gaps`` exists with its kind check;

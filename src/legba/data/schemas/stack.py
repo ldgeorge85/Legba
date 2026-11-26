@@ -12,6 +12,8 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .env_refs import parse_token_count
+from .legacy_name_digests import canonical_nlp_provider
 from .lifecycle import LifecycleState, WireEnumCoercion
 from .properties import (
     DropdownStatic,
@@ -68,7 +70,29 @@ class LLMProviderConfig(BaseModel):
     api_user: Secret | None = None
     api_pass: Secret | None = None
     model_name: Text
-    max_tokens: Number
+    # Has no effect and is read by nothing. Components registered before the
+    # per-alias limits below carry it (it used to be required), so it is still
+    # accepted for those stored rows to parse; a new component leaves it out.
+    max_tokens: Number | None = None
+    # -- the model's own limits ---------------------------------------------
+    # What the endpoint states for the alias each call names, never a limit of
+    # ours. ``max_output_tokens`` is the maximum output of ``model_name``;
+    # ``thinking_max_output_tokens`` that of ``thinking_model_name`` (reasoning
+    # tokens count against it, which is why a thinking alias states a larger
+    # one); ``context_window_tokens`` the window, input plus output. Each is a
+    # positive integer, or a text ``${env:NAME}`` reference resolved at use
+    # time like an endpoint (``env_refs``) when the number differs per
+    # instance.
+    #
+    # The OpenAI-compatible handler sends the declared maximum as
+    # ``max_tokens`` on every call to that alias, less only when the counted
+    # input leaves less room in the declared window. An alias with no
+    # declared maximum gets no ``max_tokens`` at all and relies on the
+    # endpoint's own default (the flow view says so). The window also sizes
+    # the input budgets (``analysts/_llm_budget.derived_input_budget``).
+    max_output_tokens: Number | Text | None = None
+    thinking_max_output_tokens: Number | Text | None = None
+    context_window_tokens: Number | Text | None = None
     timeout_seconds: Number = Field(
         default_factory=lambda: Property.Number.of(60, minimum=1, maximum=600)
     )
@@ -77,20 +101,20 @@ class LLMProviderConfig(BaseModel):
             "primary", ["primary", "fallback", "cheap"]
         )
     )
-    # -- router provider routing (2026-09-25) ---------------------------------
+    # -- router provider routing ---------------------------------
     # Comma-separated OpenRouter provider slugs this component must NEVER be
     # served by (the router's ``provider.ignore`` request field, e.g.
     # ``"dekallm"``). Read by the vllm-family handler and merged into every
     # request body; absent = the request is byte-identical to before this
     # field existed. Why a component knob and not a code table: over 7 days
-    # (2026-09-18..24) one subprovider served 45% of the judge's 10,018 calls
+    # one subprovider served 45% of the judge's 10,018 calls
     # at an average of 108 s (p90 210 s, max 3.6 h) against 34 s on the next,
     # and the judge's capacity is the standing constraint — which endpoint a
     # component may be served by belongs to the component row, like its
     # price, so a routing change is a registry PUT, not a deploy. A
     # self-hosted vLLM never sees the field (the knob stays unset there).
     provider_ignore: Text | None = None
-    # -- spend metering (#22, 2026-08-15) -----------------------------------
+    # -- spend metering -----------------------------------
     # Per-COMPONENT list price, USD per 1M tokens. The vllm-family handler
     # (every `.openai_compat` component: the self-hosted primary AND the
     # hosted PAYG judge lanes — Cerebras, OpenRouter) reads these when set
@@ -108,14 +132,14 @@ class LLMProviderConfig(BaseModel):
     # ungauged/no_burn_threshold and NEVER pages — the honest default for $0
     # lanes. Set it on every lane where money can actually move.
     daily_burn_alert_usd: Number | None = None
-    # -- client concurrency (#21, 2026-08-15) --------------------------------
+    # -- client concurrency --------------------------------
     # Per-component cap on in-flight chat completions from ONE process (an
     # asyncio semaphore in the vllm-family handler). Absent = unlimited =
     # the historical behavior. This is the client-side half of headroom
-    # safety: the ai1 saturation watch sees the queue, this keeps one legba
+    # safety: the models-host saturation watch sees the queue, this keeps one legba
     # process from BEING the queue.
     max_concurrent: Number | None = None
-    # -- thinking (lane T-1, 2026-11-14) -------------------------------------
+    # -- thinking -------------------------------------
     # The alias that serves THIS component's model with thinking on (the core
     # plane: ``fast`` → ``deep``, one model, "deep is just thinking on"). A
     # call that passes ``thinking=True`` names this alias instead of
@@ -123,7 +147,7 @@ class LLMProviderConfig(BaseModel):
     # = the component cannot think and a thinking call is refused loudly.
     # Registry data, not code: no call site names an alias.
     thinking_model_name: Text | None = None
-    # The reasoning-token budget the owner's gateway may accept. Its name and
+    # The reasoning-token budget the gateway may accept. Its name and
     # value are NOT known yet (SEAMS #88): both ship unset and nothing is sent.
     # When BOTH are set, a thinking call sends ``{<param>: <tokens>}``; a
     # thinking-off call never does. Never a ``max_tokens`` (no output caps on
@@ -152,6 +176,25 @@ class LLMProviderConfig(BaseModel):
                 ok = False
             if not ok:
                 raise ValueError("reasoning_budget_tokens, when set, must be a positive integer")
+        return self
+
+    @model_validator(mode="after")
+    def _model_limits_are_counts(self) -> "LLMProviderConfig":
+        """Each declared limit is a positive whole number or an env reference;
+        a thinking maximum needs the thinking alias it belongs to."""
+        for name in ("max_output_tokens", "thinking_max_output_tokens", "context_window_tokens"):
+            value = getattr(self, name)
+            if value is None:
+                continue
+            try:
+                parse_token_count(value.raw)
+            except ValueError as exc:
+                raise ValueError(f"{name}: {exc}") from None
+        if self.thinking_max_output_tokens is not None and self.thinking_model_name is None:
+            raise ValueError(
+                "thinking_max_output_tokens is the thinking alias's maximum; "
+                "declare thinking_model_name with it"
+            )
         return self
 
     @model_validator(mode="after")
@@ -235,7 +278,7 @@ class EmbeddingService(StackComponentBase):
 # ---------------------------------------------------------------------------
 # NLP service — Legba-models GPU service (translate / classify / extract / summarize)
 #
-# Phase-4 architectural correction (2026-05-22): the filter handlers
+# Architectural note: the filter handlers
 # (``ner_multilingual``, ``classify``, optional ``translate``) call the
 # hosted Legba-models FastAPI service over HTTP rather than loading the
 # underlying transformer models in-process. The endpoint catalog lives in
@@ -247,7 +290,7 @@ class EmbeddingService(StackComponentBase):
 
 
 class NLPServiceConfig(BaseModel):
-    """Hosted NLP inference service config (Legba-models, or the innoai gateway).
+    """Hosted NLP inference service config (Legba-models, or the model gateway).
 
     Endpoints expected: ``GET /health``, ``POST /translate``, ``POST /classify``,
     ``POST /extract``, ``POST /summarize``. Auth is HTTP Basic when the
@@ -255,10 +298,10 @@ class NLPServiceConfig(BaseModel):
     path has no auth — credentials are still resolved but the client treats
     a missing secret value as anonymous access.
 
-    ``provider: innoai_gateway`` (W11-F107) points the same contract at the
+    ``provider: bearer_gateway`` points the same contract at the
     gateway's ``/relations`` · ``/entities`` · ``/classify`` routes with a
     Bearer ``api_key``; summarization is not covered there, and translation
-    runs on the gateway chat model named by ``translate_model`` (W11-F109).
+    runs on the gateway chat model named by ``translate_model``.
     """
 
     model_config = ConfigDict(strict=True, extra="forbid")
@@ -285,12 +328,12 @@ class NLPServiceConfig(BaseModel):
     health_path: Text = Field(
         default_factory=lambda: Property.Text.of("/health")
     )
-    # -- W11-F107: the innoai gateway as an NLP provider (2026-10-23) ---------
+    # -- The model gateway as an NLP provider (2026-10-23) ---------
     # Every field below is OPTIONAL with a None default, so a component row
     # written before they existed (the live ``nlp.local.legba_models``)
     # validates and dumps byte-identically; the client factory applies the
     # effective defaults. ``provider`` absent = ``legba_models`` (the
-    # NlpServiceClient, unchanged); ``innoai_gateway`` = the GatewayNlpClient.
+    # NlpServiceClient, unchanged); ``bearer_gateway`` = the GatewayNlpClient.
     provider: Text | None = None
     # Bearer credential (a vault ref, like LLMProviderConfig.api_key). Auth is
     # a switch: Basic (api_user + api_pass) for legba-models, Bearer for the
@@ -299,19 +342,19 @@ class NLPServiceConfig(BaseModel):
     entities_path: Text | None = None      # client default "/entities"
     relations_path: Text | None = None     # client default "/relations"
     # Relation labels extract() asks for; absent = the labels DERIVED from the
-    # graph's relationship types (W11-F113: DEFAULT_RELATION_LABELS in
+    # graph's relationship types (DEFAULT_RELATION_LABELS in
     # nlp_service/gateway_relations.py — every RELATIONSHIP_TYPE less
     # CoOccursWith, in the write path's row-predicate form).
     relation_labels: TypedList | None = None
     # Entity classes entities() asks for; absent = the ENTITY_CLASSES taxonomy
     # less the ``entity`` catch-all (DEFAULT_ENTITY_LABELS).
     entity_labels: TypedList | None = None
-    # W11-F109: the gateway chat alias translate() asks (one completion per
-    # chunk). innoai_gateway only; absent = "fast" (the client factory applies
+    # The gateway chat alias translate() asks (one completion per
+    # chunk). bearer_gateway only; absent = "fast" (the client factory applies
     # it), an explicit blank = translation off (NlpServiceUnsupported, the
     # backfill sweeps report skipped_no_nlp).
     translate_model: Text | None = None
-    # W11-F113: fact quality on /relations. innoai_gateway only; absent = the
+    # Fact quality on /relations. bearer_gateway only; absent = the
     # client defaults. relation_confidence: the triple's confidence from its
     # head/tail scores — "min" (default: a relation is only as sure as its
     # weaker end), "mean", or "none" (no confidence; the fact path's 0.5
@@ -326,37 +369,39 @@ class NLPServiceConfig(BaseModel):
         (``api_key`` required, no Basic pair); legba-models is Basic-or-anon
         (an ``api_key`` there would be silently ignored, so it is refused)."""
         provider = self.provider.raw if self.provider is not None else "legba_models"
-        if provider not in ("legba_models", "innoai_gateway"):
+        # A row registered under the retired provider value stays valid; read-side only.
+        provider = canonical_nlp_provider(str(provider))
+        if provider not in ("legba_models", "bearer_gateway"):
             raise ValueError(
                 f"NLPServiceConfig.provider must be 'legba_models' or "
-                f"'innoai_gateway' (got {provider!r})"
+                f"'bearer_gateway' (got {provider!r})"
             )
         has_basic = self.api_user is not None or self.api_pass is not None
-        if provider == "innoai_gateway":
+        if provider == "bearer_gateway":
             if self.api_key is None:
                 raise ValueError(
-                    "NLPServiceConfig provider 'innoai_gateway' requires api_key (Bearer)"
+                    "NLPServiceConfig provider 'bearer_gateway' requires api_key (Bearer)"
                 )
             if has_basic:
                 raise ValueError(
-                    "NLPServiceConfig provider 'innoai_gateway' is Bearer-only: "
+                    "NLPServiceConfig provider 'bearer_gateway' is Bearer-only: "
                     "drop api_user/api_pass"
                 )
         else:
             if self.api_key is not None:
                 raise ValueError(
                     "NLPServiceConfig provider 'legba_models' authenticates with "
-                    "api_user/api_pass (HTTP Basic); api_key is for 'innoai_gateway'"
+                    "api_user/api_pass (HTTP Basic); api_key is for 'bearer_gateway'"
                 )
             if self.translate_model is not None:
                 raise ValueError(
                     "NLPServiceConfig translate_model is for provider "
-                    "'innoai_gateway' (legba-models translates on translate_path)"
+                    "'bearer_gateway' (legba-models translates on translate_path)"
                 )
             for name in ("relation_confidence", "relation_threshold"):
                 if getattr(self, name) is not None:
                     raise ValueError(
-                        f"NLPServiceConfig {name} is for provider 'innoai_gateway' "
+                        f"NLPServiceConfig {name} is for provider 'bearer_gateway' "
                         "(legba-models' /extract has no such knob)"
                     )
         if self.relation_confidence is not None and (

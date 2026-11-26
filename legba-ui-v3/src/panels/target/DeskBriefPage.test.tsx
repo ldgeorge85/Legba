@@ -403,7 +403,11 @@ describe('DeskBriefPage', () => {
     vi.stubGlobal('fetch', routedFetch())
     renderPanel()
     expect(await screen.findByTestId('desk-brief-index-card')).toBeInTheDocument()
-    expect(await screen.findByTestId('desk-brief-title')).toHaveTextContent('country_watch_tw')
+    // The title is the subject's name and a readable day, never the record's
+    // machine title; that title is kept in the admin's readout.
+    const title = await screen.findByTestId('desk-brief-title')
+    expect(title.textContent).not.toContain('country_watch_tw')
+    expect(screen.getByTestId('desk-brief-record-title')).toHaveTextContent('country_watch_tw')
     expect(await screen.findByTestId('desk-brief-faithfulness')).toHaveTextContent('faithfulness=0.94')
     expect(screen.getByTestId('desk-brief-scale-stamp')).toHaveAttribute('data-stamp-state', 'full')
     expect(screen.getByTestId('desk-brief-never-pooled')).toBeInTheDocument()
@@ -592,7 +596,7 @@ describe('DeskBriefPage', () => {
 // X1/D1 — the headline agrees with "composition as of"; the voice is markdown
 // ---------------------------------------------------------------------------
 
-describe('DeskBriefPage — one source of truth (X1/D1)', () => {
+describe('DeskBriefPage — one source of truth', () => {
   /** The export answers with no document (a refused or still-composing POST —
    *  what review D's GET-only run saw on Brazil). */
   function exportRefused(extra: (url: string) => unknown = () => null) {
@@ -612,7 +616,8 @@ describe('DeskBriefPage — one source of truth (X1/D1)', () => {
     renderPanel()
     const title = await screen.findByTestId('desk-brief-title')
     await waitFor(() => expect(title).toHaveAttribute('data-composition', 'present'))
-    expect(title).toHaveTextContent(COMPOSITION.title)
+    expect(title.textContent).toMatch(/ · \d{1,2} [A-Z][a-z]{2}$/)
+    expect(screen.getByTestId('desk-brief-record-title')).toHaveTextContent(COMPOSITION.title)
     expect(title.textContent).not.toMatch(/no composition/i)
     // The as-of is the SAME row's, printed short (the full instant stays in
     // the reading limits, where it cannot overflow a figure tile).

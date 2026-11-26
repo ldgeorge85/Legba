@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""E-2 ntfy alert sink — native publish shape, gating, retry, redaction.
+"""Ntfy alert sink — native publish shape, gating, retry, redaction.
 
 Mirrors ``test_webhook_sink.py`` (recording fake HTTP exercising the
 production classification + retry code) plus the dispatcher ledger seam
@@ -93,7 +93,7 @@ RECEIPT_URL = (
     "https://legba.example.org/api/v1/lineage/finding/"
     "7e0b0f37-0000-0000-0000-000000000000"
 )
-#: Roll 84: the console page that opens the record — the tap target.
+#: The console page that opens the record — the tap target.
 CONSOLE_URL = "https://legba.example.org/#rec=finding:7e0b0f37-0000-0000-0000-000000000000"
 
 
@@ -269,7 +269,7 @@ async def test_no_receipt_url_no_click_header_relative_path_in_body() -> None:
 
 
 async def test_tap_target_is_never_the_json_receipt() -> None:
-    """Roll 84: with a receipt URL but no console address, no X-Click — a
+    """With a receipt URL but no console address, no X-Click — a
     tap must open a page, and the lineage route answers JSON."""
     http = _Http([_Resp(200)])
     sink = _sink(http)
@@ -358,7 +358,7 @@ async def test_transient_exhaustion_degrades_never_raises() -> None:
     sink = _sink(http)
     result = await sink.deliver(_payload())
     assert result.outcome == "transient_error"
-    # 2 retries → 3 attempts total (the P1-1 bounded-retry contract).
+    # 2 retries → 3 attempts total (the bounded-retry contract).
     assert result.attempts == 3 and len(http.calls) == 3
     assert "http 500" in result.detail
 

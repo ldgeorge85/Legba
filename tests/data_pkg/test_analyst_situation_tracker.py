@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Continuity P2 — the ``situation_tracker`` analyst, on the REAL binding path.
+"""The ``situation_tracker`` analyst, on the REAL binding path.
 
 The house rule, and the reason this file is shaped the way it is: a wiring test
 that hand-builds the deps bundle proves the handler works when someone else

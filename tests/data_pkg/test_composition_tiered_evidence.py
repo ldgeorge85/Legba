@@ -268,7 +268,7 @@ async def test_flag_on_per_country_read_splits_basis_and_periphery(monkeypatch):
     # TWO evidence gathers: the basis read at the SPLIT floor (0.50), then the
     # periphery complement at the SAME floor — plus the two memory-section
     # gathers (the Phase-1 continuity register and FRAME-2's window ledger),
-    # neither of which is a tier — plus (W11 SWEEP-2) the ONE cadence lookup
+    # neither of which is a tier — plus the ONE cadence lookup
     # on analyst_descriptors that stamps each quoted read's cadence so a stale
     # read can be marked; never a tier, never a selection.
     assert len(conn.calls) == 5
@@ -715,8 +715,10 @@ def test_judge_periphery_rubric_names_periphery_ordinals():
     assert "EVIDENCE TIERS" in rubric
     assert "[2, 3]" in rubric
     assert "PERIPHERY tier" in rubric
-    assert "hedged AND attributed" in rubric
-    assert "ESTABLISHED FACT" in rubric
+    # Strength, not wording, is the test: no phrase passes a claim by itself.
+    assert "the wording is not the test, the strength is" in rubric
+    assert "weakly-supported reporting suggests" not in rubric
+    assert "established fact" in rubric
     # Non-empty rubric ends with the block separator so the evidence map
     # renders on its own line.
     assert rubric.endswith("\n\n")

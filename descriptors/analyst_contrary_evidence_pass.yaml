@@ -1,4 +1,4 @@
-# Contrary-Evidence Pass (Program 7a) — the platform's only ACTIVE retrieval
+# Contrary-Evidence Pass — the platform's only ACTIVE retrieval
 # against its own published claims.
 #
 # THE GAP. Four organs in this fleet already handle disagreement and not one of
@@ -57,7 +57,7 @@
 #
 # CROSS-FAMILY, BY CONSTRUCTION. The capture asks for the judge to be
 # cross-family from the producer, and it already is on this path without a
-# fence: the counter-query comes from the CORE plane (gpt-oss-120b, the writer's
+# fence: the counter-query comes from the CORE plane (the core model, the writer's
 # own family — which is fine, because it writes a query and asserts nothing),
 # and the only thing ever GRADED here is the composition's tension line, graded
 # by the faithfulness judge (nemotron). Producer and judge are different
@@ -128,7 +128,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: draft
-  owner: p7a_checking_layer
+  owner: owner@local
 
 subscription:
   # No `targets` block => META analyst: ONE global sweep per cadence tick. The
@@ -147,7 +147,7 @@ method:
   kind: deterministic
   impl: legba.data.analysts.deterministic:run_method
   sub_handler: contrary_evidence_pass
-  # X-1 declared knobs (handler_options_programs.CONTRARY_EVIDENCE_OPTIONS).
+  # Declared knobs (handler_options_programs.CONTRARY_EVIDENCE_OPTIONS).
   # Every one bounds a COST or a record's SHELF LIFE, except `paid_rung`, which
   # is the only knob here that can cause a charge. Values below are the
   # in-source defaults, stated explicitly so the descriptor documents the
@@ -187,11 +187,6 @@ method:
       factory_kind: stack_ref
       raw: llm.primary.openai_compat
       expected_family: llm_provider
-    # Output cap. The vLLM handler drops max_tokens from the wire by default (a
-    # self-hosted server serves its own budget), so this is the hosted-endpoint
-    # safety net rather than the live control; the handler's own
-    # COUNTER_MAX_TOKENS is what actually bounds the reply.
-    max_tokens: 300
   # Per-day CORE-plane token cap. Zero is the standing house rule: the core
   # plane is $0 and is never budgeted by token count.
   budget_tokens_per_day: 0

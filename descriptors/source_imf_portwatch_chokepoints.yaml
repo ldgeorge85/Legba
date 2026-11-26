@@ -14,13 +14,13 @@
 #
 # This source reads a bounded ~400-row window once a day.
 #
-# N-R (2026-11-13): scope.attribution carries the attribution line;
+# scope.attribution carries the attribution line;
 # the observation sink copies it and license_class onto every row's
 # provenance. The 8,036 rows of the first poll predate the stamp and are
 # attributed at READ time (legba.data.observation_attribution) — live rows are
 # append-only, never rewritten.
 #
-# Subject kind (N-R): `entity` — each row is about ONE chokepoint (subject =
+# Subject kind: `entity` — each row is about ONE chokepoint (subject =
 # portid, name in provenance.portname), not a world-level figure. Declared in
 # config.subject_kind AND on every series (they must agree). Rows written
 # before this head say `global`; read the declared kind from the series
@@ -45,7 +45,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: n_l_ingestion_sinks
+  owner: owner@local
   created: "2026-11-13T00:00:00Z"
 
 scope:
@@ -55,7 +55,7 @@ scope:
   tags: [maritime, shipping, chokepoint, trade, series, global]
   source_class: official
   license_class: api_terms        # IMF data terms: attribution; commercial reuse by permission
-  attribution: "Source: IMF PortWatch (portwatch.imf.org)"   # N-R: copied onto every row
+  attribution: "Source: IMF PortWatch (portwatch.imf.org)"   # copied onto every row
   access_class: public            # free, no-auth API
 
 acquisition: poll
@@ -77,7 +77,7 @@ config:
   backfill_days:
     factory_kind: number
     raw: 45
-  subject_kind:                  # N-R: a row's subject is ONE chokepoint (portid)
+  subject_kind:                  # a row's subject is ONE chokepoint (portid)
     factory_kind: text
     raw: entity
 

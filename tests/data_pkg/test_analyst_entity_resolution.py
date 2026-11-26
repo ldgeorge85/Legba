@@ -3,7 +3,7 @@
 """Tests for the ``entity_resolution`` deterministic sub-handler.
 
 Wires ``scripts/backfill_entity_graph.py`` as an ongoing analyst
-(PIVOT_BUILD_PLAN §9 fast-follow). Three layers:
+Three layers:
 
   * **Registration** — it must be a first-class registered deterministic
     sub-handler (in :data:`SUB_HANDLERS`), not hidden magic.
@@ -367,7 +367,7 @@ async def test_georgia_country_and_state_do_not_merge(composite_pool):
 async def test_any_class_prelookup_reuses_and_upgrades_upward_not_downward(
     composite_pool,
 ):
-    """DQ P4: the any-class PRE-LOOKUP reuses the highest-priority existing row
+    """The any-class PRE-LOOKUP reuses the highest-priority existing row
     for a name typed differently across articles, promoting the row's class UP
     the priority ladder (entity -> person) but NEVER down (organization stays
     organization when a later 'person' mention of the same name arrives)."""
@@ -581,7 +581,7 @@ async def test_canonicalization_merges_fragments_with_derived_from(composite_poo
 
 
 async def test_merged_fold_forward_reuses_survivor_no_new_row(composite_pool):
-    """DQ P4 round-2: after the one-shot merge HARD-DELETES the losers, a forward
+    """After the one-shot merge HARD-DELETES the losers, a forward
     mention of the fold must REUSE the sole surviving row (by name) and upgrade its
     class upward — never INSERT a fresh row (the only path that could hit a freed
     slot). Seeds a lone survivor (class entity) and mentions it typed 'location'.
@@ -638,7 +638,7 @@ async def test_merged_fold_forward_reuses_survivor_no_new_row(composite_pool):
 
 
 async def test_gc_merged_row_is_not_reanimated_by_forward_write(composite_pool):
-    """DQ P4 round-2 (defect #1 fix): a forward write must NEVER re-attach a live
+    """A forward write must NEVER re-attach a live
     signal to a gc_status IN ('merged','junk') row — even when that dead row has a
     HIGHER class priority than the active survivor. The any-class pre-lookup filters
     the dead row out, so the mention lands on the ACTIVE survivor and the dead row

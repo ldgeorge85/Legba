@@ -1,5 +1,5 @@
-# Desk Baseline analyst descriptor (P3-7 — CAST-recipe per-desk statistical
-# baseline; A7 borrowable #7, LLM-free).
+# Desk Baseline analyst descriptor (CAST-recipe per-desk statistical
+# baseline, LLM-free).
 #
 # A first-class `deterministic`-kind META analyst that, on a DAILY cadence,
 # computes a falsifiable QUANTITATIVE PRIOR per desk (g20 + watch) over OUR OWN
@@ -13,7 +13,7 @@
 # a free-text prediction. The row NEVER touches a faithfulness score.
 #
 # Per desk x {signal_volume_24h, high_sev_findings_24h} (the SAME two metrics
-# the P1-3 baseline_deviation trigger measures, with the SAME 24h-bucket window
+# the baseline_deviation trigger measures, with the SAME 24h-bucket window
 # shape) it stores into the desk_baselines sidecar (migration 0103):
 #   * expected      — trailing mean daily rate (the prior; mean-centred so the
 #                     band matches the trigger it feeds).
@@ -73,7 +73,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: draft
-  owner: a7_desk_baseline
+  owner: owner@local
 
 subscription:
   # No `targets` block -> META analyst: one global recompute per cadence tick

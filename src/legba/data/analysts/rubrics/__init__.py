@@ -14,10 +14,18 @@ Files
 -----
 ``ANNEX_C_v4.md``
     The three-label correctness rubric (``contains`` / ``contradicts`` /
-    ``silent``). Program 1's calibration gate PASSED on it — pooled 0.8444 over
-    a fresh 30-atom draw, every pair above the 0.70 floor
-    (``planning/PROGRAM1_2026-09-16/VERDICT_P1v4.md``). sha256
+    ``silent``). Its calibration gate passed — pooled 0.8444 over
+    a fresh 30-atom draw, every pair above the 0.70 floor. sha256
     ``1b51d7f5187c7f93af2e2cccc0775e21ab7efc41678bc28c4a2dcbe287fe7d8c``.
+    Kept for the rows graded under it.
+``ANNEX_C_v5.md``
+    The same three labels with scale and limiting words read as part of the
+    core claim, a rule for the core claim of a compound assertion, a narrower
+    "contains" for a broader development, "subject" in place of "country", and
+    the output contract ordered core claim, span, reason, verdict. sha256
+    ``954c4ac59280a089c09a0c41c80eb829df556b786fb153ed46cf65ac8d83ccfb``. Not
+    yet calibrated: the grader refuses to grade under it until a passing
+    re-gate row exists.
 """
 
 from __future__ import annotations

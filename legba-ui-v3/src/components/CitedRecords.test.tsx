@@ -1,6 +1,6 @@
 /**
- * CitedRecords — a cited record opens the walk its true kind names (roll 84
- * live walk: a situation cited as `signal` asked `/lineage/signal/<id>` → 404).
+ * CitedRecords — a cited record opens the walk its true kind names (a
+ * situation cited as `signal` asked `/lineage/signal/<id>` → 404).
  */
 import { beforeEach, describe, expect, it } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'

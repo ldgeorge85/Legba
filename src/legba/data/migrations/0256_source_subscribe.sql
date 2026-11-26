@@ -3,10 +3,9 @@
 --
 -- 0256_source_subscribe.sql
 --
--- THE SUBSCRIBE ACQUISITION MODE (lane I-4): a source Legba holds a
+-- THE SUBSCRIBE ACQUISITION MODE a source Legba holds a
 -- connection open to, receiving records as the upstream emits them, on the
--- same spine, sinks and receipts as a poll. (0255 is left for a concurrent
--- lane; this lane takes 0256.)
+-- same spine, sinks and receipts as a poll.
 --
 -- WHAT THIS ADDS
 -- --------------

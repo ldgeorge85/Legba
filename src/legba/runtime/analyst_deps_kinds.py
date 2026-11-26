@@ -181,13 +181,13 @@ async def wire_desk_reference_kind_deps(
     degrade-not-break posture (the gap reaches an operator as a heartbeat row,
     not as a build failure), with ONE deliberate difference:
 
-      the LLM is NOT the core plane. A gpt-oss-120b reference against
-      gpt-oss-120b desks measures the family's shared blind spots and calls
+      the LLM is NOT the core plane. A core-model reference against
+      core-model desks measures the family's shared blind spots and calls
       them agreement, and a nemotron reference would share a family with the
       JUDGE. The shipped descriptor therefore binds a THIRD family
       (llm.judge.cerebras_gemma4_31b). Because that is a DESCRIPTOR field
       resolved through the same shared helper, an operator can re-point it —
-      to a self-hosted family on ai1, say — with a PUT and no code edit. The
+      to a self-hosted family on the models host, say — with a PUT and no code edit. The
       Anthropic hard-refuse inside ``wire_deterministic_llm`` still applies: a
       SCHEDULED analyst may never route onto the billed plane.
 
@@ -236,12 +236,11 @@ async def wire_reference_builder_kind_deps(
     that is not about blind spots at all:
 
       **The reference must be free, or the tower cannot afford one per country
-      per fortnight.** R1 measured this exact loop at ~1-1.7M prompt tokens and
-      ~8 minutes of ai1 per reference; a 33-target roster is ~4-5 hours of
-      owned hardware per cycle and $0. The same work on a paid plane is the
-      cost question Program 2 exists to answer NO to. And the independence
-      property the number rests on is NOT "a different model family" — it is
-      "built without reading our substrate", which this lane satisfies by
+      per fortnight.** This exact loop measured at ~1-1.7M prompt tokens and
+      ~8 minutes of the models host per reference; a 33-target roster is ~4-5 hours of
+      owned hardware per cycle and $0. The same work on a paid plane would
+      cost real money. And the independence property the number rests on is NOT
+      "a different model family" — it is "built without reading our substrate", which this lane satisfies by
       construction: it has no substrate read in its path, only the open web.
       A shared blind spot between the builder and the desks would show up as a
       `silent` claim, which the grader already publishes as coverage rather
@@ -293,8 +292,8 @@ async def wire_correctness_grader_kind_deps(
 
     The two out-of-plane audit desks above have ONE model leg. This one has
     three, because the property it measures is that three families reading one
-    rubric agree with each other (PREREG_P1 §4): a one-family correctness number
-    is a model's opinion, and Program 1 exists because that is not a measurement.
+    rubric agree with each other; a one-family correctness number is a model's
+    opinion, not a measurement.
 
       * **F0** — ``method.llm.primary``, the $0 self-hosted core plane, through
         the SAME shared helper as signal_summarizer, so the Anthropic

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane DM-A — citations as rows, the pure parts (no database).
+"""Citations as rows, the pure parts (no database).
 
 * the planner: every sentence a row with its offsets; each marker resolved
   through the stored citation entries to a typed target; a grounding block

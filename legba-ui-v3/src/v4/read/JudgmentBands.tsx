@@ -20,9 +20,9 @@
  *  * It does not replace the read. The assembly reader below is untouched and
  *    reachable exactly as it was — this is the same panel made judgmental.
  *  * It does not emit telemetry. `MorningRead.tsx` already fires one
- *    `brief_read` per rendered read; a timer that emitted on a tick would
- *    inflate the number the 90-day wager is graded on. The timer READS the
- *    telemetry's session clock and writes nothing.
+ *    `brief_read` per rendered read.
+ *  * It carries no reading timer. One ran here against a twenty-minute
+ *    budget, with nothing on the page saying what it was.
  *
  * ── WHY EVERY LIST IS CAPPED, LOUDLY ──────────────────────────────────────
  * Twenty minutes is the design constraint, so the surface shows the worst
@@ -36,7 +36,7 @@
  * The GAPS band lives in `GapsBand.tsx`: it reads `/v3/absence` once per desk
  * it shows, which is a fetch shape none of the other three has.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 
 import { apiGet } from '@/lib/api'
@@ -54,11 +54,7 @@ import {
   checkedBand,
   dueBand,
   forecastMarkLabel,
-  formatElapsed,
-  READ_BUDGET_MS,
-  resolveVisit,
-  visitCursor,
-  visitElapsedMs,
+  pageVisit,
   type BandId,
   type ChangedRow,
   type CheckedDesk,
@@ -70,6 +66,7 @@ import {
 } from '@/lib/morningReadBands'
 import GapsBand, { useGapViews } from './GapsBand'
 import UnverifiedMark from './UnverifiedMark'
+import { ClaimText } from './claimText'
 import {
   BandFrame,
   bandCount,
@@ -85,7 +82,7 @@ import {
 } from './bandChrome'
 import { asSeverity, scrollToAnchor, utcStamp } from './readFormat'
 import { ScaleStamp } from '@/components/ScaleStamp'
-import { useScope } from '@/state/scope'
+import { clearPoint, usePointSubject } from '@/state/scope'
 
 /** The profile's subject noun in a band's note (UI-B2; the exemplar's "desk"). */
 const SUBJECT = PROFILE_UI.subject.singular.toLowerCase()
@@ -95,33 +92,6 @@ const SUBJECTS = PROFILE_UI.subject.plural.toLowerCase()
 export const CHECKED_LIMIT = 200
 /** Every query on this surface polls on the read's own five-minute cadence. */
 const REFETCH_MS = 5 * 60_000
-
-// ---------------------------------------------------------------------------
-// The read timer (the telemetry's session clock, displayed — never emitted)
-// ---------------------------------------------------------------------------
-
-function ReadTimer({ visit }: { visit: MorningVisit }) {
-  const [now, setNow] = useState(() => Date.now())
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000)
-    return () => clearInterval(id)
-  }, [])
-  const elapsed = visitElapsedMs(visit, now)
-  const over = elapsed > READ_BUDGET_MS
-  return (
-    <span
-      className={`font-mono text-xs ${over ? 'text-ink-2' : 'text-ink-3'}`}
-      data-testid="morning-read-timer"
-      title={
-        over
-          ? 'Past the twenty minutes this surface is designed for.'
-          : 'This visit, against the twenty-minute budget. Nothing is emitted by the timer.'
-      }
-    >
-      {formatElapsed(elapsed)} / {formatElapsed(READ_BUDGET_MS)}
-    </span>
-  )
-}
 
 // ---------------------------------------------------------------------------
 // Shared furniture
@@ -187,7 +157,9 @@ function ChangedBand({
                 ) : (
                   <span className="inline-block h-2 w-2 shrink-0" aria-hidden />
                 )}
-                <span className="min-w-0 flex-1 text-ink-1">{item.headline}</span>
+                <span className="min-w-0 flex-1 text-ink-1">
+                  <ClaimText text={item.headline} max={600} />
+                </span>
                 {item.alerts.length > 0 && (
                   <span
                     className="shrink-0 rounded border border-line px-1 text-label text-ink-2"
@@ -219,7 +191,7 @@ function ChangedBand({
 
 /** X4 READPATH — the block-less findings, split by the registry's state. */
 function uncheckedText(pending: number, notJudged: number): string {
-  return `${pending} judge pending, ${notJudged} not judged`
+  return `${pending} not yet checked, ${notJudged} not checked`
 }
 
 function CheckedBand({
@@ -247,7 +219,7 @@ function CheckedBand({
       question={spec.question}
       count={bandCount(state, flagged)}
       state={state}
-      note={`${verified} verified · ${flagged} claim${flagged === 1 ? '' : 's'} flagged · unverified: ${uncheckedText(pending, notJudged)}`}
+      note={`${verified} checked · ${flagged} claim${flagged === 1 ? '' : 's'} flagged · ${uncheckedText(pending, notJudged)}`}
     >
       {state === 'loading' && <StateLine testid="morning-read-checked-loading">Reading the day&rsquo;s verdicts…</StateLine>}
       {state === 'error' && (
@@ -263,22 +235,22 @@ function CheckedBand({
       )}
       {state === 'ready' && desks.length > 0 && flagged === 0 && (
         <StateLine testid="morning-read-checked-clean">
-          The verify pass flagged nothing on any desk this window. {unchecked > 0
-            ? `${unchecked} finding${unchecked === 1 ? '' : 's'} carried no verify verdict (${uncheckedText(pending, notJudged)}) — an absence, not a pass.`
-            : 'Every finding carried a verify block.'}
+          The check flagged nothing this window. {unchecked > 0
+            ? `${unchecked} finding${unchecked === 1 ? '' : 's'} had no answer from the check (${uncheckedText(pending, notJudged)}) — not checked is not passed.`
+            : 'Every finding was checked.'}
         </StateLine>
       )}
       {desks.slice(0, DESKS_PER_BAND).map((d) => (
         <div key={d.targetId} className="mb-3" data-testid="morning-read-checked-desk">
           <DeskHead
             label={d.label}
-            note={`${d.verified} verified · ${d.unsupported} with a flagged claim · unverified: ${uncheckedText(d.pending, d.notJudged)}`}
+            note={`${d.verified} checked · ${d.unsupported} with a flagged claim · ${uncheckedText(d.pending, d.notJudged)}`}
           />
           {d.claims.length === 0 ? (
             <StateLine>
               {d.verified > 0
-                ? 'Nothing flagged on this desk.'
-                : 'Nothing on this desk carries a verify verdict, so nothing is claimed as held.'}
+                ? 'Nothing flagged here.'
+                : 'Nothing here has been checked yet, so nothing is claimed as held.'}
             </StateLine>
           ) : (
             <ul className="space-y-1">
@@ -291,7 +263,7 @@ function CheckedBand({
                   testid="morning-read-checked-claim"
                 >
                   <span className="block text-xs leading-relaxed text-ink-1">
-                    &ldquo;{c.text}&rdquo;
+                    &ldquo;<ClaimText text={c.text} max={600} />&rdquo;
                   </span>
                   <span className="block text-label text-ink-3">
                     {c.reasonLabel} · {c.analystId ?? 'unknown producer'} · {c.findingTitle}
@@ -476,7 +448,6 @@ function ReadingRail({
             first visit — showing since yesterday 06:00Z
           </span>
         )}
-        <ReadTimer visit={visit} />
       </span>
     </nav>
   )
@@ -520,11 +491,10 @@ function ScopedLine({ label, onClear }: { label: string; onClear: () => void }) 
 // ---------------------------------------------------------------------------
 
 export default function JudgmentBands() {
-  // ONE visit per mount: `resolveVisit` rolls the stored record forward on a
-  // new telemetry session, so re-resolving on every render would keep handing
-  // the diff a cursor of "now" and hide everything that landed overnight.
-  const visit = useMemo(() => resolveVisit(), [])
-  const cursor = useMemo(() => visitCursor(visit), [visit])
+  // THE ONE "SINCE" of this page load (`pageVisit`), the same cursor the
+  // Board list, the rail and the map read: resolved once, never per mount.
+  const { visit: rawVisit, cursor, firstVisit } = useMemo(() => pageVisit(), [])
+  const visit = useMemo(() => ({ ...rawVisit, firstVisit }), [rawVisit, firstVisit])
 
   const since = useQuery<JudgmentSince>({
     queryKey: ['morning-judgment', 'since', cursor],
@@ -552,9 +522,8 @@ export default function JudgmentBands() {
   })
 
   // X3/D3 — a subject scope (a rail click, ⌘K, a map click) narrows every band.
-  const wallScope = useScope((s) => s.scope)
-  const clearScope = useScope((s) => s.clear)
-  const subjectId = wallScope?.kind === 'target' ? wallScope.id : null
+  const point = usePointSubject()
+  const subjectId = point?.id ?? null
 
   const changed = useMemo(() => {
     const rows = changedList(since.data)
@@ -592,7 +561,7 @@ export default function JudgmentBands() {
   return (
     <section className="px-6 pt-8" data-testid="morning-read-judgment">
       <ReadingRail counts={counts} states={states} visit={visit} />
-      {subjectId && <ScopedLine label={wallScope?.label ?? subjectId} onClear={clearScope} />}
+      {subjectId && <ScopedLine label={point?.label ?? subjectId} onClear={clearPoint} />}
       <ChangedBand rows={changed} cursor={cursor} state={states.changed} />
       <CheckedBand
         desks={checked}

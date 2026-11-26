@@ -22,7 +22,7 @@ DB selection (env, both forms honored by PostgresConfig.from_env):
     bring-up scripts default it to ``legba_pivot_test`` if unset.
   * ``LEGBA_DATA_PG_HOST`` / ``LEGBA_DATA_PG_PORT`` / ``..._USER`` / ``..._PASSWORD``
 
-NO DESCRIPTOR EVENT (lane N-R, documented 2026-11-13): :func:`open_registry`
+NO DESCRIPTOR EVENT (documented 2026-11-13): :func:`open_registry`
 builds the :class:`DescriptorRegistry` WITHOUT a bus connection
 (``nats_store=None``), so a head this walker registers, updates or advances
 emits no ``descriptor.*`` NATS event. The runtime's reconcile informer

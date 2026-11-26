@@ -12,25 +12,15 @@
 import { useState, type ReactNode } from 'react'
 
 /**
- * Which of the map's cards open at rest, by the room the region gives them
- * (U-7). The frame gives the map a tall narrow column (about 480 px at 1366
- * and 1920), a short wide band, a wide lead column on big screens and the
- * whole stage; measured in rem, because the frame's root size steps up on big
- * screens and the cards' text with it. The layer list needs 40 × 30 rem to
- * sit beside the map without covering it, the legend 30 rem of height so it
- * does not run into the layer list; below that each folds to its button.
+ * Which of the map's cards open at rest: neither, at every width. The map is
+ * the thing to look at; open, the layer card and the legend covered about
+ * three fifths of it on a laptop and still a third on a wide screen. Each is
+ * one click away as a small button in its corner. The arguments (the
+ * region's size, the inset preset) are kept so the callers need not change
+ * when a size rule comes back.
  */
-export function chromeFolds(width: number, height: number, inset: boolean): { layers: boolean; legend: boolean } {
-  let rem = 16
-  try {
-    rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16
-  } catch {
-    // no layout (a test): the default root size
-  }
-  const w = width / rem
-  const h = height / rem
-  // a size not measured yet (0) folds nothing it cannot judge
-  return { layers: inset || (w > 0 && w < 40) || (h > 0 && h < 30), legend: inset || (h > 0 && h < 30) || (w > 0 && w < 22) }
+export function chromeFolds(_width: number, _height: number, _inset: boolean): { layers: boolean; legend: boolean } {
+  return { layers: true, legend: true }
 }
 import { Info, Layers, Minus, Plus, RotateCcw, X } from 'lucide-react'
 import { cn } from '@/lib/cn'
@@ -196,6 +186,7 @@ export function LayerCard({
   onToggle,
   collapsedByDefault,
   only,
+  onOpenChange,
 }: {
   on: Record<GlobeLayerId, boolean>
   figures: Record<GlobeLayerId, LayerFigure>
@@ -203,8 +194,14 @@ export function LayerCard({
   collapsedByDefault: boolean
   /** The rows this preset lists (the inset lists fewer). */
   only?: GlobeLayerId[]
+  /** Told when the card opens or folds (the legend takes the room it leaves). */
+  onOpenChange?: (open: boolean) => void
 }) {
-  const [open, setOpen] = useState(!collapsedByDefault)
+  const [open, setOpenState] = useState(!collapsedByDefault)
+  const setOpen = (o: boolean) => {
+    setOpenState(o)
+    onOpenChange?.(o)
+  }
   const rows = GLOBE_LAYERS.filter((l) => !only || only.includes(l.id))
   const nOn = rows.filter((l) => on[l.id]).length
   if (!open) {
@@ -254,6 +251,8 @@ export function Legend({
   clusterNote,
   only,
   collapsedByDefault = false,
+  note = null,
+  room = 'shared',
 }: {
   on: Record<GlobeLayerId, boolean>
   figures: Record<GlobeLayerId, LayerFigure>
@@ -262,6 +261,14 @@ export function Legend({
   clusterNote: string | null
   only?: GlobeLayerId[]
   collapsedByDefault?: boolean
+  /** A line about how the map is drawn (a browser with no GPU), at the legend's foot. */
+  note?: string | null
+  /**
+   * How much of the map's height the open legend may take: `shared` while the
+   * layer card is open above it (two fifths), `alone` while the card is folded
+   * to its button (all but the top corner). Past that the legend scrolls.
+   */
+  room?: 'shared' | 'alone'
 }) {
   const [open, setOpen] = useState(!collapsedByDefault)
   const rows = GLOBE_LAYERS.filter((l) => on[l.id] && !l.unavailable && (!only || only.includes(l.id)))
@@ -278,7 +285,15 @@ export function Legend({
     )
   }
   return (
-    <div className={cn(CARD, 'absolute bottom-3 left-3 z-10 max-h-[40%] max-w-[min(22.5rem,calc(100%-24px))] overflow-y-auto px-3 py-2')} data-testid="globe-legend">
+    <div
+      className={cn(
+        CARD,
+        'absolute bottom-3 left-3 z-10 max-w-[min(22.5rem,calc(100%-24px))] overflow-y-auto overscroll-contain px-3 py-2',
+        room === 'alone' ? 'max-h-[calc(100%-4.5rem)]' : 'max-h-[40%]',
+      )}
+      data-testid="globe-legend"
+      data-room={room}
+    >
       {collapsedByDefault && (
         <button type="button" onClick={() => setOpen(false)} aria-label="Hide the legend" className="float-right text-ink-3 hover:text-ink-1">
           <X size={13} aria-hidden />
@@ -316,6 +331,11 @@ export function Legend({
       {!on.blanks && (
         <div className="mt-0.5 border-t border-line-subtle pt-1 text-label text-ink-3">
           Blanks are off: a quiet area may be unread, not quiet.
+        </div>
+      )}
+      {note && (
+        <div className="mt-0.5 border-t border-line-subtle pt-1 text-label text-ink-3" data-testid="globe-software-note">
+          {note}
         </div>
       )}
     </div>

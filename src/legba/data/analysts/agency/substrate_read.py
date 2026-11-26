@@ -89,13 +89,13 @@ SUBSTRATE_READ_TOOLS = (
     # consult path. (Not added to inline_target._GATHER_READ_TOOLS by design.)
     "list_targets",
     "list_sources",
-    # W11-F141 — the scheduled-events calendar (migration 0240): the
+    # The scheduled-events calendar (migration 0240): the
     # operator-entered register of FUTURE dated things, so a consult can tell
     # "nothing scheduled" apart from "could not look".
     "list_scheduled_events",
-    # W11-F162 — the forecast ledger's due-date reader (migrations 0242/0244).
+    # The forecast ledger's due-date reader (migrations 0242/0244).
     "list_due_resolvers",
-    # W11-F152 — per-source health with a staleness verdict (fresh / quiet /
+    # Per-source health with a staleness verdict (fresh / quiet /
     # stale / dead against the feed's own cadence). The journal_read pack
     # already grants it; the consult loop is governed through THIS pack, so
     # without the entry it is blocked as unknown_tool.
@@ -193,7 +193,7 @@ def _verified_kw(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def _findings_paging_kw(args: dict[str, Any]) -> dict[str, Any]:
-    """W11-F150 — ``list_findings``' survey mode and paging kwargs, only when
+    """``list_findings``' survey mode and paging kwargs, only when
     set, so a port without them stays callable and a plain read is unchanged.
 
     ``limit`` rides here too: a survey with no ``limit`` takes the port's
@@ -694,7 +694,7 @@ def register_substrate_read_tools(registry: ToolRegistry) -> None:
     # Navigation readers (consult-surface only; still pack-governed).
     registry.register("list_targets", list_targets_tool)
     registry.register("list_sources", list_sources_tool)
-    # W11-F141 — the scheduled-events calendar.
+    # The scheduled-events calendar.
     registry.register("list_scheduled_events", list_scheduled_events_tool)
     registry.register("list_due_resolvers", list_due_resolvers_tool)
     registry.register("get_source_health", get_source_health_tool)

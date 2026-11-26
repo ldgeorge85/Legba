@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The round's SHADOW statement gate (code seat ``statement_gate_shadow``),
-on the S-5 honesty gates (``statement_gate.v3``) — lane G-6.
+on the S-5 honesty gates (``statement_gate.v3``).
 
 For each sentence of the ruling the round would propose:
 

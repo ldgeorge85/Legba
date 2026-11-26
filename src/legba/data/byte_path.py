@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""One byte path (lane B-1): what a reader can say about a signal's bytes.
+"""One byte path: what a reader can say about a signal's bytes.
 
 The promise: for any published sentence, the row it came from, the evidence
 behind the row, and the exact bytes received. ``fetch_versions`` is the one

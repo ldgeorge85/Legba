@@ -123,9 +123,9 @@ def test_descriptor_ships_the_core_plane_and_the_web_pack():
 
 def test_descriptor_validates_and_every_declared_option_resolves():
     """Drive the SHIPPED yaml through the real `AnalystDescriptor` schema and the
-    real X-1 resolver. A knob the catalog rejects is dead config that would
+    real resolver. A knob the catalog rejects is dead config that would
     silently fall back to the in-source default at deploy time — the exact
-    defect X-1 exists to prevent, and the cheapest place to catch a 422 on the
+    defect exists to prevent, and the cheapest place to catch a 422 on the
     registration PUT is here rather than on the deploy train."""
     from legba.data.option_catalog.handler_options import resolve_handler_options
     from legba.data.schemas.analyst import AnalystDescriptor
@@ -144,7 +144,7 @@ def test_descriptor_validates_and_every_declared_option_resolves():
         # the shipped 6-claim sweep's knobs
         "window_hours", "max_desks", "max_claims_per_head",
         "max_claims_total", "search_limit",
-        # the WIDTH knobs (W-2 / W-9) — inert with the flag off, but declared,
+        # the WIDTH knobs — inert with the flag off, but declared,
         # validated and reachable so a descriptor PUT that widens the audit is
         # never silent dead config
         "max_claims_per_tick", "max_claims_per_day", "max_serp_per_day",
@@ -1067,7 +1067,7 @@ def test_ops_endpoint_reports_an_absent_heartbeat_as_absent_not_healthy():
 
 
 #: The production evidence-window stamp shape. `composition_window.
-#: evidence_window_span` writes `{"oldest", "newest"}` and G-3 only runs when
+#: evidence_window_span` writes `{"oldest", "newest"}` and only runs when
 #: BOTH bounds parse; the `{"earliest", "latest"}` spelling the older fixtures
 #: use resolves to an UNMEASURED window, which skips the time gate entirely.
 #: Kept as the non-default so the existing pins stay byte-identical.
@@ -1203,7 +1203,7 @@ async def test_width_flag_on_grades_assembly_spans_through_the_real_binding(
     pool, search_http, monkeypatch,
 ):
     """The width leg, end to end: the queue refills from an assembled read, the
-    drain runs one claim through the REAL search binding and the grader, W-3's
+    drain runs one claim through the REAL search binding and the grader, the
     span check is ABSENT so the decisive verdict degrades honestly, a ledger row
     and ONE critique-per-read land, and the heartbeat carries the width block
     with sample_fraction 1.0.
@@ -1306,7 +1306,7 @@ async def test_width_flag_on_grades_assembly_spans_through_the_real_binding(
 # THE REPAIRED SEAM, THROUGH THE REAL BINDING (2026-09-06)
 # ---------------------------------------------------------------------------
 #
-# The test above pins the state the width leg shipped in: "W-3's span check is
+# The test above pins the state the width leg shipped in: "the span check is
 # ABSENT so the decisive verdict degrades honestly". It was not absent. It was
 # imported and then called with keyword arguments it does not accept
 # (`claim_text=/url=/span=` against `(claim, candidate_url, fetched_text, ...)`),
@@ -1335,8 +1335,8 @@ _DECISIVE_PAYLOAD = {
     "unresponsive_engines": [],
 }
 
-#: The page the fetch leg will read. Carries the span VERBATIM (G-2) and an
-#: `article:published_time` inside the read's own window (G-3).
+#: The page the fetch leg will read. Carries the span VERBATIM and an
+#: `article:published_time` inside the read's own window.
 _DECISIVE_PAGE_HTML = (
     "<html><head>"
     '<meta property="article:published_time" content="2026-09-01T09:00:00Z"/>'
@@ -1404,8 +1404,8 @@ async def test_width_decisive_verdict_survives_the_real_span_check(
 
     One width sweep through `handle()` with the real binding. The grader
     proposes SUPPORTED with a span; the drain fetches the decisive URL through
-    the real `web_fetch` (robots-gated); G-1 tiers the domain, G-2 matches the
-    span verbatim under the shared fold and content-addresses it, G-3 anchors
+    the real `web_fetch` (robots-gated); tiers the domain, matches the
+    span verbatim under the shared fold and content-addresses it, anchors
     the publication date inside the read's own window. The ledger row lands
     DECISIVE under the REPAIRED instrument's stamp.
 
@@ -1468,9 +1468,9 @@ async def test_width_decisive_verdict_survives_the_real_span_check(
     assert row["unchecked_reason"] is None
     assert row["decisive_url"] == _TIER2_URL
     assert row["decisive_span"] == span
-    assert len(row["decisive_span_sha256"] or "") == 64, "G-2 addressed the span"
-    assert row["decisive_source_tier"] == 2, "G-1 tiered the domain"
-    assert row["decisive_published_at"] is not None, "G-3 anchored it in time"
+    assert len(row["decisive_span_sha256"] or "") == 64, "the span was addressed"
+    assert row["decisive_source_tier"] == 2, "the domain was tiered"
+    assert row["decisive_published_at"] is not None, "it was anchored in time"
     assert row["decisive_published_at"].isoformat().startswith("2026-09-01")
     assert (row["archive_ref"] or "").startswith("cas:grading/sha256/"), (
         "the grading archive has its own scheme — never a signal's cas: ref"
@@ -1509,7 +1509,7 @@ async def test_width_grace_hours_option_admits_a_before_window_source(
 
     Same decisive page and grader as ``test_width_decisive_verdict_survives_
     the_real_span_check``, but the read's own window opens 48h AFTER the
-    page's publish date — G-3 demotes it at grace=0 (today's byte-identical
+    page's publish date — demotes it at grace=0 (today's byte-identical
     rule) and admits it, span resolved and archived, once the run's own
     ``options`` carry ``window_grace_hours=72``.
     """
@@ -1550,7 +1550,7 @@ async def test_width_grace_hours_option_admits_a_before_window_source(
         )
     assert row_a["verdict"] == "NOT_FOUND"
     assert row_a["unchecked_reason"] == "out_of_window"
-    # G-2 still resolved and archived the span — "a demotion keeps its
+    # Still resolved and archived the span — "a demotion keeps its
     # evidence" (``_external_audit_grader.apply_span_check``'s own doctrine).
     # This IS the "resolved-but-out-of-window" row
     # ``out_of_window_gap_buckets`` counts.
@@ -1644,7 +1644,7 @@ async def test_width_grace_hours_option_wins_over_the_env_value(
 async def test_width_robots_disallowed_page_is_never_fetched(
     pool, search_http, fetch_http, monkeypatch,
 ):
-    """F-7, through the real binding: robots.txt says no, so the page is not
+    """, through the real binding: robots.txt says no, so the page is not
     requested and the verdict degrades to UNCHECKED with the new reason.
 
     The load-bearing assertion is `page_calls == []`. A verdict-only assertion
@@ -1908,7 +1908,7 @@ async def test_width_run_with_no_grader_writes_a_naming_heartbeat(
 async def test_a_ledger_write_failure_requeues_the_claim_then_dead_letters_it(
     pool, search_http, monkeypatch,
 ):
-    """Follow-up to the two 2026-09-05 ledger-writer incidents (see
+    """Follow-up to the two 2026-09-05 ledger-writer failures (see
     EXTERNAL_GRADES_PUBLISHED_AT_FIX_REPORT.md's re-queue recommendation): a
     claim whose ``external_grades`` write fails must not vanish from the
     queue and must not be marked graded.
@@ -2014,7 +2014,7 @@ async def test_a_ledger_write_failure_requeues_the_claim_then_dead_letters_it(
 
 
 # ---------------------------------------------------------------------------
-# G-3'S WINDOW BASIS — window_basis="evidence", against real Postgres
+# 'S WINDOW BASIS — window_basis="evidence", against real Postgres
 # ---------------------------------------------------------------------------
 #
 # The lineage walk (`_external_audit_width._EVIDENCE_WINDOW_SQL`) is a RECURSIVE
@@ -2070,7 +2070,7 @@ async def test_the_evidence_walk_reaches_signals_through_every_live_hop(pool):
 
     The live shapes it must cover (measured 2026-09-06): a country/escalation
     composition reaches signals in 2 hops, the world read in 3 through a country
-    composition, and the Assessment in 4+ because D-6 fenced it to a single
+    composition, and the Assessment in 4+ because fenced it to a single
     spine head. One query answers all of them at once, per root.
     """
     async with pool.acquire() as conn:

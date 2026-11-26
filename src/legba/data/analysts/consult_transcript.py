@@ -65,6 +65,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..stack.llm import tool_round_compaction as _tc
+from .consult_answer_format import FORCED_FINAL_INSTRUCTION, FORCED_FINAL_SYSTEM
 from .consult_tool_rendering import _bounded_tool_json
 
 logger = logging.getLogger(__name__)
@@ -85,13 +86,18 @@ MAX_TRANSCRIPT_CHARS = 600_000
 # ---------------------------------------------------------------------------
 
 
-def synthesis_system(base_system: str, final_sentinel: str) -> str:
+def synthesis_system(base_system: str, final_sentinel: str, *, frozen: bool = False) -> str:
     """The system prompt for the terminal synthesis turn.
 
     Called by the loop when it forces a final, and by the recovery path when it
     replays one. Two callers, one string — the byte-identity test depends on
-    that being literally true rather than approximately true.
+    that being literally true rather than approximately true. The text says
+    the budget is used up rather than naming a round cap, because a run that
+    ran out of time gets it too. ``frozen`` keeps the wording a bake-off arm
+    was measured with.
     """
+    if not frozen:
+        return base_system + FORCED_FINAL_SYSTEM
     return (
         base_system
         + "\n\nYou have reached the tool-round cap. You MUST now produce "
@@ -104,8 +110,10 @@ def synthesis_system(base_system: str, final_sentinel: str) -> str:
     )
 
 
-def synthesis_instruction(final_sentinel: str) -> str:
+def synthesis_instruction(final_sentinel: str, *, frozen: bool = False) -> str:
     """The user turn appended to force the synthesis."""
+    if not frozen:
+        return FORCED_FINAL_INSTRUCTION
     return (
         "Round cap reached. Emit the final answer "
         f"now, in the {final_sentinel} form."

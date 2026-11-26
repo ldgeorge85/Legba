@@ -31,7 +31,7 @@ rotation offset still advances every day, so a permanently-critical desk can
 never monopolize every slot and starve the quiet ones. That is the same
 starvation failure the alert plane's per-kind budget cap had to fix.
 
-FULL-WIDTH BRACKETS. The core plane (gpt-oss / Qwen-family) emits CJK
+FULL-WIDTH BRACKETS. The core plane (the core model / Qwen-family) emits CJK
 lenticular brackets — ``【3】`` — where the prompt asked for ``[3]``. Every
 reader that keys on ``[N]`` must normalize first (the 2026-06-30 trap). The
 regex is a LOCAL MIRROR of ``export_api._VARIANT_CITATION_RE`` for the same

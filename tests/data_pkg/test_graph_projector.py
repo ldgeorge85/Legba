@@ -714,7 +714,7 @@ async def test_readers_keep_the_substrate_read_while_the_flag_is_off(
     else:
         out = await fn(_Deps(conn))
     assert out == empty
-    assert conn.sql and "FROM entity_edges e" in conn.sql[0], "flag off ⇒ the pre-P4b read"
+    assert conn.sql and "FROM entity_edges e" in conn.sql[0], "flag off ⇒ the earlier read"
     assert "FROM graph_arcs" not in conn.sql[0]
 
 

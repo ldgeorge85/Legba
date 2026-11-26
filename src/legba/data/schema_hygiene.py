@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Schema hygiene — what the migrations create, and what a database holds
-that no migration creates (lane P-8, audit register A-64).
+that no migration creates.
 
 Two readings of one question, "is every table, index and view in the
 application schema created by a migration?":
@@ -92,7 +92,7 @@ RUNTIME_CREATED: dict[str, tuple[str, str]] = {
     ),
     "graph_arcs_new_*": (
         "src/legba/data/analysts/deterministic_handlers/graph_projector.py",
-        "graph_arcs' indexes, created unnamed on the staging table at each rebuild (P-7)",
+        "graph_arcs' indexes, created unnamed on the staging table at each rebuild",
     ),
 }
 
@@ -210,7 +210,7 @@ def declared_objects(migrations: Iterable[tuple[str, str]]) -> dict[str, str]:
 def declared_tables(migrations: Iterable[tuple[str, str]]) -> dict[str, str]:
     """The TABLES among :func:`declared_objects` (no index, no view):
     ``{name_or_glob: migration file}`` — what ``write_attribution`` must
-    classify (data-model lane 9)."""
+    classify."""
     migrations = list(migrations)
     created_as_table: set[str] = set()
     for _fname, text in migrations:

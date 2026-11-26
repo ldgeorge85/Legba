@@ -2,8 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The ``inquiry_state`` pack — the inquiry kind's OWN continuity ledger.
 
-Program 5 lane 1 (planning/PROGRAM5_INQUIRY_DESIGN_2026-09-24.md §3). An
-inquiry is STATEFUL (§1): it carries hypotheses with a resolution test each,
+An inquiry is STATEFUL: it carries hypotheses with a resolution test each,
 questions it has dispatched into the platform's own machinery, and
 observations it expects a desk to later carry forward. ``inquiry_ledger``
 (migration 0215) is the one table; this pack is its ONLY read/write surface
@@ -20,16 +19,17 @@ for an analyst — three tools, every one scoped to the CALLING descriptor:
     ``resolves_by`` horizon (absent, unreadable, or already past) is refused
     too, by name — :data:`HYPOTHESIS_NO_HORIZON_REFUSAL` — because a row with
     no horizon can never be scored and the weekly yield reads it as open
-    forever (2026-09-29: all 58 open rows carried ``resolves_by`` NULL). That
+    forever (measured once: all 58 open rows carried ``resolves_by`` NULL). That
     refusal is this handler's alone; there is no DB CHECK behind it yet.
   * ``ledger_close(id, status, reason, cited_refs)`` — close ONE of the
     calling descriptor's own rows: stamps the terminal status + ``closed_at``,
     appends ``reason`` to the row's own ``text`` (the ledger carries no
     separate reason column — the close narrative rides the same append-only
     field the row was opened with), and sets ``cited_refs``. That is the
-    writer of the CLOSING ``cited_refs`` — ``ledger_write`` may set the opening refs and this tool replaces them; ``ledger_write`` never
-    takes it — so an entry's citations are always the CLOSE-time warrant, per
-    §4's "an observation whose cited_refs a later finding cites".
+    writer of the CLOSING ``cited_refs`` — ``ledger_write`` may set the
+    opening refs and this tool replaces them — so an entry's citations are always the
+    CLOSE-time warrant: an observation whose ``cited_refs`` a later finding
+    cites.
 
 THE SCOPE FENCE (inquiry_state.py:scope_fence). Every tool is scoped to
 ``ctx.writeback.analyst_ctx.analyst_id`` — the CALLING descriptor's own
@@ -50,13 +50,13 @@ already closed vs. belongs to another inquiry) — deliberately: distinguishing
 those would leak whether another inquiry's row exists.
 
 WHY A SEPARATE PACK (not folding into ``journal_propose`` / ``substrate_read``):
-the same §7.6 grant invariant this tree already holds ``journal_propose`` to —
+the same grant invariant this tree already holds ``journal_propose`` to —
 a pack's tools must all share ONE write surface, so granting it can never
 become an implicit write-anything grant. ``inquiry_state`` writes ONLY
 ``inquiry_ledger``; it never touches facts / nexuses / hypotheses / journal
 tables. Dispatch itself (raising an open question, filing a contention) is
-NOT a tool of this pack — §3: "the inquiry uses the EXISTING journal_propose
-shapes"; a ``question`` row here only RECORDS where (``dispatched_to``), so
+NOT a tool of this pack — the inquiry uses the EXISTING journal_propose
+shapes; a ``question`` row here only RECORDS where (``dispatched_to``), so
 this pack can never itself spend anything.
 
 FOUR-SURFACE convergence (memory: consult-tools-must-be-pack-tools), the same
@@ -65,7 +65,7 @@ discipline :mod:`.journal_read` / :mod:`.journal_propose` already hold:
   1. the in-code TUPLE (``INQUIRY_STATE_TOOLS``) — below;
   2. the DESCRIPTOR (``descriptors/action_pack_inquiry_state.yaml``);
   3. the HANDLERS (``register_inquiry_state_tools``) — below;
-  4. every tool a bound inquiry can dispatch ∈ this pack (lane 2's kind
+  4. every tool a bound inquiry can dispatch ∈ this pack (the kind
      module reaches these only through :class:`legba.data.analysts.agency.Agency`).
 """
 
@@ -142,7 +142,7 @@ def _calling_descriptor_id(wb: WritebackContext) -> str:
 
 
 def _seat(wb: WritebackContext) -> str | None:
-    """The running seat's principal handle (lane 9): descriptor id + version."""
+    """The running seat's principal handle: descriptor id + version."""
     return seat_handle(wb.analyst_ctx.analyst_id, wb.analyst_ctx.analyst_version)
 
 
@@ -313,7 +313,7 @@ async def ledger_write_tool(
         refused as :data:`HYPOTHESIS_NO_HORIZON_REFUSAL`. Optional for every
         other kind.
       * ``dispatched_to`` (optional) — an open_question id / contention id /
-        desk analyst_id this row was raised through (§3). Dispatch itself is
+        desk analyst_id this row was raised through. Dispatch itself is
         NOT this tool's job — it rides the EXISTING journal_propose /
         substrate faucets; this only records WHERE.
 
@@ -442,8 +442,8 @@ async def ledger_close_tool(
       * ``reason`` (required) — appended to the row's ``text`` (the ledger
         carries no separate reason column — see the module docstring).
       * ``cited_refs`` (optional) — the substrate refs that warrant the
-        close (§4: "an observation whose cited_refs a later finding
-        cites"). The ONLY write this column ever receives.
+        close (an observation whose ``cited_refs`` a later finding
+        cites). The ONLY write this column ever receives.
 
     Scoped by ``id AND descriptor_id = <calling descriptor> AND status =
     'open'`` — a row that exists under another inquiry's descriptor_id, or

@@ -19,6 +19,7 @@ import datetime
 from typing import Any, Mapping
 
 from ..claim_support import claim_of, claim_row_label
+from ..outside_text import inert_frames
 from ..evidence_drift_slice import SOURCE_DRIFT_LEGEND, source_drift_line
 from .wire_pair_collapse import WIRE_COLLAPSE_ROW_KEY, carried_by_line
 
@@ -63,7 +64,7 @@ _CAMEO_LEGEND = (
 )
 
 
-#: Lane N-X — the one-line legend for incidents at sea, emitted only when the
+#: The one-line legend for incidents at sea, emitted only when the
 #: slice carries one (so an in-country slice renders byte-identically).
 _AT_SEA_LEGEND = (
     "Note: rows with a location= line marked 'at sea' are incidents reported "
@@ -137,7 +138,9 @@ def _render_signal(idx: int, row: Mapping[str, Any]) -> str:
     same function, that line is inside the INPUT-token budget like any other.
     """
     data = row.get("data")
-    title = (_it()._signal_title(row) or "(untitled)")[:_it()._MAX_TITLE_CHARS]
+    # The signal's own text is outside text: frame tokens inside it are made
+    # inert so it cannot pose as part of the prompt's frame.
+    title = inert_frames((_it()._signal_title(row) or "(untitled)")[:_it()._MAX_TITLE_CHARS])
     # Tag AFTER the truncation so the marker can never be the thing that gets
     # cut — a silently-dropped tag would put us back where we started.
     if _row_is_cameo_coded(row):
@@ -151,7 +154,7 @@ def _render_signal(idx: int, row: Mapping[str, Any]) -> str:
     published_at = data.get("published_at") if isinstance(data, dict) else None
     # ONE body precedence, shared with the citation-evidence snippet, so the
     # verify judge's WORKING text is byte-identical to what the analyst read.
-    snippet = _it()._signal_body(row).text
+    snippet = inert_frames(_it()._signal_body(row).text)
     published_str = f" published={published_at}" if published_at else ""
     lines = [
         f"[{idx}] {title}",
@@ -166,7 +169,7 @@ def _render_signal(idx: int, row: Mapping[str, Any]) -> str:
     sea = at_sea_line(row)
     if sea is not None:
         lines.append(sea)
-    # Lane D-1: only a row the slice reader stamped (LEGBA_SLICE_SOURCE_DRIFT_MARK,
+    # Only a row the slice reader stamped (LEGBA_SLICE_SOURCE_DRIFT_MARK,
     # off by default) carries the line; an unstamped row renders byte-identically.
     drift = source_drift_line(row)
     if drift is not None:
@@ -291,7 +294,7 @@ def _render_user_prompt(
     Absent values degrade to absent LINES (never a fabricated default), so a
     caller that wires neither renders the pre-Phase-V header plus a run date.
 
-    ``spread_block`` (lane narrative, Program 7 piece 7e) is the
+    ``spread_block`` (the narrative lane) is the
     ``narrative_coordination`` unit's pre-computed SPREAD BLOCK text
     (:func:`legba.data.analysts.spread_block.build_spread_block`) — a
     deterministic, code-computed statement about cross-source near-verbatim
@@ -321,7 +324,7 @@ def _render_user_prompt(
         header_lines.append(SOURCE_DRIFT_LEGEND.strip("\n"))
     if spread_block is not None:
         header_lines.append(spread_block)
-    # Lane K-2 — a desk's declared FEED ROSTER (feed_roster_block.py): per feed,
+    # A desk's declared FEED ROSTER (feed_roster_block.py): per feed,
     # the rows it collected in this window and the ordinals it supplied. None
     # (every descriptor without ``method.options.feed_roster``) adds nothing.
     if feed_roster is not None:

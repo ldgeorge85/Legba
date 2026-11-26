@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Citations as rows (lane DM-A): derive the rows for findings written before the dual write.
+"""Citations as rows: derive the rows for findings written before the dual write.
 
 The rows come from each finding's STORED fields only (``body`` and
 ``data->'data'->'citations'``), by the same planner the live writer uses
@@ -35,7 +35,7 @@ from .principals import rule_handle
 
 __all__ = ["BACKFILL_WRITER", "BackfillCursor", "apply_batches", "dry_run", "rollback_batch"]
 
-#: Who writes a backfill row (lane DM-B): this rule, never the finding's seat
+#: Who writes a backfill row this rule, never the finding's seat
 #: (the seat wrote the finding; the backfill derived the rows from it later).
 BACKFILL_WRITER = rule_handle("citation_rows_backfill")
 

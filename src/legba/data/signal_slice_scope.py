@@ -34,7 +34,7 @@ Three things live here:
   ``signals.tags`` is ``NOT NULL DEFAULT '{}'``, so the exclude's NOT never
   meets a NULL. The column is GIN-indexed (``signals_tags_gin``).
 
-  Lane K-1 adds the TEXT ARM: a target's ``scope.signal_text_terms`` is OR-ed
+  The TEXT ARM: a target's ``scope.signal_text_terms`` is OR-ed
   into its include (``(tags && $n OR <title+summary> ~* $m)``), so a desk with
   no place (the cyber desk) reads its own tagged feeds AND any general-news
   row that names one of its terms, in SQL, before the LIMIT. A target that
@@ -88,7 +88,7 @@ logger = logging.getLogger(__name__)
 CANONICAL_ONLY_SQL = "(canonical_signal_id IS NULL OR canonical_signal_id = id)"
 
 
-#: Lane N-X — an incident AT SEA reaches the desks of the coasts it lies off.
+#: An incident AT SEA reaches the desks of the coasts it lies off.
 #: The ingest files an authoritative point in no country under NO country
 #: (``signals.geo = '{}'``, the ``at_sea`` tag, ``payload.geo.at_sea``) and
 #: records ``payload.geo.inferred`` = the coastal states within 200 km. This is
@@ -114,7 +114,7 @@ def desk_geo_sql(n: int) -> str:
     )
 
 
-#: W11-F135 - the most characters of a signal's ``payload->>'summary'`` that
+#: The most characters of a signal's ``payload->>'summary'`` that
 #: any query-time ``to_tsvector`` may read. Postgres refuses a tsvector over
 #: 1,048,575 bytes ("string is too long for tsvector"), and a summary that is
 #: an inline base64 image splits into millions of unique "words"; one such row
@@ -180,7 +180,7 @@ class SignalTagFilter:
 
     ``include`` empty = no include filter; ``exclude`` empty = no exclude.
     ``untagged_fallback`` admits an untagged signal past the include.
-    ``text_terms`` (lane K-1, a target's ``scope.signal_text_terms``) is a
+    ``text_terms`` (a target's ``scope.signal_text_terms``) is a
     SECOND include arm, OR-ed with the tag arm: a row is in when it carries
     one of the tags OR its title + summary names one of the terms (word-start,
     case-insensitive; :func:`text_terms_regex`). Empty = no text arm, and the
@@ -235,7 +235,7 @@ NO_FILTER = SignalTagFilter()
 
 
 # ---------------------------------------------------------------------------
-# The text arm (lane K-1): a desk that has no place selects by what it is about
+# The text arm: a desk that has no place selects by what it is about
 # ---------------------------------------------------------------------------
 
 #: Target ``scope`` key: the terms of the text arm.
@@ -354,7 +354,7 @@ HOMONYM_TEXT_SQL = (
     "(coalesce(payload->>'title','') || ' ' || "
     "coalesce(payload->>'summary', payload->>'distilled_body', ''))"
 )
-#: Lane K-1 — the text the slice's text arm reads: the SAME expression.
+#: The text the slice's text arm reads: the SAME expression.
 SLICE_TEXT_SQL = HOMONYM_TEXT_SQL
 
 
@@ -389,7 +389,7 @@ class HomonymSliceFilter:
     def sql(self, params: list[Any], *, admit_unfiled: bool = False) -> list[str]:
         """The one clause (``[]`` when inactive), params appended in order.
 
-        ``admit_unfiled`` (the desk slice, lane N-X) adds a leading
+        ``admit_unfiled`` (the desk slice) adds a leading
         ``geo = '{}'`` arm: the homonym rule judges a FILING, and an unfiled
         row reaches the slice only through the at-sea arm of
         :func:`desk_geo_sql`, so it has no filing to judge."""

@@ -1,5 +1,5 @@
 /**
- * Tests for the CROSS-FRAMING derivation (wave P lane B).
+ * Tests for the CROSS-FRAMING derivation.
  *
  * What is actually at stake here is not arithmetic — this module computes no
  * statistic — it is whether each row says the RIGHT TRUE THING. So the suite is

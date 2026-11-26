@@ -107,7 +107,7 @@ def test_sentinel_glossary_is_published_on_the_wire():
 
 
 # ---------------------------------------------------------------------------
-# P-3 — the read-cost rewrite: same answer, cheaper SQL, never a cold wait
+# The read-cost rewrite: same answer, cheaper SQL, never a cold wait
 # ---------------------------------------------------------------------------
 
 
@@ -116,7 +116,7 @@ def _fields(model) -> set[str]:
 
 
 def test_p3_response_shape_is_unchanged():
-    """P-3 changed how the numbers are read, never what is returned: every
+    """Changed how the numbers are read, never what is returned: every
     field of every model on the wire, pinned as it was before the rewrite."""
     from legba.data.registry.judge_stats_api import (
         JudgeComponentHealth, JudgeHealthOut, JudgePipelineVersionRow,
@@ -774,7 +774,7 @@ async def test_structural_verify_family_is_excluded(client, seeded):
 async def test_p3_the_strict_path_filter_matches_exactly_what_leg_equality_did(
     client, seeded,
 ):
-    """P-3 swapped ``c->>'leg' = 'verify_judge'`` over ``jsonb_array_elements``
+    """Swapped ``c->>'leg' = 'verify_judge'`` over ``jsonb_array_elements``
     for ``jsonb_path_query('strict $[*] ? (@.leg == "verify_judge")')``. The
     shapes where the two could part: a non-object element, an element with no
     ``leg``, a NESTED array holding a judge call, and a ``leg`` that is an

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""0268 — the desk-rows shadow ledger on the REAL driver (lane D-1).
+"""0268 — the desk-rows shadow ledger on the REAL driver.
 
 * the migration is idempotent and creates the table with its two indexes;
 * the shadow's own writer lands one row whose ``counts`` and ``record`` are
@@ -55,6 +55,6 @@ async def test_the_writer_lands_one_row(pg_pool) -> None:
     counts = row["counts"] if isinstance(row["counts"], dict) else json.loads(row["counts"])
     record = row["record"] if isinstance(row["record"], dict) else json.loads(row["record"])
     assert (row["run_id"], row["target_id"], row["status"], row["contract_version"]) == \
-        ("run-1", "desk_x", "written", CONTRACT_VERSION)  # D-2: desk_rows.v2.1
+        ("run-1", "desk_x", "written", CONTRACT_VERSION)  # Desk_rows.v2.1
     assert counts["final"]["by_outcome"]["established_eligible"] == 2 and "body" not in counts
     assert record["body"] == "*As of x.*" and record["gate_version"] == "statement_gate.v4"

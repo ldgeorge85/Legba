@@ -11,7 +11,7 @@ this script runs, the runtime's reconciler spins up a deterministic actor that, 
 its cadence, re-runs the LIVE multilingual/telegram NER (translate-then-NER +
 telegram ``payload.text``) over the next batch of pre-fix signals — the ~9,143
 already-persisted rows that were ingested BEFORE the NERMultilingualHandler
-M11/M12 fix landed and therefore carry 0 entities. The sweep is idempotent +
+fix landed and therefore carry 0 entities. The sweep is idempotent +
 forward-progressing (stamps ``signals.reenriched_at`` on every examined row; a row
 that gains entities also gets ``payload.entities`` + promoted ``entity_classes`` +
 its ``entities_resolved_at`` reset so ``entity_resolution`` re-folds it);

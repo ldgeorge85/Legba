@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane DM-C — the held family's rules, without a database.
+"""The held family's rules, without a database.
 
 * the ``assertion_type`` family: declared, its desk-row map derived, the
   reserved ``extracted`` basis refused;

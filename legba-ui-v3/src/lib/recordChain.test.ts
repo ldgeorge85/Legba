@@ -182,7 +182,7 @@ describe('step 6 — integrity', () => {
   })
 })
 
-describe('B-1: the evidence label and the item as received', () => {
+describe('The evidence label and the item as received', () => {
   const ev = (over: Partial<EvidenceStateWire>): EvidenceStateWire => ({
     label: 'received_bytes', label_text: 'received bytes', version_id: 101, link_role: 'response', has_text: true, hash_only: [], ...over,
   })

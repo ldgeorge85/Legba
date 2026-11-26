@@ -147,7 +147,7 @@ export const EVAL_RUNS: EvalRunsResponse = {
         { class: 'ALPHA', n: 18 },
         { class: 'BETA', n: 18 },
       ],
-      grader: 'invented-grader',
+      grader: 'invented-model',
       temperature: 1,
       gold_versions: ['gold v1'],
       arms: [

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W11-F11 — the reference builder's web_search never forwards ``time_range``.
+"""The reference builder's web_search never forwards ``time_range``.
 
 The pack's ``web_search`` takes ``query`` and ``limit`` only. The builder's
 model-facing schema used to offer an optional ``time_range`` and the wrapper

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The RECORD SHEET's reads (lane U-10) — receipts, stored text, integrity.
+"""The RECORD SHEET's reads — receipts, stored text, integrity.
 
 The console's Record sheet reads a statement top to bottom as a chain:
 statement → row → evidence → RECEIPT → later versions → integrity. The row and
@@ -43,7 +43,7 @@ are recorded in the lane report.
 
 The evidence LABEL of each signal (``received bytes`` / ``archived later`` /
 ``no bytes kept``) is ``byte_path.evidence_states`` — the one function the
-statement gate and the drift pass read too (lane B-1); the sheet keeps no
+statement gate and the drift pass read too; the sheet keeps no
 rule of its own for it.
 
 A LEAF: stdlib + ``legba.data._url_canon`` and ``legba.data.byte_path``
@@ -60,6 +60,7 @@ from uuid import UUID
 from ._url_canon import canonical_url
 from .byte_path import NO_BYTES_KEPT, EvidenceState, evidence_states, signal_item_text
 from .claim_support import CLAIM_SOURCE_CLASS, claim_text_withheld
+from .trace_bulk import hydrate_traces
 
 __all__ = [
     "FORBID_TEXT_LICENSE_CLASSES",
@@ -416,7 +417,7 @@ async def version_text(
 
     ``reader`` is the display class (``display_policy``): a READER never gets
     publisher text beyond a cited span, so no text is read for one.
-    ``display_class`` (roll 84, C-2's SEAMS #90 closed): a CLAIM source's
+    ``display_class``: a CLAIM source's
     stored text — a version whose linked signals carry the claim stamp, or
     whose source declares ``source_class: claim`` — goes to the operator
     class only (``claim_support.claim_text_withheld`` →
@@ -599,9 +600,10 @@ async def run_integrity(conn: Any, run_id: str) -> Optional[dict[str, Any]]:
         rid = UUID(str(run_id))
     except (ValueError, TypeError):
         return {"run_id": str(run_id), "found": False}
-    trace = await conn.fetchrow(
+    row = await conn.fetchrow(
         f"SELECT {_TRACE_COLUMNS}, run_started_at FROM analyst_traces WHERE run_id = $1", rid,
     )
+    trace = (await hydrate_traces(conn, [row]))[0] if row is not None else None
     if trace is None:
         return {
             "run_id": str(rid), "found": False,

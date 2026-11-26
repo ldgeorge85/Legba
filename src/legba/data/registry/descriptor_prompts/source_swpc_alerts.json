@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.swpc.alerts": {
+      "source": "source_swpc_alerts.yaml",
+      "state": "draft"
+    }
+  }
+}

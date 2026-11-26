@@ -1,5 +1,5 @@
 /**
- * Citations data layer (P1-T3 — the cited assessment card).
+ * Citations data layer (the cited assessment card).
  *
  * Two citation shapes coexist in a finding's `data.citations` list, told apart
  * by the presence of `ref_kind` (new) vs `signal_id` (old/unit):

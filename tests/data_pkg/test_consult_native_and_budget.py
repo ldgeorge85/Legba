@@ -362,8 +362,8 @@ async def test_a_stuck_call_hits_the_round_deadline_and_the_run_still_answers() 
     # The DRILLING round is still cut by its deadline — that guard is unchanged
     # and is what stops one stuck call eating the run.
     assert "round_deadline_exceeded" in _kinds(steps)
-    # But the run now SYNTHESISES rather than degrading. Since the c8a0105c
-    # train the final turn gets the remaining budget under a floor, so a
+    # But the run now SYNTHESISES rather than degrading. The final
+    # turn gets the remaining budget under a floor, so a
     # drilling round losing its slice no longer costs the answer as well:
     # ``round_deadline_seconds`` bounds drilling rounds, never the synthesis.
     assert "degraded_final" not in _kinds(steps)
@@ -379,13 +379,13 @@ async def test_budget_exhaustion_produces_an_HONEST_final_not_a_death(
 ) -> None:
     """The degraded FINAL says what it got and what it never folded in.
 
-    This is the shape of answer run 3ae77c64 should have produced instead of
+    This is the shape of answer a live run should have produced instead of
     vanishing: a real turn, persisted, that an operator can read and act on.
 
-    Reaching it now takes a pinned floor. Since the c8a0105c train the
+    Reaching it now takes a pinned floor. The
     synthesis gets ``max(remaining, LEGBA_CONSULT_FINAL_FLOOR_SECONDS)`` — 240s
     by default — so a spent TOTAL budget no longer denies the run its answer,
-    which is the entire point of that change. Pinning the floor to 0.01s is how
+    which is the entire point of the floor. Pinning the floor to 0.01s is how
     a test still reaches the branch that handles "there is genuinely no room to
     synthesise", and that branch must stay honest.
     """
@@ -468,3 +468,47 @@ async def test_the_step_trace_names_which_protocol_the_run_used() -> None:
     assert native_steps[0]["round_protocol"] == "native_tools"
     assert text_steps[0]["round_protocol"] == "json_text"
     assert native.consult_response.answer and text.consult_response.answer
+
+
+# ---------------------------------------------------------------------------
+# The FINAL header names restated on the native route and in the nudge
+# ---------------------------------------------------------------------------
+
+
+def test_the_native_suffix_names_every_header_the_parser_reads() -> None:
+    from legba.data.analysts.consult_round_protocol import native_system_suffix
+
+    live = native_system_suffix("<<<FINAL>>>")
+    assert "`unanswered_aspects` / `watch_candidates` header lines" in live
+    # A bake-off arm keeps the suffix it was measured with, byte for byte.
+    arm = native_system_suffix("<<<FINAL>>>", watch_header=False)
+    assert arm == live.replace(" / `watch_candidates`", "")
+    assert "watch_candidates" not in arm
+
+
+@pytest.mark.asyncio
+async def test_a_native_turn_is_told_the_watch_header() -> None:
+    llm = _NativeLLM("anthropic", [_final_turn("<<<FINAL>>>\nuncertainty: 0.3\n\nplain")])
+    await _run(llm)
+    system = llm.calls[0]["system"] or ""
+    # The native route gets the one answer format with its native tool line,
+    # not a JSON contract followed by an override.
+    assert "watch_candidates: <indicator naming its subject>" in system
+    assert "call the tools directly through the tool channel" in system
+    assert "one JSON object and nothing else" not in system
+
+
+@pytest.mark.asyncio
+async def test_the_unparseable_reply_nudge_names_the_watch_header() -> None:
+    llm = _NativeLLM(
+        "some-unknown-plane",
+        [_final_turn("just some words, no frame"),
+         _final_turn("<<<FINAL>>>\nuncertainty: 0.3\n\nplain")],
+    )
+    await _run(llm)
+    nudges = [m["content"] for c in llm.calls for m in c["messages"]
+              if m.get("role") == "user" and "could not be read" in str(m.get("content"))]
+    assert nudges, "the text route never sent the unparseable-reply nudge"
+    # The nudge points at the full answer format and says what failed.
+    assert "use the answer format above" in nudges[-1]
+    assert "neither one JSON object nor an answer" in nudges[-1]

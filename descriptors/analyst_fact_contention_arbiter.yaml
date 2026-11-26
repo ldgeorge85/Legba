@@ -1,4 +1,4 @@
-# fact_contention_arbiter — the contested-claims referee (Holes-B Wave 2, #101).
+# fact_contention_arbiter — the contested-claims referee.
 #
 # A `deterministic`-kind META analyst over the shared `facts` table — modeled on
 # analyst_fact_decay.yaml (the sibling deterministic facts-maintenance descriptor
@@ -14,7 +14,7 @@
 # each cluster Q·C·R·F, and surfaces at most ONE winner (or abstains on a
 # near-tie). It NEVER closes, supersedes, or rewrites a fact row — it only stamps
 # the thin facts markers (contested / contention_id / surfaced_winner) + the
-# sidecar. The write-path coexistence change is the separate, flag-gated Wave 4.
+# sidecar. The write-path coexistence change is separate and flag-gated.
 #
 # The per-run summary FindingPayload (groups_open / abstained / junk_excluded /
 # values_total / groups_collapsed) is the cadence receipt — exactly how
@@ -34,7 +34,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: active
-  owner: fact_contention_arbiter_activation
+  owner: owner@local
 
 subscription:
   # META analyst: one global sweep per tick directly over the `facts` table via
@@ -51,7 +51,7 @@ method:
   kind: deterministic
   impl: legba.data.analysts.deterministic:run_method
   sub_handler: fact_contention_arbiter
-  # Wave 2b (#101): the LLM tie-break that breaks a NEAR-TIE abstain runs on the
+  # The LLM tie-break that breaks a NEAR-TIE abstain runs on the
   # SELF-HOSTED vLLM plane ONLY — the deps-builder hard-refuses an Anthropic/Opus
   # primary here (consult/deep are the only sanctioned Anthropic users). It is
   # gated additionally by LEGBA_FACT_CONTENTION_LLM_TIEBREAK (default OFF); with
@@ -59,12 +59,11 @@ method:
   # default — the LLM is consulted ONLY on a near-tie the scorer can't break, with
   # a per-call token cap + a per-pass call cap inside the handler.
   llm:
-    thinking: "on"   # T-2: low-volume synthesis seat thinks on every call
+    thinking: "on"   # low-volume synthesis seat thinks on every call
     primary:
       factory_kind: stack_ref
       raw: llm.primary.openai_compat
       expected_family: llm_provider
-    max_tokens: 256
 
 cadence:
   # Every hour at :37 — the arbiter is cheap (a bounded open-facts scan + the

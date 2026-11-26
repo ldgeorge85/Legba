@@ -1,5 +1,4 @@
-# CURATED — layer_map_ru, reviewed from the generator's DRAFT
-# (planning/LAYER_MAP_DRAFTS_2026-09-24/layer_map_ru.yaml).
+# CURATED — layer_map_ru, reviewed from the generator's DRAFT.
 #
 # Country note (Russia): the domestic press layer is the hard one. Meduza is
 # exile media (Riga) — moved here from domestic_press to foreign_press, which
@@ -14,7 +13,7 @@
 # (source.rferl.news) is USAGM/foreign-funded with a statutory editorial
 # firewall — foreign_press, unchanged from the draft.
 #
-# CHANGES vs the draft (full table also in the commit body / final report):
+# CHANGES vs the draft:
 #   - source.meduza.english      : domestic_press -> foreign_press (exile media)
 #   - source.gdelt.bigquery      : foreign_press  -> public_data   (structured
 #     CAMEO event rows, not editorial prose — same shape as ACLED)
@@ -23,14 +22,14 @@
 #   - source.telegram.org_channels: layer unchanged (social_digest); reason
 #     curated to name whose channels are RU-relevant
 # Every other entry's layer is unchanged; its `derived:` reason is kept with
-# " — confirmed" appended per source review instructions.
+# " — confirmed" appended after review.
 
 identity:
   id: layer_map_ru
   name: RU layer map (curated, reviewed)
   schema_uri: legba/layer_map/1.0.0
   kind: layer_map
-  owner: curate_ru
+  owner: owner@local
   created: '2026-09-24T00:00:00Z'
   state: reviewed
 country: RU

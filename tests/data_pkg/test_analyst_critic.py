@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""L-175 tests for the critic analyst kind.
+"""Tests for the critic analyst kind.
 
 Covers:
   * Module surface — KIND_NAME, OUTPUT_KIND, READ_SLICE, run_method,
@@ -186,7 +186,7 @@ def _rubric_block() -> str:
 
 def test_kind_identity_constants():
     """KIND_NAME, SCHEMA_VERSION, HANDLER_VERSION, PROMPT_MODULE_PATH,
-    OUTPUT_KIND match the L-175 contract."""
+    OUTPUT_KIND match the contract."""
     assert KIND_NAME == "critic"
     assert SCHEMA_VERSION == "legba/analyst.critic/1-0-0"
     assert HANDLER_VERSION == "0.1.0"
@@ -689,7 +689,7 @@ async def test_run_method_judge_model_defaults_to_llm_subprovider():
 
 @pytest.mark.asyncio
 async def test_run_method_allow_self_correlated_bypasses_guard():
-    """Per L-105 escape hatch: explicit opt-in lets self-correlated runs land."""
+    """Per escape hatch: explicit opt-in lets self-correlated runs land."""
     analyzed = _analyzed_row()
     llm = _StubLLMHandler(subprovider="same_model")
     result = await run_method(
@@ -900,8 +900,8 @@ def test_build_prompt_module_signature_fields():
 
 
 def test_critique_payload_back_compat_with_wave_a_shape():
-    """The pre-extension Wave A construction ``CritiquePayload(title=...,
-    target_ref=...)`` still validates after the L-175 fields landed."""
+    """The pre-extension construction ``CritiquePayload(title=...,
+    target_ref=...)`` still validates after the fields landed."""
     target = uuid4()
     payload = CritiquePayload(
         title="narrative critique",
@@ -911,7 +911,7 @@ def test_critique_payload_back_compat_with_wave_a_shape():
     assert payload.title == "narrative critique"
     assert payload.target_ref == target
     assert payload.rubric == "legacy free-form rubric string"
-    # New L-175 fields default to empty/None.
+    # New fields default to empty/None.
     assert payload.analyzed_output_id is None
     assert payload.analyzed_analyst_id == ""
     assert payload.scores == {}
@@ -920,11 +920,11 @@ def test_critique_payload_back_compat_with_wave_a_shape():
 
 
 # ---------------------------------------------------------------------------
-# L-175 tool-loop path — native Anthropic tool_use ReAct loop
+# Tool-loop path — native Anthropic tool_use ReAct loop
 # ---------------------------------------------------------------------------
 #
 # These tests exercise the critic's tool-threading code path (added in
-# the L-175 close-out): when the descriptor's ``method.tools_whitelist``
+# a later extension): when the descriptor's ``method.tools_whitelist``
 # is non-empty AND the runtime resolved at least one tool callable, the
 # critic uses ``_reason_via_llm_with_tools`` (native Anthropic tool_use
 # blocks) instead of the single-turn ``_reason_via_llm`` path.  The
@@ -1107,7 +1107,7 @@ class _ForeverToolLoopLLMHandler:
 
 
 class _MnemosyneTrustQueryStub:
-    """Recording test-double for the L-211 mnemosyne_trust_query tool.
+    """Recording test-double for the mnemosyne_trust_query tool.
 
     Returns the contract-frozen ``{weight, hops}`` shape per MN-3 Q13
     (the production tool's happy-path return shape).  The critic's

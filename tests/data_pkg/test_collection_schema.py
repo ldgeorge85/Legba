@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Program 7g-1 — the `collection` descriptor family: schema, taxonomy, registry.
+"""The `collection` descriptor family: schema, taxonomy, registry.
 
 Three halves, in order of how far they reach:
 

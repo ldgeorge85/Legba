@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""N-C (2026-11-11) — world read selection, from the operator's review of world
-record fd6584eb (WR3, WR4, WR5, WR7, WR8) and the 11-11b quality sweep.
+"""World read selection rules, from a review of a live world record.
 
 One section per rule:
 

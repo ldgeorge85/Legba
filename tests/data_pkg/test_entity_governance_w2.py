@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W2 Agent-C unit tests — class-agnostic identity (D8), computed completeness
+"""Unit tests — class-agnostic identity (D8), computed completeness
 (D26), and the governance-side canon endpoints (D3).
 
 Pure unit tests — no DB, no SLM, no network. Each input is a VERBATIM live
-garbage / fragmentation string lifted from planning/PLATFORM_HEALTH_RESULTS.md:
+garbage / fragmentation string observed live:
 
   * D8: ``"turkey"`` lived as country / entity / location / person at once.
   * D7/D8: ``"Bank of England"`` / ``"Nippon Steel"`` / ``"Hyundai Motor Group"``

@@ -3,7 +3,7 @@
 --
 -- 0263_entity_alias_keys.sql
 --
--- THE ENTITY NAME LOOKUP GETS A KEY TABLE (lane P-6).
+-- THE ENTITY NAME LOOKUP GETS A KEY TABLE.
 --
 -- WHY
 -- ---

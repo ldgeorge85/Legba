@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane G-5: model and judge seats, tools bound with the cut and the run's own
+"""Model and judge seats, tools bound with the cut and the run's own
 rows excluded, and the substrate code seats — against fakes. No database, no
 model, no network.
 

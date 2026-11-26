@@ -189,7 +189,7 @@ async def test_zero_checkable_claims_is_unassessable_not_one():
     verification = payload["data"]["verification"]
     assert verification["score_state"] == SCORE_STATE_UNASSESSABLE
     assert verification["score_state_reason"] == "no_checkable_claims"
-    # Rec #8, SECOND half (2026-08-09, round-5 §9b): the published
+    # Second half of the recommendation: the published
     # ``faithfulness_score`` is NULL — a tally over zero claims is not a
     # measurement, and 1.0 here entered the population mean and read as a
     # perfect pass to every consumer that did not also read ``score_state``.
@@ -363,7 +363,7 @@ async def test_json_body_drops_with_its_own_counter_and_never_grades():
 
 
 def test_coverage_statements_are_recognised_and_ordinary_prose_is_not():
-    """The round-4 panel's second pass-side caveat. P4 — "All five country reads
+    """A review panel's second pass-side caveat. "All five country reads
     (United States, Canada, Brazil, Argentina, Mexico) were included; no target
     lacked a read" — is true, verified, and a statement about the platform's own
     input set rather than about the world. The vocabulary is bounded to things

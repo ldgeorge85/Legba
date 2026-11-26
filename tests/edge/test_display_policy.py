@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The SENTINEL test — no reader transport carries archived publisher text.
 
-X2 lane B4 (W11-F19). One archived page is planted in the migrated test
+One archived page is planted in the migrated test
 database: a ``signals`` row whose ``payload.archived_text`` and
 ``payload.raw_body`` carry a unique SENTINEL string ~900 characters into the
 article (well past any cited span), and a finding whose citation's
@@ -489,7 +489,7 @@ async def _probe_a2a(w: dict[str, Any], display_class: str) -> str:
             )
         # JSON-normalised: the runtime's fetcher returns raw asyncpg values
         # (UUID, datetime) that the route's JSONResponse cannot serialise — a
-        # pre-existing A2A defect reported by lane B4, not this test's subject.
+        # pre-existing A2A defect, not this test's subject.
         out = json.loads(json.dumps([dict(r) for r in rows], default=str))
         fetched.extend(out)
         return out

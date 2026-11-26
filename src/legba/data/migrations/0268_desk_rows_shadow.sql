@@ -4,7 +4,7 @@
 -- 0268_desk_rows_shadow.sql
 --
 -- `desk_rows_shadow` — one row per desk run a contract-v2 SHADOW was run
--- beside (lane D-1).
+-- beside.
 --
 -- WHY
 -- ---

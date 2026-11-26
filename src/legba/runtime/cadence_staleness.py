@@ -2,16 +2,16 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """When is a cadence-bearing analyst (or poll source) STALE? — the pure decision.
 
-Extracted from ``liveness_watchdog`` (roll 65), which calls it for both the
+Extracted from ``liveness_watchdog``, which calls it for both the
 per-analyst and the per-source cadence checks.
 
-THE EXPECTED GAP COMES FROM THE SCHEDULE, NOT A FLAT INTERVAL (roll 65). The
+THE EXPECTED GAP COMES FROM THE SCHEDULE, NOT A FLAT INTERVAL. The
 check used to take the gap between the next two fires after NOW as "the
 interval" and alert past ``factor`` x that. For a WINDOWED cron that is wrong
 outside the window: ``correctness_grader`` runs ``20 1-9 * * *`` (hourly,
 01:20-09:20 UTC), so at 11:21Z its next two fires were 01:20 and 02:20, the
 "interval" was 1 h, and a grader that last ran at 09:21 — exactly on schedule —
-was called stalled at 2 h (the 2026-11-08 11:21Z alert).
+was called stalled at 2 h.
 
 Now the threshold is measured from the LAST RUN along the schedule itself:
 
@@ -26,7 +26,7 @@ deadline across the quiet hours: the grader's 09:21 run is next due at 01:20,
 so it is stale only once 02:20 passes without a run — the same "missed two
 fires" a continuous hourly analyst is held to, and never outside its window.
 
-A RUN IN FLIGHT IS NOT A STALL (P-7, 2026-11-14). A run's ``analyst_traces``
+A RUN IN FLIGHT IS NOT A STALL. A run's ``analyst_traces``
 row lands when the run ENDS, stamped with its START. An hourly analyst that
 misses exactly one fire (a roll killed it) is due again at the next fire —
 and at that instant ``age == 2 x period`` exactly, so for as long as the

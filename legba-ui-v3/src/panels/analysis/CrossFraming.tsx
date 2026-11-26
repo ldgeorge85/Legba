@@ -1,6 +1,6 @@
 /**
  * Cross-framing (`analysis.cross_framing`) — ONE CLAIM AGAINST THE UNITS THAT
- * TOUCH IT, where the layers diverge, and what no unit says (wave P lane B).
+ * TOUCH IT, where the layers diverge, and what no unit says.
  *
  * A country desk is a roster of bounded units, each answering one narrow
  * question over the same slice, and every surface we ship reads them SEPARATELY

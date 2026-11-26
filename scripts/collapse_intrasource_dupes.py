@@ -25,8 +25,8 @@ Reference classes to ``signals.id`` and how each is handled
 -----------------------------------------------------------
 The substrate has NO DB-level foreign key into ``signals`` (baseline 0001), so
 every reference is explicit here — the same inventory ``signals_retention``
-cleans, plus the lineage/value classes it deliberately dangles (dangling is the
-D4 trade-off for a PURGE, where the content is gone anyway; in a COLLAPSE the
+cleans, plus the lineage/value classes it deliberately dangles (dangling is a
+deliberate trade-off for a PURGE, where the content is gone anyway; in a COLLAPSE the
 identical content SURVIVES under the survivor id, so we re-point instead):
 
 * ``signal_entity_links.signal_id`` — RE-POINTED to the survivor via

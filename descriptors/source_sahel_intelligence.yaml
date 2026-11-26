@@ -1,4 +1,4 @@
-# Niger desk (country_watch_ne) coverage pass — 2026-08-03. Ships DRAFT.
+# Niger desk (country_watch_ne). Ships DRAFT.
 #
 # Sahel Intelligence (sahel-intelligence.com) — the batch's REGIONAL security
 # lane. Per its own À propos page (fetched 2026-08-03): published by GIC
@@ -60,7 +60,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: source_batch_2026_08
+  owner: owner@local
   created: "2026-08-03T00:00:00Z"
 
 scope:
@@ -70,7 +70,7 @@ scope:
   languages: [fr]
   tags: [news, world, africa, sahel, security, francophone, source_batch_2026_08]
   source_class: reporting
-  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
+  access_class: public          # free no-auth feed, no separate reuse agreement
 
 acquisition: poll
 

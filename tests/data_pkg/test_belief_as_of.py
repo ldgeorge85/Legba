@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Route-level tests for the V3/P3 temporal HTTP surface.
+"""Route-level tests for the temporal HTTP surface.
 
 * ``GET /api/v1/v3/belief`` (:mod:`legba.data.registry.belief_api`) — the
   decision-time register: findings published and not yet superseded on

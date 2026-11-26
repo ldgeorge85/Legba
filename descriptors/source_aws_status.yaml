@@ -1,4 +1,4 @@
-# K-1 cyber desk (2026-11-14) — draft SourceDescriptor. Ships DRAFT (operator activates).
+# Draft SourceDescriptor. Ships DRAFT (operator activates).
 #
 # Amazon Web Services' public service-health RSS (all services, all regions):
 # the operator's OWN statement about its own service — an incident's start,
@@ -16,7 +16,7 @@
 # Every fifteen minutes: an outage is a short event.
 #
 # Desk routing: scope.classifications `geopolitics.topic:cyber` is stamped on
-# every signal (W10 TAX-2) — the cyber desk's tag arm (target_cyber.yaml).
+# every signal — the cyber desk's tag arm (target_theme_cyber.yaml).
 
 identity:
   id: source.aws.status
@@ -26,7 +26,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: cyber_desk_k1
+  owner: owner@local
   created: "2026-11-14T00:00:00Z"
 
 scope:

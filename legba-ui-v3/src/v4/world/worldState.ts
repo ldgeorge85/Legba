@@ -40,7 +40,7 @@ export interface FilterOptions {
 }
 
 /**
- * The read currently being LENSED (P1-T7). The temporal / geo / node-graph
+ * The read currently being LENSED. The temporal / geo / node-graph
  * lenses publish the selected country-or-finding read + its directly-cited
  * evidence signal ids here so the World map can brush the SAME read's evidence
  * (a subtle emphasis) without importing the lens. `null` = no active read.
@@ -82,11 +82,17 @@ interface WorldState {
   spanMs: number
   setSpan: (spanMs: number, now?: number) => void
 
-  /** Playback for the scrubber. */
+  /**
+   * AS RECORDED — the instant whose record the console shows (epoch ms), or
+   * null for now. Set by the time band's marker and by `?at=` in the address
+   * (`lib/asOf.ts`); a region honours it only when its reads can.
+   */
+  asOfMs: number | null
+  setAsOf: (ms: number | null) => void
+
+  /** Playback: the time band steps the window a day at a time, to now. */
   playing: boolean
-  speed: number
   setPlaying: (p: boolean) => void
-  setSpeed: (s: number) => void
 
   /** Layer visibility (the Windy-style switcher). */
   layers: Record<WorldLayer, boolean>
@@ -147,10 +153,11 @@ export const useWorldState = create<WorldState>((set, get) => ({
     get().setWindow(now - spanMs, now)
   },
 
+  asOfMs: null,
+  setAsOf: (asOfMs) => set({ asOfMs }),
+
   playing: false,
-  speed: 1,
   setPlaying: (playing) => set({ playing }),
-  setSpeed: (speed) => set({ speed }),
 
   layers: { signals: true, findings: true, situations: true, entities: false, events: true },
   toggleLayer: (l) =>

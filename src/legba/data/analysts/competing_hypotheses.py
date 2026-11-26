@@ -6,8 +6,7 @@ A META analyst kind (sibling of ``relationship_reifier`` /
 ``meta_findings_synthesizer``) that re-homes the old Legba's ACH rigor into the
 source-first / Dapr-actor / analyst-kind architecture. It is the REAL hypotheses
 producer (the situation-gated ``hypothesis_lifecycle`` deterministic handler
-emitted 0 rows because every situation went dormant — see
-``planning/DATA_ANALYSIS_DEEP_REVIEW_2026-06-16.md`` §1.2 / §2 Rank 3). This kind
+emitted 0 rows because every situation went dormant). This kind
 reads the evidence base DIRECTLY (it is NOT gated on ``active`` situations), so it
 fires whenever there is a focal topic with current evidence.
 
@@ -30,7 +29,7 @@ focal situation/topic:
   3. **SCORE the ACH evidence x hypothesis MATRIX**: every evidence item is scored
      for CONSISTENCY with each hypothesis (CC / C / N / I / II in Heuer's notation,
      mapped to +2..-2). Then each item's DIAGNOSTICITY is computed two ways
-     (W11-F139): the SPREAD across hypotheses (the refutation weight — a
+: the SPREAD across hypotheses (the refutation weight — a
      refutation is already diagnostic) and the SHARE count ``consistent_with``
      (how many live hypotheses the item is consistent with). An item's support
      for each hypothesis it fits is DIVIDED by that count — evidence consistent
@@ -107,7 +106,7 @@ from ..provenance.kinds import OutputKind as _OutputKind  # noqa: E402,F401
 
 OUTPUT_KIND: object = _TRACE_ONLY
 
-#: P7/7g-1 — the origin-class leg of the open-fact read (SEAMS #57 sweep).
+#: The origin-class leg of the open-fact read.
 #: An imported 2016 fact is not evidence for what competes NOW; the gate is
 #: rendered from the one place the vocabulary lives, never spelled inline.
 _LIVE_FACTS = origin_class_clause("")
@@ -141,7 +140,7 @@ status-quo)."""
 CONFIRM_K: int = 2
 REFUTE_K: int = 2
 
-#: W11-F139 — how the matrix weighs a piece of evidence toward each hypothesis
+#: How the matrix weighs a piece of evidence toward each hypothesis
 #: it is CONSISTENT with. ``shared`` (the default) divides the item's unit
 #: support by ``consistent_with`` (the number of live hypotheses it fits), so
 #: evidence compatible with several competing theses banks 1/N in each and can
@@ -516,7 +515,7 @@ async def _read_evidence_for_topic(
                 "polarity": int(r["polarity"] or 0),
             })
 
-    # 4) Contested-fact-value diagnostics (Holes-B Wave 5, #101). An OPEN
+    # 4) Contested-fact-value diagnostics (from the contested-claims sidecar). An OPEN
     #    contention group whose subject is one of the topic's resolved entities
     #    is a FIRST-CLASS ACH diagnostic: the substrate itself is telling us
     #    credible sources DISAGREE on a (subject, predicate) value. We surface
@@ -980,7 +979,7 @@ def build_ach_matrix(
     — so the matrix is identical whether the LLM is enriching it or exhausted.
 
     ``diagnosticity_mode`` selects how an item's CONSISTENT cells are weighed
-    (W11-F139): ``shared`` (the default) divides the item's unit support by
+: ``shared`` (the default) divides the item's unit support by
     ``consistent_with`` — the number of live hypotheses it is consistent with —
     so evidence compatible with all N rows banks 1/N in each; ``off`` restores
     the pre-W11-F139 spread-diagnosticity weighting exactly. The REFUTATION
@@ -1032,7 +1031,7 @@ def build_ach_matrix(
                     _score_consistency(ev_text, ev_pol, str(h.get("thesis") or ""))
                 )
         diag = _diagnosticity(row_scores)
-        # W11-F139 — the SHARE count: how many live hypotheses this item is
+        # The SHARE count: how many live hypotheses this item is
         # consistent with. Its support toward each is 1/N (shared) or the
         # item's spread (off); the refutation path is unchanged either way.
         consistent_with = sum(1 for s in row_scores if s > 0)
@@ -1436,7 +1435,7 @@ async def run_method(
     if not isinstance(run_id, UUID):
         run_id = uuid4()
     system_prompt = deps.system_prompt or _SYSTEM_PROMPT
-    # W11-F139 — `shared` (default) divides shared support by consistent_with;
+    # `shared` (default) divides shared support by consistent_with;
     # `off` reproduces the pre-W11-F139 spread-only scoring for comparison.
     diagnosticity_mode = str(
         options.get("diagnosticity_mode") or DEFAULT_DIAGNOSTICITY_MODE
@@ -1586,7 +1585,7 @@ async def run_method(
                     "balance": int(ach["balance"][h_idx]),
                     "matrix": ach["matrix"],
                     "evidence": ach["evidence"],
-                    # W11-F139 — which diagnosticity rule produced the balance
+                    # Which diagnosticity rule produced the balance
                     # + the per-item {consistent_with, weight} map, so a brief
                     # page can show WHY a row moved.
                     "diagnosticity_mode": ach["diagnosticity_mode"],

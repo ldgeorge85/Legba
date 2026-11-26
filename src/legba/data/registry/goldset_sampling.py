@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Deterministic weekly gold-set sampling (P2-5) — pure, DB-free.
+"""Deterministic weekly gold-set sampling — pure, DB-free.
 
-The correctness gold set grows only if labeling is cheap: the operator agreed
-to label a HANDFUL of findings per week if a lightweight surface exists. This
+The correctness gold set grows only if labeling is cheap: a HANDFUL of findings
+per week is enough if a lightweight surface exists. This
 module is that surface's selection brain — each ISO week it picks a small,
 stratified, STABLE sample of verified head findings for labeling:
 

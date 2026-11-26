@@ -25,8 +25,8 @@ MODES
     family (DEC-12) would be seeded from. `--json PATH` writes the full census.
   --apply: writes `signals.data.classifications` for every TAGGED row (rows
     with no tags stay `data IS NULL`) as the UNION of the row's EXISTING
-    entries and the binding of its raw tags (`merged_classifications`, W10-F2):
-    an entry the insert-time stamper (W10 TAX-2) wrote that no raw tag yields
+    entries and the binding of its raw tags (`merged_classifications`):
+    an entry the insert-time stamper wrote that no raw tag yields
     — the source's declared `src:` scope entries — is kept in place, an entry
     a raw tag yields is re-bound against the vocabulary as registered now, and
     the remaining raw-tag bindings follow in tag order; one entry per
@@ -281,7 +281,7 @@ def _existing_entries(raw: Any) -> list[dict[str, Any]]:
 def merged_classifications(
     existing: Any, tags: list[str], *, families: VocabularyIndex,
 ) -> list[dict[str, Any]]:
-    """W10-F2 — the ONE ``data.classifications`` shape both stampers converge on.
+    """The ONE ``data.classifications`` shape both stampers converge on.
 
     The row's existing entries first, in their order: one a raw tag also yields
     is replaced by that tag's binding NOW (its status refreshed), one no raw

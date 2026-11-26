@@ -635,6 +635,33 @@ SELECT s.id, s.title, s.published_at
  WHERE t.run_id = '<run-id>' AND s.title ILIKE '%<term>%';
 ```
 
+A run older than `LEGBA_TRACE_COMPRESS_AFTER_DAYS` may be compacted (when
+`LEGBA_TRACE_COMPRESS` is on): its `prompt_rendered`, `input_payload` and
+`output_payload` read NULL in SQL and `bulk_bundle_id` names the
+`analyst_trace_bundles` row that holds them. The console, lineage and Flow
+routes read them back as before. From a shell, in the runtime or registry
+container:
+
+```bash
+python3 - <<'PY'
+import asyncio, asyncpg
+from legba.data.config import PostgresConfig
+from legba.data.trace_bulk import hydrate_traces, pointer_columns_sql
+async def main():
+    c = await asyncpg.connect(PostgresConfig.from_env().dsn)
+    row = await c.fetchrow(f"SELECT run_id, prompt_rendered, output_payload, {pointer_columns_sql()}"
+                           " FROM analyst_traces WHERE run_id = $1", "<run-id>")
+    print((await hydrate_traces(c, [row]))[0]["prompt_rendered"][:2000])
+asyncio.run(main())
+PY
+```
+
+After the first full compaction pass the freed space is reused by the table
+for new traces (about two months of growth); it returns to the operating
+system only when the table is rewritten with `VACUUM FULL analyst_traces`,
+which holds an exclusive lock for the whole rewrite (every trace write and
+read waits), so it belongs in a window with the analysts paused, if at all.
+
 ### Registry workers
 
 The registry runs one uvicorn worker unless `LEGBA_REGISTRY_WORKERS` says

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Program 5 lane 3 — the CROSSROADS detectors, the pre-pass seam, the mandate
-and the descriptor (planning/PROGRAM5_INQUIRY_DESIGN_2026-09-24.md §5 / §7).
+"""The CROSSROADS detectors, the pre-pass seam, the mandate
+and the descriptor.
 
 Pure — no DB, no network, no event loop except the three explicitly async
 tests, which drive fakes. The four detectors are pure functions over already
@@ -800,9 +800,9 @@ def crossroads_body():
 
 
 def test_crossroads_descriptor_validates(crossroads_body):
-    """The ``inquiry`` kind and its option catalog are lane p5_kind's to ship;
+    """The ``inquiry`` kind and its option catalog ship in their own module;
     this registers both locally so the DESCRIPTOR's own shape is under test
-    here rather than the other lane's progress. The autouse
+    here rather than that module's progress. The autouse
     ``_preserve_analyst_kind_registry`` fixture restores the kind registry at
     the test boundary; the catalog entry is popped in the finally."""
     from legba.data.option_catalog.handler_options import (
@@ -887,9 +887,9 @@ def test_the_manifest_carries_the_new_descriptor_state():
 
 
 def test_the_inquiry_option_catalog_must_declare_the_pre_pass_hook(crossroads_body):
-    """THE CROSS-LANE CONTRACT — asserted over live state, never skipped.
+    """THE CROSS-MODULE CONTRACT — asserted over live state, never skipped.
 
-    Lane p5_kind owns ``ANALYST_KIND_OPTIONS['inquiry']`` (it ships ``brief``).
+    The inquiry kind owns ``ANALYST_KIND_OPTIONS['inquiry']`` (it ships ``brief``).
     Two assertions, both real: this descriptor's ONE option key is
     ``pre_pass_module`` (unconditional), and — the moment that catalog entry
     lands — it must declare that key. Without it ``AnalystDescriptor`` refuses

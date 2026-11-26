@@ -3,8 +3,8 @@
 """``deep_consult`` analyst kind — the detached submit half of PIECE 4.
 
 This kind is the **actor→workflow bridge** for the deep-consult staged Dapr
-Workflow (anchor §2.2 / §5 PIECE 4 — "scheduled via the actor→workflow bridge,
-optimizer pattern").  It is deliberately THIN:
+Workflow (scheduled via the actor→workflow bridge,
+optimizer pattern).  It is deliberately THIN:
 
   * its ``run_method`` SCHEDULES :func:`deep_consult_workflow` via the
     runtime-resident :class:`DaprDeepConsultWorkflowClient` and returns the
@@ -152,7 +152,7 @@ async def run_method(
     # registry maps the operator's friendly choice ("core"/"opus"/"fable") to a
     # sanctioned component id and threads it as ``llm_component_override``;
     # validated here against the SAME allowlist as the chat path (defense in
-    # depth — the registry is the primary gate; since roll 84 it threads the
+    # depth — the registry is the primary gate; it threads the
     # core component for a request that names no model). Absent /
     # not-allowlisted ⇒ the descriptor primary (core in the shipped descriptor). The workflow's stage deps
     # resolve their handler AND their BudgetEnforcer from THIS id, so the whole
@@ -189,7 +189,7 @@ async def run_method(
         # Empty when no pins were sent, so every pre-pin workflow input stays
         # byte-identical to today's.
         pinned_context=normalize_pinned_context(first.get("pinned_context")),
-        # W11-F68b: the asker's display class rides the durable input.
+        # The asker's display class rides the durable input.
         display_class=str(first.get("display_class") or ""),
         # Q-1 — the turn contract's inputs (absent ⇒ defaults; byte-identical).
         **{k: first[k] for k in ("window", "on_screen") if isinstance(first.get(k), dict)},

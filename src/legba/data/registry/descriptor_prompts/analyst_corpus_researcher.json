@@ -1,8 +1,8 @@
 {
   "prompts": {
     "corpus_researcher": {
-      "chars": 11600,
-      "sha256": "f7420c095023a84845745e202aa3957f78b0b9a962a26cac61be43de95a9f0b3",
+      "chars": 12114,
+      "sha256": "44c97f25e05e180e4d39783d9cfc7c4d0227dc038ac91d5843659ee5ee820b47",
       "source": "analyst_corpus_researcher.yaml"
     }
   },

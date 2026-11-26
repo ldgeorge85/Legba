@@ -1,10 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""THE REAL-BINDING-PATH tests for the ``inquiry_state`` pack (Program 5
-lane 1, planning/PROGRAM5_INQUIRY_DESIGN_2026-09-24.md §3).
+"""THE REAL-BINDING-PATH tests for the ``inquiry_state`` pack.
 
-Per the operator's "tests must traverse the REAL binding path" rule (memory:
-tests-must-traverse-real-binding — the journal_propose precedent in
+Tests must traverse the REAL binding path (the journal_propose precedent in
 tests/journal_w4/test_propose_real_binding_path.py): every tool call here
 goes through :meth:`legba.data.analysts.agency.agency.Agency.run_pack_tool`
 via :class:`~legba.data.analysts.agency.binding.AgencyToolBinding` — the SAME
@@ -12,8 +10,8 @@ resolve → govern → record → dispatch → settle pipeline production runs, 
 hand-called handler — and every assertion that a call actually happened reads
 the ``action_pack_invocations`` ledger, the durable proof of life.
 
-No analyst kind exists yet to wire the pack in (lane 2's job), so these
-bindings are built the way lane 2's deps builder WILL build them: a granted +
+No analyst kind exists yet to wire the pack in (the kind's job), so these
+bindings are built the way the kind's deps builder WILL build them: a granted +
 allowed ``inquiry_state`` pack, a per-run ``ToolContext(writeback=...)``
 carrying an :class:`AnalystContext` — the SAME channel
 ``journal_propose._insert_proposal`` stamps every proposal with

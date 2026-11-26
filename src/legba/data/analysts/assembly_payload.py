@@ -299,10 +299,8 @@ CITED_SALIENCE_ROW_KEY: str = "_cited_salience"
 #: evidence-map strip renders from the SAME join the order sorted on.
 CITED_MAGNITUDES_ROW_KEY: str = "_cited_magnitudes"
 
-#: F-3, ratified. The block header is ruled to be the desk's BOUNDED QUESTION,
-#: and **no descriptor field holds one today** — the mock's questions were
-#: written by hand. A parallel descriptor train is authoring them one line per
-#: descriptor. Until it lands, the assembler reads this option (a mapping
+#: The block header is the desk's BOUNDED QUESTION, and **no descriptor field
+#: holds one yet**. Until one does, the assembler reads this option (a mapping
 #: ``analyst_id -> question`` the runtime resolves from the desk descriptors)
 #: and falls back to the desk DISPLAY NAME, stamping ``question_source`` so the
 #: fallback rate is countable rather than invisible.
@@ -1115,7 +1113,7 @@ def build_assembly(
                 if str(tier) == TIER_COUNTRY else None
             )
         except SpanConstructionError as exc:
-            # F-12, ratified: a block whose span fails byte-identity against its
+            # A block whose span fails byte-identity against its
             # source finding CANNOT BE CONSTRUCTED. Fail loud into the existing
             # error path — the actor classifies it — rather than publishing a
             # read with a silent hole where a quotation should be.
@@ -1155,7 +1153,7 @@ def build_assembly(
             "spans": [span] + ([context_span] if context_span else []),
             "signals": signals,
             "corroboration": corroboration,
-            # Lane N-D: the LEAD span's numbers and actors against the signals
+            # The LEAD span's numbers and actors against the signals
             # its own markers cite (annotates only; ``assembly_span_checks``).
             "span_checks": span_checks(span, row),
         })
@@ -1167,12 +1165,11 @@ def build_assembly(
             f"construction failure, not an empty page"
         )
 
-    # A CONNECTIVE MAY NEVER BECOME A SPAN (P3-B). The carry above is what makes
+    # A CONNECTIVE MAY NEVER BECOME A SPAN. The carry above is what makes
     # this true on the common case; this is the gate that says so at
-    # CONSTRUCTION, in the same posture `assembly_spans` takes on byte-identity
-    # (D-1 §3.6, ratified F-12): the assembly is deterministic, so a connective
-    # in a quote is a BUG in this module, not a score for verify to publish
-    # around. It fires on the residue — a child shaped in a way the carry rule
+    # CONSTRUCTION, in the same posture `assembly_spans` takes on byte-identity:
+    # the assembly is deterministic, so a connective in a quote is a BUG in
+    # this module, not a score for verify to publish around. It fires on the residue — a child shaped in a way the carry rule
     # did not recognise, a hand-built candidate in a test, a future producer
     # that renders its connectives somewhere new — and it fires LOUD rather
     # than shipping a read whose headline asserts nothing.

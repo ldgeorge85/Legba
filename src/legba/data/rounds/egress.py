@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""An egress guard for the round / bake-off HARNESS process (lane G-6).
+"""An egress guard for the round / bake-off HARNESS process.
 
-WHY. In lane G-5's first runs one tool read tried to reach the compose
+WHY. In early runs one tool read tried to reach the compose
 service name ``opensearch`` from the HOST. On this host the resolver
 qualifies a bare name with its search domain and that domain answers every
 name with a public address, so ``opensearch`` resolved to a public machine.

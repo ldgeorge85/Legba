@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """L1 — WHICH GRADER GRADED THIS, on the row and in the body.
 
-THE INCIDENT (2026-09-18 -> 09-20). OpenRouter removed
+THE FAILURE. OpenRouter removed
 ``mistralai/mistral-large-2512``. The standing auditor's grader component
 pointed at it, every grader call 404'd, and for 2.7 days the auditor wrote
 critique rows whose provenance line read:
@@ -231,7 +231,7 @@ def test_the_rollup_carries_the_component_id_not_just_the_family():
 
 
 def test_the_critique_body_names_component_and_model():
-    """The literal string this lane exists to delete: "grader: mistral (model
+    """The literal string this module exists to delete: "grader: mistral (model
     unrecorded)". Both halves of the route are on the line now."""
     g = grader.WidthGrade(
         claim=_claim(), verdict="NOT_FOUND", rater_role=grader.RATER_PRIMARY,

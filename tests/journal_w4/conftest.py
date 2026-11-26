@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Conftest for the Journal Assessor Wave 4 (propose-and-gate) DB tests.
+"""Conftest for the Journal Assessor propose-and-gate DB tests.
 
 ISOLATION (mandatory): these tests run against a DISPOSABLE throwaway
 Postgres+AGE container the operator/CI spins up — NEVER the live ``legba`` /

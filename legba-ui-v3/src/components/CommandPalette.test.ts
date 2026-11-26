@@ -22,7 +22,7 @@ describe('RECORD_PRIMARY_PANEL', () => {
   })
 })
 
-describe('parsePalettePrefix — namespaced families (design §3.3)', () => {
+describe('parsePalettePrefix — namespaced families', () => {
   it('splits the workspace sigil off the query', () => {
     expect(parsePalettePrefix('#')).toEqual({ prefix: '#', rest: '' })
     expect(parsePalettePrefix('#trust')).toEqual({ prefix: '#', rest: 'trust' })

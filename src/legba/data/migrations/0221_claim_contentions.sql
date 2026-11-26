@@ -3,8 +3,7 @@
 --
 -- 0221_claim_contentions.sql
 --
--- Program 7a — the CONTRARY-EVIDENCE pass's record table
--- (planning/NEXT_ARC_CAPTURE_2026-09-23.md §A.1, §B1, §E 7a).
+-- The CONTRARY-EVIDENCE pass's record table.
 --
 -- WHAT THIS TABLE IS FOR, AND THE ONE THING IT MUST NEVER HOLD. Every
 -- retrieval this platform already runs points AT the claim: the standing
@@ -213,7 +212,7 @@ CREATE TABLE IF NOT EXISTS public.claim_contentions (
     CONSTRAINT claim_contentions_window CHECK (expires_at >= as_of)
 );
 
--- The replay/idempotency key. See §4: one record per claim per pass version per
+-- The replay/idempotency key: one record per claim per pass version per
 -- UTC day.
 CREATE UNIQUE INDEX IF NOT EXISTS claim_contentions_claim_day_unique
     ON public.claim_contentions USING btree (claim_id, pipeline_version, as_of_day);

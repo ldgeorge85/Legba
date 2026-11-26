@@ -1,18 +1,16 @@
-# I-5 series-kind capabilities (2026-11-14) — the Japan Meteorological
+# The Japan Meteorological
 # Agency's earthquake bulletin list (bosai quake list.json), as structured
 # text signals. Ships DRAFT; the reference host walks it to CONFIGURED
-# (descriptors/LIFECYCLE.md), never active — activation is the owner's call.
+# (descriptors/LIFECYCLE.md), never active — activation is the operator's call.
 # Kind: json_api (the document root is the item array: `items_path` empty).
 #
-# WHY: a national quake authority beside USGS (the review's Area B row,
-# "add (json_api)"). X-1 could not write it: the review recorded the shape
-# (a top-level array of 206) but not the item field names.
+# WHY: a national quake authority beside USGS.
 #
 # THE ENDPOINT. https://www.jma.go.jp/bosai/quake/data/list.json. Checked
-# 2026-11-14 by the source-expansion review (generic client identity): 200,
-# application/json, a top-level array of 206 bulletins. Field names read by
-# lane I-5 from ONE plain GET of the same URL on 2026-11-14 (generic client,
-# no identifying headers; the body kept only in that lane's scratchpad):
+# 2026-11-14 (generic client identity): 200,
+# application/json, a top-level array of 206 bulletins. Field names read from
+# ONE plain GET of the same URL on 2026-11-14 (generic client,
+# no identifying headers):
 # 206 bulletins over 162 events spanning 2026-10-16..2026-11-15 (JST), every
 # item carrying ctt, eid, rdt, ttl, ift, ser, at, anm, acd, cod, mag, maxi,
 # int, json, en_ttl, en_anm. Read here: `json` — the bulletin's own file name
@@ -37,7 +35,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: i5_series_kind_capabilities
+  owner: owner@local
   created: "2026-11-14T00:00:00Z"
 
 scope:

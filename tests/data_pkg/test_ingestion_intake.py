@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane I-1 — the ingestion intake, on the real path against a migrated
+"""The ingestion intake, on the real path against a migrated
 Postgres (the data_pkg session database, isolated test stack only).
 
 Covered: every admission refusal (recorded and counted); a request satisfied

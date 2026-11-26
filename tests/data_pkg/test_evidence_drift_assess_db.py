@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane D-2 — the drift assessment on the real path against a migrated
+"""The drift assessment on the real path against a migrated
 Postgres (the data_pkg session database, isolated test stack only).
 
 Covered: one code-only assessment per flag-writing change with a claim effect

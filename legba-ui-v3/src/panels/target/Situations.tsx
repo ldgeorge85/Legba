@@ -229,7 +229,7 @@ export default function TargetSituationsPanel({ registration, scope }: PanelProp
                               >
                                 trace this situation →
                               </button>
-                              {/* Wave P lane B — CROSS-FRAMING from a situation
+                              {/* CROSS-FRAMING from a situation
                                   row. "Trace" walks DOWN into this frame's own
                                   lineage; this walks ACROSS, putting the desk's
                                   most contested claim against every bounded

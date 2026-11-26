@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""A-2 — the two diffs and the gauge.
+"""The two diffs and the gauge.
 
 Both arms in isolation (C1/C2/C3 and E1/E2/E3), ``unanchorable`` excluded from
 both sides, ``None``-not-``0.0`` on every empty denominator, a degraded day
@@ -180,7 +180,7 @@ def test_e2_cited_is_engagement_even_without_naming():
 
 
 def test_e3_licensed_is_a_covariate_never_engagement():
-    """An open frame naming the item is the register's LICENCE — the cause R-1
+    """An open frame naming the item is the register's LICENCE — the cause 
     will move, not the effect. It is recorded, and it is NOT in the engagement
     disjunction."""
     engaged, arms, licensed = rd.engage_item(
@@ -228,7 +228,7 @@ def test_the_il_shaped_regression():
     assert record["attention_rate"] == 0.0         # collected, NOT engaged
     assert record["attention_gap"] == 1.0
     assert record["n_licensed"] == 0               # unlicensed
-    # The 2x2 R-1 reads: one item, unlicensed (row 0) and unengaged (col 0).
+    # The 2x2 reads: one item, unlicensed (row 0) and unengaged (col 0).
     assert record["licensed_engaged_2x2"] == [[1, 0], [0, 0]]
 
 

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W11-F68b — deep consult's tool context goes through the reader renderer.
+"""deep consult's tool context goes through the reader renderer.
 
 ``runtime/dapr_workflow/deep_consult.py`` used to render acquired tool results
 into the analyze prompt with a raw ``json.dumps`` (and never forwarded the

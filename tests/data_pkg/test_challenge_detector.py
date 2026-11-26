@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""FETCH_REVIEW (a′) — the false-absence defect: a block must read as a block.
+"""The false-absence defect: a block must read as a block.
 
 THE DEFECT. ``evidence_archiver``'s wall detector already carried bot-challenge
 phrasing, but ``_WALL_MAX_CHARS = 500`` gated every pattern. That cap was
@@ -14,8 +14,7 @@ nothing*: the same false-absence failure the search plane's degradation reads
 exist to prevent.
 
 THE FIXTURES. The four probe bodies are reconstructed here from the tells and
-the byte counts FETCH_REVIEW §2 published (the live probe bodies live in that
-session's scratchpad, never in the repo), padded to the measured sizes so the
+the published byte counts (the live probe bodies are not in the repo), padded to the measured sizes so the
 length dimension of the defect is exercised for real and not assumed away:
 
   * ``www.reuters.com``        401, 774 B   — DataDome (``var dd={'rt'…``)
@@ -253,8 +252,8 @@ def test_everything_else_is_not_a_block(code):
 
 
 def test_402_is_a_paywall_not_a_challenge():
-    """FETCH_REVIEW §3(e): a paywall is a money and licence decision, and
-    nothing in this lane routes around one. It must not be counted as a block
+    """A paywall is a money and licence decision, and
+    nothing here routes around one. It must not be counted as a block
     the fetcher could fix."""
     assert challenge_from_status(402) is None
 
@@ -266,7 +265,7 @@ def test_the_carry_has_exactly_one_name():
 
 
 # ---------------------------------------------------------------------------
-# W11-F259 — the Federal Register access wall (roll 79)
+# The Federal Register access wall
 # ---------------------------------------------------------------------------
 
 

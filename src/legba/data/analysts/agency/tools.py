@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Action-pack tool interface + seed handler library (P-11 / PIVOT §4.8).
+"""Action-pack tool interface + seed handler library.
 
 A pack's :class:`legba.data.schemas.action_pack.ToolSpec` names an action; this
 module is the runtime side — the tool HANDLER registry + the seed handlers the
@@ -208,7 +208,7 @@ class ChannelEmitter:
     write is best-effort: an audit-write failure is logged, never raised, so a
     blipped writer connection cannot break an escalation the operator needs.
 
-    ``alert_sinks`` (optional, P1-1) is the OUTWARD fan-out: an
+    ``alert_sinks`` (optional) is the OUTWARD fan-out: an
     :class:`legba.data.alerts.AlertSinkDispatcher`. After the internal emit +
     audit row, the escalation payload is shaped into the converged
     :class:`~legba.data.alerts.AlertSinkPayload` (summary / severity / verify
@@ -260,7 +260,7 @@ class ChannelEmitter:
                 "channel.emit name=%s kind=%s payload=%s",
                 channel.name, channel.kind, payload,
             )
-            # P7-F5(a): a log-only emit went NOWHERE — never claim delivery. The
+            # A log-only emit went NOWHERE — never claim delivery. The
             # pre-fix branch stamped delivered=True for an alert/nats_stream channel
             # whenever no publisher was wired (tests, an unwired subclass, a partial
             # bring-up), so the durable alert_sink_deliveries audit lied that a
@@ -276,7 +276,7 @@ class ChannelEmitter:
     async def _fan_out_alert_sinks(
         self, channel: Channel, payload: dict[str, Any]
     ) -> None:
-        """P1-1 outward fan-out — shape the escalation into the converged
+        """Outward fan-out — shape the escalation into the converged
         alert payload and push it through the sink dispatcher.
 
         Best-effort: the dispatcher's own ``fan_out`` never raises, but the
@@ -393,7 +393,7 @@ class ChannelEmitter:
             payload.get("target_id"),
             payload.get("severity"),
             eff_conf,
-            # P7-F5(a): honor an explicit non-delivery status ('logged_only' for a
+            # Honor an explicit non-delivery status ('logged_only' for a
             # log-only emit) so the audit distinguishes 'went nowhere by design'
             # from a delivery 'failed'; a confirmed publish stays 'delivered'.
             record.get("status") or ("delivered" if delivered else "failed"),
@@ -562,7 +562,7 @@ async def _emit_to_channels(
         "output_id": call.args.get("output_id"),
         "target_id": call.args.get("target_id"),
         "effective_confidence": call.args.get("effective_confidence"),
-        # P1-1: the RAW faithfulness score (when the verify pass produced a
+        # The RAW faithfulness score (when the verify pass produced a
         # verdict) rides along so the outward alert-sink payload can state
         # its verify posture explicitly — "faithfulness=<score>" vs
         # "unverified — <reason>". None when nothing was verified.
@@ -647,15 +647,15 @@ def default_tool_registry() -> ToolRegistry:
     register_substrate_read_tools(r)
     # journal_read reuses the substrate_read list_findings handler (idempotent
     # re-register of the same callable) so the journal_read pack's tool surface
-    # is self-contained even if substrate_read is ever disabled (plan §5).
+    # is self-contained even if substrate_read is ever disabled.
     register_journal_read_tools(r)
-    # journal_propose (plan §7 / Wave 4) — the journal's PROPOSE-AND-GATE write
+    # journal_propose — the journal's PROPOSE-AND-GATE write
     # surface: each handler writes ONLY a pending journal_proposals row (asserted
-    # by the gating test, tests/journal_w4). Registered here so the agency
+    # by the gating test). Registered here so the agency
     # dispatch resolves the name; it RUNS only when the journal grants the
     # journal_propose pack AND a per-run ctx.writeback is wired.
     register_journal_propose_tools(r)
-    # Program 5 lane 1 — the inquiry kind's own continuity ledger (§3): three
+    # The inquiry kind's own continuity ledger: three
     # tools, each scoped to the calling descriptor (inquiry_state.py:scope_fence).
     # Registered here so the agency dispatch resolves the names; they RUN only
     # when a granted+allowed inquiry descriptor's per-run ctx.writeback is wired.

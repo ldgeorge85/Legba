@@ -1,30 +1,30 @@
-# I-5 series-kind capabilities (2026-11-14) — the World Bank's consumer-price
+# The World Bank's consumer-price
 # inflation for the world aggregate (World Development Indicators,
 # FP.CPI.TOTL.ZG, annual %), as a SERIES. Ships DRAFT; the reference host
 # walks it to CONFIGURED (descriptors/LIFECYCLE.md), never active —
-# activation is the owner's call. Kind: series_api.
+# activation is the operator's call. Kind: series_api.
 #
-# WHY: a country-baseline indicator family (the review's row 4, "add"). The
-# review names ONE indicator (the one its check URL asked for), so this file
+# WHY: a country-baseline indicator family (one indicator is
+# checked), so this file
 # is that one, written as the TEMPLATE for the rest: another indicator or
 # country is a new output (or a new file) with its own check — which
-# indicators to hold is the owner's choice (e.g. NY.GDP.MKTP.KD.ZG GDP growth,
+# indicators to hold is the operator's choice (e.g. NY.GDP.MKTP.KD.ZG GDP growth,
 # SP.POP.TOTL population, per country rather than WLD).
 #
 # THE ENDPOINT. World Bank Indicators API v2,
-# /v2/country/WLD/indicator/FP.CPI.TOTL.ZG?format=json. Checked 2026-11-14 by
-# the source-expansion review (generic client identity; the first try 502,
+# /v2/country/WLD/indicator/FP.CPI.TOTL.ZG?format=json. Checked 2026-11-14
+# (generic client identity; the first try 502,
 # the retry 200, application/json, 541 bytes for per_page=2): the body is a
-# TOP-LEVEL ARRAY of two — [page metadata, rows] — which is why X-1 could not
-# write it; I-5's `rows_path: "1"` reads the second element. Row fields as
-# the API documents them (the review recorded the shape and size, not the
+# TOP-LEVEL ARRAY of two — [page metadata, rows] — so
+# `rows_path: "1"` reads the second element. Row fields as
+# the API documents them (shape and size checked, not the
 # field list; 541 bytes is two such rows plus the metadata object): `date`
 # (the year, "2025"), `value` (number or null — null is absent, never zero),
 # `countryiso3code` ("WLD"), `indicator.id`, `obs_status`, `decimal`. If the
 # first poll finds other names it writes nothing and its health detail counts
 # the skipped rows. per_page=100 holds the whole history of one indicator for
 # one country (about 66 years) in one page; the handler keeps the rows whose
-# YEAR ends inside the window (I-5: a period is re-read while its end is in the
+# YEAR ends inside the window (a period is re-read while its end is in the
 # window), so the 1 + 400-day re-read covers the newest year and its revisions.
 #
 # SUBJECT. The world aggregate, subject `global` (subject_kind global), the
@@ -45,7 +45,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: i5_series_kind_capabilities
+  owner: owner@local
   created: "2026-11-14T00:00:00Z"
 
 scope:

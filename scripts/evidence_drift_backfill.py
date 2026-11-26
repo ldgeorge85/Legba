@@ -401,13 +401,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--max-dependants", type=int, default=200)
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--assess", action="store_true",
-                    help="D-2: assess every flag-writing archive pair (code only; needs --archive)")
+                    help="Assess every flag-writing archive pair (code only; needs --archive)")
     ap.add_argument("--assess-model", action="store_true",
-                    help="D-2: also run the model step through the runtime's own handler")
+                    help="Also run the model step through the runtime's own handler")
     ap.add_argument("--model-ref", default="llm.primary.openai_compat")
     ap.add_argument("--allow-host", action="append", default=[],
                     help="endpoint host the model step may call (repeat); anything else is refused")
-    ap.add_argument("--out", default=None, help="D-2: write per-pair JSON and summary.json here")
+    ap.add_argument("--out", default=None, help="Write per-pair JSON and summary.json here")
     return asyncio.run(_amain(ap.parse_args(argv)))
 
 

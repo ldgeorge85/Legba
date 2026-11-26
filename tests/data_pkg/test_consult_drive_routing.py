@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""C-1b — consult presents a case: the drive tools through the REAL binding path.
+"""Consult presents a case: the drive tools through the REAL binding path.
 
 Design C-1a §7, backend tests 1-7 and 10-11. Every drive tool runs through the
 case gate and then ``AgencyToolBinding.run_tool`` → ``Agency.run_pack_tool`` →

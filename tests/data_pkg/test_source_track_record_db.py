@@ -331,7 +331,7 @@ def _source_body(descriptor_id: str) -> dict[str, Any]:
             "version": "0" * 16,
             "abstraction_level": "L1",
             "state": "draft",
-            "owner": "lewis@local",
+            "owner": "owner@local",
             "created": "2026-07-24T10:00:00+00:00",
         },
         "scope": {

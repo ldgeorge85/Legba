@@ -1,4 +1,4 @@
-# K-1 cyber desk (2026-11-14) — draft SourceDescriptor. Ships DRAFT (operator activates).
+# Draft SourceDescriptor. Ships DRAFT (operator activates).
 #
 # CISA Known Exploited Vulnerabilities (KEV) catalogue, read from the
 # provider's own published JSON feed through the existing json_api kind.
@@ -6,8 +6,7 @@
 # WHY NOT source.intelmq.cisa_kev (the parked adapter): that descriptor runs
 # the IntelMQ HTTP collector bot one-shot in a subprocess, and the `intelmq`
 # package is an opt-in extras group that docker/Dockerfile.runtime does not
-# install (verified 2026-06-09; RETIRED.md lists it `parked`, never registered
-# on the reference host). Activating it needs a different runtime image for a
+# install (RETIRED.md lists it `parked`, never registered). Activating it needs a different runtime image for a
 # keyless GET of one JSON file. The json_api kind already does that GET.
 #
 # THE HONEST LANDING. The catalogue is a REGISTER: entries are added over time,
@@ -36,7 +35,7 @@
 # First poll: `lookback_minutes` 30 days, so the first pull backfills about
 # 30-45 entries (2026-10/11 rates), within the 180 s poll budget. Twice a day:
 # CISA adds entries during the US working day; `dateAdded` is a DATE (read as
-# 00:00 UTC), and the 72 h cursor look-back (W11-F151 default) keeps an entry
+# 00:00 UTC), and the 72 h cursor look-back (default) keeps an entry
 # added after a pull eligible on the next one.
 #
 # Geography: deliberately NO declared geo. The json_api handler stamps the
@@ -50,7 +49,7 @@
 # Credibility: host cisa.gov seeded at 0.92 / gov / state-affiliated
 # (scripts/bringup_register_source_batch_2026_09.py).
 # Desk routing: scope.classifications `geopolitics.topic:cyber` is stamped on
-# every signal (W10 TAX-2) — the cyber desk's tag arm (target_cyber.yaml).
+# every signal — the cyber desk's tag arm (target_theme_cyber.yaml).
 
 identity:
   id: source.cisa.kev
@@ -60,7 +59,7 @@ identity:
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
   state: draft
-  owner: cyber_desk_k1
+  owner: owner@local
   created: "2026-11-14T00:00:00Z"
 
 scope:

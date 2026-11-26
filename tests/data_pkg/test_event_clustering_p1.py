@@ -1,12 +1,12 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""V3/P1 tests — event clustering, lifecycle maintenance and reconciliation.
+"""Tests — event clustering, lifecycle maintenance and reconciliation.
 
 Pure tests pin the matcher contract (weights live in the sibling module), the
 B1 guards, the additive embedding/fact gates and the descriptor shape. The
 ``migrated_pg`` tests exercise the real path end-to-end: bounded signal slice →
 cluster → event upsert + links → lifecycle transition → reactivation, plus the
-signature-collapse edge the tower lane produces deliberately.
+signature-collapse edge the tower leg produces deliberately.
 """
 
 from __future__ import annotations
@@ -1215,9 +1215,9 @@ def test_opposed_compass_stem_restricted_walk_matches_old_cross_product() -> Non
     def _old_opposed_compass_stem(
         left_names: tuple[str, ...], right_names: tuple[str, ...]
     ) -> bool:
-        """The pre-P1f reference: the O(n x m) cross product over the raw
+        """The earlier reference: the O(n x m) cross product over the raw
         string predicate — exactly what ``_opposed_compass_stem`` did
-        before this lane hoisted the per-row probes."""
+        before the per-row probes were hoisted."""
         for a in left_names:
             for b in right_names:
                 if not differs_by_direction(a, b):
@@ -1371,9 +1371,9 @@ def test_prefilter_open_events_by_category_or_geo_with_fallback() -> None:
 
 
 def test_match_event_bounds_a_120_member_candidate_under_the_wall() -> None:
-    """P1d, the incident this lane fixes: a 120-member tower candidate
+    """A 120-member tower candidate
     matched against a large open-event set used to run 254.3 s against a
-    10 s wall (finding 128dcb9c, 2026-09-24) because
+    10 s wall because
     ``asyncio.wait_for`` cannot cancel the synchronous ``_match_event`` walk.
     With the prepared-aggregate path, the member cap and the category/geo
     pre-filter engaged (the shape ``_write_tower_candidate`` now uses), the
@@ -1431,21 +1431,21 @@ def test_match_event_bounds_a_120_member_candidate_under_the_wall() -> None:
 
 
 def test_prepare_open_events_amortizes_across_many_tower_candidates() -> None:
-    """P1e — the fix's realistic shape and the incident it closes. Live
-    2026-09-24, with the P1d cap and pre-filter already engaged,
+    """The realistic shape of the amortized-preparation fix. Live,
+    with the member cap and pre-filter already engaged,
     ``_match_event`` still cost 90.5 s / 106.4 s / 13.8 s for the three
     candidates past the cursor, because the open-event set — unchanged for
     the whole tick — was re-``_prepare``d fresh for EVERY candidate. Here:
     1,000 open events, each carrying 50-300 entity mentions and a long
-    title (the heavy fold this lane amortizes), matched against 3 different
+    title (the heavy fold being amortized), matched against 3 different
     120-member candidates. ONE ``prepare_open_events`` call folds the whole
     set; every candidate's match must then land well under the
     ``tower_candidate_max_seconds`` wall — this is the shape that used to
     blow it. No directional-compass entity names (``North Korea``, ``West
     Bank``, ...) in the pool: at this density they would make almost every
     pair trip the pre-existing O(members x mentions) opposed-direction scan
-    (``_opposed_compass_stem``) — a real, separate cost this lane does not
-    touch, not the redundant-preparation cost it fixes."""
+    (``_opposed_compass_stem``) — a real, separate cost not
+    touched here, not the redundant-preparation cost it fixes."""
     entity_pool = [f"Entity {i}" for i in range(400)] + [
         "Iran", "United States", "Russia", "China", "Israel", "Ukraine",
         "European Union", "Saudi Arabia", "Republic of Korea", "Turkey",
@@ -1510,10 +1510,10 @@ def test_prepare_open_events_amortizes_across_many_tower_candidates() -> None:
         elapsed = time.monotonic() - started
         per_candidate_seconds.append(elapsed)
         assert outcome.capped is True
-        # The brief's target is ~1 s; the bound here carries headroom for the
-        # shared test box (six wave-F lanes contend for the same CPU) without
+        # The target is ~1 s; the bound here carries headroom for the
+        # shared test box (other suites contend for the same CPU) without
         # hiding a regression — this is still two orders of magnitude under
-        # the 90.5 s / 106.4 s / 13.8 s live-profiled incident and a fifth of
+        # the 90.5 s / 106.4 s / 13.8 s live-profiled costs and a fifth of
         # the 10 s tower_candidate_max_seconds wall.
         assert elapsed < 2.0, (
             f"per-candidate match took {elapsed:.3f}s against the 2s bound "

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """TEST-ONLY fixture: one new deterministic handler and one new alert kind,
-added through the type registry exactly as a lane would add them.
+added through the type registry exactly as a contributor would add them.
 
 Three files here (the handler's code, its declaration, the alert kind's
 declaration) plus the test that proves them

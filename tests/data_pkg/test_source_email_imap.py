@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W5 SRC-8 — the ``email_imap`` source kind.
+"""The ``email_imap`` source kind.
 
 Driven against an in-process IMAP double that answers in imaplib's own
 return shapes (``("OK", [b"1 2 3"])`` for UID SEARCH, the ``(header, bytes)``
@@ -489,7 +489,7 @@ async def test_health_check_logs_in_readonly_when_configured():
 
 class _Conn:
     """Enough of asyncpg for write_canonical_signal + the poll-outcome row,
-    with the S-4 collapse keyed on (source_id, content_hash) like the SQL."""
+    with the collapse keyed on (source_id, content_hash) like the SQL."""
 
     def __init__(self, db: dict[str, Any]) -> None:
         self.db = db

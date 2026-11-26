@@ -1,11 +1,11 @@
 /**
  * assemblyModel — the reader's half of the composition-demotion contract (D-4).
  *
- * The producer (D-2) writes `data.data.assembly`, a typed `assembly.v1` document,
+ * The producer writes `data.data.assembly`, a typed `assembly.v1` document,
  * onto the SAME `kind='finding'` row the Morning Read already reads
- * (`DEMOTION_D1_SPEC_2026-09-04.md` §1.1 — no new kind, no new analyst_id, so
+ * (no new kind, no new analyst_id, so
  * `/api/v1/findings?analyst_id=world_assessor` keeps serving it and this module
- * needs no new endpoint). The Assessment (D-6) is its own row,
+ * needs no new endpoint). The Assessment is its own row,
  * `analyst_id='world_assessment'`, carrying `data.data.assessment` and a
  * `derived_from` of length exactly one — the spine it was written from.
  *
@@ -40,7 +40,7 @@ export type SpanRole =
   | 'window_adds'
 
 /**
- * P3 Lane A — CONTEXT, not quotation. A COUNTRY block carries its origin desk
+ * CONTEXT, not quotation. A COUNTRY block carries its origin desk
  * head in FULL (offsets [0:len], same digest, same construction gate) so the
  * per-country Assessment can argue ACROSS dimensions. It is NOT part of the
  * record: the server's own render omits it and every reader here must too, or
@@ -120,7 +120,7 @@ export interface AssemblyBlock {
   /** THE QUOTATIONS — what the record carries. Never the context body. */
   spans: AssemblySpan[]
   /**
-   * P3 Lane A — the origin desk head IN FULL, country tier only, empty
+   * The origin desk head IN FULL, country tier only, empty
    * everywhere else. Available to a reader that wants to open the read behind a
    * quoted sentence; never rendered as part of the record.
    */
@@ -141,7 +141,7 @@ export interface AssemblyBlock {
   /** N-C — opposite verdicts on one event among the unit head's cited headlines. */
   contested_facts?: ContestedFact[]
   /**
-   * Lane N-D — the lead span checked against the signals ITS markers cite
+   * The lead span checked against the signals ITS markers cite
    * (`assembly_span_checks`): numbers no cited signal states, and citations
    * that name none of the span's actors. `null` when the block was not
    * checked (built before the check, or a head with no citation bridge).
@@ -245,7 +245,7 @@ export interface AssemblyTension {
    * `false` means the pair is evidence for the drop ledger, NOT a conflict the
    * record published: nothing was carried on the B side to conflict with. The
    * reader must never render a `b_carried: false` tension in the same voice as
-   * a carried pair — on 2026-09-06 the world read's only declared tension was
+   * a carried pair — a world read's only declared tension once had
    * that shape and the Assessment narrated it as a live conflict between two
    * published reads.
    *
@@ -503,9 +503,9 @@ export interface SpineBadge {
 /**
  * W-3 — one `data.data.citations` entry off an ASSESSMENT row.
  *
- * THE READING PROBLEM, and it is a reading problem only. D-6 fences the voice
+ * THE READING PROBLEM, and it is a reading problem only. The Assessment fences the voice
  * to its spine (`derived_from == [spine_id]`), so every `ref_id` the channel
- * writes is that one row — the 2026-09-06 12:15Z Assessment carried four
+ * writes is that one row — one Assessment carried four
  * citations and all four resolved to the same uuid. The fence is the contract
  * and nothing here widens it by a byte. What it does is stop DISCARDING the
  * two keys the producer already stamps: `ordinal` (which spine block the
@@ -674,7 +674,7 @@ function projectBlock(v: unknown): AssemblyBlock | null {
   const o = obj(v)
   if (!o) return null
   const allSpans = arr(o.spans).map(projectSpan).filter((s): s is AssemblySpan => s !== null)
-  // P3 Lane A — the split happens HERE, once, so every consumer of `spans`
+  // The split happens HERE, once, so every consumer of `spans`
   // keeps meaning "the quotations" with no edit. See CONTEXT_SPAN_ROLES.
   const spans = allSpans.filter((s) => !isContextSpan(s))
   const contextSpans = allSpans.filter((s) => isContextSpan(s))
@@ -839,7 +839,7 @@ function projectThread(v: unknown): SharedThread | null {
   }
 }
 
-/** Lane N-D — `blocks[].span_checks`, total over a malformed entry. */
+/** `blocks[].span_checks`, total over a malformed entry. */
 export function projectSpanChecks(v: unknown): SpanChecks | null {
   const o = obj(v)
   if (!o) return null
@@ -1115,7 +1115,7 @@ export function projectAssembly(row: ReadFindingRow): AssemblyPayload | null {
  * "assembly_arms.v1"`, plus the arms' raw tallies in `verification.counters`
  * (`assembly_quote_spans_checked` / `_ok`, `assembly_scope_spans_checked`, ...).
  * A critique has NEVER carried an `assembly_arms` key (0 of 4,572 audited
- * critiques, 2026-11-07), so that shape is read only as a fallback for the
+ * critiques), so that shape is read only as a fallback for the
  * fixtures that model it.
  *
  * Derivations, all from those two server-written objects:

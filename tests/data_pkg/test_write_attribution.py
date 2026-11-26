@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Every table names its writer class in ONE place (data-model lane 9).
+"""Every table names its writer class in ONE place.
 
 ``legba.data.write_attribution.TABLES`` classifies every table the migrations
 (and the declared runtime DDL) create as (a) already names its writer, (b)

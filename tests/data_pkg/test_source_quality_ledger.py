@@ -342,7 +342,7 @@ async def test_all_four_legs_land_typed_and_unblended(api_app, client, tag):
     assert c["cadence_raw"] == "*/15 * * * *"
     assert c["budget_minutes"] == 60
     assert c["freshness_grade"] == "ok"
-    # W3 SRC-2: the staleness tripwire rides the computed leg (3 signals a
+    # The staleness tripwire rides the computed leg (3 signals a
     # minute ago against a 15-minute poll: fresh, a measured factor).
     assert c["staleness"]["state"] == "fresh"
     assert c["staleness"]["factor"] is not None and c["staleness"]["factor"] < 1
@@ -380,7 +380,7 @@ async def test_list_row_withholds_dossier_prose(api_app, client, tag):
 async def test_list_staleness_is_measured_for_active_only_and_unknown_is_not_zero(
     api_app, client, tag,
 ):
-    """W3 SRC-2: ``computed.staleness`` — a stale ACTIVE feed reads stale with
+    """``computed.staleness`` — a stale ACTIVE feed reads stale with
     its factor; an active feed that never delivered reads ``unknown`` with a
     null factor; a paused one is NOT MEASURED (null block), never a fake 0."""
     from legba.runtime import source_staleness

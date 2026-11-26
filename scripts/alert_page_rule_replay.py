@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Replay a window of past alerts through THE page rule, offline (L-1).
+"""Replay a window of past alerts through THE page rule, offline.
 
 Input: the JSON lines ``scripts/alert_page_rule_replay.sql`` exports
-(read-only) — one line per would-be raise from the three pre-L-1 systems, with
+(read-only) — one line per would-be raise from the three earlier alerting systems, with
 what actually reached the push service. Optionally the host logs, for the
 pushes no ledger recorded (``--disk-log``, ``--nightly-log``).
 

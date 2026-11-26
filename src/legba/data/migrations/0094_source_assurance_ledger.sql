@@ -3,8 +3,7 @@
 --
 -- 0094_source_assurance_ledger.sql
 --
--- P3-1 (source assurance ledger, layers 1+2 of the A6 program design —
--- planning/PROGRAM_RECOMMENDATIONS_2026-07-24.md §A6):
+-- Source assurance ledger, layers 1+2:
 --
 --   * `source_ratings`  — layer 2: explicit rubric grades per source, with the
 --     Admiralty vocabulary (source reliability A–F × information credibility
@@ -23,7 +22,7 @@
 -- contention outcomes) is a LATER task gated on the contested-claims arbiter
 -- tail — deliberately NOT in this migration.
 --
--- HARD consumption rule (operator): grades NEVER touch the faithfulness
+-- HARD consumption rule: grades NEVER touch the faithfulness
 -- score. They feed weighting / flags / tie-breaks in later tasks; today the
 -- only consumers are display surfaces (the assurance route + the source-list
 -- `assurance_grade` projection). Nothing in the verify/judge path reads

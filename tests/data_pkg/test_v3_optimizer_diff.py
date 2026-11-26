@@ -293,7 +293,7 @@ async def test_diff_404_for_unknown_candidate(api_app, client: AsyncClient):
 def test_diff_route_does_not_import_dspy():
     """The registry process must never import dspy to serve the diff route.
 
-    Guards the L-176 invariant: dspy lives only in the opt-in GEPA worker. The
+    Guards the invariant: dspy lives only in the opt-in GEPA worker. The
     diff route reads the parent snapshot from substrate, so importing the v3
     API module (and exercising its route table) must not drag dspy in.
 

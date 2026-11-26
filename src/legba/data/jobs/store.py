@@ -80,7 +80,7 @@ CREATE TABLE IF NOT EXISTS public.legba_jobs (
     result           JSONB,
     -- Full enqueued envelope, cached on claim so the reaper can RE-ENQUEUE a
     -- zombie's work (the ledger row alone lacks ``input_refs`` / ``deadline``,
-    -- which the handler needs). C-3 / 2.6.
+    -- which the handler needs).
     envelope         JSONB,
     claimed_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()

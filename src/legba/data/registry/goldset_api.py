@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Correctness gold-set labeling loop (P2-5) — the weekly worksheet surface.
+"""Correctness gold-set labeling loop — the weekly worksheet surface.
 
 The correctness-vs-reference gold set was n≈1 because labeling had no cheap
-surface. The operator agreed to label a handful of findings per week IF one
+surface. A handful of findings per week can be labeled IF a cheap surface
 exists; this router is that surface:
 
   * ``GET  /eval/goldset/worksheet`` — this ISO week's stratified sample of

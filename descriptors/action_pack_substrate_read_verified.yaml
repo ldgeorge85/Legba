@@ -1,6 +1,6 @@
-# X3/G0 — substrate_read_verified: the bake-off's ARM C read surface (DRAFT).
+# substrate_read_verified: the bake-off's ARM C read surface (DRAFT).
 #
-# planning/reviews/BAKEOFF_DESIGN.md v1.0 §2, arm C — "frontier consult over
+# Arm C — "frontier consult over
 # VERIFIED findings only": the platform's findings that pass the composition
 # admission floor, the source documents those findings cite, and target
 # resolution. No raw search.
@@ -19,8 +19,8 @@
 # descriptor GRANTS it (data/analysts/consult_bakeoff.consult_read_pack_for) —
 # today only analyst_consult_bakeoff_verified.yaml.
 #
-# DRAFT. NOT in scripts/bringup_register_action_packs.py. The operator registers
-# it for the bake-off window (G1) and retires it after.
+# DRAFT. NOT in scripts/bringup_register_action_packs.py. Register
+# it for the bake-off window and retire it after.
 
 identity:
   id: substrate_read_verified
@@ -29,7 +29,7 @@ identity:
   version: "<content-hash stamped at register time>"
   abstraction_level: L1
   state: draft
-  owner: x3_g0_bakeoff
+  owner: owner@local
   created: "2026-10-09T00:00:00Z"
 
 tools:

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Citations as rows (lane DM-A): the writer, beside the finding, in its transaction.
+"""Citations as rows: the writer, beside the finding, in its transaction.
 
 ``writes.write_analyst_output`` calls :func:`dual_write_citation_rows` for a
 NEW finding, on the same connection and inside the same transaction as the
@@ -20,7 +20,7 @@ desk run, the index the run was handed. Today's fields are untouched.
   back the finding's own INSERT with it.
 * Idempotent on ``finding_citation_receipts.finding_id``: a second call for
   the same finding writes nothing (the backfill relies on it).
-* ``written_by`` (lane DM-B): the finding's writer, the deterministic
+* ``written_by``: the finding's writer, the deterministic
   handler (``rule:<id>``) or the seat (``agent:<id>@<version>``)
   (``principals.output_writer_handle``); the backfill names
   ``rule:citation_rows_backfill``.
@@ -165,7 +165,7 @@ async def pin_material(conn: Any, kind: str, keys: Sequence[str]) -> dict[str, _
     ``observation``): the receipt version ``byte_path.classify`` picks, or,
     when no version keeps its bytes, the received one by its hash
     (``no_bytes_kept``). One query. A key with no receipt is absent. Also the
-    held family's pin (lane DM-C), so both tables pin by one rule."""
+    held family's pin, so both tables pin by one rule."""
     out: dict[str, _Pin] = {}
     rows_by: dict[str, list[Mapping[str, Any]]] = {}
     for r in await conn.fetch(_PIN_SQL, kind, sorted(set(keys))):
@@ -272,7 +272,7 @@ async def write_citation_rows(
     (written before: nothing is written twice). The caller owns the
     transaction; this function opens none.
 
-    ``written_by`` is the writer's principal HANDLE (lane DM-B): resolved
+    ``written_by`` is the writer's principal HANDLE: resolved
     once by ``legba_principal`` in the receipt INSERT, and that id stamped on
     every other row of the write. ``None`` leaves the column NULL."""
     specs = specs if specs is not None else target_specs()

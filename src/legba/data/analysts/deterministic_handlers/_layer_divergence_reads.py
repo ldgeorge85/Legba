@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Program 6 L2 — the READ half of ``layer_divergence``: the four queries that
+"""The READ half of ``layer_divergence``: the four queries that
 turn a loaded map into one desk's :class:`TargetBundle`, plus the synthetic
 (no-DB) path the unit tests build bundles through.
 

@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The held family's status log as a hash chain, and its cache rebuilt
-(data-model lane 10, DM-C).
+"""The held family's status log as a hash chain, and its cache rebuilt.
 
 THE DATABASE IS THE AUTHORITY. ``assertion_status_log``'s BEFORE INSERT
 trigger (migration ``20261115T1940_held_record``) sets ``seq``,

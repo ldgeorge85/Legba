@@ -240,7 +240,17 @@ function objectSummary(o: PinObject, surface: string): string {
  * pin (never a stale one).
  */
 export function resolveAmbientPin(claims: readonly PinClaim[], scope: Scope | null): AmbientPin | null {
-  const live = claims.filter((c) => c.key !== WALL_SCOPE_CLAIM || !!scope)
+  // THE POINT WINS OVER A WIDER OR OTHER SUBJECT: while a subject is the point
+  // (the one the top bar names), a surface's claim on the whole roster or on
+  // a different subject never takes Consult's pin — Consult would otherwise
+  // say "the whole roster" beside a bar that says "Burkina Faso". A claim on a
+  // record (a finding, a source, a unit) still wins: it is narrower focus.
+  const pointId = scope?.kind === 'target' ? scope.id : null
+  const live = claims.filter(
+    (c) =>
+      (c.key !== WALL_SCOPE_CLAIM || !!scope) &&
+      !(pointId && (c.object.kind === 'roster' || (c.object.kind === 'target' && c.object.id !== pointId))),
+  )
   const hasScopeClaim = live.some((c) => c.key === WALL_SCOPE_CLAIM)
   const top = live.reduce<PinClaim | null>((best, c) => (!best || c.seq > best.seq ? c : best), null)
   if (!top) return scope && !hasScopeClaim ? { pin: scopePin(scope), surface: 'scope' } : null

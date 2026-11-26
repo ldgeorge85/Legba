@@ -3,8 +3,8 @@
 --
 -- 0098_fact_decay_states.sql
 --
--- C4 (substrate dynamics — fact confidence decay + corroborations-as-
--- sightings; planning/PROGRAM_RECOMMENDATIONS_2026-07-24.md §C4): the
+-- Substrate dynamics (fact confidence decay + corroborations-as-
+-- sightings): the
 -- per-fact DECAY READOUT sidecar the `fact_decay_scan` deterministic analyst
 -- stamps daily.
 --

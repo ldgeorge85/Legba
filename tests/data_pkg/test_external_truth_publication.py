@@ -174,7 +174,7 @@ def test_the_visible_tier_unknown_class_is_its_own_stratum_cell() -> None:
 
 
 def test_the_external_axis_is_never_pooled_into_another_aggregate() -> None:
-    """The ``labels_api`` P2-5 idiom, applied to the new axis from its first row
+    """The ``labels_api`` idiom, applied to the new axis from its first row
     rather than retrofitted after a review finds the number reimplemented."""
     et.assert_not_pooled({"faithfulness": 0.92}, what="a faithfulness aggregate")
     try:

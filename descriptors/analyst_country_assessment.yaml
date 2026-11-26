@@ -1,4 +1,4 @@
-# country_assessment — THE INTERPRETIVE CHANNEL, PER COUNTRY (P3 Lane A).
+# country_assessment — THE INTERPRETIVE CHANNEL, PER COUNTRY.
 #
 # CLONED FROM analyst_world_assessment.yaml, and the clone is the point: the two
 # channels are the SAME code path under the SAME kind, differing only in which
@@ -9,8 +9,9 @@
 # Since the 2026-09-04 composition demotion EVERY composition tier is an
 # ASSEMBLY. `country_composition` quotes ONE sentence — the BLUF lead span — from
 # each of its eight desk heads, byte-for-byte, under ordinals, with a closed
-# connective vocabulary; it writes no sentence of its own. D-5 retired the region
-# tier to a deterministic rollup. D-6 gave the WORLD assembly a voice.
+# connective vocabulary; it writes no sentence of its own. The region
+# tier was retired to a deterministic rollup; world_assessment gave the WORLD
+# assembly a voice.
 #
 # Nobody was left writing the cross-dimension per-country read: the read that
 # says what an energy finding and an escalation finding ON THE SAME DESK mean
@@ -19,7 +20,7 @@
 #
 # ── why the SAME kind, again ────────────────────────────────────────────────
 # `identity.kind: meta_findings_synthesizer` makes the same four integrations
-# no-ops it made for world_assessment (spec §2.1b): the verify dispatch's kind
+# no-ops it made for world_assessment: the verify dispatch's kind
 # allowlist already admits this kind when the descriptor declares
 # `method.llm.verify`; the rubric is chosen from the PAYLOAD (`[[ref:N]]`
 # citations route to the composition branch); `judge_assessability.
@@ -28,7 +29,7 @@
 # takes analyst_id, so the reader serves it on day one. Nothing in
 # `runtime/dapr_actors.py` moves — that file is at its module ceiling with no
 # seam, and a clause there would have blocked this train exactly as it would
-# have blocked D-6's.
+# have blocked world_assessment's.
 #
 # ── THE ONE STRUCTURAL DIFFERENCE: this analyst is PER-TARGET ───────────────
 # `subscription.targets` is PRESENT below. `_cadence_targets` (dapr_actors.py)
@@ -69,12 +70,12 @@
 # still RAISES rather than degrading to a reason code.
 #
 # ── state: draft, and what has to be true before it goes active ────────────
-# Same lifecycle call D-6 made, for the same class of reason plus one of its own:
+# Same lifecycle call world_assessment made, for the same class of reason plus one of its own:
 #   (a) LEGBA_COMPOSITION_ASSEMBLY must include country_composition, or every
 #       run reads a `regime: legacy` row and NOOPs with "No assembled record to
 #       assess";
 #   (b) this fan-out is ~32 runs per cycle against the world channel's 1, and
-#       every one of them is ALWAYS judged — the 33x judge spend D-6 named as
+#       every one of them is ALWAYS judged — the 33x judge spend named as
 #       the reason the country tier was deferred. It is a $0 core-plane call per
 #       the model policy below, but it is 32 of them twice a day plus their
 #       judge passes, and that is an operator's number to accept, not a
@@ -94,7 +95,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: draft
-  owner: country_assessment
+  owner: owner@local
 
 subscription:
   # PRESENT `targets` block ⇒ per-COUNTRY analyst, one worker per matched desk
@@ -111,7 +112,7 @@ subscription:
     - id: country_composition
       data_types: [finding]
       # 24h, and this window is a FRESHNESS bound rather than the composition's
-      # own 336h ADMISSIBILITY HORIZON — the same deliberate difference D-6
+      # own 336h ADMISSIBILITY HORIZON — the same deliberate difference world_assessment
       # spells out one tier up. A composition admits each desk's NEWEST head
       # however old, because a stale read is still the desk's current answer. An
       # Assessment written over yesterday's record while today's exists is simply
@@ -151,7 +152,7 @@ method:
   # PAYLOAD's tier rather than from this descriptor), so a voice change is a
   # deploy and a diff rather than a descriptor PUT no test can see.
   llm:
-    thinking: "off"   # 2026-11-15: off on the measurement (32 runs: 57.6 s vs 16.0 s, verifier 0.725 vs 0.718); was "on" under T-2
+    thinking: "off"   # off on the measurement (32 runs: 57.6 s vs 16.0 s, verifier 0.725 vs 0.718)
     # Fleet-wide 1.0 per the 2026-07-24 sampling audit.
     temperature: 1.0
     # MODEL POLICY (operator): the CORE plane via a stack_ref ($0). NEVER a
@@ -175,7 +176,6 @@ method:
       factory_kind: stack_ref
       raw: llm.primary.openai_compat
       expected_family: llm_provider
-    max_tokens: 768            # the kind's DEFAULT_MAX_TOKENS
   budget_tokens_per_day: 0
   retry:
     budget:
@@ -183,7 +183,7 @@ method:
 
 cadence:
   # 30 MINUTES AFTER THE COUNTRY COMPOSITION (11:30 / 23:30 UTC), so the record
-  # this reads is the one this cycle just wrote. Same offset D-6 chose over the
+  # this reads is the one this cycle just wrote. Same offset world_assessment chose over the
   # world composition (:00 → :15); a wider gap buys nothing because the
   # composition's own fan-out is done well inside 30 minutes, and a narrower one
   # risks reading the PREVIOUS cycle's head on a slow desk — which is not a

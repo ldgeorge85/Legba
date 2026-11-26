@@ -1,0 +1,64 @@
+{
+  "title": "Berth-fee dispute sparks coordinated regional condemnation",
+  "body": "*As of 2026-08-18; slice covers the trailing 72h to that date; 111 signals.*\n\n**BLUF:** A coordinated narrative has emerged across Veldmark, Halden and international outlets condemning the Harbour Authority's recent berth-fee announcement.\n\n## What changed\n- Multiple outlets on 15-16 August reported the same framing of the fee as \"an anachronistic provocation\" and \"a tax on every crew\" [99][101][111][84][85][77][92][108][107].\n- The reports uniformly highlight regional protests by two shipping unions and describe the fee as undermining the trade agreement, a shift from routine coverage of port business to a synchronised focus on this issue.\n\n## Why it matters\nThe convergence of phrasing - \"ritual levy,\" \"harbour hold-up,\" \"fee blindness\" - across distinct national media indicates a coordinated messaging push, likely aimed at amplifying pressure on the Authority. Such narrative alignment can shape public perception, constrain the Authority's options, and feed into broader regional narratives about trade fairness.\n\n## What would change this read\nThe observation of a single, isolated report of the fee without similar coverage would weaken the coordination claim; systematic reporting from a dedicated union-monitoring unit (which this desk does not currently collect) would be needed to reassess.\n\n## Indicators\n- Synchronised framing of the berth-fee announcement across multiple regional outlets.\n- Consistent protest language used by union and carrier sources.\n- Repetition of \"ritual levy\" and \"harbour hold-up\" terminology within hours of each other.\n",
+  "confidence": 0. nine,
+  "evidence": [
+    99,
+    101,
+    111,
+    84,
+    85,
+    77,
+    92,
+    108,
+    107
+  ],
+  "tags": [
+    "severity:moderate",
+    "topic:narrative_coordination"
+  ],
+  "indicators": [
+    {
+      "id": "synchronized-hashtag-surge",
+      "statement": "Coordinated surge of an identical hashtag/slogan across many accounts in a short window",
+      "status": "not_observed",
+      "horizon_date": "2026-08-15",
+      "first_seen": "2026-07-02",
+      "citations": []
+    },
+    {
+      "id": "cross-platform-message-cloning",
+      "statement": "Near-identical framing appearing simultaneously across two or more platforms/outlets",
+      "status": "triggered",
+      "horizon_date": "2026-07-30",
+      "first_seen": "2026-07-02",
+      "citations": [
+        "[99]",
+        "[101]",
+        "[111]",
+        "[84]",
+        "[85]",
+        "[77]",
+        "[92]",
+        "[108]",
+        "[107]"
+      ]
+    },
+    {
+      "id": "state-media-amplification",
+      "statement": "State or state-linked media amplifies the narrative in lockstep with the online push",
+      "status": "not_observed",
+      "horizon_date": "2026-07-30",
+      "first_seen": "2026-07-02",
+      "citations": []
+    },
+    {
+      "id": "inauthentic-account-cluster",
+      "statement": "A cluster of new/low-history/bot-like accounts drives a measurable share of the volume",
+      "status": "not_observed",
+      "horizon_date": "2026-08-15",
+      "first_seen": "2026-07-02",
+      "citations": []
+    }
+  ]
+}

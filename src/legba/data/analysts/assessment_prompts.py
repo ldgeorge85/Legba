@@ -1,4 +1,4 @@
-"""THE ASSESSMENT CHANNEL'S PROMPT — the voice that survives, fenced (D-1 §2).
+"""THE ASSESSMENT CHANNEL'S PROMPT — the voice that survives, fenced.
 
 The demotion takes the composition tier's prose away and replaces it with
 quotation. This module is where the interpretive voice goes instead: a separate
@@ -6,8 +6,8 @@ row, in its own band, written FROM the assembled record and from nothing else.
 
 THE FENCE IS A SIGNATURE, NOT A SENTENCE. :func:`build_assessment_prompt` takes
 ``payload: Mapping`` — the ``data.data.assembly`` object — as its ONLY data
-argument. No connection, no slice, no reader, no desk head. That is §2.1's
-enforcement point 2, and a test pins the signature rather than trusting the
+argument. No connection, no slice, no reader, no desk head. That is the
+enforcement point, and a test pins the signature rather than trusting the
 prose: a prompt builder that cannot reach the substrate cannot quote it.
 
 WHAT THE VOICE IS HANDED. The rendered record, byte-for-byte the body the
@@ -18,8 +18,8 @@ deliberate: the voice and the reader then see the same words in the same order,
 so "the record says X" is checkable by looking at the page.
 
 THE REGISTER, AND WHY IT DEPARTS FROM THE COMPOSITION PROMPTS.
-``VOICE_ORGANIC_REVIEW_2026-09-01`` §3.3 measured what makes the journal read
-organic while the reads read templated, and §3.4 sorted the properties into
+A review measured what makes the journal read
+organic while the reads read templated, and sorted the properties into
 transferable and load-bearing. This prompt takes the transferable ones:
 
   * **A1 — prose out, markers in.** No strict-JSON envelope. The journal proves
@@ -44,13 +44,13 @@ transferable and load-bearing. This prompt takes the transferable ones:
   * **B1 — threads, weighted, uncrowned**, with the earned-single state kept
     legal and now DECIDED by an arithmetic the voice is handed as a fact.
 
-And it refuses the ones §3.4 marks load-bearing (C1–C5): no uncited assertion, no
+And it refuses the load-bearing ones (C1–C5): no uncited assertion, no
 speculative first person, no refusal to state a bottom line, no flag-never-strip
 consequence model for the RECORD (this channel's own flags are a different
 thing — see below), and no non-attribution of the machine.
 
-THE v2 CLAUSE — THE INSTRUMENT IS NOT THE WORLD (D-6 §7.6, prereg E-2 / N2).
-D-6's replay diagnosed the weakest specimen (fidelity floor 0.545) as *"prose
+THE v2 CLAUSE — THE INSTRUMENT IS NOT THE WORLD.
+A replay diagnosed the weakest specimen (fidelity floor 0.545) as *"prose
 about the record's own machinery … an analyst narrating an instrument rather
 than a world"* and named one prompt clause as the lever. The first natural
 post-fix live Assessment measured the diagnosis exactly: ``citation_support``
@@ -75,7 +75,7 @@ only in the arithmetic block's own words with an ordinal, never narrate the
 instrument — and ``assessment_unsupported.instrument_prose`` marks the residue
 deterministically rather than leaving it to a judge to find.
 
-THE v3 REPAIR — THE TWO RESIDUALS (G3, D-6 §6.1). The v2 clause worked on its
+THE v3 REPAIR — THE TWO RESIDUALS. The v2 clause worked on its
 target and the failures moved house: across the N=5 replay the INSTRUMENT class
 fell from 7 of 11 judge failures to 3 of 8, while CROSS-BLOCK WEIGHTING rose 1 → 3
 and the APERTURE stayed at 2. Neither residual is fabrication and neither is
@@ -99,7 +99,7 @@ fixable by telling the voice to stop:
     that names a unit the record never declared.
 
 THE ONE PRIVILEGE THIS CHANNEL HAS, AND WHY IT IS SAFE. Its unsupported spans are
-MARKED, not dropped (§2.4) — the journal's off-chain privilege, granted here
+MARKED, not dropped — the journal's off-chain privilege, granted here
 because the Assessment cannot write a fact into the record. The record is the
 assembly; the assembly is quotation; nothing this voice says changes a byte of
 it. The prompt tells the model this outright, because a writer who knows a
@@ -111,7 +111,7 @@ WHAT IS DELIBERATELY NOT IMPORTED: ``_tradecraft.with_preamble``. The shared
 specifies … The first character must be { and the last must be }"* and opens with
 a single-judgment BLUF mandate. Both are precisely what this channel drops. The
 journal made the same call for the same reason (``journal_assessor`` module
-banner, §4.2), and the standards worth keeping are restated below in the
+banner), and the standards worth keeping are restated below in the
 channel's own words rather than inherited with their envelope attached.
 """
 
@@ -181,20 +181,18 @@ __all__ = [
 #: Bumped whenever the system prompt changes, and stamped on the row. A voice
 #: change that is invisible in the data is a voice change nobody can attribute.
 #:
-#: v2 (2026-09-05) — THE WEAK-SPECIMEN CLAUSE. D-6 §7.6 named it: the weakest
+#: v2 — THE WEAK-SPECIMEN CLAUSE. The replay named it: the weakest
 #: replay specimen (floor 0.545) "spends sentences on the record's own machinery
 #: … an analyst narrating an instrument rather than a world", and *"if one thing
-#: is tuned before R5, it is this"*. The first natural post-fix live Assessment
-#: (2026-09-06 00:15Z) then measured it exactly: ``citation_support`` 0.4286
+#: is tuned first, it is this"*. The first natural post-fix live Assessment
+#: then measured it exactly: ``citation_support`` 0.4286
 #: against the G3 bar of 0.90, with ALL FOUR ``soft_fail`` claims in that one
 #: class and every substantive world claim supported. Two sections carry the
 #: fix — ``THE INSTRUMENT IS NOT THE WORLD`` and the aperture section's
 #: re-pointing at the world — and the version is what lets a row be attributed
-#: to one side of it. R4 note: this is prereg item E-2 / instrument-plan N2, and
-#: it lands BEFORE T0 (2026-09-12 13:00Z), so it is not a mid-window
-#: co-intervention.
+#: to one side of it.
 #:
-#: v3 (2026-09-06) — THE G3 REPAIR, the two residual classes D-6 §6.1 named.
+#: v3 — THE G3 REPAIR, the two residual classes the replay named.
 #: The v2 replay moved the mean 0.7428 -> 0.7893 and reached the 0.90 bar on
 #: 2 of 5, because the instrument class fell (7 of 11 judge failures -> 3 of 8)
 #: and the failures REDISTRIBUTED into two shapes the clause could not reach:
@@ -208,7 +206,11 @@ __all__ = [
 #: grader half is ``provenance.assessment_weighting`` and the marker half is
 #: ``assessment_unsupported.aperture_unrostered``; this version is what lets a
 #: row be attributed to one side of the pair.
-PROMPT_VERSION: str = "assessment_prompt.v3"
+#: v3.1 — the shared assessment standards changed under every voice: the
+#: calibrate item now says how strong the support is separately from how likely
+#: the thing is, in the shared likelihood words. No section of this voice moved,
+#: so it is a minor step on v3 rather than a new world-voice number.
+PROMPT_VERSION: str = "assessment_prompt.v3.1"
 
 
 #: The Assessment's section list, run through the SAME ``_body_shape`` mechanics
@@ -218,12 +220,12 @@ PROMPT_VERSION: str = "assessment_prompt.v3"
 #: TWO SECTIONS OF ``COMPOSITION_BODY_SHAPE`` ARE DELIBERATELY GONE, and the
 #: reason is the demotion itself rather than taste:
 #:
-#:   * ``## Coverage`` — the record now PERSISTS its coverage ledger (§1.4c) and
+#:   * ``## Coverage`` — the record now PERSISTS its coverage ledger and
 #:     the reader renders it from the array. A prose restatement is what produced
 #:     the live ``metadata_mismatch`` specimen (a body asserting a tier the ledger
 #:     contradicts) and what ``_PIPELINE_VOICE`` forbids in the same breath as
 #:     mandating it.
-#:   * ``## Tension`` — tensions are DETECTED now (§1.6), and the tier may
+#:   * ``## Tension`` — tensions are DETECTED now, and the tier may
 #:     neither manufacture nor dissolve one. A model asked for a Tension section
 #:     writes one; 13.8% of world bodies currently close it by asserting
 #:     unanimity in a pipeline whose desks are structurally prevented from
@@ -310,7 +312,11 @@ OUTPUT. Respond with PROSE, in markdown — NOT JSON. The FIRST line is your hea
 #: v1 (2026-09-18) — the first country voice since the demotion. The world
 #: prompt's text and :data:`PROMPT_VERSION` are BYTE-UNCHANGED by this train;
 #: a test pins both.
-COUNTRY_PROMPT_VERSION: str = "country_assessment_prompt.v1"
+#:
+#: v1.1 — the shared assessment standards' calibrate item changed (support
+#: strength separate from likelihood, in the shared likelihood words), and one
+#: sentence of the country voice lost its history; the sections are unchanged.
+COUNTRY_PROMPT_VERSION: str = "country_assessment_prompt.v1.1"
 
 #: The header the context section is rendered under. A module constant because
 #: the test that proves the country prompt carries it — and the world prompt
@@ -411,7 +417,7 @@ COUNTRY_ASSESSMENT_BODY_SHAPE: str = _body_shape(
 #:      it fires on every block rather than on some.
 COUNTRY_ASSESSMENT_SYSTEM: str = f"""TASK — THE COUNTRY ASSESSMENT. You are handed ONE assembled record: this country's verified desk reads for this window, each quoted verbatim under an ordinal handle [[ref:N]], with the arithmetic that ordered them, and with each desk's FULL read printed below the record. Write the interpretive read that sits BESIDE that record, in its own clearly-labelled band, under your own headline.
 
-WHAT YOU ARE. You are not the record and you are not the machine. You are an argument ABOUT the record. The record states what each desk found, in its words, with its origins; you say what they MEAN TOGETHER for this one country — what you weigh heavily, what you discount, what you would watch. That is the whole of your job, and it is the one thing this product no longer has: every composition tier now quotes its inputs and writes no sentence of its own, so the cross-dimension read of a country exists only if you write it.
+WHAT YOU ARE. You are not the record and you are not the machine. You are an argument ABOUT the record. The record states what each desk found, in its words, with its origins; you say what they MEAN TOGETHER for this one country — what you weigh heavily, what you discount, what you would watch. That is the whole of your job: the composition tiers quote their inputs and write no sentence of their own, so the cross-dimension read of a country exists only if you write it.
 
 THE ONE QUESTION. These blocks are several DIMENSIONS of the SAME place in the SAME window — energy security, escalation, internal stability, leadership, military posture, economic coercion, narrative coordination, and on some desks proliferation. A reader can already see each dimension's own verdict; it is printed above you. What a reader cannot see, and what you are for, is the JOINT read: which dimensions are telling one story and which are telling two, where one desk's fact makes another desk's fact more or less worrying, and where two of them point in opposite directions and the record leaves that unresolved.
 
@@ -465,8 +471,8 @@ def system_prompt_for(payload: Mapping[str, Any]) -> str:
     """The voice this RECORD gets — chosen from the payload, never from an id.
 
     Total, and world-by-default: anything that is not a country-tier assembly
-    and carries no context answers :data:`ASSESSMENT_SYSTEM`, byte-for-byte what
-    D-6 shipped. The choice is made from ``payload`` rather than from the
+    and carries no context answers :data:`ASSESSMENT_SYSTEM`, byte-for-byte the
+    original world prompt. The choice is made from ``payload`` rather than from the
     running analyst id because the payload is the only thing this channel may
     read, and a voice selected from a descriptor would be a second input to a
     run whose whole warrant is that it has one.
@@ -526,8 +532,8 @@ def desk_reads_in_full(payload: Mapping[str, Any]) -> str:
     a test pins them.
 
     ``""`` when no block carries a context span, so the world payload built
-    before STEP E and every thematic prompt are byte-identical to what D-6
-    shipped.
+    before the country tier and every thematic prompt are byte-identical to
+    the original.
     """
     is_country_tier = str((payload or {}).get("tier") or "") == TIER_COUNTRY
     # STEP E — THE RECORD'S OWN NAME MAP, and it is needed at THIS tier and not
@@ -621,7 +627,7 @@ def desk_reads_in_full(payload: Mapping[str, Any]) -> str:
 
 
 def render_lead_test(payload: Mapping[str, Any]) -> str:
-    """The concentration verdict, in the words §1.5.3 requires it to be handed in.
+    """The concentration verdict, in the words it must be handed in.
 
     Rendered VERBATIM into the prompt so the interpretive voice cannot crown
     against the record's own arithmetic without visibly contradicting a number
@@ -667,15 +673,13 @@ def render_lead_test(payload: Mapping[str, Any]) -> str:
 #: So the voice is handed a tension in the rendered body ("[[ref:6]] / a read
 #: that was not carried — <statement>"), told it may neither invent one nor
 #: dissolve one, and then graded against a map holding a COUNT. Every tension
-#: sentence the channel has ever written failed: ``soft_fail`` on 2026-09-06
-#: 12:15Z live, ``soft_fail`` on 2026-09-07 00:15Z live, and a third in the
-#: 2026-09-07 00:00Z replay. Three for three, and the judge was right each time
+#: sentence the channel has ever written failed: ``soft_fail`` twice live
+#: and a third in a replay. Three for three, and the judge was right each time
 #: — nothing in the map said WHICH pair the detector chose or what either side
-#: actually said. This is §2's defect on a second surface, and the same repair:
+#: actually said. This is the same defect on a second surface, and the same repair:
 #: the record knows, so the record publishes it.
 #:
-#: THE PRICE, MEASURED ON THE TWO LIVE TENSION-BEARING SPINES (2026-09-07
-#: 00:00Z and 2026-09-08 12:00Z). One declared tension rendered whole —
+#: THE PRICE, MEASURED ON THE TWO LIVE TENSION-BEARING SPINES. One declared tension rendered whole —
 #: statement, both sides' identities and head ids, the safe side's own words,
 #: the carriage flag and its why-class — costs the arithmetic block **+1,154 and
 #: +1,221 bytes** (2,672 → 3,826 and 3,107 → 4,328). The block is byte-identical
@@ -692,8 +696,8 @@ def render_lead_test(payload: Mapping[str, Any]) -> str:
 #:
 #: THAT IS AGAIN THE LARGEST MAP THIS SURFACE HAS PRODUCED — on top of the
 #: roster fix's own +799, a rostered tension-bearing spine reaches ~33 KB
-#: (~8.5k tokens, still inside the 32,000-token input budget). G3 §4.6 named
-#: DILUTION as a live hypothesis and the roster train did not settle it, so this
+#: (~8.5k tokens, still inside the 32,000-token input budget). Dilution was
+#: named as a live hypothesis and the roster train did not settle it, so this
 #: train does not assert the trade either: it MEASURES it, arm B against arm C
 #: over the four post-G3 spines, with the two tension-less spines as the
 #: byte-identity control.
@@ -706,7 +710,7 @@ def render_lead_test(payload: Mapping[str, Any]) -> str:
 #: sized off the live block spans (p50 92, p90 237, max 451 over the four
 #: post-G3 spines) so a typical verdict sentence rides whole.
 #:
-#: THE DETECTOR'S ``detail`` IS DELIBERATELY NOT RENDERED. D-1 §1.6 rule 1 is
+#: THE DETECTOR'S ``detail`` IS DELIBERATELY NOT RENDERED. The rule is
 #: DECLARE, never EXPLAIN — an inferential link between two spans is on the
 #: MAY-NOT side — and ``detail`` is exactly that link ("the composition
 #: attributes INCREASE to a desk whose own verdict is DECREASE"). Putting it in
@@ -714,8 +718,7 @@ def render_lead_test(payload: Mapping[str, Any]) -> str:
 #: statement template is written to refuse.
 #:
 #: WHAT THE REPLAY ACTUALLY FOUND, AND IT DOES NOT SUPPORT A FIDELITY CLAIM
-#: (4 post-G3 spines × 2 rounds × 2 arms, 16/16 graded, no ``judge_empty``;
-#: ``planning/ASSESSMENT_TENSIONS_IN_MAP_REPORT.md`` §5). Tension-relay
+#: (4 post-G3 spines × 2 rounds × 2 arms, 16/16 graded, no ``judge_empty``). Tension-relay
 #: sentences graded **0 of 3 supported in the shipped arm and 0 of 3 here**. The
 #: truthmaker is in the map — that part is deterministic and proven above — and
 #: it did not move the verdict, because two other causes bind first:
@@ -965,8 +968,8 @@ def record_arithmetic(payload: Mapping[str, Any]) -> str:
     coverage ledger's own length. Nothing is derived, so the voice cannot be
     handed a number the reader will not find beneath it.
 
-    PUBLIC since 2026-09-05, and the rename is the fix. This block is one of the
-    THREE things :func:`build_assessment_prompt` hands the voice (D-6 §1.1), and
+    PUBLIC, and the rename is the fix. This block is one of the
+    THREE things :func:`build_assessment_prompt` hands the voice, and
     the prompt tells it in terms *"you may quote them"* — but the EVIDENCE MAP the
     Assessment is then graded against carried only the second of the three, the
     blocks' quoted spans. So a sentence resting on the record's own arithmetic —
@@ -1081,10 +1084,9 @@ APERTURE_TITLE_CHARS: int = 60
 #: 16.6 → 23.0 and 18.0 → 24.4 (~6.1k tokens at the worst), still inside the
 #: 32,000-token input budget with the desks' quoted spans the bulk of it.
 #:
-#: THAT IS THE LARGEST MAP THIS SURFACE HAS PRODUCED, and G3 §4.6 named DILUTION
+#: THAT IS THE LARGEST MAP THIS SURFACE HAS PRODUCED, and dilution was named
 #: as a live hypothesis at 21.8 KB — so this train does not assert the trade, it
-#: MEASURES it: the N=5 × 3-round replay in
-#: ``planning/ASSESSMENT_LIVE_FIDELITY_2026-09-08.md`` is the experiment, and the
+#: MEASURES it: a replay (N=5, 3 rounds) is the experiment, and the
 #: two roster-less spines in it are the byte-identity control.
 #:
 #: The four TITLE-BEARING drop-ledger lines keep ``APERTURE_NAME_CAP``, which is
@@ -1192,7 +1194,7 @@ def carried_unit(payload: Mapping[str, Any], block: Mapping[str, Any]) -> str:
 def declared_aperture(payload: Mapping[str, Any]) -> str:
     """THE DECLARED APERTURE — what this record could have carried, BY NAME.
 
-    THE DEFECT THIS ANSWERS (D-6 §6.1, the second follow-on). The body shape
+    THE DEFECT THIS ANSWERS The body shape
     mandates a ``## What this reading misses`` section and the voice was handed
     only COUNTS to write it from, so it guessed: the N=5 replay's arm B wrote
     *"provides no coverage of Central Asia or broader South America"* and *"the
@@ -1202,9 +1204,9 @@ def declared_aperture(payload: Mapping[str, Any]) -> str:
     nothing in the evidence map names Central Asia.
 
     THE RECORD ALREADY KNOWS THE ANSWER and was not passing it on. The drop
-    ledger (D-2 §F-7) publishes, per row, the DESK, the TARGET and the head's
+    ledger publishes, per row, the DESK, the TARGET and the head's
     own TITLE for every read this surface saw and did not carry — ranked
-    not-selected, cap-trimmed, below-floor — and D-2b persisted
+    not-selected, cap-trimmed, below-floor — and the record persists
     ``coverage_roster`` beside the coverage ledger so the declared denominator
     travels with the accounting of it. Those are real names of real uncovered
     subjects. Handing them over turns the blind-spot sentence from a guess into
@@ -1372,12 +1374,12 @@ def build_assessment_prompt(payload: Mapping[str, Any]) -> str:
     """The Assessment's USER prompt, built from the assembly payload ALONE.
 
     ``payload`` is ``data.data.assembly`` (schema ``assembly.v1``). It is the
-    only data argument this function has, and that is the point: §2.1's input
+    only data argument this function has, and that is the point: the input
     restriction is enforced by a signature a test can read, not by a clause a
     model can ignore. A test pins the signature exactly (the
     ``action_pack_invocations`` discipline — audit the real binding path).
 
-    The record is rendered by D-2's OWN renderer, so the words below are the
+    The record is rendered by the assembly's OWN renderer, so the words below are the
     bytes the canonical row publishes. If the two ever diverge, the divergence is
     a bug in one function rather than a difference of opinion between two.
     """
@@ -1404,14 +1406,14 @@ def build_assessment_prompt(payload: Mapping[str, Any]) -> str:
     # after the arithmetic, so the record is still the first and largest thing
     # the voice reads and the ordinals are already established when the full
     # reads arrive under them. Empty string on every world/thematic payload, so
-    # this prompt is byte-identical to D-6's there — a test pins it.
+    # this prompt is byte-identical to the original there — a test pins it.
     context = desk_reads_in_full(payload)
     if context:
         # STEP E — the fence label names what is inside it. The country tier's
         # bytes are unchanged; the world tier's say COUNTRY, because a voice
         # told it is reading desk reads and handed country assessments has been
         # told a false thing about the text in front of it.
-        # NOT ``CONTEXT_SECTION_HEADER``: the fence label D-6/P3-A shipped is
+        # NOT ``CONTEXT_SECTION_HEADER``: the original fence label is
         # "DESK READS IN FULL" with no leading "THE", and the country prompt's
         # bytes are a pinned contract. Two literals, one test.
         label = (

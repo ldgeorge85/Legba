@@ -120,7 +120,7 @@ def test_legacy_row_with_null_honesty_columns_shapes_cleanly() -> None:
 
 def test_summary_counts_and_non_delivery_breakdown_match_the_canary() -> None:
     """The 24h summary tallies each status and the non_delivery count (failed +
-    logged_only) EXACTLY as the W1-T3 canary, with a worst-first breakdown that
+    logged_only) EXACTLY as the canary, with a worst-first breakdown that
     carries the sample error."""
     # GROUP BY status, sink_kind tallies over the window.
     summary_rows = [

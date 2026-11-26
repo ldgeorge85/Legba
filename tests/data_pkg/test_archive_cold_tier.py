@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""C-1 — the cold tier read end to end, and its failure cases.
+"""The cold tier read end to end, and its failure cases.
 
 What these pin, over a local "cold" directory and an in-process S3:
 

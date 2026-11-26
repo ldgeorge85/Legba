@@ -1,8 +1,8 @@
 {
   "prompts": {
     "energy_security": {
-      "chars": 24480,
-      "sha256": "f3ee21e6e5cad727473cdbf55636a572dfbc6cd668207ed4c953b6cc6df46cee",
+      "chars": 25953,
+      "sha256": "ce277b6549a66bdcabecf3890064c95a144df6797741656d38fd088656107c2b",
       "source": "analyst_energy_security.yaml"
     }
   },

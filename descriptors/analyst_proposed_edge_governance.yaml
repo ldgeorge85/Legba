@@ -26,7 +26,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: active
-  owner: phase_d_governance
+  owner: owner@local
 
 subscription:
   # META analyst: one global sweep per tick over the proposed_edges queue via

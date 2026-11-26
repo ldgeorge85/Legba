@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W11-F84 — the bounded drain of the actor host on a rolling deploy.
+"""the bounded drain of the actor host on a rolling deploy.
 
 uvicorn's graceful shutdown would drain the in-flight requests (each an actor
 turn), but ``dapr_host.main``'s own loop-level signal handler stopped the loop

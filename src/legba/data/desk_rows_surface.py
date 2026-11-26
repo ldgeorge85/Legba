@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""SURFACE subjects and GENERIC ROLES for contract-v2 fact rows (lane D-2).
+"""SURFACE subjects and GENERIC ROLES for contract-v2 fact rows.
 
 THE UNRESOLVED ACTOR. A fact row's quote may name an actor that no entity the
 entity layer knows matches — a company, a militia, an official the linker has

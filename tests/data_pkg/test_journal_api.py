@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Integration tests for the Journal read surface (`/api/v1/journal`,
-`/api/v1/journal/{id}`) — Voices panel step 1 (planning/VOICES_PANEL_SPEC.md
-§3): the repeatable `kind` filter, the `fields=summary|full` weight mode, and
-the §3.4 verify-score/verify-body critique join.
+`/api/v1/journal/{id}`) — Voices panel: the repeatable `kind` filter,
+the `fields=summary|full` weight mode, and
+the verify-score/verify-body critique join.
 
 Runs against the live substrate via the `migrated_pg` fixture from
 `conftest.py`, mirroring `test_substrate_reads_api.py`'s pattern exactly (real
@@ -527,8 +527,7 @@ async def test_verify_generic_critique_does_not_overwrite_faithfulness_pin(
 
 
 # ---------------------------------------------------------------------------
-# T1.3 (planning/JOURNAL_CONNECTIVE_AUDIT_PROPOSAL_2026-09-09.md §6) — a raw
-# signal ref resolves to `kind='signal'` PLUS its `source_id`, so the reader
+# A raw signal ref resolves to `kind='signal'` PLUS its `source_id`, so the reader
 # can label it "signal · <source> · <title>" instead of a bare "unknown" chip.
 # A ref that matches no substrate row at all stays `kind='unknown'`,
 # `source_id=None` — never fabricated, never silently promoted to a fake

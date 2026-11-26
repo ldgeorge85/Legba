@@ -42,7 +42,7 @@ from fastapi import FastAPI
 from legba.shared.registry_principal import check_service_principal, service_auth_headers
 
 from .actor_deactivation import mount_idempotent_deactivation
-from .runtime_healthz import mount_runtime_healthz  # roll 86: before DaprActor(app)
+from .runtime_healthz import mount_runtime_healthz  # must mount before DaprActor(app)
 from .actor_turn import (
     HealBreaker,
     TurnBudgetExceeded,
@@ -129,7 +129,7 @@ _GATHER_KINDS: frozenset[str] = frozenset({"inline_target", "journal_assessor", 
 _GATHER_READ_PACK_BY_KIND: dict[str, str] = {
     "journal_assessor": "journal_read",
     # inline_target falls through to the SUBSTRATE_READ_PACK_ID default below.
-    # So does Program 5's `inquiry`, deliberately: its DEFAULT read binding must
+    # So does the `inquiry` kind, deliberately: its DEFAULT read binding must
     # be substrate_read, because `inline_target._GATHER_READ_TOOLS` IS that
     # pack's 19 names and the GATHER loop routes exactly those through the
     # default binding. Its journal_read instruments and its inquiry_state ledger
@@ -561,7 +561,7 @@ def resolve_a2a_mount() -> Any | None:
         raise RuntimeError(
             f"{A2A_ENABLED_ENV}=1 but {A2A_TRUSTED_KEYS_ENV} is empty and "
             "LEGBA_DEV_MODE=1 is not set — refusing to mount the A2A skill "
-            "surface without an explicit caller allowlist (B-2 fail-closed)."
+            "surface without an explicit caller allowlist (fail-closed)."
         )
     return directory
 
@@ -1230,7 +1230,7 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
     _lazy_nlp_client = LazyNlpClient(
         registry_client=registry_client,
         secrets_resolve=_secrets_resolve,
-        # W11-F107: LEGBA_NLP_COMPONENT_ID picks the component (nlp.innoai.gateway
+        # LEGBA_NLP_COMPONENT_ID picks the component (nlp.gateway.bearer
         # for the gateway); unset = nlp.local.legba_models, as before.
         component_id=resolve_nlp_component_id(),
     )
@@ -1835,7 +1835,7 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
         # use. pg_pool is threaded onto each ToolContext so the write tools have
         # the connection source the WritebackContext needs (seam22-2).
         # §4.9 — generalized to the GATHER kind set (was `== "inline_target"`).
-        # The journal_assessor is read-only in Wave 0 (it grants no web/write
+        # The journal_assessor is read-only (it grants no web/write
         # pack), so this inner loop is a no-op for it; the gate stays open for any
         # llm_planner GATHER kind that DOES grant web_access/propose_facts later.
         gather_write_bindings: dict[str, Any] | None = None
@@ -1880,9 +1880,9 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
             _bindings: dict[str, Any] = {}
             _web_fragments: list[str] | None = None
             _write_fragments: list[str] | None = None
-            # Each write/web pack the GATHER kind grants. journal_propose (plan §7
-            # / Wave 4) is a WRITE pack like propose_facts — each tool writes ONLY
-            # a pending journal_proposals row, so it needs the per-run
+            # Each write/web pack the GATHER kind grants. journal_propose is a WRITE pack like
+            # propose_facts — each tool writes ONLY a pending journal_proposals
+            # row, so it needs the per-run
             # WritebackContext injection (_is_write=True) exactly like propose_facts
             # (the connection source + run identity; NO provenance writer). A pack
             # the analyst does not grant is skipped (`_grants_include` below).
@@ -1900,7 +1900,7 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
                 (WRITE_PACK_ID, WRITE_TOOLS, True),
                 (JOURNAL_PROPOSE_PACK_ID, JOURNAL_PROPOSE_TOOLS, True),
             ]
-            # Program 5 — the `inquiry` kind's two EXTRA packs. KIND-GATED on
+            # The `inquiry` kind's two EXTRA packs. KIND-GATED on
             # purpose: journal_read is journal_assessor's DEFAULT read binding,
             # so adding it to the table unconditionally would bind that pack a
             # second time for every journal tier and change what lands in their
@@ -2051,7 +2051,7 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
                 embedding_service=embedding_service,  # L-114 — grounding embedder
                 qdrant_client=qdrant_client,  # S5-T3 — vector:world_context RAG
                 nlp_client=_lazy_nlp_client,  # reenrich_ner — NER-backfill sweep source
-                # W11-F118 reenrich_pending: the factory below, looked up at call time.
+                # reenrich_pending: the factory below, looked up at call time.
                 source_enrichment_factory=lambda sd: _source_enrichment_factory(sd),
                 tools_registry=tools_registry,      # L-175
                 consult_agency_binding=consult_agency_binding,
@@ -2239,7 +2239,7 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
     )
 
     _reminder_deleter = build_sidecar_reminder_deleter()
-    # W11-F268: a reminder daprd already answered 404 for, on an unchanged
+    # A reminder daprd already answered 404 for, on an unchanged
     # retired row, is re-asked once a day, not on every 5-minute resync.
     _reminder_absence_memo = ReminderAbsenceMemo()
 
@@ -2427,7 +2427,7 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
             )
 
         runner = PipelineRunner(stages=built, ctx_factory=_ctx_factory)
-        # W11-F118: the stage never raises, so the pending sweep reads these to
+        # The stage never raises, so the pending sweep reads these to
         # tell a re-enriched row from a silently degraded one.
         state: dict[str, Any] = {"handlers": [h for _, h in built], "fallbacks": 0}
 
@@ -2458,7 +2458,7 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
             # columns. Lift them across so a signal about Germany lands
             # geo=['DE'] and routes to country_g20_de.
             try:
-                # Lane N-O: every code the geo block files it under (an
+                # Every code the geo block files it under (an
                 # issuer's declared state + the subject), primary first.
                 from ..data.filters._geo_precedence import promote_payload_columns
                 promote_payload_columns(sig)
@@ -2783,7 +2783,7 @@ def main() -> None:
             h = handles_holder.get("h")
             if h is None:
                 return []
-            # W11-F68a: JSON-safe rows (UUID / datetime reduced) — the shared
+            # JSON-safe rows (UUID / datetime reduced) — the shared
             # fetcher lives beside the route that serialises them.
             return await fetch_latest_analyst_outputs(
                 h.pg_store.pool,
@@ -2836,7 +2836,7 @@ def main() -> None:
                 content={
                     "error": "a2a_skill_surface_disabled",
                     "detail": (
-                        f"The A2A skill surface is operator-gated OFF (B-2 "
+                        f"The A2A skill surface is operator-gated OFF ("
                         f"fail-closed). Set {A2A_ENABLED_ENV}=1 plus "
                         f"{A2A_TRUSTED_KEYS_ENV}=<did=hex,...> (or "
                         f"LEGBA_DEV_MODE=1) and restart to mount it. See "
@@ -2847,7 +2847,7 @@ def main() -> None:
 
     from .shutdown_drain import install_shutdown_signal_handlers, runtime_drain_seconds
 
-    drain_seconds = runtime_drain_seconds()  # W11-F84 — None: stop at the first signal
+    drain_seconds = runtime_drain_seconds()  # None: stop at the first signal
     cfg = uvicorn.Config(
         app,
         host=os.getenv("LEGBA_RUNTIME_HTTP_HOST", "0.0.0.0"),

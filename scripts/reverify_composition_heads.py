@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""DQ P7-F1 in-place faithfulness RE-VERIFY over the COMPOSITION heads (one-shot).
+"""In-place faithfulness RE-VERIFY over the COMPOSITION heads (one-shot).
 
-The P7-F1 fix (verify.py — bold '**Heading**' lines dropped as headings, a
+The verify fix (verify.py — bold '**Heading**' lines dropped as headings, a
 citation marker trailing a sentence period pulled back inside the sentence,
 'judgment'/'assumption' synthesis openers exempted from the floor, forward-looking
 watch bullets exempted from BOTH floor and judge, and the shared-lineage
@@ -107,11 +107,11 @@ async def _fetch_heads(conn: Any) -> list[dict[str, Any]]:
     WHERE f.kind='finding'
       AND f.superseded_by IS NULL
       AND f.analyst_id = ANY($1::text[])
-      -- D-5: a deterministic region rollup has no prose to re-grade. Re-running
+      -- a deterministic region rollup has no prose to re-grade. Re-running
       -- the faithfulness judge over one would mint a faithfulness verdict for a
       -- row that never had one and is not entitled to one — which is exactly
-      -- the fabricated-critique move DEMOTION_D1_SPEC §4.2 refuses. IS DISTINCT
-      -- FROM, not <>: the path is NULL on every pre-D-2 row.
+      -- the fabricated-critique move the demotion rules refuse. IS DISTINCT
+      -- FROM, not <>: the path is NULL on every earlier row.
       AND (f.data -> 'data' -> 'assembly' ->> 'regime') IS DISTINCT FROM 'rollup'
     ORDER BY f.analyst_id, COALESCE(f.target_id,'~world'), f.produced_at DESC
     """
@@ -154,7 +154,7 @@ async def _descriptor_meta(conn: Any, analyst_ids: list[str]) -> dict[str, dict[
 
 
 async def main() -> None:
-    ap = argparse.ArgumentParser(description="P7-F1 composition-head faithfulness re-verify")
+    ap = argparse.ArgumentParser(description="composition-head faithfulness re-verify")
     ap.add_argument("--wet", action="store_true", help="persist critiques (default: dry-run)")
     ap.add_argument("--floor-only", action="store_true",
                     help="force the deterministic floor (judge_llm=None) for every head")
@@ -173,7 +173,7 @@ async def main() -> None:
     from legba.data.provenance.writes import write_critique
 
     mode = "WET (writing critiques)" if args.wet else "DRY-RUN (writing nothing)"
-    log.info("=== P7-F1 composition-head re-verify — %s ===", mode)
+    log.info("=== composition-head re-verify — %s ===", mode)
     log.info("judge_enabled(env)=%s  floor_only_flag=%s",
              _llm_judge_enabled(), args.floor_only)
 

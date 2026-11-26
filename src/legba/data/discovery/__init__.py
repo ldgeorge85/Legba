@@ -1,10 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""legba.data.discovery — discovery-kind handler contract + registry (L-180 / L-183).
+"""legba.data.discovery — discovery-kind handler contract + registry.
 
-The discovery family is the fifth leaf of the kind taxonomy. Per L-106
-(authoritative spec) discovery kinds emit *candidate target descriptors*
-that the registry expands into N materialized target instances via the
+The discovery family is the fifth leaf of the kind taxonomy. Discovery kinds emit
+*candidate target descriptors* that the registry expands into N materialized target instances via the
 template's relabel chain. The handler never knows what gets scraped; the
 target descriptor never knows how it was discovered. Static targets
 (no ``discovery`` block) bypass the pipeline entirely — see
@@ -24,14 +23,13 @@ Public surface
     per-candidate ``evidence`` (provenance).
 
 :class:`RelabelRule`
-    Prometheus-style rewrite rule with 9 closed actions per L-106 §3
+    Prometheus-style rewrite rule with 9 closed actions
     (``set`` / ``set_list`` / ``format`` / ``lookup`` /
     ``lookup_languages`` / ``merge_list`` / ``keep`` / ``drop`` /
     ``hash_mod``). The registry — not the handler — applies the chain.
 
 :class:`ResyncPolicy`
-    Per-descriptor disappearance-ratio threshold policy. Default 0.30
-    per L-106 §5.
+    Per-descriptor disappearance-ratio threshold policy. Default 0.30.
 
 :func:`evaluate_relabel_chain`
     The deterministic rule-chain evaluator. Given a candidate + ordered
@@ -45,20 +43,20 @@ Public surface
     whether to proceed or pause the discovery.
 
 :func:`is_static_descriptor` + :func:`materialize_static`
-    The L-183 static-target shortcut path. Descriptors without a
+    The static-target shortcut path. Descriptors without a
     ``discovery`` block route here and materialize as a single
     instance whose body equals the descriptor itself.
 
 :func:`discover_discovery_kinds`
-    Walks the package for first-party discovery kinds (L-181 / L-182)
+    Walks the package for first-party discovery kinds
     and returns a ``dict[kind_name, DiscoveryHandlerBundle]`` mirroring
     :func:`legba.data.analysts.discover_analyst_kinds`. Always includes
     the static-target sentinel.
 
-Wave-B inheritance pattern
-~~~~~~~~~~~~~~~~~~~~~~~~~~
+Inheritance pattern
+~~~~~~~~~~~~~~~~~~~
 
-L-181 ``country_list_discovery`` and L-182 ``file_sd_discovery`` will
+``country_list_discovery`` and ``file_sd_discovery`` will
 land as new modules under this package. Each exposes:
 
   * ``KIND_NAME`` — module-level string.
@@ -142,7 +140,7 @@ from .materializer import (
 )
 
 # Trigger the schemas-side forward-ref resolution for DiscoveryBlock +
-# TargetDescriptor (per Wave D L-200 — they hold forward refs to
+# TargetDescriptor (they hold forward refs to
 # RelabelRule + ResyncPolicy declared in ._contract). The schemas
 # package can't eagerly import these at top level (schemas → sources →
 # mediacloud → schemas cycle), so we drive the rebuild here after both

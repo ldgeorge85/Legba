@@ -20,12 +20,12 @@ import { ChevronDown, Link2, Plus, RotateCcw, Search, ArrowLeft, Undo2, Wrench }
 import type { Mode } from '@/types'
 import { cn } from '@/lib/cn'
 import { OPERATOR_SURFACES, READER_SURFACES, findSurface, type SurfaceId } from '@/lib/surfaces'
-import { useSelection } from '@/state/selection'
-import { useScope } from '@/state/scope'
+import { usePointSubject } from '@/state/scope'
+import { humanizeId, subjectName, useSubjectIndex } from '@/lib/deskNames'
 import { PROFILE_UI } from '@/lib/profileUi'
 import { SubjectRoster } from '@/components/ObjectRail'
 import { CatalogPopover } from '@/components/CatalogPopover'
-import { OPERATOR_SIDE_REASON, useBelowContributor } from '@/auth/roles'
+import { useBelowContributor, useRoleRank } from '@/auth/roles'
 
 export interface SurfaceBarProps {
   mode: Mode
@@ -41,32 +41,33 @@ export interface SurfaceBarProps {
   notice?: string | null
 }
 
-/** The reader's point as the bar names it: the selected or scoped subject. */
-function usePointSubject(): string | null {
-  const selection = useSelection((s) => s.selection)
-  const scope = useScope((s) => s.scope)
-  if (selection?.kind === 'target') return selection.label ?? selection.id
-  if (scope?.kind === 'target') return scope.label ?? scope.id
-  return null
-}
 
 function SubjectSwitcher() {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
-  const point = usePointSubject()
+  // The bar names the one point (`state/scope.ts`), the same one every
+  // region filters by and Consult asks about.
+  const subject = usePointSubject()
+  // re-read once the roster answers: a subject is named by what it declares
+  const index = useSubjectIndex()
+  const point = subject ? (subjectName(subject.id, index) ?? (subject.label !== subject.id ? subject.label : humanizeId(subject.id))) : null
   useEffect(() => {
     if (!open) return
     const onDown = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
     }
+    // Escape closes the popover only; it is taken before the shell's own
+    // Escape (which clears the point) sees it.
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false)
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      setOpen(false)
     }
     window.addEventListener('mousedown', onDown)
-    window.addEventListener('keydown', onKey)
+    window.addEventListener('keydown', onKey, true)
     return () => {
       window.removeEventListener('mousedown', onDown)
-      window.removeEventListener('keydown', onKey)
+      window.removeEventListener('keydown', onKey, true)
     }
   }, [open])
   const noun = PROFILE_UI.subject.singular.toLowerCase()
@@ -138,6 +139,7 @@ export function SurfaceBar({ mode, active, onSwitch, onReset, onCopyLink, onOpen
   const tabs = side === 'reader' ? READER_SURFACES : OPERATOR_SURFACES
   const [catalogOpen, setCatalogOpen] = useState(false)
   const readerOnly = useBelowContributor()
+  const rank = useRoleRank()
   return (
     <header
       className="relative flex shrink-0 items-center gap-3 border-b border-line bg-surf-base px-3"
@@ -223,7 +225,7 @@ export function SurfaceBar({ mode, active, onSwitch, onReset, onCopyLink, onOpen
           >
             <Plus size={15} aria-hidden />
           </IconButton>
-          {catalogOpen && <CatalogPopover mode={mode} side={side} onClose={() => setCatalogOpen(false)} />}
+          {catalogOpen && <CatalogPopover mode={mode} side={side} rank={rank} onClose={() => setCatalogOpen(false)} />}
         </div>
         {onUndo && (
           <button
@@ -244,16 +246,14 @@ export function SurfaceBar({ mode, active, onSwitch, onReset, onCopyLink, onOpen
         <IconButton testId="copy-view-link" title="Copy a link to this view" onClick={onCopyLink}>
           <Link2 size={14} aria-hidden />
         </IconButton>
-        {side === 'reader' && (
+        {/* A reader has no way across, so the button is not drawn for them. */}
+        {side === 'reader' && !readerOnly && (
           <button
             type="button"
             data-testid="to-operator-side"
-            // RA-1: a reader has no way across — a plain reason, no request
-            disabled={readerOnly}
-            data-reason={readerOnly ? 'role' : undefined}
-            onClick={() => { if (!readerOnly) onSwitch('engine') }}
-            title={readerOnly ? OPERATOR_SIDE_REASON : 'The operator side: engine, evaluation internals, the gate, investigation'}
-            className="ml-2 flex h-7 shrink-0 items-center gap-1.5 rounded-control border border-line px-2 text-body text-ink-3 hover:text-ink-1 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:text-ink-3"
+            onClick={() => onSwitch('engine')}
+            title="The operator side: engine, evaluation internals, the gate, investigation"
+            className="ml-2 flex h-7 shrink-0 items-center gap-1.5 rounded-control border border-line px-2 text-body text-ink-3 hover:text-ink-1"
           >
             <Wrench size={13} aria-hidden />
             Operator

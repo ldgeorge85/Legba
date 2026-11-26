@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""L-170 inline_target analyst kind.
+"""inline_target analyst kind.
 
 Reads ONE target's substrate slice (signals with ``produced_by ==
 target_id``) and emits one structured :class:`FindingPayload` describing
@@ -8,10 +8,10 @@ the most significant patterns or events in that slice.
 
 This is the cognitive replacement for the pre-reshape Legba cycle
 (``src/legba/agent/cycle.py``). The seven phases of the legacy cycle are
-preserved as the *cycle envelope* (§Cycle Envelope below); the actual
-LLM reasoning is wrapped as a DSPy module per the L-105 eval-loop spec.
+preserved as the *cycle envelope* (below); the actual
+LLM reasoning is wrapped as a DSPy module for the eval loop.
 
-Per topology-redesign v2 §5.1::
+Per topology-redesign v2::
 
     Reads:  one target's substrate slice
     Method: cycle pattern (LLM planner), per-target tool whitelist
@@ -92,12 +92,12 @@ The seven phases of the legacy cycle map onto this kind as follows:
                    actor host does the I/O.  This keeps the kind pure
                    so the optimizer can replay it deterministically.
 
-Per L-102 KC-7: the three analyst-protocol phases (fetch_inputs / run /
+The three analyst-protocol phases (fetch_inputs / run /
 emit_outputs) are runtime-enforced.  The runtime calls ``run_method``
 from inside its ``run`` phase — *we are just the LLM-driven reasoning
 step*.  Persisting to substrate happens in ``emit_outputs`` upstream.
 
-DSPy module wrapping (L-105 §2)
+DSPy module wrapping
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The prompt is exposed as ``legba.prompts.inline_target.v1`` per the
@@ -165,7 +165,7 @@ from .consult_on_demand import (
 # K-2b post-persist conversion, extracted 2026-08-30 to its own sibling and
 # RE-EXPORTED here: the caller is ``runtime.dapr_actors`` (frozen) and
 # ``test_open_question_faucet.py`` both import these names from this module.
-from .open_question_conversion import (  # noqa: F401 — re-export, see §K-2b
+from .open_question_conversion import (  # noqa: F401 — re-export
     OPEN_QUESTION_MARKER_KEY,
     _citation_signal_map,
     convert_open_questions,
@@ -175,11 +175,14 @@ from .open_question_conversion import (  # noqa: F401 — re-export, see §K-2b
 # here: this file is against its size ceiling, and the contract is pure and
 # testable with no slice, LLM or DB (see the module note for the traced defect).
 from .output_contract import (
+    EmptyBodyContractError,
+    bluf_missing_step,
     OutputContractError,
     is_unusable_output,
     parse_finding_envelope,
     repair_confidence_word_token,
     salvage_json_envelope,
+    salvage_prose_outside_object,
     strip_tool_plan_preamble,
 )
 # NATIVE TOOL ROUNDS — the structured tool channel the providers already
@@ -187,7 +190,7 @@ from .output_contract import (
 # decision + the batch concurrency policy; ``stack.llm.tool_rounds`` owns the
 # provider-shaped wire grammar and is SHARED with the consult loop. The
 # JSON-text protocol below is unchanged and remains the fallback.
-from . import gather_context_budget as _ctxb  # W11-F91 — the GATHER evidence cap
+from . import gather_context_budget as _ctxb  # the GATHER evidence cap
 from .gather_native import (
     complete_with_tools,
     execute_batch,
@@ -247,7 +250,7 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Kind identity (registry key — see kind_contracts §1)
+# Kind identity (registry key —)
 # ---------------------------------------------------------------------------
 
 
@@ -275,7 +278,7 @@ class LLMHandlerLike(Protocol):
     """Minimum slice of ``LLMProviderHandler`` the analyst method depends on.
 
     Mirrors the structural shape implemented by
-    :class:`legba.data.stack.llm.openai.OpenAIProviderHandler` (gpt-oss-120b via
+    :class:`legba.data.stack.llm.openai.OpenAIProviderHandler` (the core model via
     vLLM by default per Phase 5a Q&A F) and the test-double shape used in
     ``tests/runtime/test_spike_integration.py``.
     """
@@ -304,8 +307,8 @@ class AnalystMethodResult:
 
     The runtime takes ``finding`` and emits it through the analyst's
     configured output kinds (substrate write → findings table is the
-    default per topology §4.5).  ``usage`` flows into the budget enforcer
-    (L-163) and the trace logger (L-105 §3).
+    default).  ``usage`` flows into the budget enforcer
+    and the trace logger.
     """
 
     finding: FindingPayload
@@ -315,12 +318,12 @@ class AnalystMethodResult:
     # runtime forwards it into ``write_analyst_output``'s `derived_from`
     # arg so a lineage walker can backtrack.
     derived_from: list[UUID] = field(default_factory=list)
-    # Per-phase intermediate steps for the eval-loop trace (L-105 §3.1
+    # Per-phase intermediate steps for the eval-loop trace (
     # ``intermediate_steps``).  Populated by the cycle envelope; the
     # runtime writes the list to ``analyst_traces.intermediate_steps``.
     intermediate_steps: list[dict[str, Any]] = field(default_factory=list)
     # Per-call tool invocations the analyst kind made during run_method
-    # (L-175 tool-threading).  Each entry is a JSON-serializable mapping
+    # (tool-threading).  Each entry is a JSON-serializable mapping
     # describing one tool call: at minimum ``{"name", "args", "result",
     # "round"}``.  The runtime forwards the list to
     # ``receipt_chain.record(tool_calls=...)`` which lands it in
@@ -344,7 +347,7 @@ class AnalystMethodResult:
     # ``legba.data.provenance.consumption``). Default empty: kinds that don't
     # stamp it get no consumption rows and are byte-for-byte unchanged.
     consumed_edges: list[tuple[UUID, str]] = field(default_factory=list)
-    # Continuity P2 — pending `situation_events` ledger rows
+    # Pending `situation_events` ledger rows
     # (:class:`legba.data.situations.trajectory.TrajectoryEvent`) the
     # `situation_tracker` built this run. The runtime materializes them on the
     # SAME flow as the output write, stamping `source_output_id` with the new
@@ -363,7 +366,7 @@ class AnalystMethodResult:
 # ---------------------------------------------------------------------------
 
 
-# INPUT-side budget (2026-06-22). The assessor prompt is bounded by an estimated
+# INPUT-side budget. The assessor prompt is bounded by an estimated
 # INPUT-token budget, NOT a fixed signal count and NOT a max_tokens cap on the
 # model's OUTPUT: the core (vLLM / OpenAI-compat) plane serves its own output budget —
 # we never send max_tokens to it — so the only lever for a sane prompt is how
@@ -396,17 +399,17 @@ _CITATION_SNIPPET_CHARS = _MAX_SNIPPET_CHARS
 # unsupported" to "contradicted => unsupported" on the excerpt. See
 # verify._marker_to_evidence.
 _SOURCE_TEXT_CHARS = 3200
-# F-D (2026-08-03): the budget definition moved to ``_llm_budget`` so the
+# F-D: the budget definition moved to ``_llm_budget`` so the
 # COMPOSITION path can pack against the SAME window rather than its own pair of
 # fixed character constants (it was reading its inputs at ~7% of this). These
 # aliases keep every reference in this module — and its tests — unchanged.
 _DEFAULT_INPUT_TOKEN_BUDGET = DEFAULT_INPUT_TOKEN_BUDGET
 _CHARS_PER_TOKEN = CHARS_PER_TOKEN
-# DQ P6 — cap on the grounding-preamble text persisted into the trace's
+# Cap on the grounding-preamble text persisted into the trace's
 # ``inject_preamble`` step (a live preamble is ~3.8k chars; 16k covers the tail
 # without letting a pathological preamble bloat the analyst_traces row).
 _PREAMBLE_TRACE_CHAR_CAP = 16000
-# A2 (verify-path structural fix, 2026-07-31) — bound on the UNMARKED-BASIS
+# bound on the UNMARKED-BASIS
 # citation fallback (see ``run_method``): when the model's prose carries no
 # resolvable ``[N]`` marker at all despite a real oriented slice, we fall back
 # to citing the slice directly rather than shipping an empty/absent citations
@@ -416,10 +419,10 @@ _FALLBACK_BASIS_CITATIONS_CAP = 25
 
 
 #: Estimated INPUT-token budget for the assembled signals block — the SHARED
-#: definition (``_llm_budget.input_token_budget``), so the composition path packs
-#: against the same window. Bounds the SIGNALS block only; the separately-bounded
-#: grounding preamble is prepended on top in ``run_method``, and output is never
-#: capped on the core plane.
+#: definition (``_llm_budget.input_token_budget``), derived from the route's
+#: context window when ``run_method`` passes its handler. Bounds the SIGNALS
+#: block only; the separately-bounded grounding preamble is prepended on top in
+#: ``run_method``, and output is never capped.
 _input_token_budget = input_token_budget
 
 #: Cheap chars/4 token estimate (no tokenizer on the inference hot path).
@@ -430,7 +433,7 @@ _estimate_tokens = estimate_tokens
 # QW1-B — the per-unit slice RANKING seam (``method.options.slice_focus``)
 # ---------------------------------------------------------------------------
 #
-# THE DEFECT IT ANSWERS. The P1 gallery measured 8 of the 9 bounded units fanning
+# THE DEFECT IT ANSWERS. A prompt-gallery measurement found 8 of the 9 bounded units fanning
 # out over ONE byte-identical 120-row user message: same target, same window, same
 # reader, same pack. Only the ~8-10K-char system prompt differs. The escalation
 # unit and the energy_security unit read the same food-security piece and the same
@@ -665,7 +668,7 @@ def _orient(
 
     live, wire_copies_collapsed = collapse_wire_pairs(live)
 
-    # W11-F91: a GATHER run under an evidence cap packs to its slice share.
+    # a GATHER run under an evidence cap packs to its slice share.
     budget = budget if budget is not None else _input_token_budget()
     trimmed: list[Mapping[str, Any]] = []
     used = 0
@@ -785,8 +788,8 @@ def _clean_body_text(text: str) -> str:
 #   text            chat-platform full message body (telegram/discord populate
 #                   ONLY payload.text — see below; this outranks archived_text
 #                   because a t.me "archive" is embed-widget chrome, not prose)
-#   archived_text   P2-1 evidence archive: the FULL extracted article, already
-#                   JS-wall/bot-check gated by evidence_archiver (V-E1)
+#   archived_text   evidence archive: the FULL extracted article, already
+#                   JS-wall/bot-check gated by evidence_archiver
 #   raw_body        the ingest body (RSS content:encoded / full-text feeds)
 #   summary / description / content_text / snippet   the thin teaser tail
 #
@@ -794,7 +797,7 @@ def _clean_body_text(text: str) -> str:
 #   * ``text`` — telegram carries the message body ONLY here and stamps no
 #     ``title`` at all, so every telegram signal rendered as "(untitled)" with
 #     an EMPTY snippet: 632 of 5,377 rows in a live 24h window were citable
-#     NOTHING (P1 gallery ``[4]``, a bare t.me forward).
+#     NOTHING (a bare t.me forward).
 #   * ``archived_text`` — the archived full article (live 24h: ~1.6k rows,
 #     2,000-5,000 chars each) never reached the prompt, so the analyst read a
 #     ~113-char RSS teaser of a story we already hold in full.
@@ -866,8 +869,8 @@ def _gdelt_event_record(fields: Mapping[str, Any]) -> Mapping[str, Any] | None:
 
     Both GDELT handlers (``gdelt_files`` file-dump, ``gdelt`` BigQuery) stash
     the whole 61-column CAMEO record under ``payload.raw_body`` as a MAPPING —
-    which the body precedence used to stringify straight into the prompt (P1
-    gallery ``[6]``: ~1,500 chars of ``'Actor1Geo_FeatureID': 'IR'`` key-value
+    which the body precedence used to stringify straight into the prompt (one
+    gallery sample: ~1,500 chars of ``'Actor1Geo_FeatureID': 'IR'`` key-value
     noise per row, and GDELT is the single highest-volume source on the
     platform — 1,813 of 5,377 signals in a live 24h window).
     """
@@ -1079,7 +1082,7 @@ def _signal_title(row: Mapping[str, Any]) -> str:
 def _is_dead_row(row: Mapping[str, Any]) -> bool:
     """True for a slice row that would render as a CITABLE NOTHING.
 
-    No title AND no usable body — the P1 gallery's ``[4]``: an empty numbered
+    No title AND no usable body — an empty numbered
     entry the model can (and does) cite, spending a citation slot and a
     provenance edge on zero evidence. Dropped before the slice is numbered so
     the budget it would have burned goes to a row with content instead.
@@ -1101,7 +1104,7 @@ from .wire_pair_collapse import (  # noqa: F401
 )
 
 # Slice rendering extracted to slice_render.py at the regrowth-gate seam
-# (2026-08-05). Re-exported: callers and tests import from here unchanged.
+#. Re-exported: callers and tests import from here unchanged.
 from .slice_render import (  # noqa: F401
     _CAMEO_LEGEND,
     _CAMEO_TITLE_TAG,
@@ -1114,7 +1117,7 @@ from .slice_render import (  # noqa: F401
 
 
 # ---------------------------------------------------------------------------
-# Citation index (P0-T1 — cite the prose)
+# Citation index (cite the prose)
 # ---------------------------------------------------------------------------
 #
 # The assessor prompt asks every claim to cite its signal ``[N]`` (see
@@ -1172,7 +1175,7 @@ def _resolve_signal_id(raw_id: Any) -> str | None:
     return None
 
 
-# V3/P2 — the ``event:<uuid>`` ref kind (spec §2.5). The token is matched
+# The ``event:<uuid>`` ref kind. The token is matched
 # bare or bracketed (``[event:<uuid>]`` / ``[[event:<uuid>]]`` — marker
 # drift is the norm on this plane). Flag off ⇒ ordinary text, byte-identical.
 _EVENT_BODY_REF_RE = re.compile(
@@ -1197,7 +1200,7 @@ async def _expand_event_refs(
     stats: dict[str, int] | None = None,
 ) -> tuple["FindingPayload", list[dict[str, Any]], list[UUID]]:
     """Expand ``event:<uuid>`` refs in the finding's body + ``evidence`` list
-    into ordinary per-signal citation entries (spec §2.5, LEGBA_EVENT_CITATIONS).
+    into ordinary per-signal citation entries (LEGBA_EVENT_CITATIONS).
 
     Each distinct token expands through :func:`expand_event_citation` into at
     most ``LEGBA_EVENT_EXPANSION_MAX_SIGNALS`` entries numbered onto fresh
@@ -1332,7 +1335,7 @@ def _citation_entry(
         # common_crawl) → content → content_text → summary → description — so the
         # judge grounds on the SAME raw field. When the analyst read raw directly
         # this coincides with ``snippet``; that's fine.
-        # R1-0 (2026-08-05): ``archived_text`` LEADS the chain — the archived
+        # R1-0: ``archived_text`` LEADS the chain — the archived
         # full article is the fullest RAW source we hold (an extraction of the
         # source page, not a summary, so the distilled_body exclusion is
         # untouched). Before this line the analyst read the full article while
@@ -1932,7 +1935,7 @@ def _unstructured_finding(
             f"{text.strip()[:200]!r}"
         )
     # DS-1: truncation loses the `indicators` array (it serializes AFTER the
-    # body) and keeps the prose — derive it, never fabricate. test_s3_indicators §2b.
+    # body) and keeps the prose — derive it, never fabricate. test_s3_indicators
     derived = _coerce_indicators(_derive_indicators_from_prose(body))
     data: dict[str, Any] = {"indicators": derived} if derived else {}
     # N-T — keep the raw completion the parse failed on, as the structured
@@ -1996,7 +1999,7 @@ def _coerce_finding(
                         end = i + 1
                         break
             candidate = candidate[:end]
-        # V-P1: repair a "0. nine"-shaped confidence token before parsing.
+        # Repair a "0. nine"-shaped confidence token before parsing.
         candidate = repair_confidence_word_token(candidate)
         parsed = json.loads(candidate)
     except (json.JSONDecodeError, ValueError) as exc:
@@ -2023,7 +2026,7 @@ def _coerce_finding(
         return _unstructured_finding(
             str(parsed), fallback_title=fallback_title, tag="unstructured",
         )
-    # THE FINDING BEHIND THE TOOL CALL (2026-09-09). The scan above stops at the
+    # THE FINDING BEHIND THE TOOL CALL. The scan above stops at the
     # first balanced object; live, that is a {"tool": …} protocol object with
     # the real finding on the NEXT line. Walk past it. See ``planner_action``.
     if not (parsed.get("title") or parsed.get("body")):
@@ -2055,6 +2058,7 @@ def _coerce_finding(
         title = strip_tool_plan_preamble(str(parsed.get("title") or ""))[0].strip()
         if not title and inner_title:
             title = strip_tool_plan_preamble(inner_title)[0].strip()
+        model_titled = bool(title)
         if not title:
             title = _title_from_text(body, fallback_title=fallback_title)
         # V-N1: a contract whose BODY is empty or pure scaffolding is a vacuous
@@ -2062,11 +2066,21 @@ def _coerce_finding(
         # faithfulness 1.00 on ZERO claims — a perfect grade for saying nothing,
         # which is the most misleading row this path can write. Same raise as
         # the degrade branches; the caller DLQs the run.
+        # Prose written beside the object stands in for an empty body (no second call).
+        outside = salvage_prose_outside_object(raw) if model_titled and is_unusable_output(body) else None
+        if outside:
+            body = outside
         if is_unusable_output(body):
-            raise OutputContractError(
+            message = (
                 "model returned a finding contract with no readable body "
                 f"(title={title[:120]!r})"
             )
+            # The model titled it: a finding with its body left out of the
+            # object, which the caller may repair once. A bare tool call or
+            # scaffolding gets no title of its own and fails as before.
+            if model_titled:
+                raise EmptyBodyContractError(message, title=title)
+            raise OutputContractError(message)
         # S3-T1: the OPTIONAL structured I&W block. The unit prompts emit it as a
         # top-level `indicators` array alongside the prose; tolerate a model that
         # nested it under `data`. Coerce leniently (drop malformed entries) so a
@@ -2075,6 +2089,8 @@ def _coerce_finding(
         if ind_raw is None and isinstance(parsed.get("data"), dict):
             ind_raw = parsed["data"].get("indicators")
         data: dict[str, Any] = {"raw_llm_response": raw[:8000]}
+        if outside:
+            data["body_outside_object_chars"] = len(outside)
         indicators = _coerce_indicators(ind_raw, level)
         # S3-T1 EMIT FALLBACK: the core plane won't emit the structured array but
         # DOES write a prose "## Indicators to watch" bullet list. When the model
@@ -2188,7 +2204,7 @@ def _narrate(
 def build_prompt_module() -> Any:
     """Construct and return the DSPy module bound to this analyst kind.
 
-    Imported by the L-176 optimizer (DSPy + GEPA) to compile a candidate
+    Imported by the optimizer (DSPy + GEPA) to compile a candidate
     over a recorded trace set.  Imported by the runtime at analyst-actor
     activate time *only when DSPy is installed* — otherwise the runner
     falls back to the direct ``chat_complete`` path with the same prompt
@@ -2250,12 +2266,64 @@ async def _reason_via_llm(
     return content, usage_dict
 
 
+#: The one line sent after a reply whose finding had a title and no body.
+EMPTY_BODY_REPAIR_LINE = (
+    "Your reply could not be used: the finding's JSON object has no readable `body` field."
+)
+
+
+async def _repair_empty_body(
+    deps: Any, first: EmptyBodyContractError, content: str, usage: dict[str, int],
+    steps: list[dict[str, Any]], *, user_prompt: str, fallback_title: str,
+    level: Any,
+) -> tuple[str, FindingPayload]:
+    """ONE repair call for a finding that came back titled with no body.
+
+    The model gets its own reply back and the one-line statement of what was
+    missing, in the same conversation and under the same system prompt. Its
+    usage is added to the run's; a ``empty_body_repair`` step records the
+    outcome so the rate is countable. Returns ``(new_content, finding)``; if
+    the repair call fails, or its reply is still not a finding, the run fails
+    as it did before, on the original error or the repaired reply's own.
+    """
+    step: dict[str, Any] = {"phase": "reflect", "kind": "empty_body_repair",
+                            "title": first.title[:200]}
+    steps.append(step)
+    messages = [
+        {"role": "user", "content": user_prompt},
+        {"role": "assistant", "content": content},
+        {"role": "user", "content": EMPTY_BODY_REPAIR_LINE},
+    ]
+    try:
+        repaired, extra = await _reason_via_llm(
+            deps.llm, user_prompt=user_prompt, max_tokens=deps.max_tokens,
+            temperature=deps.temperature, system_prompt=_effective_system_prompt(deps),
+            messages=messages,
+        )
+    except Exception as exc:  # noqa: BLE001 — a failed repair fails as the original did
+        step.update(outcome="llm_error", error=type(exc).__name__)
+        raise first from exc
+    for _k, _v in extra.items():
+        usage[_k] = usage.get(_k, 0) + _v
+    step["tokens"] = extra.get("prompt_tokens", 0) + extra.get("completion_tokens", 0)
+    try:
+        finding = _coerce_finding(repaired, fallback_title=fallback_title, level=level)
+    except OutputContractError:
+        step["outcome"] = "still_failing"
+        raise
+    finally:
+        # The receipt keeps the repaired reply whichever way it went.
+        step["raw_head"] = (repaired or "").strip()[:500]
+    step["outcome"] = "repaired"
+    return repaired, finding
+
+
 # ---------------------------------------------------------------------------
 # Public entry — ``run_method`` (the runtime's AnalystRunFn)
 # ---------------------------------------------------------------------------
 
 
-# Tier-1 knowledge-grounding hook (L-241 grounding). When the descriptor's
+# Tier-1 knowledge-grounding hook. When the descriptor's
 # ``grounding`` block is enabled, the deps-builder closes over a substrate
 # resolver + the descriptor's grounding config and installs this callable on
 # the deps. Called once per run with the (already-read) signal slice + the run
@@ -2305,11 +2373,11 @@ GROUNDING_RAG_STATS_SINK_KEY = "_grounding_rag_stats_sink"
 GROUNDING_QUESTION_SINK_KEY = "_grounding_question_sink"
 
 
-# PER-PHASE LLM SPLIT — the gpt-oss "Reasoning: high" directive. vLLM does NOT
-# honor a ``reasoning_effort`` wire arg (vllm.py:106,:129); gpt-oss takes this
+# PER-PHASE LLM SPLIT — the core model "Reasoning: high" directive. vLLM does NOT
+# honor a ``reasoning_effort`` wire arg (vllm.py:106,:129); the core model takes this
 # directive injected into the system/message content. It is prepended to the
 # GATHER system prompt ONLY when ``deps.gather_reasoning_high`` is set (the
-# journal's gpt-oss/vLLM gather plane), so the heavy investigation rounds think hard
+# journal's core-model / vLLM gather plane), so the heavy investigation rounds think hard
 # while the Opus voice calls — which never carry the gather suffix — are unpolluted.
 _REASONING_HIGH_DIRECTIVE = "Reasoning: high"
 
@@ -2334,21 +2402,18 @@ class InlineTargetDeps:
     max_tokens: int = 1024
     temperature: float = HOUSE_TEMPERATURE
     system_prompt: str = _SYSTEM_PROMPT
-    # PER-PHASE LLM SPLIT (journal §4.1). Optional SECOND handler for the VOICE
+    # PER-PHASE LLM SPLIT. Optional SECOND handler for the VOICE
     # phases (the journal's field-notes seam + NARRATE). ``None`` → every phase
     # uses the single primary ``llm`` handler — the BYTE-FOR-BYTE back-compat
     # path for every other analyst (no descriptor sets ``method.llm.narrate``).
     # When set (journal_assessor / journal_consolidator wire
     # ``method.llm.narrate.raw`` to the Opus plane), the heavy GATHER loop stays
-    # on ``llm`` (the gpt-oss / vLLM plane, reasoning=high) while the voice phases route to
-    # ``llm_narrate`` (Opus) via :meth:`narrate_llm`. The narrate handler may carry
-    # its OWN output cap — see ``narrate_max_tokens`` — because the Anthropic plane
-    # caps OUTPUT with max_tokens whereas the vLLM plane serves its own budget.
+    # on ``llm`` (the core-model / vLLM plane, reasoning=high) while the voice phases route to
+    # ``llm_narrate`` (Opus) via :meth:`narrate_llm`.
     llm_narrate: LLMHandlerLike | None = None
-    # Optional OUTPUT cap for the narrate (Opus) phases. ``None`` → reuse
-    # ``max_tokens``. On the Anthropic plane max_tokens IS the output cap, so the
-    # journal sets a larger narrate cap (entry 16384 / consolidation 24576) than
-    # the inert gather cap.
+    # The ``max_tokens`` argument the narrate phases pass. ``None`` → reuse
+    # ``max_tokens``. Like every caller's ``max_tokens`` it is never sent and
+    # limits nothing: each handler sends the model's own maximum.
     narrate_max_tokens: int | None = None
     # Optional Tier-1 grounding hook (see GroundingHook). ``None`` → no
     # grounding injection (the default for every non-opted-in analyst).
@@ -2373,21 +2438,21 @@ class InlineTargetDeps:
     # Optional budget-headroom precheck (see BudgetPrecheck). None → no
     # precheck; GATHER engages whenever a binding is present.
     budget_precheck: BudgetPrecheck | None = None
-    # V3/P2 — optional substrate pool/conn for the ``event:<uuid>`` citation
-    # expansion (LEGBA_EVENT_CITATIONS). None (the pre-P2 construction shape)
+    # Optional substrate pool/conn for the ``event:<uuid>`` citation
+    # expansion (LEGBA_EVENT_CITATIONS). None (the older construction shape)
     # leaves the tokens ordinary prose even when the flag is on.
     pg: Any | None = None
     # N-T — the substrate pool a kind's PLAN pre-pass reads (the inquiry hook's
     # ``deps.pg_pool``: crossroads' two leaf reads). Never wired before N-T, so
     # those reads reported failed on every crossroads run since 2026-09-24.
     pg_pool: Any | None = None
-    # PER-PHASE LLM SPLIT — inject the gpt-oss ``Reasoning: high`` directive into
-    # the GATHER system prompt ONLY (the heavy gpt-oss/vLLM investigation rounds).
+    # PER-PHASE LLM SPLIT — inject the core model ``Reasoning: high`` directive into
+    # the GATHER system prompt ONLY (the heavy core-model / vLLM investigation rounds).
     # Default False → the gather suffix is byte-for-byte unchanged for every
-    # assessor + the Opus voice calls. The journal sets it True so the gpt-oss/vLLM
+    # assessor + the Opus voice calls. The journal sets it True so the core-model / vLLM
     # gather thinks hard; the Opus field-notes/NARRATE calls are NOT polluted
     # because they never pass through the gather suffix. ``reasoning_effort`` is
-    # NOT a vLLM wire arg — gpt-oss takes a ``Reasoning: high`` content directive
+    # NOT a vLLM wire arg — the core model takes a ``Reasoning: high`` content directive
     # (see vllm.py:106,:129), so the CALLER (here) injects it into the prompt.
     gather_reasoning_high: bool = False
     llm_gather: LLMHandlerLike | None = None  # T-2: GATHER's own thinking choice; None = ``llm``
@@ -2400,28 +2465,26 @@ class InlineTargetDeps:
         the zero-regression path for every analyst that doesn't split (no
         descriptor sets ``method.llm.narrate``). When ``llm_narrate`` IS set
         (the journal's Opus plane) the voice routes there while GATHER stays on
-        ``llm`` (the gpt-oss/vLLM plane).
+        ``llm`` (the core-model / vLLM plane).
         """
         return self.llm_narrate or self.llm
 
     def narrate_tokens(self) -> int:
-        """The OUTPUT-token cap for the narrate phases.
-
-        ``narrate_max_tokens`` when set (the Anthropic plane caps OUTPUT, so the
-        journal raises it past the inert gather cap), else ``max_tokens``.
+        """The ``max_tokens`` argument the narrate phases pass (never sent;
+        it limits nothing): ``narrate_max_tokens`` when set, else ``max_tokens``.
         """
         return self.narrate_max_tokens if self.narrate_max_tokens is not None else self.max_tokens
 
 
 # ---------------------------------------------------------------------------
-# Unit-factory (P2-T1): the descriptor-supplied system prompt drives synthesis
+# Unit-factory: the descriptor-supplied system prompt drives synthesis
 # ---------------------------------------------------------------------------
 
 
 def _effective_system_prompt(deps: InlineTargetDeps) -> str:
     """The system prompt that drives THIS unit's synthesis.
 
-    P2-T1 (unit-factory): a bounded reasoning unit is JUST a descriptor — its
+    Unit-factory: a bounded reasoning unit is JUST a descriptor — its
     OWN ``method.system_prompt`` / ``method.prompt_module`` is threaded into
     ``deps.system_prompt`` by the deps-builder and drives the LLM synthesis here
     (so a new unit needs NO new entry in ``_KIND_MODULE_NAMES``). Falls back to
@@ -2539,7 +2602,7 @@ async def _gather(
             gather_steps.append(step)
             return "", aggregate_usage, refs, gather_steps, citation_extension
 
-    # A NEW llm_planner kind (the journal_assessor, plan §5/§4.9) reaches its
+    # A NEW llm_planner kind (the journal_assessor) reaches its
     # OWN read tools through this loop. Those tools are NOT in inline_target's
     # _GATHER_READ_TOOLS (they are journal_read-pack-specific instruments), so
     # the caller passes them in ``extra_read_tools`` — they are then BOTH
@@ -2547,7 +2610,7 @@ async def _gather(
     # (the journal_read binding, which Agency.run_pack_tool governs against the
     # journal_read pack). Empty for inline_target → byte-for-byte unchanged.
     #
-    # ``extra_write_tools`` (plan §7 / Wave 4 — the journal_propose pack) carries
+    # ``extra_write_tools`` (the journal_propose pack) carries
     # the journal's OWN write/propose tool names. They are recognized as valid
     # tool names but — unlike read tools — are NOT added to ``read_tools``, so
     # they route through their per-tool binding in ``tool_bindings`` (the
@@ -2568,8 +2631,8 @@ async def _gather(
     # web/write guidance from the bound packs' descriptors); fall back to the
     # read-only suffix when not supplied (back-compat: read-only assessors).
     gather_system = _effective_system_prompt(deps) + (gather_system or _GATHER_SYSTEM_SUFFIX)
-    # PER-PHASE LLM SPLIT — prepend the gpt-oss "Reasoning: high" directive to the
-    # GATHER system prompt ONLY when this deps opted in (the journal's gpt-oss/vLLM
+    # PER-PHASE LLM SPLIT — prepend the core model "Reasoning: high" directive to the
+    # GATHER system prompt ONLY when this deps opted in (the journal's core-model / vLLM
     # gather plane). Default off → byte-for-byte unchanged for every assessor;
     # the Opus field-notes/NARRATE calls never reach this code path so they are
     # NEVER polluted with the directive.
@@ -2595,7 +2658,7 @@ async def _gather(
     messages: list[Mapping[str, Any]] = [
         {"role": "user", "content": user_prompt}
     ]
-    # W11-F91: one digest per tool result, in append order (compaction input).
+    # one digest per tool result, in append order (compaction input).
     ctx, digests, empty_completions = context_budget, [], 0
 
     async def _dispatch(call: ToolCall) -> tuple[dict[str, Any], bool, bool]:
@@ -2677,7 +2740,7 @@ async def _gather(
         # falls through to the existing prose summary so the model still sees the
         # query outcome.
         signal_pairs = _gathered_signals_from_result(tool_name, tool_result)
-        numbered: list[tuple[int, str, str]] = []  # W11-F91: what a digest keeps
+        numbered: list[tuple[int, str, str]] = []  # what a digest keeps
         for raw_id, fields in signal_pairs:
             key = str(raw_id)
             if key in gathered_seen:
@@ -2748,7 +2811,7 @@ async def _gather(
                 analyst_id, target_id, rounds_used,
             )
             break
-        if ctx is not None:  # W11-F91: compact older results, then pre-flight
+        if ctx is not None:  # compact older results, then pre-flight
             messages = list(_ctxb.compact_transcript(messages, digests, ctx))
             refused = _ctxb.preflight_step(
                 ctx, system=gather_system, messages=messages, round_no=round_idx + 1,
@@ -2808,7 +2871,7 @@ async def _gather(
             if calls:
                 protocol = "native"
         if _ctxb.is_empty_completion(content, calls):
-            # W11-F91: no text and no call is a FAILED round, never a clean done.
+            # no text and no call is a FAILED round, never a clean done.
             empty_completions += 1
             step = {"phase": "gather", "kind": _ctxb.EMPTY_COMPLETION_KIND,
                     "round": rounds_used, "protocol": "text" if native is None else "native"}
@@ -2825,7 +2888,7 @@ async def _gather(
             if native is not None and action is None:
                 # NO tool call and no readable action: under the native protocol
                 # that IS the terminal condition — the model has stopped asking
-                # for tools, so gathering is over and the §28.4 synthesis turn
+                # for tools, so gathering is over and the synthesis turn
                 # writes the finding exactly as it always has. (This is why
                 # ``tool_choice`` stays ``auto``: a forced call could never
                 # stop.) ``protocol`` says which channel closed the loop.
@@ -2862,7 +2925,7 @@ async def _gather(
                 steps.append(step)
                 gather_steps.append(step)
                 break
-            # THE ACTION IS READ GENEROUSLY (2026-09-08) — the live runs emitted
+            # THE ACTION IS READ GENEROUSLY — the live runs emitted
             # the right tool and arguments in the wrong envelope and the strict
             # ``parsed["tool"]`` read refused them. Why: ``planner_action``.
             if action is None:
@@ -3082,19 +3145,24 @@ async def run_method(
         # pack and web_access are granted independently.
         bound_tools=tuple(tool_bindings),
     )
-    # W11-F91 — the multi-round GATHER evidence cap (gather_context_budget). It is
+    # the multi-round GATHER evidence cap (gather_context_budget). It is
     # resolved BEFORE the pack because the slice is packed to its share of it.
     ctx_budget = _ctxb.resolve_gather_context_budget(
         options, gather_system=_effective_system_prompt(deps) + gather_system,
         max_rounds=max(1, min(_GATHER_ROUNDS_CEILING, deps.max_rounds)),
         engaged=(options.get("agency_binding") or deps.agency_binding) is not None,
+        llm=deps.llm,
     )
     render_stats: dict[str, Any] = {}
     sliced, derived_from = _orient(
         list(signal_inputs), target_id,
         stats=render_stats,
         focus=_resolve_slice_focus(options),
-        budget=ctx_budget.slice_budget_tokens if ctx_budget is not None else None,
+        # The route's own window sizes the slice (``_llm_budget``).
+        budget=(
+            ctx_budget.slice_budget_tokens if ctx_budget is not None
+            else _input_token_budget(deps.llm)
+        ),
     )
     orient_step: dict[str, Any] = {
         "phase": "orient",
@@ -3106,7 +3174,7 @@ async def run_method(
         # renderer dropped, prosed, marked, or upgraded on THIS slice.
         **render_stats,
     }
-    # Lane N-B — a watermark slice's DECLARED coverage gap: in-window signals
+    # A watermark slice's DECLARED coverage gap: in-window signals
     # this read never saw (slice cut + ORIENT pack). Absent ⇒ no key.
     slice_coverage = finalize_coverage(options.get(COVERAGE_KEY), read=len(derived_from))
     if slice_coverage is not None:
@@ -3166,7 +3234,7 @@ async def run_method(
     # constant here and never out of the prompt prose. Absent => the header
     # simply omits the window line.
     _window_opt = options.get("slice_window_hours")
-    # Lane narrative (Program 7 piece 7e) — the narrative_coordination unit's
+    # The narrative_coordination unit's
     # pre-computed SPREAD BLOCK. Opt-in ONLY via the descriptor's declared
     # ``method.options.spread_block: true`` (ANALYST_KIND_OPTIONS["inline_target"]
     # catalog entry, handler_options.py) — every other inline_target unit leaves
@@ -3222,7 +3290,7 @@ async def run_method(
             "instructions, grounded in and citing (with [N] markers) the corpus "
             "documents you gather. Output ONLY the STRICT JSON finding object."
         )
-    # P0-T1: capture the render-time {N -> signal_id} map so REFLECT can resolve
+    # Capture the render-time {N -> signal_id} map so REFLECT can resolve
     # the prose's [N] citation markers back to substrate ids. Built from the SAME
     # ORIENTed slice _render_user_prompt rendered, so the 1-based N matches the
     # [N] _render_signal stamped onto each block.
@@ -3275,7 +3343,7 @@ async def run_method(
                 "phase": "ground",
                 "kind": "inject_preamble",
                 "preamble_chars": len(preamble),
-                # DQ P6 — persist the ACTUAL injected preamble text (bounded) into
+                # Persist the ACTUAL injected preamble text (bounded) into
                 # the trace (analyst_traces.intermediate_steps) so the grounding
                 # block a run saw is AUDITABLE after the fact. Previously only the
                 # char count was logged (prompt_rendered is NULL on every trace),
@@ -3414,14 +3482,14 @@ async def run_method(
             ground_blocks_step[HISTORY_DETAIL_RECEIPT_KEY] = history_detail
             steps.append(ground_blocks_step)
 
-    _over = _ctxb.synthesis_over_budget_step(  # W11-F91: named, then sent
+    _over = _ctxb.synthesis_over_budget_step(  # named, then sent
         ctx_budget, system=_effective_system_prompt(deps),
         user_prompt=synthesis_prompt(user_prompt, gathered=active_binding is not None),
     )
     if _over is not None:
         steps.append(_over)
     # --- REASON+ACT ----------------------------------------------------
-    # NOTE: when DSPy is wired into the runtime (L-176 GEPA replays this
+    # NOTE: when DSPy is wired into the runtime (GEPA replays this
     # phase), the call below is the boundary the optimizer monkey-patches
     # to swap candidate prompt modules.  Keep it a single function call
     # for replay simplicity.
@@ -3435,13 +3503,13 @@ async def run_method(
             user_prompt=synthesis_prompt(user_prompt, gathered=active_binding is not None),
             max_tokens=deps.max_tokens,
             temperature=deps.temperature,
-            # P2-T1: the descriptor-supplied unit prompt drives synthesis; fall
+            # The descriptor-supplied unit prompt drives synthesis; fall
             # back to the kind default when unset/None (see _effective_system_prompt).
             system_prompt=_effective_system_prompt(deps),
         )
     except Exception:
         # Re-raise — let the runtime classify (TransientFailure /
-        # BudgetExhausted / HardFailure) per kind_contracts §7.  We
+        # BudgetExhausted / HardFailure)  We
         # don't swallow here because the runtime's failure semantics
         # gate cooldowns + reminders + DLQ routing.
         steps.append({"phase": "reason", "kind": "llm_error"})
@@ -3462,9 +3530,16 @@ async def run_method(
     # --- REFLECT -------------------------------------------------------
     fallback_title = f"Assessment for {target_id or 'target'}"
     try:
-        finding = _coerce_finding(
-            content, fallback_title=fallback_title, level=_shape.level_specs(options),
-        )
+        try:
+            finding = _coerce_finding(
+                content, fallback_title=fallback_title, level=_shape.level_specs(options),
+            )
+        except EmptyBodyContractError as first:
+            content, finding = await _repair_empty_body(
+                deps, first, content, usage, steps,
+                user_prompt=synthesis_prompt(user_prompt, gathered=active_binding is not None),
+                fallback_title=fallback_title, level=_shape.level_specs(options),
+            )
     except OutputContractError as exc:
         # V-N1 DEGRADE-NOT-FABRICATE. Nothing a reader could use came back — an
         # empty completion, a bare tool call, or pure JSON scaffolding. Fail the
@@ -3474,11 +3549,18 @@ async def run_method(
         steps.append(unreadable_answer_step(content, exc, hypothesis_id=assignment_question_id))
         raise
 
-    # THE NARRATION IS NOT A FINDING (2026-09-08) — the decision, its receipt
+    if "body_outside_object_chars" in finding.data:  # receipt step, not a stored field
+        steps.append({"phase": "reflect", "kind": "body_outside_object",
+                      "chars": finding.data.pop("body_outside_object_chars")})
+
+    # THE NARRATION IS NOT A FINDING — the decision, its receipt
     # and its raise live together in ``planner_action.refuse_narration``.
     refuse_narration(finding.body, _GATHER_TOOLS, assignment_question_id, steps)
+    # Counted, never rejected: a body that skips the BLUF its prompt asked for.
+    if (bluf_warning := bluf_missing_step(finding.body, _effective_system_prompt(deps))):
+        steps.append(bluf_warning)
 
-    # P0-T1 (cite the prose): parse the [N] markers the synthesis prose already
+    # Cite the prose: parse the [N] markers the synthesis prose already
     # carries (the prompt asks every key-development claim to cite its signal [N])
     # and resolve each against the render-time {N -> signal_id} map. Persist the
     # resolved mapping as data['citations'] ALONGSIDE the untouched prose — this
@@ -3493,7 +3575,7 @@ async def run_method(
     citations, marker_count, resolved_count = _extract_citations(
         finding.body, citation_index
     )
-    # A2 (verify-path structural fix, 2026-07-31): the marker pass above resolved
+    # A2: the marker pass above resolved
     # to NOTHING — either the model's prose carried no [N] marker at all, or
     # every marker it used was out-of-range/unmapped — yet this run WAS reasoned
     # over real evidence (``sliced`` is the same non-empty set that seeds
@@ -3516,7 +3598,7 @@ async def run_method(
         if fallback:
             citations = fallback
             citations_fallback = True
-    # V3/P2 — the ``event:<uuid>`` ref kind (spec §2.5, LEGBA_EVENT_CITATIONS
+    # The ``event:<uuid>`` ref kind (LEGBA_EVENT_CITATIONS
     # + a wired ``deps.pg``): each token in the body / ``evidence`` expands
     # through ``signal_event_links`` into ordinary per-signal entries
     # numbered past the render index; the body token is rewritten to the new
@@ -3538,7 +3620,7 @@ async def run_method(
         citation_data = dict(finding.data) if isinstance(finding.data, dict) else {}
         citation_data["citations"] = citations
         finding = finding.model_copy(update={"data": citation_data})
-    # X4 LEVEL (W11-F36) — a level observed at its level must cite a collected
+    # X4 LEVEL — a level observed at its level must cite a collected
     # report; one resting on desk memory alone is set back (indicator_shape).
     level_data, level_demoted = _shape.demote_unsupported_levels(finding.data)
     if level_demoted:
@@ -3614,10 +3696,10 @@ async def run_method(
         # sequence is unchanged (no extra reflect step).
         "citation_markers": marker_count,
         "citations_resolved": resolved_count,
-        # A2 — whether the persisted citations came from the unmarked-basis
+        # whether the persisted citations came from the unmarked-basis
         # fallback rather than a resolved [N] marker (see above).
         "citations_fallback": citations_fallback,
-        # V3/P2 — event-ref expansions this run (flag off ⇒ 0) + the degrade
+        # Event-ref expansions this run (flag off ⇒ 0) + the degrade
         # counts (an expansion that raised; one that resolved to no member).
         "event_citations": event_expanded,
         "event_expand_failed": event_stats.get("event_expand_failed", 0),
@@ -3636,7 +3718,7 @@ async def run_method(
         _coerce_step.update({"level_observations": _level_obs, "level_demoted": level_demoted})
     steps.append(_coerce_step)
 
-    # --- NARRATE (roll 83: a first read's movement call is `new`, decided in code)
+    # --- NARRATE (a first read's movement call is `new`, decided in code)
     finding, _first_read = await settle_first_read_delta(getattr(deps, "pg", None), finding, analyst_id=analyst_id, target_id=target_id)
     steps.extend([_first_read] if _first_read else [])
     narrated = _narrate(finding, target_id=target_id, analyst_id=analyst_id)
@@ -3654,8 +3736,8 @@ async def run_method(
     for r in gather_refs:
         if r not in full_derived:
             full_derived.append(r)
-    # V3/P2 — the event id AND its expanded signal ids both ride derived_from
-    # (spec §2.5 rule 4), so the lineage walk resolves either way and
+    # The event id AND its expanded signal ids both ride derived_from
+    # (rule 4), so the lineage walk resolves either way and
     # output_consumption still names the load-bearing rows.
     for r in event_derived_ids:
         if r not in full_derived:
@@ -3787,7 +3869,7 @@ class InlineTargetRunner:
         llm_narrate: LLMHandlerLike | None = None,
         narrate_max_tokens: int | None = None,
         gather_reasoning_high: bool = False,
-        # V3/P2 — optional substrate pool/conn for the event-citation expansion (LEGBA_EVENT_CITATIONS).
+        # Optional substrate pool/conn for the event-citation expansion (LEGBA_EVENT_CITATIONS).
         pg: Any | None = None, llm_gather: LLMHandlerLike | None = None, rows_shadow: Any | None = None,
     ) -> None:
         self._deps = InlineTargetDeps(

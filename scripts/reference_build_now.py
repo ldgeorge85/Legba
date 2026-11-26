@@ -20,8 +20,8 @@ as ``reference_targets`` and ``--as-of`` as ``as_of`` — the SAME key the
 correctness grader reads for the same concept — and both ride inside the body's
 ``options`` object, which is the ONE channel ``dapr_actors`` merges into a
 sub-handler's option mapping. A knob at the TOP level of the body is ignored
-silently: that is precisely how G1's D1 defect hid, and the G1-fix lane settled
-this shape. That is not tidiness: an operator pinning a fortnight passes one
+silently: that is precisely how an earlier defect hid, and this shape fixed
+it. That is not tidiness: an operator pinning a fortnight passes one
 value to both jobs, so the reference and the grading of it can be anchored to
 one instant. ``tests/runtime/test_reference_builder_wiring.py`` asserts the envelope and
 every key in it against the live catalog, so a drift in either is a red test
@@ -92,9 +92,9 @@ def build_body(args: argparse.Namespace) -> dict[str, object]:
     go inside ``options`` — the per-run channel ``dapr_actors`` merges into the
     sub-handler's option mapping. Top-level keys other than the actor's own are
     IGNORED, with no error and no log line on the handler side, which is exactly
-    how G1's D1 defect hid: the on-demand run stamped ``as_of=now`` although the
+    how an earlier defect hid: the on-demand run stamped ``as_of=now`` although the
     body carried a past stamp, because the key was in the wrong place and
-    nothing said so. The G1-fix lane settled this shape; this script speaks it,
+    nothing said so. This script speaks the settled shape,
     and ``tests/runtime/test_reference_builder_wiring.py`` pins that it does.
 
     Every key inside ``options`` is a DECLARED knob

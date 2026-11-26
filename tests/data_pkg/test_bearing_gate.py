@@ -138,7 +138,7 @@ def test_the_gate_ref_default_is_the_measured_component():
 
 
 def test_prompt_constants_are_the_tuning_surface():
-    """The prompt-lab lane edits these; the version rides every stamped edge,
+    """The prompt lab edits these; the version rides every stamped edge,
     so a prompt change without a version bump would make a precision shift
     unattributable."""
     assert "{thesis}" in bg.GATE_PROMPT and "{signal}" in bg.GATE_PROMPT
@@ -148,7 +148,7 @@ def test_prompt_constants_are_the_tuning_surface():
 
 
 # ---------------------------------------------------------------------------
-# CW-2 — the desk identity reaches BOTH legs
+# The desk identity reaches BOTH legs
 #
 # K-4 R3: theses that never name their own country scored 0.048, and a US
 # Senate live blog with no Turkey token passed both legs onto the TÜRKIYE
@@ -540,14 +540,14 @@ async def test_confirm_stamps_gate_passed_edges_with_a_verdict_and_reason():
     assert counters["bearing_confirm_yes"] == 1
     assert counters["bearing_confirm_no"] == 1
     assert counters["bearing_confirm_calls"] == 1
-    # CW-1: the 'no' was ASKED and ANSWERED, and it is not in the survivors.
+    # The 'no' was ASKED and ANSWERED, and it is not in the survivors.
     assert kept == [a]
 
 
 # ----------------------------- CW-1: the confirm leg BLOCKS -----------------
 #
-# K-4 round 3 (planning/K4_LABELS_R3.csv, 120 labeled rows off the LIVE gated
-# stream): confirm-yes 38/57 = 0.667, confirm-no 4/47 = 0.085, absent
+# Measured on 120 labeled rows off the live gated
+# stream: confirm-yes 38/57 = 0.667, confirm-no 4/47 = 0.085, absent
 # 6/16 = 0.375. The 7.8x discriminator was being computed and thrown away.
 
 
@@ -659,7 +659,7 @@ async def test_the_unwired_leg_never_silences_the_plane_in_blocking_mode():
 
 
 async def test_the_confirm_cap_is_sized_to_the_gate_cap():
-    """CW-1 made the confirm a DECIDER, so an over-cap band is now an
+    """Made the confirm a DECIDER, so an over-cap band is now an
     UN-ADJUDICATED band. A cap below the gate's would manufacture one."""
     assert bg.DEFAULT_BEARING_CONFIRM_CAP >= bg.DEFAULT_BEARING_GATE_CAP
 
@@ -745,14 +745,14 @@ async def test_the_confirm_prompt_carries_every_pair_with_its_echo_id():
 
 
 # ---------------------------------------------------------------------------
-# W11-F148 — the gate asks a DECISION component (clef-flash) when given one;
+# The gate asks a DECISION component when given one;
 # a chat component keeps the chat path byte for byte
 # ---------------------------------------------------------------------------
 
 _GOLDEN = Path(__file__).resolve().parent / "fixtures" / "bearing_gate_llm_call_golden.json"
 _DESCRIPTOR = Path(__file__).resolve().parents[2] / "descriptors" / "analyst_claim_watch.yaml"
-_CLEF = "llm.decide.innoai_clef_flash"
-_GEMMA = "llm.verify.innoai_gemma.openai_compat"
+_DECIDER = "llm.decide.gateway_typed_choice"
+_GEMMA = "llm.verify.gateway_judge.openai_compat"
 
 
 class _FakeDecider:
@@ -839,7 +839,7 @@ async def test_a_decision_gate_asks_the_one_shared_question_over_the_gate_row():
     decider = _FakeDecider()
     cand = _cand(thesis="THESIS-TEXT", signal="SIGNAL-TEXT")
     cand.desk_label = "G20 — Türkiye [country_g20_tr]"
-    await _run_ref([cand], deps=_gate_deps(decider), gate_ref=_CLEF)
+    await _run_ref([cand], deps=_gate_deps(decider), gate_ref=_DECIDER)
     [call] = decider.calls
     assert call["state"] == bg.gate_row_text(cand)
     assert call["questions"] == bg.bearing_questions()
@@ -855,7 +855,7 @@ async def test_a_decision_gates_choice_is_the_verdict(answer, verdict, kept_n):
     cand = _cand(signal="sig")
     asked: list = []
     kept, counters = await _run_ref(
-        [cand], deps=_gate_deps(_FakeDecider({"sig": answer})), gate_ref=_CLEF, asked=asked)
+        [cand], deps=_gate_deps(_FakeDecider({"sig": answer})), gate_ref=_DECIDER, asked=asked)
     assert len(kept) == kept_n
     assert counters["bearing_gate_calls"] == 1
     if verdict == "yes":
@@ -868,28 +868,28 @@ async def test_a_decision_gates_choice_is_the_verdict(answer, verdict, kept_n):
 async def test_a_decision_gate_carries_its_confidence_and_shape_on_the_edge():
     cand = _cand(signal="sig")
     kept, counters = await _run_ref(
-        [cand], deps=_gate_deps(_FakeDecider({"sig": "yes"})), gate_ref=_CLEF)
+        [cand], deps=_gate_deps(_FakeDecider({"sig": "yes"})), gate_ref=_DECIDER)
     data = cand.data_payload()
     assert data["bearing_gate"] == "yes"
-    assert data["bearing_gate_ref"] == _CLEF
+    assert data["bearing_gate_ref"] == _DECIDER
     assert data["bearing_gate_shape"] == "decide"
     assert data["bearing_gate_confidence"] == pytest.approx(0.9)
     assert data["bearing_gate_p_yes"] == pytest.approx(0.9)
     assert data["bearing_gate_prompt"] == bg.GATE_DECIDE_QUESTION_VERSION
     assert counters["bearing_gate_shape"] == "decide"
     assert counters["bearing_gate_prompt"] == bg.GATE_DECIDE_QUESTION_VERSION
-    assert counters["bearing_gate_ref"] == _CLEF
+    assert counters["bearing_gate_ref"] == _DECIDER
 
 
 async def test_a_decision_gate_without_confidence_falls_back_to_the_larger_probability():
     cand = _cand(signal="sig")
     answer = {"choice": "yes", "probabilities": {"yes": 0.7, "no": 0.3}}
-    await _run_ref([cand], deps=_gate_deps(_FakeDecider({"sig": answer})), gate_ref=_CLEF)
+    await _run_ref([cand], deps=_gate_deps(_FakeDecider({"sig": answer})), gate_ref=_DECIDER)
     assert cand.gate_confidence == pytest.approx(0.7)
     assert cand.gate_p_yes == pytest.approx(0.7)
     bare = _cand(signal="bare")
     await _run_ref([bare], deps=_gate_deps(_FakeDecider({"bare": {"choice": "yes"}})),
-                   gate_ref=_CLEF)
+                   gate_ref=_DECIDER)
     assert bare.gate == "yes" and bare.gate_confidence is None
     assert "bearing_gate_confidence" not in bare.data_payload()
 
@@ -902,7 +902,7 @@ async def test_an_unanswerable_decision_gate_stamps_and_writes(answer):
     cand = _cand(signal="sig")
     asked: list = []
     kept, counters = await _run_ref(
-        [cand], deps=_gate_deps(_FakeDecider({"sig": answer})), gate_ref=_CLEF, asked=asked)
+        [cand], deps=_gate_deps(_FakeDecider({"sig": answer})), gate_ref=_DECIDER, asked=asked)
     assert kept == [cand] and cand.gate == "unavailable"
     assert counters["bearing_gate_errors"] == 1
     assert asked == [(cand, "unavailable")]
@@ -913,7 +913,7 @@ async def test_a_decision_gate_keeps_the_cap_and_the_deferred_stamp():
     counters: dict[str, Any] = {}
     decider = _FakeDecider()
     kept = await bg.run_bearing_pipeline(
-        cands, deps=_gate_deps(decider), mode="on", gate_ref=_CLEF, gate_cap=2,
+        cands, deps=_gate_deps(decider), mode="on", gate_ref=_DECIDER, gate_cap=2,
         confirm_cap=0, counters=counters)
     assert len(decider.calls) == 2 and len(kept) == 4
     assert counters["bearing_gate_deferred"] == 2
@@ -929,9 +929,9 @@ async def test_a_decision_gate_built_from_the_registry_is_cached(monkeypatch):
 
     monkeypatch.setattr(bg, "build_component_handler", _build)
     for _ in range(2):
-        _, counters = await _run_ref([_cand()], deps=_Deps(), gate_ref=_CLEF)
+        _, counters = await _run_ref([_cand()], deps=_Deps(), gate_ref=_DECIDER)
         assert counters["bearing_gate_shape"] == "decide"
-    assert builds == [_CLEF]
+    assert builds == [_DECIDER]
 
 
 def test_the_shape_counter_is_seeded_empty():
@@ -944,7 +944,7 @@ async def test_an_off_gate_leaves_the_shape_empty():
 
 
 def test_the_descriptor_swaps_the_roles_and_validates():
-    """11-05 decision: clef-flash is the GATE, the Gemma chat judge its
+    """11-05 decision: the decision model is the GATE, the Gemma chat judge its
     SHADOW. The descriptor must still parse on the runtime's own model and
     its options must land whole through the catalog."""
     import yaml
@@ -958,13 +958,11 @@ def test_the_descriptor_swaps_the_roles_and_validates():
     raw["identity"]["version"] = "0" * 16
     desc = AnalystDescriptor.model_validate(raw)
     opts = raw["method"]["options"]
-    assert opts["bearing_gate_ref"] == _CLEF
+    assert opts["bearing_gate_ref"] == _DECIDER
     assert opts["bearing_shadow_ref"] == _GEMMA
     assert opts["bearing_gate"] == "on"
     res = resolve_handler_options("claim_watch", opts)
     assert res.rejected == ()
-    assert res.accepted["bearing_gate_ref"] == _CLEF
+    assert res.accepted["bearing_gate_ref"] == _DECIDER
     assert res.accepted["bearing_shadow_ref"] == _GEMMA
     assert desc.method.sub_handler == "claim_watch"
-    text = _DESCRIPTOR.read_text(encoding="utf-8")
-    assert "2026-11-05" in text and "CLEF_ADJUDICATION_2026-10-25_prelabelled" in text

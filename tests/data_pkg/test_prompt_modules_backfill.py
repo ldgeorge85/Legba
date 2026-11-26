@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Wave B prereq #4 — DSPy ``build_prompt_module`` backfill across 5 kinds.
+"""DSPy ``build_prompt_module`` backfill across 5 kinds.
 
 Each LLM-bearing analyst kind now exposes a real :class:`dspy.Module`
-subclass per L-105 §2.3.  These tests verify:
+subclass per §2.3.  These tests verify:
 
   1. The kind module's ``build_prompt_module()`` returns an instance of
      the expected DSPy module class.
@@ -13,13 +13,13 @@ subclass per L-105 §2.3.  These tests verify:
      (matches the inline_target contract).
 
 The 5 kinds covered here:
-  * cross_target_raw           (L-171)
-  * meta_findings_synthesizer  (L-172)
-  * predictor                  (L-174)  — narrative wrapper only
-  * cross_analyst_correlator   (L-177)
-  * consult_on_demand          (L-178)  — per-round ReAct step
+  * cross_target_raw
+  * meta_findings_synthesizer
+  * predictor  — narrative wrapper only
+  * cross_analyst_correlator
+  * consult_on_demand  — per-round ReAct step
 
-The inline_target kind (L-170) is already covered in
+The inline_target kind is already covered in
 ``test_analyst_inline_target.py``.
 """
 
@@ -28,7 +28,7 @@ from __future__ import annotations
 import pytest
 
 # ---------------------------------------------------------------------------
-# cross_target_raw (L-171)
+# cross_target_raw
 # ---------------------------------------------------------------------------
 
 
@@ -58,7 +58,7 @@ def test_cross_target_raw_build_prompt_module():
 
 
 # ---------------------------------------------------------------------------
-# meta_findings_synthesizer (L-172)
+# meta_findings_synthesizer
 # ---------------------------------------------------------------------------
 
 
@@ -88,7 +88,7 @@ def test_meta_findings_synthesizer_build_prompt_module():
 
 
 # ---------------------------------------------------------------------------
-# predictor (L-174) — narrative wrapper only
+# predictor — narrative wrapper only
 # ---------------------------------------------------------------------------
 
 
@@ -123,7 +123,7 @@ def test_predictor_build_prompt_module():
 
 
 # ---------------------------------------------------------------------------
-# cross_analyst_correlator (L-177)
+# cross_analyst_correlator
 # ---------------------------------------------------------------------------
 
 
@@ -155,7 +155,7 @@ def test_cross_analyst_correlator_build_prompt_module():
 
 
 # ---------------------------------------------------------------------------
-# consult_on_demand (L-178) — per-round ReAct step
+# consult_on_demand — per-round ReAct step
 # ---------------------------------------------------------------------------
 
 
@@ -188,7 +188,7 @@ def test_consult_on_demand_build_prompt_module():
 
 
 # ---------------------------------------------------------------------------
-# critic (L-175)
+# critic
 # ---------------------------------------------------------------------------
 
 

@@ -72,7 +72,7 @@ describe('CoverageLine — W11 stale-read marks (the composition panel)', () => 
     expect(note).not.toContain('military_posture')
   })
 
-  it('W11-F14 — names each unit the register lists carried, unsupported, with its last evidence', () => {
+  it('Names each unit the register lists carried, unsupported, with its last evidence', () => {
     const assembly = {
       ...base,
       coverage: [

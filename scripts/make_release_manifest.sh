@@ -84,7 +84,7 @@ mapfile -t IMAGES < <(
   echo "## migration baseline (data-migration files; ledger HEAD is verified at deploy)"
   ls -1 "${REPO_ROOT}/src/legba/data/migrations/"*.sql 2>/dev/null \
     | xargs -r -n1 basename | sort || echo "<no migration files found>"
-  echo "# Ledger table: legba_data_migrations  (verify applied set per RUNBOOK §3)"
+  echo "# Ledger table: legba_data_migrations  (verify applied set per the runbook)"
 
   echo
   echo "## smoke verification"

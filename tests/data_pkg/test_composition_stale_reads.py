@@ -1,12 +1,12 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W11 SWEEP-2 - a composition marks the unit reads it quotes that are stale.
+"""A composition marks the unit reads it quotes that are stale.
 
 FRESH_EYES_2026-10-05 §5: 19 of 40 compositions quoted unit reads 34-94 h old
 and a reader could not tell. ``composition_stale_reads`` marks (never
 re-selects): each quoted head and coverage row gains ``cadence_h`` + ``stale``,
 the record gains ``stale_unit_reads``. The cadence lookup is proven on the real
-driver with a throwaway head descriptor, deleted at teardown (W8 rule).
+driver with a throwaway head descriptor, deleted at teardown.
 """
 
 from __future__ import annotations

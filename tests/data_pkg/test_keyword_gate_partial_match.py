@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane N-R — the keyword gate's per-term partial match (``*`` at a term end),
+"""The keyword gate's per-term partial match (``*`` at a term end),
 and the Bundeswehr procurement gate that needed it.
 
 The Bundeswehr source wrote zero signals: its whole-word gate missed German

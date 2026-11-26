@@ -6,7 +6,7 @@
 WHY THIS EXISTS AS A COMMITTED SCRIPT
 -------------------------------------
 The "720-pair transliteration backlog" has been quoted three times now — in
-commit ``801e8477``, in migration ``0165``'s header, and in the W3-C audit — and
+commit ``801e8477``, in migration ``0165``'s header, and in an audit — and
 until this file it lived in nobody's tree. It is not a queue and never was:
 there is no backlog table, no counter, no persisted list. It is *whatever the
 V-G6 predicate accepts against the live person table today*, recomputed from
@@ -14,7 +14,7 @@ scratch each time anyone asks, which is why the number moved from 720 (at commit
 time, 20,512 rows) to 726 (a day later, 20,621 rows) without anything happening.
 
 That is fine — recomputable is better than retrievable — but only if everyone
-recomputes it the SAME way. The W3-C audit had to re-derive the predicate by
+recomputes it the SAME way. That audit had to re-derive the predicate by
 hand from a commit message to check its own numbers. This script is that
 derivation, committed, so the next before/after comparison is a diff of two runs
 rather than a diff of two reconstructions.
@@ -28,7 +28,7 @@ not merged/junk):
   ``accepted``    pairs accepted by V-G6 conditions 1-4 (the historical figure:
                   same token count >= 2, no digits, whole-string Levenshtein
                   <= 2, per-token double-metaphone overlap primary OR alt)
-  ``gated``       pairs condition 5 — the W3-C COMPASS GATE — then rejects
+  ``gated``       pairs condition 5 — the COMPASS GATE — then rejects
 
 ``accepted - gated`` is the backlog as the shipped guard now sees it.
 
@@ -48,7 +48,7 @@ predicate's meaning.
 SAFETY: read-only. The session is opened with
 ``default_transaction_read_only = on`` (server-enforced) in addition to issuing
 nothing but SELECTs. This script proposes no merge, writes no table, and emits
-no migration — per the W3-C verdict, resolving any of these pairs is a per-pair
+no migration — per the audit's verdict, resolving any of these pairs is a per-pair
 human-gated decision, not a batch this script is allowed to prepare.
 
 COST: an O(n^2) self-join over ~20.6k rows, roughly 3 minutes. It is a census,
@@ -124,7 +124,7 @@ pairs AS (
 )
 """
 
-#: Condition 5 — the W3-C compass gate, as the boolean the live probe negates.
+#: Condition 5 — the compass gate, as the boolean the live probe negates.
 #: ``$1`` is DIRECTIONAL_TOKENS.
 _GATED_EXPR = """
     EXISTS (
@@ -163,7 +163,7 @@ async def _run(show_gated: bool) -> int:
         row = await conn.fetchrow(_COUNT_SQL, tokens)
         accepted, gated = int(row["accepted"]), int(row["gated"])
         print(f"active person population : {population}")
-        print(f"pairs accepted (V-G6 1-4): {accepted}")
+        print(f"pairs accepted (rules 1-4): {accepted}")
         print(f"rejected by compass gate : {gated}")
         print(f"backlog after the gate   : {accepted - gated}")
         print(f"direction tokens bound   : {len(tokens)}")

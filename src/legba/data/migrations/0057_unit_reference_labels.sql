@@ -3,7 +3,7 @@
 --
 -- 0057_unit_reference_labels.sql
 --
--- P2-T4 — the per-bounded-unit GOLD / reference-set substrate. Phase 2 measures
+-- The per-bounded-unit GOLD / reference-set substrate. Phase 2 measures
 -- each small reasoning unit individually; per-unit CORRECTNESS ("is the unit's
 -- read RIGHT?") needs a labeled reference answer to score against, separate from
 -- faithfulness (P0-T2, "is the prose faithful to its cites?"). This table is that

@@ -1,4 +1,4 @@
-# G1 — THE CORRECTNESS GRADER (LEDGER_RESET_2026-09-16 §3, Program 2).
+# THE CORRECTNESS GRADER.
 #
 # THE GAP. ~84% of this fleet's LLM calls are the system grading itself:
 # faithfulness judges scoring our prose against our own citations, calibration
@@ -9,21 +9,21 @@
 # labeled reference per unit, and without one the verify pass measures
 # groundedness, not truth.
 #
-# WHAT THIS IS. Program 1's instrument, ported into the platform. On 2026-09-16
-# it was run BY HAND over Israel — 8 desk heads + the composition, 54 claims, an
-# independent reference built blind to the substrate, three grader families
-# reading ANNEX C v4 — and it found TWO false claims the platform had published
-# that day: a desk asserting a "deadlock over list submissions" on a day the
-# lists were filed, and a composition asserting "no price spikes" while crude
-# was over $100. The desk had hedged the second; the composition un-hedged it.
-# That is the laundering hazard the spine names, caught by measurement.
+# WHAT THIS IS. A manual run of the instrument over one country (8 desk heads +
+# the composition, 54 claims, an independent reference built blind to the
+# substrate, three grader families reading ANNEX C v4) found two false claims
+# the platform had published: a desk asserting a "deadlock over list
+# submissions" on a day the lists were filed, and a composition asserting "no
+# price spikes" while crude was over $100. The desk had hedged the second; the
+# composition un-hedged it. That is the laundering hazard, caught by
+# measurement; this analyst runs the same instrument inside the platform.
 #
-# THE THREE-LABEL RUBRIC, and why three. R4's five-label rubric with its tiers
-# and its precedence ladder produced pooled three-family agreement of 0.42
+# THE THREE-LABEL RUBRIC, and why three. An earlier five-label rubric with
+# tiers and a precedence ladder produced pooled three-family agreement of 0.42
 # against a 0.75 bar: the verdict was instrument-limited, not a finding about
 # the reads. ANNEX C v4 removes the tiers and the ladder and asks ONE question
 # with THREE answers — contains / contradicts / silent — and measured 0.8444 on
-# a fresh 30-atom draw, every pair above the 0.70 floor (VERDICT_P1v4.md). The
+# a fresh 30-atom draw, every pair above the 0.70 floor. The
 # rubric ships as a DATA FILE in the tree
 # (src/legba/data/analysts/rubrics/ANNEX_C_v4.md, sha256 1b51d7f5…) whose digest
 # is checked at import, because that sha is the identity of every number written
@@ -40,10 +40,9 @@
 # an empty denominator) and the handler writes them together.
 #
 # THREE FAMILIES, one of them free. F0 = the $0 self-hosted core plane
-# (llm.primary.openai_compat, gpt-oss-120b) — DISCLOSED as the PRODUCER family:
-# the model that writes the reads grades them here. PREREG_P1 §4 registered that
-# disclosure and VERDICT_P1v4 measured F0 not to be the outlier (F0xF3 = 0.90,
-# the strongest pair). F2 = Meta Llama-3.3-70B, F3 = Mistral Large 3, both on
+# (llm.primary.openai_compat, the core model) — DISCLOSED as the PRODUCER family:
+# the model that writes the reads grades them here. The calibration measured F0
+# not to be the outlier (F0xF3 = 0.90, the strongest pair). F2 = Meta Llama-3.3-70B, F3 = Mistral Large 3, both on
 # OpenRouter, both passed through the external-grader fence (never Anthropic,
 # never the writer's family, never the live judge's, never each other's).
 #
@@ -63,7 +62,7 @@
 # decision. It takes an env change and a recreate, which is a deploy step with a
 # human at the other end.
 #
-# THE CALIBRATION INTERLOCK (G3). The handler REFUSES to grade unless a
+# THE CALIBRATION INTERLOCK. The handler REFUSES to grade unless a
 # `grader_calibrations` row exists that names this rubric sha, covers every
 # model id the run will use, and says gate_pass. Coverage is a SUPERSET test: a
 # run may use a SUBSET of the calibrated families (F0 alone at a $0 ceiling is
@@ -83,7 +82,7 @@
 # which is why coverage travels with every share. It is correctness against a
 # reference OF SOME AGE, which is why `reference_age_days` is written on every
 # row and printed on every receipt. It cannot grade a unit whose reference does
-# not exist — track R2 owns the reference builder (docs/SEAMS.md #55) and this
+# not exist — the reference builder is a separate analyst (docs/SEAMS.md #55) and this
 # job records `no_reference`, or `reference_stale` when a reference exists and
 # has aged past the grace, and grades nothing. It cannot break a split: where no
 # two families agree the claim is published `split`, counted in the coverage
@@ -98,8 +97,8 @@
 #
 # NOTHING PAGES AND NOTHING GATES FROM THIS TRAIN. The receipt is a
 # counting-not-repairing gauge. The read-surface number and the composition gate
-# ("compose only over units carrying a number >= threshold") are track G2, and
-# the threshold is the operator's.
+# ("compose only over units carrying a number >= threshold") are not built here,
+# and the threshold is the operator's.
 #
 # State: DRAFT in-tree. FLAG LEGBA_CORRECTNESS_GRADER_ENABLED defaults OFF; with
 # it off the handler writes nothing at all — no row, no LLM call, no spend.
@@ -127,7 +126,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: draft
-  owner: g1_correctness_instrument
+  owner: owner@local
 
 subscription:
   # No `targets` block => META analyst: ONE global sweep per cadence tick. The
@@ -147,13 +146,13 @@ method:
   kind: deterministic
   impl: legba.data.analysts.deterministic:run_method
   sub_handler: correctness_grader
-  # X-1 declared knobs (handler_options.HANDLER_OPTIONS['correctness_grader']).
+  # Declared knobs (handler_options.HANDLER_OPTIONS['correctness_grader']).
   # Values below are the in-source defaults, stated explicitly so this file
   # documents the shipped volume rather than implying it. The SPEND ceiling is
   # NOT here — see the banner.
   options:
     # EMPTY means "every target carrying a reference whose window contains the
-    # stamp", so the sweep widens on its own as track R2 lands references and
+    # stamp", so the sweep widens on its own as the reference builder lands references and
     # grades nothing at all while unit_references is empty. Naming targets here
     # bounds it to those.
     grader_targets: []
@@ -203,12 +202,12 @@ method:
       # serving a DIFFERENT model fails the calibration coverage test and stops
       # the grader until a re-gate lands.
       factory_kind: stack_ref
-      raw: llm.verify.innoai_gemma.openai_compat   # cutover 2026-10-23: F2 = Gemma 4 on the box (the OpenRouter Llama lane is retired)
+      raw: llm.verify.gateway_judge.openai_compat   # F2 = Gemma 4 on the gateway
       expected_family: llm_provider
     family_f3:
       # F3 — Mistral Large 3 (mistralai/mistral-large-2512). Same rule.
       factory_kind: stack_ref
-      raw: llm.grader.innoai_lightning.openai_compat   # cutover 2026-10-23: F3 = Nemotron Lightning on the box (the OpenRouter Mistral lane is retired)
+      raw: llm.grader.gateway_third_family.openai_compat   # F3 = the Nemotron grader on the gateway
       expected_family: llm_provider
   # Per-day token cap (24h bucket). Sized for the measured shape: the Israel
   # hand run was 54 claims x 3 families at ~7.4k input each (a live packet
@@ -237,12 +236,12 @@ cadence:
 # NO ACTION PACKS. This analyst reaches nothing outside the substrate and the
 # three bound LLM components: no web search, no fetch, no ad-hoc HTTP anywhere
 # in its path. The REFERENCE is an input it reads from a table; building one is
-# track R2's job and deliberately not this analyst's, because a grader that
+# the reference builder's job and deliberately not this analyst's, because a grader that
 # could also build its own reference could close the loop on itself.
 action_packs: []
 
 # No output bindings. The sweep's receipt finding is the run's own return value;
 # the NUMBERS are side-written to unit_correctness + unit_correctness_claims
 # (migration 0196). No outward fan-out from here — the read-surface number and
-# the composition gate are track G2.
+# the composition gate are not built here.
 outputs: []

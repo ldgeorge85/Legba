@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The resolution record and the resolution job (ST1-A, migration 0244).
+"""The resolution record and the resolution job (migration 0244).
 
 Every act on a question's outcome is one APPEND-ONLY row of
 ``forecast_resolution_records``:

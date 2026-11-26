@@ -1,11 +1,11 @@
-# L-200 — G20 country discovery descriptor (operator-scoped clone of
+# G20 country discovery descriptor (operator-scoped clone of
 # discovery_geopolitical_countries.yaml).
 #
 # Materialises 19 country target instances scoped to the G20 minus the
 # EU (which has no ISO-3166-1 code).  Sibling to the full-249 descriptor
 # at descriptors/discovery_geopolitical_countries.yaml — the full one
 # is currently retired; we use this narrower set as the production
-# rollout starting point per Lewis's call (2026-06-02): "G20 for now."
+# rollout starting point ("G20 for now").
 #
 # Per-country body shape after relabel (same as the parent template):
 #   identity.id          = country_geopolitical_<iso2_lower>

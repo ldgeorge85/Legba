@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""DESK-TIER span checks: the quoted BLUF against the signals IT cites (lane N-D).
+"""DESK-TIER span checks: the quoted BLUF against the signals IT cites.
 
 The assembly quotes a desk head's lead sentence verbatim, and the arms prove
 the quotation is a faithful slice of the head. Quote fidelity means QUOTED

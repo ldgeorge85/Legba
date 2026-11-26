@@ -1,22 +1,22 @@
 /**
  * Voices (`system.journal`) — Legba's reflective voices, filtered + grouped
- * (VOICES_PANEL_SPEC.md, step 1 — the incremental path §4).
+ * (incremental first cut).
  *
- * Reads `GET /api/v1/journal` (summary-weight for the list, `fields=summary`
- * §3.3) + `GET /api/v1/journal/{id}` (full weight, on row-select — the reader
+ * Reads `GET /api/v1/journal` (summary-weight for the list, `fields=summary`)
+ * + `GET /api/v1/journal/{id}` (full weight, on row-select — the reader
  * pane's fetch) + the open consolidation + the substrate `calibration` verdict.
  * Polled every 60s. The panel surfaces:
  *
- *  - A FILTER RAIL (§2a) — kind chips (Journal / Consolidation / Chronicle,
- *    plus any `lens`/`lens_diff` kinds actually present once LV-1 lands) with
+ *  - A FILTER RAIL — kind chips (Journal / Consolidation / Chronicle,
+ *    plus any `lens`/`lens_diff` kinds actually present once they exist) with
  *    a live row count + a verify-score pill, multi-select / union semantics,
  *    all-selected by default.
  *  - The LATEST CONSOLIDATION prominently, above the list — "Legba's current
  *    inner landscape" (the single open `entry_kind='consolidation'` row) —
  *    ALWAYS fetched regardless of chip state (a "jump to" shortcut, not a
- *    true filter, §2a); the Consolidation chip toggles only its local
+ *    true filter); the Consolidation chip toggles only its local
  *    visibility.
- *  - A GROUPED-BY-CYCLE collapsed list (§2b) replacing the old unbounded
+ *  - A GROUPED-BY-CYCLE collapsed list replacing the old unbounded
  *    scroll — rows bucketed by `period_end` date, newest cycle expanded, an
  *    entry_kind priority order within a group, a diary-row reveal cap. Each
  *    cycle splits into two BANDS (h7): SYNTHESIS (chronicle + lens +
@@ -27,19 +27,19 @@
  *    by reading a uniformly-grey label. The palette deliberately avoids the
  *    amber ("unverified") and rose ("contradicted") meanings this panel
  *    already spends colour on; see `KIND_BADGE_CLASSES`.
- *  - A READER PANE (§2c) — selecting a row fetches the full row and reuses
+ *  - A READER PANE — selecting a row fetches the full row and reuses
  *    `EntryCard` + `ClaimRow` + `HonestyBanner` wholesale (they already render
  *    any `entry_kind` generically). When the row's `verify_body` names
  *    contested spans (`[judge_contradicted]` / `[judge_unsupported]`), a
  *    compact per-claim VERDICT BLOCK renders them as flagged chips — the
  *    operator's window into what the verify pass actually disputed.
- *  - A DIFF TAB shell (§2d) — permanent empty state pre-LV-1.
+ *  - A DIFF TAB shell — permanent empty state until a comparison row exists.
  *  - PER-CLAIM PROVENANCE CHIPS — unchanged from the prior cut: each
  *    `claims[].refs` ref renders as a `ProvenanceChip` deep-linking via the
  *    shared `selectRow`.
  *  - The "UNVERIFIED PERSPECTIVE" visual style — a `[needs_citation]`-prefixed
  *    span or a `kind="perspective"` claim renders dashed/amber, visible and
- *    NEVER hidden (§4.5) — the grounding-honesty surface.
+ *    NEVER hidden — the grounding-honesty surface.
  *  - The HONESTY BANNER — driven by `calibration`, cross-checked against the
  *    open consolidation's stored `honesty_flags`.
  *
@@ -120,8 +120,7 @@ function sourceShortName(sourceId: string): string {
 }
 
 /**
- * The honest label for a resolved journal ref (T1.3,
- * planning/JOURNAL_CONNECTIVE_AUDIT_PROPOSAL_2026-09-09.md §6). Before this,
+ * The honest label for a resolved journal ref. Before this,
  * every ref rendered as `title ?? id` regardless of kind — so a `kind='unknown'`
  * ref (the server's placeholder for an id matching no substrate row) showed a
  * bare UUID indistinguishable from a resolved one, and the underlying
@@ -161,18 +160,18 @@ function refToChip(ref: JournalRef): ProvenanceRef {
 
 /** Drive the shared selection from a chip — opens the Inspector + brushes the
  *  other rooms. `selectRow` coerces an unknown/non-first-class kind to a
- *  walkable Inspector path, so a click is never a dead-end (§9). */
+ *  walkable Inspector path, so a click is never a dead-end. */
 function openRef(ref: JournalRef): void {
   selectRow(ref.kind, ref.id, journalRefLabel(ref), { origin: 'journal' })
 }
 
 /** An explicit speculation / perspective / self-instrument marker family the
- *  server deliberately KEEPS (never strips) — appendix §5.2. Mirrors
+ *  server deliberately KEEPS (never strips) — mirrors
  *  `journal_assessor.py`'s `_SPECULATION_RE`. */
 const SPECULATION_MARKER_RE =
   /\[\[(spec|speculation|perspective|wonder|inference|unverified|instrument|unsupported|number_unsupported|duplicate_citation|outcome_overstated)\]\]/gi
 
-/** Lane N-D — the PRE-PUBLISH verify marks (`journal_prepublish.VERIFY_MARKS`):
+/** The PRE-PUBLISH verify marks (`journal_prepublish.VERIFY_MARKS`):
  *  the verify pass ran before the entry published and marked, in place, what
  *  its cited sources do not bear out. Rendered as rose pills, never hidden. */
 const VERIFY_MARK_LABELS: Record<string, string> = {
@@ -185,7 +184,7 @@ const VERIFY_MARK_IN_SPAN_RE =
   /\[\[(unsupported|number_unsupported|duplicate_citation|outcome_overstated)\]\]/
 
 /** Normalize inline body markers for the human-readable markdown render
- *  (appendix §5.2, renamed from `stripRefMarkers` now that it does more than
+ *  (renamed from `stripRefMarkers` now that it does more than
  *  strip refs):
  *   - `[[ref:<uuid>]]` markers are STRIPPED — the chip binding lives in
  *     `claims`, so an inline marker is redundant noise in the prose.
@@ -217,7 +216,7 @@ function splitOnSpeculationTags(text: string): Array<{ text: string } | { tag: s
 }
 
 /** One `[[instrument]]`-family inline pill — reuses `ClaimRow`'s amber/slate
- *  unverified palette for visual family consistency (appendix §5.2). */
+ *  unverified palette for visual family consistency. */
 function SpeculationTag({ tag }: { tag: string }) {
   const verifyLabel = VERIFY_MARK_LABELS[tag]
   if (verifyLabel) {
@@ -249,7 +248,7 @@ function ClaimRow({ claim }: { claim: JournalClaim }) {
   const span = claim.text_span
   const needsCitation = span.startsWith(NEEDS_CITATION_PREFIX)
   // An uncited assertion (`[needs_citation]`) OR a perspective span is the
-  // "unverified perspective" style: visible, distinct, never hidden (§4.5).
+  // "unverified perspective" style: visible, distinct, never hidden.
   const verifyMark = VERIFY_MARK_IN_SPAN_RE.exec(span)?.[1] ?? null
   const unverified = needsCitation || claim.kind === 'perspective' || verifyMark !== null
   const display = needsCitation ? span.slice(NEEDS_CITATION_PREFIX.length).trim() : span
@@ -271,7 +270,7 @@ function ClaimRow({ claim }: { claim: JournalClaim }) {
             className="shrink-0 rounded px-1 text-[10px] uppercase tracking-wide bg-amber-900/60 text-amber-200"
             title={
               needsCitation
-                ? 'Uncited factual span — flagged, shown verbatim, never hidden (§4.5)'
+                ? 'Uncited factual span — flagged, shown verbatim, never hidden'
                 : verifyMark !== null
                   ? `Marked before publish: ${VERIFY_MARK_LABELS[verifyMark]}`
                   : 'Perspective / inference — the voice, not a cited fact'
@@ -307,7 +306,7 @@ function ClaimRow({ claim }: { claim: JournalClaim }) {
 }
 
 // ---------------------------------------------------------------------------
-// §3 of the task: the per-claim verdict block, parsed from `verify_body`.
+// The per-claim verdict block, parsed from `verify_body`.
 // ---------------------------------------------------------------------------
 
 interface VerdictLine {
@@ -350,7 +349,7 @@ function verdictChipClass(reason: string): string {
     : 'border-amber-700/60 bg-amber-950/20 text-amber-200'
 }
 
-/** The compact per-claim verdict block (task §2 / spec §3.4) — the operator's
+/** The compact per-claim verdict block — the operator's
  *  window into what the faithfulness verify pass actually disputed. Renders
  *  ONLY when `verify_body` names at least one disputed span; silent
  *  otherwise (a clean verify carries no adverse lines to show). */
@@ -385,7 +384,7 @@ function VerdictBlock({ verifyBody }: { verifyBody: string | null }) {
 
 // ---------------------------------------------------------------------------
 // The card — reused wholesale for the prominent consolidation slot AND the
-// reader pane (§2c).
+// reader pane.
 // ---------------------------------------------------------------------------
 
 /**
@@ -510,7 +509,7 @@ function EntryCard({
       )}
 
       {/* Per-entry honesty pills — the deterministic flags forced from the live
-          calibration metric at write time (§10). */}
+          calibration metric at write time. */}
       {entry.honesty_flags.length > 0 && (
         <div className="mb-2 flex flex-wrap gap-1.5" data-testid="journal-entry-honesty">
           {entry.honesty_flags.map((flag) => (
@@ -525,7 +524,7 @@ function EntryCard({
         </div>
       )}
 
-      {/* The per-claim verdict block (§3.4 / task §2) — flagged contested
+      {/* The per-claim verdict block — flagged contested
           spans from the verify critique, when any exist. */}
       <VerdictBlock verifyBody={entry.verify_body} />
 
@@ -533,7 +532,7 @@ function EntryCard({
           always rendered, never raw), with `[[ref:...]]` markers stripped
           (the chip binding lives in the claims sidecar below) and the
           `_SPECULATION_RE` family (`[[instrument]]` etc.) rendered as small
-          inline tags rather than literal brackets (appendix §5.2). */}
+          inline tags rather than literal brackets. */}
       {bodyText.trim() && (
         <div className="mb-3 text-sm" data-testid="journal-entry-body">
           {bodyParts.map((part, i) =>
@@ -547,7 +546,7 @@ function EntryCard({
       )}
 
       {/* Per-claim cited spans + provenance chips — the "every claim a chip"
-          promise + the visible unverified-perspective distinction (§9). */}
+          promise + the visible unverified-perspective distinction. */}
       {entry.claims.length > 0 && (
         <div className="space-y-1.5" data-testid="journal-entry-claims">
           <div className="text-[10px] uppercase tracking-wide text-slate-500">
@@ -563,7 +562,7 @@ function EntryCard({
 }
 
 /**
- * The honesty banner (§9 / §10). Keyed off the substrate-derived `calibration`
+ * The honesty banner. Keyed off the substrate-derived `calibration`
  * verdict the route returns (the live metric), and cross-checked against the
  * current consolidation's stored `honesty_flags` (which were themselves forced
  * deterministically from that metric). The banner is NEVER green-washed: the
@@ -652,10 +651,10 @@ function HonestyBanner({
 }
 
 // ---------------------------------------------------------------------------
-// §2a — the filter rail (kind chips w/ count + verify-score pill).
+// The filter rail (kind chips w/ count + verify-score pill).
 // ---------------------------------------------------------------------------
 
-/** Fixed display order + label for the always-present kinds (§2a); any other
+/** Fixed display order + label for the always-present kinds; any other
  *  kind actually present (a future `lens`/`lens_diff` id, or an unforeseen
  *  kind) is appended after these in first-seen order — "generated from the
  *  distinct kinds present," never hardcoded to a roster. */
@@ -698,7 +697,7 @@ const KIND_BADGE_CLASSES: Record<string, string> = {
   chronicle: 'border-sky-800/50 bg-sky-950/40 text-sky-300',
   lens: 'border-violet-800/50 bg-violet-950/40 text-violet-300',
   lens_diff: 'border-fuchsia-800/50 bg-fuchsia-950/40 text-fuchsia-300',
-  // Program 5 — the stateful tier. Indigo and teal are the two remaining
+  // The stateful tier. Indigo and teal are the two remaining
   // families that are neither AMBER (unverified/perspective/warn) nor ROSE
   // (judge contradicted) and are distinguishable from the violet/fuchsia the
   // lens pair already holds, so a badge still cannot be misread as a verdict.
@@ -756,7 +755,7 @@ function KindBadge({ kind }: { kind: string }) {
 }
 
 /** emerald ≥0.7 / amber <0.7 / slate if absent — reuses HonestyBanner's
- *  palette family (§2a). */
+ *  palette family. */
 function scoreTone(score: number | null): 'good' | 'warn' | 'none' {
   if (score == null) return 'none'
   return score >= 0.7 ? 'good' : 'warn'
@@ -787,7 +786,7 @@ function VerifyScorePill({ score }: { score: number | null }) {
 interface KindChipInfo {
   kind: JournalEntryKind
   count: number
-  /** The most recent row's verify score for this kind (§2a). */
+  /** The most recent row's verify score for this kind. */
   latestScore: number | null
 }
 
@@ -799,7 +798,7 @@ function computeKindChips(rows: JournalEntrySummary[]): KindChipInfo[] {
     byKind.set(r.entry_kind, list)
   }
   // Fixed kinds are ALWAYS present (even with 0 rows loaded) — Journal /
-  // Consolidation / Chronicle chips never disappear (§2a). Any other kind
+  // Consolidation / Chronicle chips never disappear. Any other kind
   // present in the loaded window (a future lens/lens_diff id) is appended,
   // first-seen order — never hardcoded to a roster.
   const order: JournalEntryKind[] = [...FIXED_KIND_ORDER]
@@ -860,11 +859,11 @@ function FilterRail({
 }
 
 // ---------------------------------------------------------------------------
-// §2b — grouped-by-cycle collapsed list.
+// Grouped-by-cycle collapsed list.
 // ---------------------------------------------------------------------------
 
 /** `entry_kind` priority within a cycle group — synthesized rows lead,
- *  high-volume diary rows trail (§2b). */
+ *  high-volume diary rows trail. */
 const KIND_PRIORITY: Record<string, number> = {
   consolidation: 0,
   chronicle: 1,
@@ -880,7 +879,7 @@ function kindPriority(kind: string): number {
 /** The two bands a cycle group splits into (h7).
  *
  *  SYNTHESIS is the cross-cycle reading — `chronicle` plus the faculty-lens
- *  rows (`lens` / `lens_diff`) plus the Program 5 stateful tier (`inquiry` /
+ *  rows (`lens` / `lens_diff`) plus the stateful tier (`inquiry` /
  *  `crossroads`, which read ACROSS cycles by construction) — and is what the
  *  operator scans first.
  *  DIARY is the running self-account: the high-volume `entry` stream plus any
@@ -943,7 +942,7 @@ function BandHeading({ band, count }: { band: CycleBand; count: number }) {
   )
 }
 
-/** `period_end` date-bucketed to `YYYY-MM-DD` — the grouping key (§2b): when
+/** `period_end` date-bucketed to `YYYY-MM-DD` — the grouping key: when
  *  the reflected-on window closes, not write time (which can lag under
  *  retry/backoff). */
 function cycleBucket(periodEnd: string): string {
@@ -1032,7 +1031,7 @@ function CycleGroupSection({
   // The synthesis band (chronicle + lens + lens_diff) renders APART from the
   // diary band (entry + consolidation), each under its own heading — the kind
   // badges say what a row is, the bands say which reading it belongs to (h7).
-  // Synthesis is never capped; only the high-volume diary stream is, per §2b.
+  // Synthesis is never capped; only the high-volume diary stream is capped.
   const { synthesis, diary } = splitCycleBands(group.rows)
   const visibleDiary = revealAll ? diary : diary.slice(0, DIARY_REVEAL_CAP)
   const hiddenCount = diary.length - visibleDiary.length
@@ -1106,7 +1105,7 @@ function CycleGroupSection({
 }
 
 // ---------------------------------------------------------------------------
-// §2d — the Diff tab shell (permanent empty state, pre-LV-1).
+// The Diff tab shell (permanent empty state until a comparison row exists).
 // ---------------------------------------------------------------------------
 
 function DiffTabEmptyState() {
@@ -1122,7 +1121,7 @@ function DiffTabEmptyState() {
 }
 
 // ---------------------------------------------------------------------------
-// §2c — the reader pane.
+// The reader pane.
 // ---------------------------------------------------------------------------
 
 type ReaderTab = 'entry' | 'diff'
@@ -1195,7 +1194,7 @@ export default function JournalPanel({ registration }: PanelProps) {
   const query = useQuery({
     queryKey: ['journal-summary'],
     queryFn: async () => {
-      // Always request the consolidation slot too (§2a: the chip is a
+      // Always request the consolidation slot too (the chip is a
       // "jump to" shortcut, not a true filter — hiding it is a pure
       // client-side render toggle, never a re-fetch) alongside the default
       // stream kinds. Once real chip-driven kind filtering is wired to a
@@ -1225,7 +1224,7 @@ export default function JournalPanel({ registration }: PanelProps) {
   }, [query.data?.entries, appended])
 
   // The grouped list only ever shows stream kinds — the consolidation stays
-  // a separate prominent slot, never folded into a cycle group (§2c).
+  // a separate prominent slot, never folded into a cycle group.
   const streamRows = useMemo(() => allRows.filter((r) => r.entry_kind !== 'consolidation'), [allRows])
 
   const kindChips = useMemo(() => computeKindChips(allRows), [allRows])
@@ -1331,7 +1330,7 @@ export default function JournalPanel({ registration }: PanelProps) {
               ))}
 
             <div className="grid h-[calc(100%-1rem)] grid-cols-1 gap-3 overflow-hidden md:grid-cols-2">
-              {/* Grouped-by-cycle collapsed list (§2b) — replaces the old
+              {/* Grouped-by-cycle collapsed list — replaces the old
                   unbounded scroll. */}
               <div className="overflow-auto" data-testid="journal-cycle-list">
                 {groups.length === 0 ? (
@@ -1367,7 +1366,7 @@ export default function JournalPanel({ registration }: PanelProps) {
                 )}
               </div>
 
-              {/* Reader pane (§2c) — reuses EntryCard/ClaimRow/HonestyBanner
+              {/* Reader pane — reuses EntryCard/ClaimRow/HonestyBanner
                   wholesale, fetches the full row on selection. */}
               <div className="overflow-hidden rounded border border-line bg-surf-1 p-2">
                 {selectedRowId ? (

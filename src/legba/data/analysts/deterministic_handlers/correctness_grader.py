@@ -1,12 +1,12 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""G1 — THE CORRECTNESS GRADER: Program 1's hand-run instrument, as a job.
+"""THE CORRECTNESS GRADER: a hand-run instrument, as a job.
 
 WHAT THIS MEASURES, and what nothing else in the platform does. ~84% of this
 fleet's LLM calls are the system grading itself: faithfulness judges scoring our
 prose against our own citations, calibration trackers scoring our own bands. Not
 one of them can see a tower that is internally immaculate and FACTUALLY WRONG.
-On 2026-09-16 the instrument in this module, run by hand over Israel, found two
+Run by hand over one country, the instrument in this module found two
 false claims the platform had published that day — a desk asserting a
 "deadlock over list submissions" on a day the lists were filed, and a
 composition asserting "no price spikes" while crude was over $100. The desk had

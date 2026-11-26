@@ -1151,7 +1151,7 @@ describe('ConsultPanel — the response bag survives a reload (0223)', () => {
     expect(turn.watchMinted).toHaveLength(1)
   })
 
-  it('W4-F1: counts the folded candidates and names what each folded onto', async () => {
+  it('Counts the folded candidates and names what each folded onto', async () => {
     const minted = [
       { ...MINTED[0], hypothesis_id: 'h-new', fold_check: 'semantic', similarity: 0.43 },
       {

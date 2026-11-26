@@ -305,10 +305,10 @@ export function layerAvailable(id: LayerId, ui: ProfileUi = PROFILE_UI): boolean
 }
 
 /** The aperture as labelled lines, in a fixed order — the `i`'s body. */
-export function apertureLines(layer: CatalogLayer): { label: string; text: string }[] {
+export function apertureLines(layer: CatalogLayer, technical = true): { label: string; text: string }[] {
   const a = layer.aperture
   return [
-    { label: 'Reads', text: a.reads },
+    technical ? { label: 'Reads', text: a.reads } : { label: 'Shows', text: plainReads(a.reads) },
     { label: 'Source layers', text: a.sourceLayers },
     { label: 'Window', text: a.window },
     { label: 'Subjects', text: a.subjects },
@@ -316,9 +316,20 @@ export function apertureLines(layer: CatalogLayer): { label: string; text: strin
   ]
 }
 
+/**
+ * What a layer reads, without its route: the route is the admin's detail, a
+ * reader is told what the rows are (`GET /signals — the newest 3,000 …` →
+ * `the newest 3,000 …`).
+ */
+export function plainReads(reads: string): string {
+  const i = reads.indexOf(' — ')
+  if (i >= 0) return reads.slice(i + 3).trim()
+  return reads.replace(/^(?:GET|POST)\s+\S+\s*/, '').trim() || 'what this layer draws'
+}
+
 /** The aperture as one sentence (the accessible description, a CSV cell). */
-export function apertureSentence(layer: CatalogLayer): string {
-  return `${layer.label}. ${apertureLines(layer)
+export function apertureSentence(layer: CatalogLayer, technical = true): string {
+  return `${layer.label}. ${apertureLines(layer, technical)
     .map((l) => `${l.label}: ${l.text}.`)
     .join(' ')}`
 }

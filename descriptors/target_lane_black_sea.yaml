@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # Supply-chain pack — Tier-A desk 4/6: the Black Sea grain corridor + the
-# Turkish Straits. planning/SUPPLY_CHAIN_PACK_PLAN_2026-07-29.md §1.1.
+# Turkish Straits.
 #
 # The full shape rationale (the 360-row pre-filter, why scope.geo is the SQL
 # pushdown and contains_any only a refiner, why no US in the geo set, why no
@@ -13,14 +13,13 @@
 # wheat 7 titles / 30d plus heavy ukrinform shipping reporting). It doubles as the
 # Turkish-Straits watch: `bosporus` as a term measured ZERO hits in 30 days, so a
 # standalone straits desk would be dishonest — the Bosphorus/Dardanelles
-# vocabulary lives here as a refiner term instead (plan §1.2 rationale for what
-# does NOT get its own desk).
+# vocabulary lives here as a refiner term instead.
 #
 # MEASURED: ~320 canonical rows / 24h against the geo set below — the TIGHTEST
 # Tier-A lane against the 360 cap. If the preflight shows it over, trim GE or BG
 # before activation rather than widening the window.
 #
-# Ships `state: draft`; activation is a deliberate main-session FSM step after
+# Ships `state: draft`; activation is a deliberate operator FSM step after
 # scripts/preflight_supply_chain_lanes.py.
 
 identity:
@@ -31,7 +30,7 @@ identity:
   abstraction_level: L1
   inherits: []
   state: draft
-  owner: supply_chain_pack
+  owner: owner@local
   created: "2026-07-29T00:00:00Z"
 
 scope:

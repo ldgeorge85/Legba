@@ -139,7 +139,7 @@ async def test_unpriced_component_is_byte_identical_to_before():
 
 
 async def test_one_sided_price_costs_the_other_side_at_zero():
-    """A free-input promo lane is a real thing; a half-priced receipt beats a
+    """A free-input promo route is a real thing; a half-priced receipt beats a
     silently unpriced one."""
     h = await _configured(
         VLLMProviderHandler(),

@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W4 TOKEN-FIX — the registry bearer token is never an actor.
+"""The registry bearer token is never an actor.
 
-Until W4 ``require_bearer`` returned the PRESENTED TOKEN as the principal and
+Formerly ``require_bearer`` returned the PRESENTED TOKEN as the principal and
 every handler stamped it: ``descriptor_audit_log.actor_id``,
 ``consult_sessions.principal``, ``journal_proposals.decided_by`` held the live
 secret, and the Audit-Chain Browser rendered it in its "by actor" chips. The
@@ -161,7 +161,7 @@ _HEADER_PASSTHROUGH = {"api.py", "consult_stream_api.py"}
 
 
 def _literal_text(node: ast.AST) -> str | None:
-    """A str OR bytes constant's text (W11-F77: a bytes read of
+    """A str OR bytes constant's text (a bytes read of
     ``b"authorization"`` off the ASGI scope was invisible to a str-only scan)."""
     if isinstance(node, ast.Constant):
         if isinstance(node.value, str):
@@ -206,7 +206,7 @@ def test_no_registry_module_reads_the_raw_credential():
 
 
 def test_the_guard_sees_bytes_literals():
-    """W11-F77: the scan must flag a BYTES read of the header — the shape
+    """The scan must flag a BYTES read of the header — the shape
     ``session_auth`` used (``key.lower() == b"authorization"``) before X4."""
     tree = ast.parse('def f(scope):\n    return [v for k, v in scope if k == b"authorization"]\n')
     hits = [n for n in ast.walk(tree) if (_literal_text(n) or "").lower() == "authorization"]

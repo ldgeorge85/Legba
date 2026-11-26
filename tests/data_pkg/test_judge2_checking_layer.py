@@ -18,7 +18,7 @@ these tests claim is PERSISTED is read back from the test database:
      host, and closes the episode on the first success;
   4. ``scripts/rejudge_floor_critiques.py`` dry-run counts a fixture by day, and
      ``--apply`` refuses without an explicit ``--limit`` (SEAMS #69, built in
-     W11-F102 — the apply itself is ``tests/runtime/test_rejudge_floor.py``).
+     The apply itself is ``tests/runtime/test_rejudge_floor.py``).
 
 The judge rungs are the only doubles (the only external process); no paid or
 hosted model is called. Every row is scoped by a throwaway id and deleted at

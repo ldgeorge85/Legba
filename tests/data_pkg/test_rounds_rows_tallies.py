@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane G-3: typed rows, tallies, tables, handoff gates and the run store.
+"""Typed rows, tallies, tables, handoff gates and the run store.
 
 Tallies on hand-built verdicts including ties and absences; the gates on
 planted violations (they call the statement layer's honesty gates); the

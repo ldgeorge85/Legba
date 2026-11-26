@@ -1,10 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""P3-6 — register the Wave-A no-auth breadth batch (draft SourceDescriptors).
+"""Register the Wave-A no-auth breadth batch (draft SourceDescriptors).
 
-The "Wave-A" set is the additive-breadth slice of the 2026-07-02/03 new-source
-research sweep (planning/SOURCE_RESEARCH_2026-07-02.md, "Wave A — register this
-week (verified live, no auth)"). It ADDS 41 independently verified, keyless
+The "Wave-A" set is the additive-breadth slice of the new-source
+research sweep ("Wave A": verified live, no auth). It ADDS 41 independently verified, keyless
 ``rss`` / ``json_api`` feeds — desk-gap fills (Israel, Taiwan, N.Korea, Japan,
 Brazil/Mexico/Argentina, Spain, Gulf, Indonesia, Russia counterweight,
 Australia, Canada, Italy), topical/unit feeds (ISW, State Dept, UN, Kremlin,
@@ -14,7 +13,7 @@ quality adds (Guardian, Euronews, Le Monde, Spiegel, Bangkok Post, Dawn).
 This is ADDITIVE breadth, not revival. Deliberately EXCLUDED from the batch
 (and why):
   * the A1 "re-point existing" feeds (WHO news, CDC travel/outbreaks, EIA press)
-    are ALREADY registered in the S-1 catalog (bringup_register_source_catalog.py)
+    are ALREADY registered in the source catalog (bringup_register_source_catalog.py)
     at their current endpoints — a re-point is the operator's, not a new source;
   * EMSC FDSN was deliberately RETIRED 2026-06-12 as duplicative-of-USGS noise;
   * Focus Taiwan / CNA is already double-covered (source.cna.all +
@@ -71,7 +70,7 @@ from legba.data.schemas.source import SourceDescriptor  # noqa: E402
 DESCRIPTORS_DIR = pathlib.Path(__file__).resolve().parent.parent / "descriptors"
 
 # The 41 Wave-A draft descriptors, grouped by the research sweep's A1..A4
-# provenance sections (planning/SOURCE_RESEARCH_2026-07-02.md).
+# provenance sections.
 SOURCE_FILES = [
     # A1 — additive dead-feed COMPLEMENTS (net-new ids; the pure re-points live
     #      in the S-1 catalog already)
@@ -217,7 +216,7 @@ async def main() -> int:
                 await register_descriptor(pg, reg, family=Family.SOURCE, descriptor=desc)
             )
         failures = print_results(
-            f"Wave-A draft sources ({len(results)} descriptors):", results
+            f"Draft sources ({len(results)} descriptors):", results
         )
         inserted, skipped = await seed_credibility(pg)
         print(f"source_credibility seeds: +{inserted} inserted, ={skipped} already present")

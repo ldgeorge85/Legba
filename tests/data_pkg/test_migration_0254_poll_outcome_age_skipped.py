@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""0254 — ``source_poll_outcomes.age_skipped`` on the REAL driver (W11-F265).
+"""0254 — ``source_poll_outcomes.age_skipped`` on the REAL driver.
 
 * the migration file is idempotent: applied twice the column is one nullable
   integer with no default;

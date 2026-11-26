@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""ST1-A — the forecast resolvers on fixtures (pure; no DB, no model).
+"""The forecast resolvers on fixtures (pure; no DB, no model).
 
 Every outcome a rule can give — yes, no, void, undetermined, needs_judgement —
 on fictional questions and fictional source rows, plus the guards that keep a

@@ -86,14 +86,14 @@ ClassificationTag = Annotated[
 #                        support rules are code (legba.data.claim_support).
 SourceClass = Literal["reporting", "analysis", "official", "state_media", "claim"]
 
-# LIC-2 (planning/SOURCE_LICENSING_LEDGER_2026-07-10.md §E.4) — the license
+# The license
 # class a source's content carries, stamped SourceScope → every signal's
 # ``payload.license_class`` at ingest (source_actor) and read by the OpenSearch
-# corpus facet + the P2-2 evidence-archiver retention gate. The closed §E.4
+# corpus facet + the P2-2 evidence-archiver retention gate. The closed
 # enum; ``None`` (the field default) = unset/unreviewed — honest absence, NOT
 # ``unknown`` (which is a REVIEWED "we looked and could not determine" verdict).
-# The orthogonal flags + the derived public_ledger_ok firewall bit remain the
-# rest of the LIC-2 build (not yet fielded).
+# The orthogonal flags + the derived public_ledger_ok firewall bit are not
+# yet fielded.
 LicenseClass = Literal[
     "public_domain",             # US-gov / CC0
     "open_gov_attribution",      # OGL / Etalab / EU / IGO-reuse
@@ -109,7 +109,7 @@ LicenseClass = Literal[
     "unknown",
 ]
 
-# Wave-E (2026-09-24) — WHO may read what this source produces, once it is in
+# WHO may read what this source produces, once it is in
 # our own substrate. Orthogonal to LicenseClass (what we may KEEP of a fetched
 # page) — see legba.data.provenance.access for the full axis writeup and the
 # closed ACCESS_CLASSES vocabulary this Literal mirrors. Defaults FAIL CLOSED
@@ -226,12 +226,12 @@ class CadenceBlock(BaseModel):
     schedule: Cron | None = None          # poll sources only; None for push
     cooldown_seconds: int = Field(default=0, ge=0)
     jitter_seconds: int = Field(default=0, ge=0)
-    # Lane N-U: a feed that is QUIET BY NATURE (USGS significant quakes: days
+    # A feed that is QUIET BY NATURE (USGS significant quakes: days
     # with nothing new are the norm). The liveness watchdog's empty-poll streak
     # page skips it; the cadence-stall and error paths still watch it. Left out
     # of the dump when False, so every existing body and hash is unchanged.
     expect_quiet: bool = Field(default=False, exclude_if=lambda v: v is False)
-    # Roll 86: how long (hours, since the last ingested signal) an honestly
+    # How long (hours, since the last ingested signal) an honestly
     # quiet empty-poll streak must last before it pages. Unset = the platform
     # floor (``runtime.source_quiet_evidence.QUIET_PAGE_MIN_ELAPSED_S``, 72 h:
     # longer than a weekend); 0 = the poll count alone decides. Left out of the

@@ -2,11 +2,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Migration 0194 — the first-pass host `license_class` ratification.
 
-`planning/HOST_LICENSE_CLASSIFICATION_PROPOSAL_2026-09-05.md` §2 (CLEARED,
-10 hosts) and §3 (FORBIDDEN, 0 hosts) applied as idempotent, never-clobber
-UPDATEs against `source_credibility.license_class` (migration 0192). §4's 24
-genuinely-ambiguous hosts and §5's 85-host TEASER bookkeeping stamp are
-DELIBERATELY absent — this migration's only job is the 10 §2 hosts.
+The CLEARED (10 hosts) and FORBIDDEN (0 hosts) classes applied as
+idempotent, never-clobber UPDATEs against `source_credibility.license_class`
+(migration 0192). The 24 genuinely-ambiguous hosts and the 85-host TEASER
+bookkeeping stamp are DELIBERATELY absent — this migration's only job is the
+10 CLEARED hosts.
 
 Everything here runs the migration's REAL SQL text against a real Postgres
 connection (never a mock), because the guarantees under test are properties
@@ -50,18 +50,11 @@ EXPECTED_CLEARED = {
     "globalvoices.org": "cc_by",
 }
 
-# §4 — genuinely-ambiguous hosts the proposal explicitly leaves untouched
-# (TEASER/NULL). The migration must never mention any of these.
-SECTION_4_HOSTS = [
-    "kremlin.ru", "un.org", "wto.org", "iaea.org", "gdacs.org",
-    "seismicportal.eu", "pancanal.com", "allafrica.com", "t.me",
-    "bbc.com", "bbc.co.uk", "npr.org", "cbc.ca", "abc.net.au",
-    "theguardian.com",
-    "aljazeera.com", "aljazeera.net",
-    "economist.com", "foreignaffairs.com", "foreignpolicy.com", "ft.com",
-    "wsj.com", "nytimes.com", "washingtonpost.com",
-]
-assert len(SECTION_4_HOSTS) == 24, "the proposal's own §4 count"
+# The 24 hosts the first pass leaves untouched, stood in for by placeholder
+# hosts: the migration matches on exact host names, so the test only needs
+# hosts that are not among the ten it names.
+SECTION_4_HOSTS = [f"outlet-{n:02d}.example" for n in range(1, 25)]
+assert len(SECTION_4_HOSTS) == 24, "the first pass leaves 24 hosts unclassified"
 
 
 def _migration_sql() -> str:
@@ -109,7 +102,7 @@ def test_every_written_class_is_in_the_cleared_vocabulary():
         )
         assert cls not in FORBID_RETENTION_CLASSES, (
             f"{cls!r} is in evidence_archiver.FORBID_RETENTION_CLASSES — "
-            "this migration must write zero forbidding verdicts (§3 = 0 hosts)"
+            "this migration must write zero forbidding verdicts (zero hosts)"
         )
 
 
@@ -132,14 +125,20 @@ def test_no_section4_host_appears_in_the_active_sql():
     active_sql = _strip_sql_comments(_migration_sql())
     for host in SECTION_4_HOSTS:
         assert host not in active_sql, (
-            f"{host!r} is a §4 operator-must-decide host and must not be "
+            f"{host!r} is a must-decide host and must not be "
             "touched by this migration"
         )
 
 
-def test_header_cites_the_proposal_and_the_vocabulary_source():
+def test_the_active_sql_names_exactly_the_ten_cleared_hosts():
+    """The migration matches on exact host names; it names these ten and no others."""
+    active_sql = _strip_sql_comments(_migration_sql())
+    named = set(re.findall(r"'([a-z0-9.-]+\.[a-z]{2,})'", active_sql))
+    assert named == set(EXPECTED_CLEARED)
+
+
+def test_header_cites_the_vocabulary_source():
     sql = _migration_sql()
-    assert "HOST_LICENSE_CLASSIFICATION_PROPOSAL_2026-09-05" in sql
     assert "CLEARED_LICENSE_CLASSES" in sql
     assert "FORBID_RETENTION_CLASSES" in sql
 
@@ -194,6 +193,30 @@ async def test_the_ten_cleared_hosts_stamp_correctly_and_reapply_is_idempotent(
         await conn.execute(
             "DELETE FROM source_credibility WHERE source_host = ANY($1::text[])",
             list(EXPECTED_CLEARED),
+        )
+
+
+@pytest.mark.asyncio
+async def test_hosts_outside_the_ten_are_left_unclassified(conn):
+    sql = _migration_sql()
+    try:
+        for host in SECTION_4_HOSTS:
+            await conn.execute(
+                "INSERT INTO source_credibility (source_host, score, tier) "
+                "VALUES ($1, 0.5, 'wire') ON CONFLICT (source_host) DO NOTHING",
+                host,
+            )
+        await conn.execute(sql)
+        rows = await conn.fetch(
+            "SELECT license_class FROM source_credibility WHERE source_host = ANY($1::text[])",
+            SECTION_4_HOSTS,
+        )
+        assert len(rows) == len(SECTION_4_HOSTS)
+        assert all(r["license_class"] is None for r in rows)
+    finally:
+        await conn.execute(
+            "DELETE FROM source_credibility WHERE source_host = ANY($1::text[])",
+            SECTION_4_HOSTS,
         )
 
 

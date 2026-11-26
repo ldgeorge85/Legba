@@ -562,7 +562,7 @@ describe('applyFrame — spend, cap, and the answer as it forms', () => {
     expect(turn.steps).toEqual([])
   })
 
-  it('restarts the preview when a new segment starts streaming (W11-F132)', () => {
+  it('restarts the preview when a new segment starts streaming', () => {
     // A drilling round streams too: its preamble is not the answer, and the
     // round that answers replaces it rather than appending to it.
     let turn = pending()

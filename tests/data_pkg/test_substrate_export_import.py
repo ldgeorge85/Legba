@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for the instance export/import bundle tools (seeding flavor a).
 
-Covers (planning/SEEDING_SKETCH.md "flavor a"):
+Covers substrate export/import:
 
   * ``export_substrate.py`` writes entities/facts/nexuses JSONL keyed by
     NATURAL KEY + a manifest.json (schema version, counts, filters);

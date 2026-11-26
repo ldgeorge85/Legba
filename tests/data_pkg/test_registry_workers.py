@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The registry at ``LEGBA_REGISTRY_WORKERS = N`` (W11-F85).
+"""The registry at ``LEGBA_REGISTRY_WORKERS = N``.
 
 All fakes — no Postgres, NATS or Redis is reached. Two app instances (or two
 leases) in one process stand in for two uvicorn workers; what they share is

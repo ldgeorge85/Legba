@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The exogenous forecast ledger — the ONE store for migration 0242 (ST0-A).
+"""The exogenous forecast ledger — the ONE store for migration 0242.
 
 Every probability names what resolves it and when (the Story's third
 promise). This module is the model and the store for that record:
@@ -10,7 +10,7 @@ promise). This module is the model and the store for that record:
     pre-registered void rules and the operator's condition;
   * :class:`ForecastNumber` — one issuer's probability on one question
     (:data:`ISSUER_KINDS`: the operator, the scheduled tower, the consult, the
-    frontier and Clef comparison arms, later the think tank's seats and actor
+    frontier and decision-model comparison arms, later the think tank's seats and actor
     models), or a stated ABSENCE (``p`` None + ``absent_reason``) — an issuer
     with no number is recorded as absent, never imputed;
   * :class:`ForecastResolution` — the outcome (yes | no | void), who resolved
@@ -67,6 +67,7 @@ __all__ = [
     "build_ledger_rows",
     "clamp_p",
     "fetch_ledger",
+    "fetch_ledger_as_of",
     "ledger_leaf",
     "parse_forecasts_yaml",
     "resolve",
@@ -79,7 +80,7 @@ __all__ = [
 #: The ledger contract revision — hash recipe, vocabularies, the seal rule.
 LEDGER_VERSION = "2026-11/st0"
 
-#: The decided resolver vocabulary (plan 10 §3.2, D-10). Exogenous: a named
+#: The resolver vocabulary. Exogenous: a named
 #: authority, document, series or reported event decides the question.
 RESOLVER_KINDS: tuple[str, ...] = (
     "event_reported",
@@ -97,8 +98,8 @@ MACHINE_RESOLVABLE: frozenset[str] = frozenset({"series_threshold"})
 
 #: Who may hold a number (migration 0242's CHECK). The operator's numbers, the
 #: scheduled analysts (``tower``), the consult, the frontier comparison arm
-#: (``frontier_arm``), the $0 Clef arm (``clef_arm``); ``synthesis``, ``seat``
-#: and ``actor_model`` are the think tank's (ST2/ST3).
+#: (``frontier_arm``), the $0 decision-model arm (``clef_arm``); ``synthesis``, ``seat``
+#: and ``actor_model`` are the think tank's.
 ISSUER_KINDS: tuple[str, ...] = (
     "operator", "tower", "consult", "synthesis", "seat", "actor_model",
     "frontier_arm", "clef_arm",
@@ -505,7 +506,7 @@ async def upsert_question(
 ) -> tuple[str, str]:
     """``(outcome, id)`` — outcome ``inserted`` | ``updated`` | ``unchanged``.
 
-    ``written_by`` is the writing principal's handle (lane 9) — not part of the
+    ``written_by`` is the writing principal's handle — not part of the
     sealed content (``created_by`` is the question's stated author).
 
     Idempotent on the natural key ``slug``. A changed question is restated
@@ -540,8 +541,8 @@ async def state_number(
 ) -> tuple[str, str]:
     """``(outcome, id)`` — state (or, before the seal, restate) one issuer's
     number. Refuses on a sealed question: a position is stated before the
-    seal or not at all. ``written_by`` is the writing principal's handle
-    (lane 9); the issuer columns say whose number it is."""
+    seal or not at all. ``written_by`` is the writing principal's handle;
+    the issuer columns say whose number it is."""
     problems = n.problems()
     if problems:
         raise LedgerRefusal("invalid", "; ".join(problems))
@@ -658,7 +659,7 @@ async def resolve(
         new = await conn.fetchrow(
             _INSERT_RESOLUTION, str(question_id), outcome, when, resolved_by,
             list(refs), res.early, proposal_id, note, sha,
-            # Lane 9: resolved_by is the server-stamped audit actor.
+            # resolved_by is the server-stamped audit actor.
             handle_for_actor(resolved_by),
         )
         if active is not None:
@@ -805,6 +806,71 @@ async def fetch_ledger(conn: Any, *, limit: int = 200, now: datetime | None = No
     numbers = [dict(r) for r in await conn.fetch(LEDGER_NUMBERS_SQL, ids)]
     resolutions = [dict(r) for r in await conn.fetch(LEDGER_RESOLUTIONS_SQL, ids)]
     return build_ledger_rows(questions, numbers, resolutions, now=now)
+
+
+# ---------------------------------------------------------------------------
+# The ledger as it stood at an instant (``?at=``)
+# ---------------------------------------------------------------------------
+#
+# What each row allows:
+#   * a question is fixed once sealed (only `status` moves after), so a
+#     question sealed by the instant reads exactly as it did then; one still
+#     unsealed then may have been edited in place since, so it is left out and
+#     counted instead (`unsealed_then`);
+#   * a number is edited only while unsealed, and every edit restamps
+#     `issued_at`, so a number with `issued_at` at or before the instant is the
+#     number as it stood; it was sealed then when `sealed_at` is at or before it;
+#   * a resolution is a new row per outcome (a correction retires the old row
+#     and adds a new one), so the outcome then is the latest written by then,
+#     and the question's status then follows from it.
+
+LEDGER_QUESTIONS_AS_OF_SQL = """
+SELECT id::text AS id, slug, question, question_class, resolver_kind,
+       resolver_spec::text AS resolver_spec, window_start, window_end, due_at,
+       grace_hours, condition, void_rules, exogenous, subject_keys,
+       sealed_at, created_at, content_sha256
+  FROM forecast_questions
+ WHERE sealed_at <= $2
+ ORDER BY due_at, slug
+ LIMIT $1
+"""
+LEDGER_UNSEALED_THEN_SQL = """
+SELECT count(*) FROM forecast_questions
+ WHERE created_at <= $1 AND (sealed_at IS NULL OR sealed_at > $1)
+"""
+LEDGER_NUMBERS_AS_OF_SQL = """
+SELECT question_id::text AS question_id, issuer_kind, issuer_ref, p::float8 AS p,
+       absent_reason, as_of, issued_at, rationale, rationale_ref,
+       CASE WHEN sealed_at <= $2 THEN sealed_at END AS sealed_at, content_sha256
+  FROM forecast_numbers
+ WHERE question_id = ANY($1::uuid[]) AND issued_at <= $2
+ ORDER BY issuer_kind, issuer_ref
+"""
+LEDGER_RESOLUTIONS_AS_OF_SQL = """
+SELECT DISTINCT ON (question_id)
+       question_id::text AS question_id, id::text AS id, outcome, resolved_at,
+       resolved_by, evidence_refs, early, note
+  FROM forecast_resolutions
+ WHERE question_id = ANY($1::uuid[]) AND resolved_at <= $2
+ ORDER BY question_id, resolved_at DESC, id DESC
+"""
+
+
+async def fetch_ledger_as_of(conn: Any, at: datetime, *, limit: int = 200) -> tuple[list[dict[str, Any]], int]:
+    """The ledger as it stood at ``at``, and how many questions were still
+    unsealed then (left out: their wording then is not kept)."""
+    unsealed = int(await conn.fetchval(LEDGER_UNSEALED_THEN_SQL, at))
+    questions = [dict(r) for r in await conn.fetch(LEDGER_QUESTIONS_AS_OF_SQL, int(limit), at)]
+    ids = [q["id"] for q in questions]
+    if not ids:
+        return [], unsealed
+    numbers = [dict(r) for r in await conn.fetch(LEDGER_NUMBERS_AS_OF_SQL, ids, at)]
+    resolutions = [dict(r) for r in await conn.fetch(LEDGER_RESOLUTIONS_AS_OF_SQL, ids, at)]
+    outcome = {str(r["question_id"]): r["outcome"] for r in resolutions}
+    for q in questions:
+        o = outcome.get(str(q["id"]))
+        q["status"] = "open" if o is None else ("void" if o == "void" else "resolved")
+    return build_ledger_rows(questions, numbers, resolutions, now=at), unsealed
 
 
 # ---------------------------------------------------------------------------

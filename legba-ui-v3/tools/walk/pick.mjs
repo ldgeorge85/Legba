@@ -2,7 +2,7 @@
  * The walk's "a place selected" pick (U-8): which pixel of the Board map to
  * click so the click selects a changed area.
  *
- * Roll 80's live walk failed "map: a place selected — no accent outline after
+ * A live walk failed "map: a place selected — no accent outline after
  * the click" because the old pick asked the renderer only: the first pixel,
  * scanning from the top-left, where the `land` layer carried a wash. At 1680
  * the map's own layer card (open by default at that size) sits over the
@@ -46,7 +46,7 @@ export function pickPlace(doc, pickable) {
       const land = top.layer.id === 'land' ? top : all.find((f) => f.layer.id === 'land')
       if (!land || !(land.state && land.state.wash > 0)) continue
       const iso = isoOf(land.properties || {})
-      // Roll 86: a blank's hatch is drawn over its land and `onClick` treats
+      // A blank's hatch is drawn over its land and `onClick` treats
       // it as the land (the default branch selects the place's subject by
       // `iso`), so a hatched changed area is as clickable as a bare one. Any
       // other feature on top (a ring, a series dot) selects that instead.

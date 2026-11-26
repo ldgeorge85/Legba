@@ -289,7 +289,7 @@ export function decisionErrorText(err: unknown): string {
       detail = typeof d === 'string' ? d : JSON.stringify(d)
     }
     if (err.status === 409) {
-      return `Auto-rejected (§7.5(b) protected section) — NOTHING was applied and the proposal is archived. ${detail}`.trim()
+      return `Auto-rejected (protected section) — NOTHING was applied and the proposal is archived. ${detail}`.trim()
     }
     if (err.status === 422) {
       return `Apply failed — NOTHING was applied and the proposal is archived. ${detail}`.trim()

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Assessability — the judge subsystem's second extracted brick (Q-1, R-train).
+"""Assessability — the judge subsystem's second extracted brick.
 
 One question, asked twice: **did we actually check anything, and may we call the
 result a score?**
@@ -13,7 +13,7 @@ labeled-scaffold rule swallowed whole finding bodies, the claim list came back
 empty, and an empty claim list scored **1.0**. Fixing either half alone leaves
 the other free to re-tell the same lie.
 
-The measured class (2026-08-04 adjudication annex §9, re-measured 08-05 on the
+The measured class (an adjudication annex, re-measured 08-05 on the
 live DB): 11 critiques in the trailing 7 days carried ZERO claim verdicts, all
 11 scored ``overall_score = 1.0``, and 10 of them graded findings of 1,026-2,091
 characters — full, substantive, heavily-cited analytic prose. The Italy energy
@@ -189,9 +189,8 @@ _JSON_PUNCT_ONLY_RE = re.compile(r'^[\s\{\}\[\],:"\']+$')
 def is_json_syntax_claim(claim: str) -> bool:
     """Is this span literal JSON syntax that leaked into a finding body?
 
-    Q-1(d), the tripwire. ``cross_doc_corroborator`` has been shipping raw tool
-    preamble and UNPARSED JSON into the substrate as a finding body (adjudication
-    §6.4). The segmenter has no opinion about JSON, so ``"verdict": "supported",``
+    The tripwire. ``cross_doc_corroborator`` has been shipping raw tool
+    preamble and UNPARSED JSON into the substrate as a finding body. The segmenter has no opinion about JSON, so ``"verdict": "supported",``
     reaches the ledger as a graded *claim* — a machine artefact scored as though
     it were an analyst's assertion, in both directions (a fabricated support and
     a fabricated miss are equally available).
@@ -227,7 +226,7 @@ def is_json_syntax_claim(claim: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# 2b. V-I6 (2026-08-05) — WHAT IS IN THE DENOMINATOR. Two counters, no gate.
+# 2b. WHAT IS IN THE DENOMINATOR. Two counters, no gate.
 #
 # The round-4 panel passed the pass-side gate (0 misses at n=10) and attached two
 # caveats to the pass, both about the SUPPORTED DENOMINATOR rather than about any
@@ -238,9 +237,9 @@ def is_json_syntax_claim(claim: str) -> bool:
 #      by ~4.6%. The class is not new — 194 entries under `2026-08-02/1`, 230
 #      under `2026-08-03/1` — and the panel kept it in the sampling frame for
 #      method continuity while naming it plainly: "a scaffold artifact, not a
-#      proposition". Its P2 specimen: *"triggered indicator: Electoral loss or
+#      proposition". Its specimen: *"triggered indicator: Electoral loss or
 #      intra-elite disagreement signaling ruling coalition strain."*
-#   2. **Coverage statements counted as substantive.** P4: *"All five country
+#   2. **Coverage statements counted as substantive.** For example: *"All five country
 #      reads (United States, Canada, Brazil, Argentina, Mexico) were included; no
 #      target lacked a read."* True, verified, and a statement about the
 #      platform's own input set rather than about the world.
@@ -318,7 +317,7 @@ def denominator_caveat_counters(*, body: str, indicators: Any) -> dict[str, int]
 SCORE_STATE_SCORED = "scored"
 #: The report carries NO measurement. Not 1.0, not 0.0 — a non-score.
 SCORE_STATE_UNASSESSABLE = "unassessable"
-#: SW-9 (2026-10-03/1) — a unit finding whose every resolved citation is its
+#: SW-9 — a unit finding whose every resolved citation is its
 #: OWN MEMORY (the PRIOR READ / WINDOW LEDGER blocks) was graded against
 #: nothing but what this desk already said. The judge DOES see those blocks
 #: (QW1-B folds them into the evidence map), so it can only answer "is the
@@ -467,7 +466,7 @@ def is_provisional(judge_status: Any) -> bool:
 # ---------------------------------------------------------------------------
 # 3b. JUDGE SAMPLING — which findings the LLM judge grades at all
 # ---------------------------------------------------------------------------
-# J2 (2026-08-15, FORWARD_PLAN §1). The judge plane moved to a rate-limited
+# The judge plane moved to a rate-limited
 # free tier (~50 calls/day), so verification is SAMPLED, not exhaustive. The
 # policy below decides, per finding, whether the LLM judge runs. Three rules,
 # all of them replayable:
@@ -484,7 +483,7 @@ def is_provisional(judge_status: Any) -> bool:
 #     unsampled unit finding, and their combined volume (~25/day) fits the
 #     budget.
 #   * AN ABSENT RATE IS NO GATE. ``rate=None`` (no descriptor option) judges
-#     everything, byte-identical to the pre-J2 tree. The gate only exists
+#     everything, byte-identical to the pre-sampling tree. The gate only exists
 #     where a descriptor says so.
 #
 # An UNSAMPLED finding keeps the deterministic floor + the PROVISIONAL ceiling
@@ -529,12 +528,12 @@ def judge_sample_unit(finding_id: Any) -> float:
 
 @dataclass(frozen=True)
 class JudgeSamplingPolicy:
-    """The resolved per-finding sampling decision inputs (J2).
+    """The resolved per-finding sampling decision inputs.
 
     Built by the CALLER (the actor seam, from descriptor options merged into
     the run options) and handed to ``verify_finding_faithfulness``; the
     decision itself is computed here so the verify path owns its own gate.
-    ``rate=None`` means NO gate (judge everything — the pre-J2 contract);
+    ``rate=None`` means NO gate (judge everything — the pre-sampling contract);
     ``always=None`` means the code default membership above, while an explicit
     empty tuple CLEARS it (an operator saying "sample even the compositions").
     """
@@ -571,7 +570,7 @@ class JudgeSamplingPolicy:
 # ---------------------------------------------------------------------------
 # Moved here from verify.py 2026-08-05 (Q-1). The payload builder is the single
 # place a FaithfulnessReport turns into the row every downstream gate, alert,
-# scorecard and badge reads, so the rule about what a tally may be CALLED (§3)
+# scorecard and badge reads, so the rule about what a tally may be CALLED
 # and the code that calls it belong in one unit. Shared verify-module names
 # late-bind through ``_verify()`` at call time — no load-time cycle.
 
@@ -629,9 +628,9 @@ def build_faithfulness_critique_payload(
     hedge-laundering clause over a weak sub-claim demotes to ≤ that sub-claim,
     and correlated sub-claims cannot inflate the ceiling.
 
-    P2-4 (additive, labels + persistence only — scores/floors/gates untouched):
+    Additive (labels + persistence only — scores/floors/gates untouched):
 
-      * ``judge_llm_ref`` — the RESOLVED judge stack-ref (the P2-4 JudgeRoute
+      * ``judge_llm_ref`` — the RESOLVED judge stack-ref (the JudgeRoute
         component id) stamped top-level (CritiquePayload field) AND into
         ``data.verification`` so provenance records which model judged, forever.
         ``""`` = floor-only (no judge wired).
@@ -653,7 +652,7 @@ def build_faithfulness_critique_payload(
     ``judge_route`` are.
 
       * ``judge_trigger`` — WHY the judge decision came out the way it did:
-        ``'sampled'`` (the ordinary J2 policy: hash gate, always-list, or no
+        ``'sampled'`` (the ordinary sampling policy: hash gate, always-list, or no
         gate) or ``'floor_escalation'`` (``judge_floor_escalation`` — the judge
         ran ONLY because the composition floor was about to exclude an
         UNJUDGED finding). THE ARM SEPARATOR: escalation conditions on the
@@ -680,8 +679,7 @@ def build_faithfulness_critique_payload(
     # different and worse lie than the one being fixed. The cap DEMOTES; the
     # ``score_state`` below is what SAYS SO.
     #
-    # ``faithfulness_score`` is the OTHER half of round-4 rec #8, shipped
-    # 2026-08-09 after round 5 measured the gap (§9b): both unassessable rows
+    # ``faithfulness_score`` is the OTHER half of the same fix: both unassessable rows
     # still carried 1.0 there, so the raw tally entered the population mean and
     # every consumer reading ``faithfulness_score`` without ``score_state`` saw a
     # perfect score for producing nothing checkable. An unassessable report now
@@ -755,7 +753,7 @@ def build_faithfulness_critique_payload(
         )
     for span in report.unsupported_spans[:20]:
         body_lines.append(f"  - [{span.reason}] {span.text[:200]}")
-    # V3 (MP:DEC-E) — per-branch telemetry (design §2.3 / §2.2). ``branch_scores``
+    # Per-branch telemetry. ``branch_scores``
     # is the pooled sub-score per JUDGED claim-kind (empty on the deterministic
     # path AND on the M14 whole-finding survey path, so those runs + a pre-V3
     # reader are byte-identical). ``branch_versions`` stamps the profile VERSION
@@ -768,7 +766,7 @@ def build_faithfulness_critique_payload(
         for kind in branch_scores
         if kind in _verify()._JUDGE_PROFILES
     }
-    # P2-4: the size-bounded per-claim ledger + honest truncation flag.
+    # The size-bounded per-claim ledger + honest truncation flag.
     claim_verdicts, claim_verdicts_truncated = _verify()._bounded_claim_verdicts(
         report.claim_verdicts
     )
@@ -798,7 +796,7 @@ def build_faithfulness_critique_payload(
         "analyzed_analyst_version": analyzed_analyst_version[:64],
         "analyzed_model": analyzed_model[:128],
         "judge_model": judge_model[:128],
-        # P2-4: the RESOLVED judge stack-ref (JudgeRoute component id) —
+        # The RESOLVED judge stack-ref (JudgeRoute component id) —
         # provenance for which model judged, stamped on the row forever.
         "judge_llm_ref": judge_llm_ref[:256],
         # W-3d: the judge-route CLASS (configured|fallback_verify|
@@ -840,7 +838,7 @@ def build_faithfulness_critique_payload(
                 # or the M14 whole-finding survey rubric graded the entire list).
                 "branch_scores": branch_scores,
                 "branch_versions": branch_versions,
-                # P2-4 additive fields: the judge-route provenance stamp, and the
+                # Additive fields: the judge-route provenance stamp, and the
                 # full per-claim verdict ledger (supported verdicts included —
                 # previously recorded nowhere), size-bounded with an honest flag.
                 "judge_llm_ref": judge_llm_ref[:256] or None,
@@ -874,7 +872,7 @@ def build_faithfulness_critique_payload(
                 # 'llm'`` rows at 2026-09-08 21:02Z carried no receipt at all.
                 # Present iff the judge was ASKED; see the function's docstring.
                 **_judge_transport_receipts(report),
-                # H3-MEASURE (2026-09-25/1) — the alignment audit
+                # H3-MEASURE — the alignment audit
                 # (``miscount_claims``, ``aligned_by_id``,
                 # ``aligned_positionally``, ``unmatched_claims``), folded from
                 # the ONE function that shapes it. The wave-F lane put these
@@ -884,7 +882,7 @@ def build_faithfulness_critique_payload(
                 # live verdicts stamped 2026-09-25/1 carried none of them and
                 # ``/system/judge-stats`` read ``positional_share`` null at
                 # 2026-09-24 22:30Z. The same defect class as the transport
-                # receipts one line up (2026-09-08); the same repair.
+                # receipts one line up; the same repair.
                 **_verify().alignment_audit_fields(
                     report.claim_verdicts,
                     report.judge_miscount_claims,

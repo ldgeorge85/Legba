@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""R2 — the reference builder's deps wiring, and the OPTION PATH to its handler.
+"""The reference builder's deps wiring, and the OPTION PATH to its handler.
 
 Two properties, and the second one is the reason this file is not just a
 deps-wiring test.
@@ -11,15 +11,13 @@ a named status rather than raising — with one deliberate asymmetry: no model i
 a degradation, no web binding is a REFUSAL, because a reference built without
 the open web is not independent of the reads it grades.
 
-**THE OPTION PATH, which is where G1 drew blood.** G1's on-demand run stamped
-``as_of=now`` although the method body carried ``as_of=19:30Z`` — the defect
-recorded as D1. The body's value never reached the handler. A concurrent lane is
-fixing how method-body options reach deterministic sub-handlers; this file
-asserts the CONTRACT that fix must satisfy, from both ends, so it holds whichever
-lane lands first:
+**THE OPTION PATH.** An on-demand run once stamped
+``as_of=now`` although the method body carried ``as_of=19:30Z``: the body's
+value never reached the handler. This file asserts the CONTRACT for how
+method-body options reach deterministic sub-handlers, from both ends:
 
   * every key ``scripts/reference_build_now.py`` puts in the body is a DECLARED
-    option in the X-1 catalog (so the runtime's option merge accepts rather than
+    option in the option catalog (so the runtime's option merge accepts rather than
     rejects it) — which is a test of the script against the catalog, and would
     have caught a typo in either;
   * the descriptor's own options survive the REAL merge
@@ -27,7 +25,7 @@ lane lands first:
     not a reimplementation of it);
   * a value already in the run options — which is what a forced method body
     becomes — WINS over the descriptor's default, because the merge is
-    ``setdefault``. That is the precise property D1 violated;
+    ``setdefault``. That is the property the earlier as_of defect violated;
   * ``as_of`` is the same key name the correctness grader reads, so an operator
     pinning a fortnight passes ONE value to both jobs.
 """
@@ -234,7 +232,7 @@ def test_every_descriptor_option_is_a_declared_knob():
     warning, which is how a descriptor comes to document a volume it is not
     running."""
     declared = set(known_option_names("reference_builder"))
-    assert declared, "reference_builder is not in the X-1 catalog at all"
+    assert declared, "reference_builder is not in the catalog at all"
     for key in _descriptor_body()["method"]["options"]:
         assert key in declared, f"{key} is not a declared reference_builder knob"
 
@@ -270,7 +268,7 @@ def test_no_fence_is_settable_from_a_descriptor():
 
 
 # ---------------------------------------------------------------------------
-# THE OPTION PATH — the property G1's D1 defect violated
+# THE OPTION PATH — the property the earlier as_of defect violated
 # ---------------------------------------------------------------------------
 
 
@@ -310,9 +308,8 @@ def test_the_forced_body_nests_every_knob_under_options():
     """THE ENVELOPE, and it is not cosmetic. ``dapr_actors`` merges ONE channel
     into a sub-handler's option mapping: ``body['options']``. A knob at the top
     level of the body is ignored silently — no error, no log line — which is
-    exactly how G1's D1 defect hid, stamping ``as_of=now`` while the body
-    carried a past stamp. The G1-fix lane settled this shape and this pins that
-    the reference builder's own door speaks it."""
+    exactly how the as_of defect hid, stamping ``as_of=now`` while the body
+    carried a past stamp. This pins that the reference builder's own door speaks it."""
     module = _load_script()
     args = argparse.Namespace(
         target=["country_watch_il"],
@@ -348,7 +345,7 @@ def test_a_body_with_no_knobs_carries_no_options_object_at_all():
 def test_every_key_the_on_demand_script_sends_is_a_declared_option():
     """The script against the catalog. A typo in either end is REJECTED at the
     runtime boundary with a warning and the handler default stands — which is
-    exactly the silent no-op G1's D1 was."""
+    exactly the silent no-op that earlier defect was."""
     declared = set(known_option_names("reference_builder"))
     sent = _script_body_keys() - {"trigger_kind"}  # the actor's own contract
     assert sent, "the script sends no options at all — did the body shape change?"
@@ -388,9 +385,9 @@ def test_the_descriptors_options_survive_the_REAL_runtime_merge():
 
 
 def test_a_forced_method_body_WINS_over_the_descriptor_default():
-    """THE D1 CONTRACT. The merge is ``setdefault``, so a value the runtime has
+    """THE OPTION CONTRACT. The merge is ``setdefault``, so a value the runtime has
     already placed — which is what a forced method body becomes — must survive.
-    G1's on-demand run stamped ``as_of=now`` although the body carried a past
+    An on-demand run once stamped ``as_of=now`` although the body carried a past
     stamp; this is the assertion that failure would not have passed."""
     from legba.runtime.dapr_actors import _merge_descriptor_options
 
@@ -416,7 +413,7 @@ def test_a_forced_method_body_WINS_over_the_descriptor_default():
 
 def test_the_handler_reads_the_merged_values_back_out():
     """Closing the loop: the keys the merge produces are the literals the
-    handler reads. The X-1 reachability sweep proves a declared knob is real by
+    handler reads. The reachability sweep proves a declared knob is real by
     finding its literal read in the module; this proves the ROUND TRIP."""
     from legba.data.analysts.deterministic_handlers import reference_builder as RB
 
@@ -505,32 +502,32 @@ def test_the_option_catalog_entry_is_registered_under_the_sub_handler_name():
 
 
 # ---------------------------------------------------------------------------
-# D4 — THE BUILD MUST FIT THE PLANE THAT RUNS IT (ops 2026-09-17)
+# THE BUILD MUST FIT THE PLANE THAT RUNS IT
 #
-# READ THIS BEFORE CHANGING A NUMBER BELOW, because the incident report and the
-# code disagree about one thing and the disagreement is load-bearing.
+# READ THIS BEFORE CHANGING A NUMBER BELOW, because a build's warnings and its
+# real limit are easy to confuse, and the difference is load-bearing.
 #
-# The 00:43Z build produced TWO warnings reading
+# A long build can produce warnings reading
 # `actor_turn.budget_exceeded op=reconcile.activate ... timeout=20s`. Those are
 # NOT a budget on the run. They are the RECONCILER's per-heal deadline
 # (`actor_turn.heal_timeout_seconds()`, 20 s) expiring because the AnalystActor's
-# turn was held by the 927.9 s build and Dapr actors are turn-based with
+# turn was held by the long build and Dapr actors are turn-based with
 # reentrancy disabled, so the queued ENSURE_ACTIVE could not start. Their
 # consequence is a SKIPPED heal, retried next resync and counted by
 # `HealBreaker` — not a cooldown, not a failed run. NOTHING in the runtime
 # bounds an analyst `run` turn: there is no budget for a build to be "under",
 # and no useful build could ever be under 20 s anyway.
 #
-# What actually took the lane down for two hours was the PER-ANALYST DAY
-# BUCKET. 4,510,885 tokens against this descriptor's own
-# `budget_tokens_per_day: 4000000` made the 01:43 tick's precall check return
+# What can actually stall the builder is the PER-ANALYST DAY
+# BUCKET. A build spending 4,510,885 tokens against this descriptor's own
+# `budget_tokens_per_day: 4000000` makes the next tick's precall check return
 # `exhausted`; the default `pause_until_next_window` strategy stamped
 # `cooldown_until = now + BudgetRetryPolicy.cooldown_seconds` (3600 s) with no
-# log line at all, the 02:43 tick lost the race by 0.99 s and no-op'd
-# `reason=cooldown scope=global`, and the watchdog called it a stall.
+# log line at all, the next tick no-ops with
+# `reason=cooldown scope=global`, and the watchdog calls it a stall.
 #
 # So the caps are asserted against the bounds that EXIST and against the one
-# that actually fired. A cap that fits those fits the actor plane; a cap
+# that actually bites. A cap that fits those fits the actor plane; a cap
 # "under the actor-turn budget" would be a cap under 20 s, which is not a build.
 # ---------------------------------------------------------------------------
 
@@ -595,7 +592,7 @@ def test_the_build_cap_default_fits_the_actor_plane():
         "at most two builds a day fits under the bucket — the 32-target "
         "roster on a 7-day cadence needs ~4.6"
     )
-    # and the run that caused the incident would NOT fit under it
+    # and a run of that size would NOT fit under it
     assert 4_510_885 > RB.DEFAULT_BUILD_MAX_TOKENS
 
     # 6. THE RECONCILER'S DEADLINES ARE NOT A RUN BUDGET, pinned so the next
@@ -655,7 +652,7 @@ def test_the_backoff_env_WINS_over_the_merged_descriptor_value(monkeypatch):
     """THE INVERSE precedence, asserted through the REAL merge.
 
     ``build_max_seconds`` and ``build_max_tokens`` are volumes an operator sizes
-    once, so the descriptor wins over their envs. This one is an INCIDENT lever
+    once, so the descriptor wins over their envs. This one is an emergency lever
     — "the lane is stuck on one country, let it move on" — at a moment when a
     descriptor PUT plus a re-register plus a fresh actor record is exactly the
     ceremony that cannot be afforded. So the env wins, and the receipt names
@@ -886,7 +883,7 @@ def test_the_day_bucket_covers_the_cadence_it_is_scheduled_at():
     # and the margin is real rather than exactly-fits
     assert worst_case <= day_bucket * 0.85
 
-    # the run that caused the incident would not have fitted the OLD bucket
+    # an over-sized run would not have fitted the OLD bucket
     # either, which is the point: one build must never be able to spend a day
     assert int(options["build_max_tokens"]) * 2 <= day_bucket
 

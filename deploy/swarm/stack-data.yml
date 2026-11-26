@@ -5,8 +5,8 @@
 #
 # ############################################################################
 # ##  DRAFT — NOT DEPLOYABLE YET. Phase-1 validation pending.               ##
-# ##  See deploy/swarm/README.md + planning/SWARM_CONVERSION_ASSESSMENT_    ##
-# ##  2026-07-25.md before touching this with `docker stack deploy`.        ##
+# ##  See deploy/swarm/README.md before touching this with                 ##
+# ##  `docker stack deploy`.                                                ##
 # ############################################################################
 #
 # Translation of the substrate tier of docker-compose.yml (redis, postgres,
@@ -14,7 +14,7 @@
 # compose-v3 stack file for `docker stack deploy -c stack-data.yml legba-data`.
 #
 # DELIBERATE DIFFERENCES from the live compose (each verified against the
-# Docker 29.2.1 `docker stack config` validator — see the assessment §3):
+# Docker 29.2.1 `docker stack config` validator):
 #   * NO `profiles:` — stack deploy hard-errors on the key ("Additional
 #     property profiles is not allowed"). Stack membership = file membership.
 #   * NO `mem_limit:` — a FORBIDDEN property under stack deploy ("Configuration
@@ -25,7 +25,7 @@
 #     bind an IP) — a naive translation would expose the un-authed substrate
 #     (OpenSearch security OFF, PG legba/legba) on every node interface.
 #     Services reach the substrate over the `legba-swarm` overlay by alias;
-#     host tooling (backup.sh, watchdog psql) is reworked per assessment §4f.
+#     host tooling (backup.sh, watchdog psql) needs reworking.
 #   * NO `restart:` — ignored under swarm; deploy.restart_policy carries it.
 #   * `./docker/nats.conf` bind → a swarm `config` (binds require the file to
 #     pre-exist on whichever node the task lands on; configs travel with the
@@ -41,7 +41,7 @@
 # live `legba_*` volume names (external) here — a validation stack sharing the
 # production postgres_data volume is the exact data-bleed the compose
 # isolation override exists to prevent. Phase-2 data move = backup/restore
-# into these fresh volumes on the data node (runbook, assessment §5).
+# into these fresh volumes on the data node (see the runbook).
 #
 # INTERPOLATION: `${VAR:-default}` is substituted from the SHELL environment
 # only — stack deploy does NOT read .env (verified). Deploy via:

@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The server's copy of the console's PANEL ACTION catalogue (lane Q-1) — a leaf.
+"""The server's copy of the console's PANEL ACTION catalogue — a leaf.
 
 The console declares, per view, what Consult may do to it
-(``legba-ui-v3/src/panel-registry/contracts.ts``, lane U-6) and routes every
+(``legba-ui-v3/src/panel-registry/contracts.ts``) and routes every
 action through ``applyPanelAction(id, action, args)`` with Undo. This module
 loads the GENERATED copy of that declaration
 (``panel_action_catalog.json``, written by ``scripts/gen_panel_action_catalog.py``

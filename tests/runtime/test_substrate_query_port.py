@@ -657,7 +657,7 @@ async def test_search_signals_scope_predicate_echo(port, pg_pool):
 def _oversize_summary(lead: str) -> str:
     """A summary whose UNCAPPED tsvector exceeds Postgres' 1 MB limit.
 
-    W11-F135: an RSS entry whose description was inline base64 images became an
+    An RSS entry whose description was inline base64 images became an
     11 MB summary of millions of unique "words" and broke every
     ``search_signals`` call for five weeks. 250k distinct 9-char tokens is
     about 2.3 MB of text and ~2.5 MB of tsvector, with the lead words first so
@@ -1729,7 +1729,7 @@ async def test_list_sources_sql_executes(port):
     )
 
 
-# W11-F152 -- list_sources: freshest-first rows behind a whole-fleet summary,
+# List_sources: freshest-first rows behind a whole-fleet summary,
 # last_success_at + staleness on every row, 'empty' read as "no new items".
 # The session DB is shared, so each test seeds its own uniquely-named sources
 # and asserts only on those (relative order, own rows), never on fleet totals.

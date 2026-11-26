@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The held family's ONE writer (data-model lane 10, DM-C).
+"""The held family's ONE writer.
 
 :func:`write_shadow_record` writes one desk shadow record's plan
 (:func:`held_record.plan_shadow_record`) into the six tables of migration

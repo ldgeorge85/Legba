@@ -50,7 +50,7 @@ ENTITY_CLASSES: list[tuple[str, float]] = [
     ("group", 0.126),
 ]
 
-# JUDGE_SYNTHESIS §4.1 decision 3 tiers, in roughly the live ratio
+# Edge tiers, in roughly the live ratio
 # (cooccurrence is the 9.9k/day firehose; relation is 12/day and precious).
 EDGE_FAMILIES: list[tuple[str, float]] = [
     ("cooccurrence", 0.62),

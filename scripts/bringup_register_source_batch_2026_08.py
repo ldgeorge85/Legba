@@ -56,7 +56,7 @@ the instance. ``source.rsshub.apnews.world`` additionally needs ``rsshub`` on
 the runtime's ``LEGBA_EGRESS_ALLOW_HOSTS`` (the RSS handler's SSRF egress guard
 blocks internal hosts), which docker-compose already defaults.
 
-Source-class notes (S1-T8 taxonomy, docs/DATA_SOURCES.md §2.4): all six are
+Source-class notes (source-class taxonomy, docs/DATA_SOURCES.md §2.4): all six are
 ``reporting``. France 24 is state-FUNDED but editorially independent under
 statute, so it takes the RFI/DW treatment — ``reporting`` with
 ``state_affiliation`` true on the credibility row, never ``state_media``.

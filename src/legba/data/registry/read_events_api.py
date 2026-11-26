@@ -1,18 +1,14 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Read telemetry — ``/api/v1/read-events`` (D2e, the oracle wager's instrument).
+"""Read telemetry — ``/api/v1/read-events`` (the instrument for whether the product is read).
 
 THE GAP this closes, in one line: the substrate has ~80 tables receipting
 every WRITE and not one recording a READ.
 
-``planning/CAMPAIGN_2026-08-29/PREMISE_REASON_TO_EXIST.md`` §2.1 says the
-Glass-Tower ruling — "a self-driving organ **the operator reads**" — is
-falsified in its reading half by "zero finding-level drills in 15 days". That
-number is an inference off Caddy access logs. It is the best evidence that
-existed and it is not good enough to settle a 90-day wager, because an access
-log cannot tell a panel mount from a build event, and cannot see a citation
-chip being followed at all. §5 Option 1 names the fix directly: *"Instrument
-reading (opens, drills)."* This module is that instrument.
+Access logs are not good enough to tell whether the product is read, because
+an access log cannot tell a panel mount from a build event, and cannot see a
+citation chip being followed at all. The fix is to instrument reading (opens,
+drills). This module is that instrument.
 
 Two endpoints, deliberately asymmetric in weight:
 
@@ -27,9 +23,9 @@ Two endpoints, deliberately asymmetric in weight:
 
 ``GET /api/v1/read-events/rollup``
     The scoreboard. Events by kind by day over a bounded window (default 30d,
-    max 365d), plus the wager's headline scalars: reads today, reads this
+    max 365d), plus the headline scalars: reads today, reads this
     week, and the brief-read day count — "on how many of the last N days did
-    the operator open the morning product at all?". This is what day 90 reads.
+    the operator open the morning product at all?".
 
 CONVENTIONS — the same as the rest of the registry HTTP plane:
 
@@ -180,8 +176,7 @@ class RollupTotals(BaseModel):
     brief_reads_today: int
     brief_reads_this_week: int
     # "On how many of the last `window_days` days did the operator open the
-    # morning product at all?" — the single number the 90-day verdict turns
-    # on, per PREMISE §5 Option 1.
+    # morning product at all?" — the headline reading number.
     brief_read_days: int
     active_days: int
     sessions_this_week: int
@@ -259,7 +254,7 @@ def build_read_events_router(deps: RegistryAPIDeps) -> APIRouter:
 
         rows: list[tuple[Any, ...]] = []
         reasons: list[str] = []
-        # Lane 9: whose reading this is (the signed-in person; with sign-in
+        # Whose reading this is (the signed-in person; with sign-in
         # off, the shared credential every reader holds).
         who = handle_for_actor(principal)
         for event in batch.events:

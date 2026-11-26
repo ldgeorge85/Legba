@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W2 / F-6 — the context ceiling a consult call's input respects.
+"""The context ceiling a consult call's input respects.
 
-Session 181a8bab (Opus, 2026-09-28) answered on its ninth call carrying 136,833
+Session 7c3e91a2 (model A, synthetic sample) answered on its ninth call carrying 136,833
 prompt tokens; the 621,505 its trace shows under ``usage.input_tokens`` is the
 run's RUNNING SUM over nine calls. The ceiling bounds what one call sends — the
 answering call above all — by withholding whole tool results, oldest first,
@@ -17,7 +17,7 @@ What is proven here:
   and the stamp is absent; over it the stamp rides the data bag and the
   ``build_consult_response`` frame;
 * the recovery replay honours the same ceiling with the turn's cited refs;
-* the replay of 181a8bab's own per-call tool-result sizes;
+* the replay of 7c3e91a2's own per-call tool-result sizes;
 * the descriptor knob is declared on the kind and validates.
 """
 
@@ -452,15 +452,14 @@ async def test_the_recovery_replay_honours_the_ceiling_with_the_turns_cited_refs
 
 
 # ---------------------------------------------------------------------------
-# 4. The 181a8bab replay
+# 4. The 7c3e91a2 replay
 # ---------------------------------------------------------------------------
 
-#: Session 181a8bab's persisted turn — the tracked fixture the divergence suite
-#: already reads (the same rows as planning/waves/R1/evidence/
-#: consult_sessions_2026-09-28.json).
+#: Session 7c3e91a2's persisted turn — the tracked fixture the divergence suite
+#: already reads.
 _FIXTURE = (
-    Path(__file__).parent / "fixtures" / "consult_divergence" / "2026-09-28"
-    / "181a8bab_opus.json"
+    Path(__file__).parent / "fixtures" / "consult_divergence" / "sample"
+    / "7c3e91a2_model_a.json"
 )
 
 #: The answer's 85 cited refs, classified on the live database (read-only,
@@ -499,7 +498,7 @@ def _trace() -> tuple[list[int], list[int], list[list[tuple[str, int]]], list[st
     return prompt, completion, [rounds[r] for r in sorted(rounds)], cited
 
 
-def test_the_181a8bab_answering_call_read_137k_not_621k():
+def test_the_7c3e91a2_answering_call_read_137k_not_621k():
     """The review's "final input 621k" is the run's running sum."""
     prompt, completion, rounds, cited = _trace()
     assert len(prompt) == 9 and len(rounds) == 8 and len(cited) == 85
@@ -508,7 +507,7 @@ def test_the_181a8bab_answering_call_read_137k_not_621k():
     assert sum(prompt) + sum(completion) == 641_400  # the "641k tokens"
 
 
-def _replay_181a8bab() -> tuple[list[dict[str, Any]], set[str], int]:
+def _replay_7c3e91a2() -> tuple[list[dict[str, Any]], set[str], int]:
     prompt, completion, rounds, cited_ids = _trace()
     budget = dict(_CITED_BY_FAMILY)
     pool = list(cited_ids)
@@ -526,7 +525,7 @@ def _replay_181a8bab() -> tuple[list[dict[str, Any]], set[str], int]:
                 budget[family] -= take
             refs = [pool.pop(0) for _ in range(take)]
             cited.update(refs)
-            refs += [_uuid("181a8bab", r, c, k) for k in range(nrefs - take)]
+            refs += [_uuid("7c3e91a2", r, c, k) for k in range(nrefs - take)]
             head = json.dumps({"tool": tool, "refs": refs, "rows": []})
             pad = max(0, per_call_chars - len(head) - 2)
             bodies.append(head[:-2] + '"' + "z" * pad + '"]}')
@@ -542,8 +541,8 @@ def _replay_181a8bab() -> tuple[list[dict[str, Any]], set[str], int]:
 ANTHROPIC_PLANE_CEILING = 160_000  # the value to set on a 200k-window plane
 
 
-def test_the_181a8bab_replay_sits_under_the_anthropic_plane_ceiling_untouched():
-    messages, cited, answering = _replay_181a8bab()
+def test_the_7c3e91a2_replay_sits_under_the_anthropic_plane_ceiling_untouched():
+    messages, cited, answering = _replay_7c3e91a2()
     assert len(cited) == 85
     estimate = cc.estimate_input_tokens("", messages)
     # The replay reproduces the answering call's size (136,833 tokens) within 2%.
@@ -558,8 +557,8 @@ def test_the_181a8bab_replay_sits_under_the_anthropic_plane_ceiling_untouched():
 
 
 @pytest.mark.parametrize("ceiling", [100_000, 64_000])
-def test_the_181a8bab_replay_under_a_biting_ceiling_keeps_every_cited_result(ceiling):
-    messages, cited, _answering = _replay_181a8bab()
+def test_the_7c3e91a2_replay_under_a_biting_ceiling_keeps_every_cited_result(ceiling):
+    messages, cited, _answering = _replay_7c3e91a2()
     out, stamp = cc.apply_context_ceiling(
         messages, system="", ceiling=ceiling, cited_refs=cited,
     )

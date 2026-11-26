@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.federalregister.significant_documents": {
+      "source": "source_federalregister_significant.yaml",
+      "state": "draft"
+    }
+  }
+}

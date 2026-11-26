@@ -75,7 +75,8 @@ describe('sources — the firing matrix over the wired roster', () => {
     expect(f.value).toBe(UNMEASURED)
     expect(f.unmeasured).toBe(true)
     expect(f.asOf).toBeNull()
-    expect(f.title).toContain('/v3/system/source-firing')
+    expect(f.title).toContain('could not be read')
+    expect(f.title).not.toMatch(/\/v3\//)
   })
 
   it('a shape that is not a list of rows degrades rather than throwing', () => {
@@ -123,11 +124,11 @@ describe('gaps — typed absence for the ACTIVE scope', () => {
       },
       NOW,
     )
-    expect(f.value).toBe('2 typed')
+    expect(f.value).toBe('2 recorded')
     expect(f.asOf).toBe('1m ago')
-    expect(f.title).toContain('2 typed absences on Argentina')
+    expect(f.title).toContain('2 gaps recorded on Argentina')
     expect(f.title).toContain('1 of them are last known and NOT re-checked')
-    expect(f.title).toContain('Every absence kind was read')
+    expect(f.title).toContain('Every kind of gap was read here')
   })
 
   it('a desk read with nothing found is a MEASURED zero, not unmeasured', () => {
@@ -135,7 +136,7 @@ describe('gaps — typed absence for the ACTIVE scope', () => {
       { scopeTargetId: 'country_g20_ar', res: res(), failed: false },
       NOW,
     )
-    expect(f.value).toBe('0 typed')
+    expect(f.value).toBe('0 recorded')
     expect(f.unmeasured).toBe(false)
   })
 
@@ -155,16 +156,17 @@ describe('gaps — typed absence for the ACTIVE scope', () => {
       },
       NOW,
     )
-    expect(f.title).toContain('1 absence kind could not be read for this scope')
+    expect(f.title).toContain('1 kind of gap could not be read here')
   })
 
-  it('a failed read names the route and the desk', () => {
+  it('a failed read names the subject, never the route', () => {
     const f = absenceFigure(
       { scopeTargetId: 'country_g20_ar', res: undefined, failed: true },
       NOW,
     )
     expect(f.value).toBe(UNMEASURED)
-    expect(f.title).toContain('/v3/absence?scope=country_g20_ar')
+    expect(f.title).toContain('country_g20_ar')
+    expect(f.title).not.toMatch(/\/v3\//)
   })
 })
 

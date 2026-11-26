@@ -30,7 +30,7 @@ Switch and cadence (all off / declared here, env-overridable):
 * ``LEGBA_INTAKE_DRIFT_HEAD_DAYS`` (14) — how recent an open head must be for
   its citations to put a page first.
 
-The SELECTION (lane D-1) is :data:`_CANDIDATES_SQL`: the same cap, ordered by
+The SELECTION is :data:`_CANDIDATES_SQL`: the same cap, ordered by
 what relies on the page (open heads first, then the sealed ledgers' evidence
 and what was published outward), stable pages backed off, and hosts the
 licence ledger refuses never re-checked.
@@ -68,7 +68,7 @@ def _num(name: str, default: float) -> float:
         return default
 
 
-#: The selection (lane D-1). Same budget (``cap`` per batch, one batch per
+#: The selection. Same budget (``cap`` per batch, one batch per
 #: cadence), smarter order:
 #:
 #: * candidates — the newest page/archiver version of each address a CITED

@@ -154,7 +154,7 @@ describe('a view registered in one call', () => {
     const on = describeOnScreen()!
     expect(on.page).toBe('board')
     expect(on.views.find((v) => v.id === 'test.dummy:t1')).toMatchObject({ at: expect.stringMatching(/^p\d$/) })
-    expect(on.views[0]).toEqual({ id: 'v4.morning_read', at: 'stage', front: true })
+    expect(on.views[0]).toEqual({ id: 'view:board_changed', at: 'stage', front: true })
     expect(JSON.stringify(on).length).toBeLessThanOrEqual(MAX_BYTES)
     // ON THE STAGE: the same view, sent to the stage through its contract.
     act(() => {
@@ -165,7 +165,7 @@ describe('a view registered in one call', () => {
     act(() => {
       undoView()
     })
-    await waitFor(() => expect(stageView()).toBe('v4.morning_read'))
+    await waitFor(() => expect(stageView()).toBe('view:board_changed'))
     act(() => {
       undoView()
       undoView()
@@ -214,10 +214,10 @@ describe("the reader views' declared actions reach them", () => {
 
   it('a view in the panels closes and re-opens through its contract', async () => {
     await boot()
-    expect(applyPanelAction('system.wall', 'close')).toEqual({ state: 'executed' })
-    await waitFor(() => expect(dockIds()).not.toContain('system.wall'))
-    expect(applyPanelAction('system.wall', 'open')).toEqual({ state: 'executed' })
-    await waitFor(() => expect(dockIds()).toContain('system.wall'))
+    expect(applyPanelAction('v4.map', 'close')).toEqual({ state: 'executed' })
+    await waitFor(() => expect(dockIds()).not.toContain('v4.map'))
+    expect(applyPanelAction('v4.map', 'open')).toEqual({ state: 'executed' })
+    await waitFor(() => expect(dockIds()).toContain('v4.map'))
   })
 })
 
@@ -231,7 +231,7 @@ describe('Consult is given the on-screen context', () => {
     const turn = posts.find((p) => p.url.includes('/consult'))!.body
     expect(turn.on_screen).toMatchObject({ v: 1, page: 'board', side: 'reader', chat: { placement: 'bottom', collapsed: false } })
     const views = (turn.on_screen as { views: { id: string }[] }).views.map((v) => v.id)
-    expect(views).toEqual(expect.arrayContaining(['v4.morning_read', 'v4.map', 'system.wall']))
+    expect(views).toEqual(expect.arrayContaining(['view:board_changed', 'v4.map']))
     // the map is on the page: its rows that are on ride along (U-7)
     expect((turn.on_screen as { map?: { layers: string[] } }).map?.layers).toEqual(expect.arrayContaining(['change', 'blanks']))
     expect(JSON.stringify(turn.on_screen).length).toBeLessThanOrEqual(MAX_BYTES)

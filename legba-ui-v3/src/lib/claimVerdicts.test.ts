@@ -41,7 +41,7 @@ describe('claimVerdictForMarker', () => {
       '[3]',
     )
     expect(v.kind).toBe('not-checked')
-    expect(v.label).toMatch(/LLM judge did not run/)
+    expect(v.label).toMatch(/the check did not run/)
   })
 
   it('LLM judge ran + chip not named by any flag → not-flagged with pooled context', () => {
@@ -55,7 +55,7 @@ describe('claimVerdictForMarker', () => {
     const v = claimVerdictForMarker(verifiedLlm, '[[ref:5]]')
     // [5] is named by hedge_laundering AND judge_contradicted → worst wins.
     expect(v.kind).toBe('contradicted')
-    expect(v.label).toBe('contradicted by the verify judge')
+    expect(v.label).toBe('contradicted by its sources, by the check')
     expect(v.spans.map((s) => s.reason)).toEqual(['judge_contradicted', 'hedge_laundering'])
     expect(v.spans[0].text).toBe('Contradicted claim over ref 2.')
   })
@@ -81,7 +81,7 @@ describe('claimVerdictForMarker', () => {
       '[4]',
     )
     expect(v.kind).toBe('unsupported')
-    expect(v.label).toBe('unsupported by the verify judge')
+    expect(v.label).toBe('not supported by its sources, by the check')
   })
 
   it('markers [] spans (uncited claims) never attach to a chip', () => {
@@ -127,7 +127,7 @@ describe('claimVerdictForMarker — P2-4 claim_verdicts ledger', () => {
       '[9]',
     )
     expect(v.kind).toBe('supported')
-    expect(v.label).toBe('supported by the verify judge')
+    expect(v.label).toBe('supported by its sources, by the check')
     expect(v.checkable).toBe(13)
     expect(v.supported).toBe(13)
   })

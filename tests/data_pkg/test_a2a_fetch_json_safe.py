@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W11-F68a — the A2A fetcher returns JSON-safe rows.
+"""The A2A fetcher returns JSON-safe rows.
 
 ``dapr_host._fetch_latest_outputs`` used to hand the route raw asyncpg values
 (``uuid.UUID``, ``datetime``); ``JSONResponse`` could not serialise them, so

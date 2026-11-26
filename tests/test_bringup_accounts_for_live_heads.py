@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W6 SPLIT-1 (DEC-13) — the tree can rebuild every live head of the reference host.
+"""The tree can rebuild every live head of the reference host.
 
-Review A (planning/reviews/PLATFORM_SEAMS_2026-09-29.md §0 #2) found that
+A platform review found that
 ``deploy/deploy.sh`` registered 46 of 88 live analysts: the rest had been
 registered by hand or by one of the bring-up scripts deploy.sh never calls, so
 a fresh instance could not reproduce the host. This file is the accounting.
@@ -16,8 +16,8 @@ every NON-retired head the tree must carry a registrar that deploy.sh runs:
     entry — when deploy.sh calls the walker; or
   * a ``descriptors/*.yaml`` a script deploy.sh calls names literally (the
     registrars before the walker), or the catalog when deploy.sh calls it; or
-  * an explicit ``retired`` row in ``descriptors/RETIRED.md`` (a retire is the
-    operator's word: none were added by SPLIT-1).
+  * an explicit ``retired`` row in ``descriptors/RETIRED.md`` (a retire is an explicit
+    decision).
 
 A head that fails this is NAMED in the assertion. Pure: no database, no HTTP.
 """

@@ -43,6 +43,7 @@ from legba.data.analysts._tradecraft import (
     TITLE_NOT_THE_AS_OF_LINE,
     UNIT_BODY_SHAPE,
     UNIT_BODY_SHAPE_D6,
+    UNIT_NO_INSTRUMENT_READINGS,
     UNIT_READ_CONTRACT,
     UNIT_READ_CONTRACT_D6,
     UNIT_VERDICT_RULE,
@@ -61,7 +62,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DESCRIPTORS = REPO_ROOT / "descriptors"
 
 #: The NINE bounded reasoning units Phase-V rewrites. ``disruption_status`` is
-#: the ninth (DS-1): the wave filed it as a non-unit because it GATHERS, and it
+#: the ninth (DS-1): it was filed as a non-unit because it GATHERS, and it
 #: went on ordering the banned template sentence in 14/15 findings after the
 #: wave — the one desk where D2/D3/D4/D5 measurably never landed. Every
 #: parametrized pin below now runs against it, which is what makes the
@@ -327,19 +328,20 @@ def test_the_prohibition_paragraphs_are_actually_prohibitions(unit: str) -> None
 
     cost = zones.get("WHAT EACH MISTAKE COSTS")
     if unit in D6_FLIPPED:
-        assert cost is not None, f"{unit}: D6-flipped but P2 is missing"
+        assert cost is not None, f"{unit}: flipped but the typing block is missing"
         # P2 states BOTH prices; the shared note forbids shipping it with one.
-        assert "fails the finding" in cost
-        assert "is WORSE" in cost
+        assert "fails its evidence check" in cost
+        assert "passes every check yet leaves a reader" in cost
     else:
-        assert cost is None, f"{unit}: held desk carries P2"
+        assert cost is None, f"{unit}: held desk carries the typing block"
 
 
 @pytest.mark.parametrize("unit", UNITS)
 def test_unit_prompt_binds_absence_scoping_to_the_bluf(unit: str) -> None:
     """D3 — 336/701 BLUFs asserted an absence and only 40 were scoped."""
     assembled = _norm(_assembled(unit))
-    assert "THE BLUF IS UNDER THE ABSENCE RULE TOO" in assembled
+    assert "A NEGATIVE IS A STATEMENT ABOUT THIS DESK'S COLLECTION" in assembled
+    assert "This holds in the BLUF above all" in assembled
     assert "CALIBRATE CONFIDENCE TO THE OBSERVATION, NOT TO THE WORLD" in assembled
     assert "signal count is not evidence" in assembled
 
@@ -348,7 +350,7 @@ def test_unit_prompt_binds_absence_scoping_to_the_bluf(unit: str) -> None:
 def test_unit_prompt_bans_instrument_readings_in_prose(unit: str) -> None:
     """D5 — indicator schema fields were being pasted into the prose."""
     assembled = _norm(_assembled(unit))
-    assert _norm(NO_INSTRUMENT_READINGS) in assembled
+    assert _norm(UNIT_NO_INSTRUMENT_READINGS) in assembled
 
 
 # ---------------------------------------------------------------------------
@@ -391,7 +393,7 @@ def test_disruption_status_no_longer_orders_the_template_sentence() -> None:
     """The measured defect, in one assertion per phrasing.
 
     Q-5 measured "the dominant vector is <X>, and the direction is <Y>" in
-    14/15 findings AFTER the voice wave and 57/61 before — unchanged, because
+    14/15 findings AFTER the voice rewrite and 57/61 before — unchanged, because
     the prompt still ORDERED it: "state the direction of travel — DEGRADING,
     HOLDING, or RECOVERING — and say which, in those words". A ban alone would
     have produced "the principal vector"; the order had to go.
@@ -403,7 +405,7 @@ def test_disruption_status_no_longer_orders_the_template_sentence() -> None:
     assert "Identify the DOMINANT vector" not in prompt
     # The replacement SHAPE, in this desk's own vocabulary, is what stands in
     # its place — a driver, a direction, a pace, and the thing that caps it.
-    assert "Name the ONE vector that is actually driving this desk's read" in prompt
+    assert "If a vector moved in this window, name it" in prompt
     assert "what is holding it back" in prompt
     # The enum survives as a CATEGORY the structured fields carry, not as the
     # sentence: it is the six-vector taxonomy this desk is scored on.
@@ -411,7 +413,7 @@ def test_disruption_status_no_longer_orders_the_template_sentence() -> None:
 
 
 def test_disruption_status_retired_its_own_body_skeleton() -> None:
-    """D4 — the pre-wave skeleton was byte-identical before and after the PUT
+    """D4 — the pre-rewrite skeleton was byte-identical before and after the PUT
     this desk did receive. It is gone from the prompt entirely now: two body
     specs in one prompt is how a model gets to pick."""
     prompt = _norm(_system_prompt("disruption_status"))

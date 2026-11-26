@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""EVENT-ANCHORED windows — detected, never guessed (lane Q-2) — pure, no I/O.
+"""EVENT-ANCHORED windows — detected, never guessed — pure, no I/O.
 
 An asker often bounds a question by an event rather than a date: "since the
 ceasefire", "after the summit", "since the strike on the port", "before the

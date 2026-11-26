@@ -3,7 +3,7 @@
 #
 # docker-compose.replicas.yml — LOCAL 2-replica proof for scaling-multinode.
 #
-# WHAT THIS IS (locked decision D3 / planning/SCALING.md §scaling-multinode):
+# WHAT THIS IS:
 #   A second `legba-runtime-dapr` replica with its OWN co-located daprd sidecar,
 #   so Dapr placement redistributes the SourceActor / AnalystActor / TargetActor
 #   set across two replicas, reminders fire on the owning node, and the trigger
@@ -39,8 +39,8 @@
 #
 # THE DOCUMENTED PROOF PROCEDURE lives in docs/RUNBOOK.md §"Multi-replica local
 # proof" — it is the step-by-step verify (placement spread, single leader,
-# reminder ownership, failover). This file + that runbook section are the D3
-# deliverable.
+# reminder ownership, failover). This file + that runbook section are the
+# proof.
 
 services:
   # ---- Replica 2's co-located daprd sidecar -------------------------------

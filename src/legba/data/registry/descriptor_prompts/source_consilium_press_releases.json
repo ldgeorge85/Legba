@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.consilium.press_releases": {
+      "source": "source_consilium_press_releases.yaml",
+      "state": "draft"
+    }
+  }
+}

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""ACTORS as subject candidates for a sentence piece (lane S-5).
+"""ACTORS as subject candidates for a sentence piece.
 
 WHY. Desk sentences are mostly about ACTORS — an armed group, an agency, a
 company, a named official — and the typing seat was offered only the desk's

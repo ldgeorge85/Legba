@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Lane N-G — the journal evidence gate.
+"""The journal evidence gate.
 
   1. Notes gate: a stub / uncited / pseudo-tool-call field-notes reply is
      discarded for the full gathered context, the row records it, and the notes

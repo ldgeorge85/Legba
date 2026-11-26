@@ -3,7 +3,7 @@
 
 """Alert kind ``consult_unhealthy``.
 
-Topic: Lane F: N consecutive failed consult turns
+Topic: N consecutive failed consult turns
 (runtime/consult_health.py).
 """
 

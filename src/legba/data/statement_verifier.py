@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The VERIFIER seat — gate G4, the clean-context support check (plan P1 §3 G4,
-§4 lane S3; design B1 §3 "Support check").
+"""The VERIFIER seat — gate G4, the clean-context support check.
 
 CODE FIRST. Before any model sees a statement, code runs the checks it can:
 every evidence quote is in the stored text it cites (G1), every number and
@@ -50,6 +49,8 @@ and returned either way.
 No I/O beyond the injected ``llm``; nothing is written.
 """
 from __future__ import annotations
+
+import json
 
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -178,7 +179,9 @@ def build_verifier_prompt(
     ]
     for i, row in enumerate(_evidence(support), start=1):
         quote = ((getattr(row, "quote_context", None) if show_context else None) or row.quote or "").strip()
-        lines.append(f"  Q{i} (published {_published_label(row)}): \"{quote}\"")
+        # JSON-encoded: a quote mark or a line break inside the quote cannot
+        # end the quote early or start a new line of the frame
+        lines.append(f"  Q{i} (published {_published_label(row)}): {json.dumps(quote, ensure_ascii=False)}")
     return "\n".join(lines)
 
 

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""FRAME-3 — SEVERITY AS STATE (``planning/FRAME_PROGRAM_2026-08-20.md`` §0.6, §7).
+"""SEVERITY AS STATE.
 
 CORRECTNESS-R1's C-B finding was a single tag answering two questions and
 therefore neither. A desk tagged the severity of its SLICE DELTA, so a standing
@@ -399,7 +399,7 @@ def test_the_rule_names_the_defect_it_exists_to_kill():
     state; (2) a HIGH level that held is high + steady, never a demotion;
     (3) ``new`` when there is no prior read, never ``steady``."""
     rule = _norm(SEVERITY_AS_STATE_RULE)
-    assert "NOT how far it moved in the last 72 hours" in rule
+    assert "NOT how far it moved in this window" in rule
     assert "never a demotion" in rule
     assert "never 'steady', which claims a comparison you did not make" in rule
     assert "never print either one" in rule

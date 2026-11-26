@@ -22,6 +22,7 @@ import type { ReactNode } from 'react'
 import { ChevronDown, ChevronUp, Maximize2, Minimize2, PanelBottom, PanelLeft, PanelRight } from 'lucide-react'
 import type { currentMode } from '@/auth/jwt'
 import { SingletonView } from '@/components/SingletonView'
+import { RegionAsOf } from '@/components/AsOfStrip'
 import { PanelEmbedProvider } from '@/components/PanelEmbedContext'
 import { ConsultFrameProvider } from '@/components/ConsultFrameContext'
 import type { ChatPlacement } from '@/state/frame'
@@ -118,11 +119,15 @@ export function ConsultDock({
         </span>
       </div>
       <div className="min-h-0 flex-1">
-        <ConsultFrameProvider value={{ compact }}>
-          <PanelEmbedProvider>
-            <SingletonView kind="system.consult" mode={mode} />
-          </PanelEmbedProvider>
-        </ConsultFrameProvider>
+        {/* Consult answers about the record now: while an earlier instant is
+            set it says so, like every region that cannot show the past. */}
+        <RegionAsOf viewId="system.consult">
+          <ConsultFrameProvider value={{ compact }}>
+            <PanelEmbedProvider>
+              <SingletonView kind="system.consult" mode={mode} />
+            </PanelEmbedProvider>
+          </ConsultFrameProvider>
+        </RegionAsOf>
       </div>
     </aside>
   )

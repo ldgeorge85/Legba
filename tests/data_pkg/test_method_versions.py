@@ -62,7 +62,7 @@ def test_every_method_version_constant_has_a_docs_row() -> None:
         if ver not in table.values()
     }
     assert not missing, (
-        "METHOD_VERSION constants with no §10.9 table row: " + ", ".join(missing)
+        "METHOD_VERSION constants with no table row: " + ", ".join(missing)
     )
 
 
@@ -75,7 +75,7 @@ def test_the_table_names_every_instrument_by_module() -> None:
         # Private-leaf modules drop the leading underscore in their public
         # instrument name (`_correctness_calibration` → `correctness_calibration`).
         stem = Path(mod).stem.lstrip("_")
-        assert stem in table, f"{mod}: no §10.9 row names this instrument"
+        assert stem in table, f"{mod}: no table row names this instrument"
 
 
 def test_retroactive_boundaries_are_documented() -> None:
@@ -214,6 +214,6 @@ def test_country_scorecard_route_projects_the_stamp() -> None:
 
 
 def test_version_format_is_pinned() -> None:
-    """``<instrument>/2026-09.N`` — the human-readable form the lane fixes."""
+    """``<instrument>/2026-09.N`` — the human-readable form."""
     for mod, ver in _declared_versions().items():
         assert re.fullmatch(r"[a-z_]+/\d{4}-\d{2}\.\d+", ver), f"{mod}: {ver!r}"

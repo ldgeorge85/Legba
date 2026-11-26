@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Page-text extraction — ONE implementation for every page the platform reads.
 
-Lane I-2 moved these helpers here, verbatim, out of
+These helpers were moved here, verbatim, out of
 ``analysts/deterministic_handlers/evidence_archiver.py`` (which imports them
 back under the same names), so the three readers of a fetched page run the
 SAME extraction and the same wall rejection:
@@ -182,7 +182,7 @@ def match_wall_phrase(text: str) -> str | None:
     """The challenge tell or the wall deny-pattern in ``text`` at ANY length,
     else ``None``.
 
-    Only for a page the fetch was REDIRECTED to on another host (W11-F259):
+    Only for a page the fetch was REDIRECTED to on another host:
     there the length gate's premise — a pattern inside a long article is
     furniture — does not hold, because the page is not the article that was
     asked for. Everywhere else :func:`_match_wall_pattern` (length-gated) rules.

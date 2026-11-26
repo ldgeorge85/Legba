@@ -1,10 +1,9 @@
 /**
  * Layer Divergence (`system.layer_divergence`) — THE DIVERGENCE MAP.
  *
- * Program 6 L2's reader surface: per country, the six source layers, the three
+ * The reader surface: per country, the six source layers, the three
  * gaps worth watching, and what the instrument said about each of them today.
- * It is one of the four checking surfaces the next-arc capture named as the
- * thing that has to become VISIBLE on the reader surface — "cited source beside
+ * It is one of the four checking surfaces that has to become VISIBLE on the reader surface — "cited source beside
  * each claim, declared gaps, confidence folds with their reason, the divergence
  * map" — and it is the only one that had no surface at all.
  *

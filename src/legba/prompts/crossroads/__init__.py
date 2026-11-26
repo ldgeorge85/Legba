@@ -1,13 +1,12 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""legba.prompts.crossroads — the ONE FIXED MANDATE of the crossroads inquiry
-(Program 5 lane 3; ``planning/PROGRAM5_INQUIRY_DESIGN_2026-09-24.md`` §5).
+"""legba.prompts.crossroads — the ONE FIXED MANDATE of the crossroads inquiry.
 
 WHAT MAKES THIS DIFFERENT FROM EVERY OTHER INQUIRY. The inquiry kind's brief is
-``method.options.brief`` — free text, PUT-able, re-authored whenever the
-operator wants a different question carried. The crossroads is the one
+``method.options.brief`` — free text, PUT-able, re-authored whenever a
+different question is to be carried. The crossroads is the one
 descriptor on that kind whose brief is FIXED and lives in tracked code, for the
-same reason the lens priors do (DL-2): the crossroads is not a question someone
+same reason the lens priors do: the crossroads is not a question someone
 asked, it is the standing obligation to say the four things no desk is
 positioned to say, and an obligation that can be edited in a DB row without a
 visible hash change is not an obligation.

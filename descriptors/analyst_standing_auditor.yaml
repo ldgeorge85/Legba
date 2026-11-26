@@ -75,7 +75,7 @@
 # ALERT PLANE. The handler writes the kind='alert' ROW and does NO outward
 # fan-out — the page is the alert plane's own budgeted step. INTEGRATION POINT:
 # when the `alert-suppression-guard` branch (fleet-wide daily page budget +
-# per-trigger-class diversity cap + FRAME-3 steady-state suppression) lands, give
+# per-trigger-class diversity cap + steady-state suppression) lands, give
 # trigger_class 'external_audit' a slot in that budget's kind vocabulary and let
 # apply_daily_page_budget rank an external-audit contradiction against the other
 # classes. Nothing in the handler changes: the row already carries trigger_class
@@ -144,7 +144,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: draft
-  owner: d5_standing_audit
+  owner: owner@local
 
 subscription:
   # No `targets` block => META analyst: ONE global sweep per cadence tick. The
@@ -162,7 +162,7 @@ method:
   kind: deterministic
   impl: legba.data.analysts.deterministic:run_method
   sub_handler: standing_auditor
-  # X-1 declared knobs (see handler_options.HANDLER_OPTIONS['standing_auditor']).
+  # Declared knobs (see handler_options.HANDLER_OPTIONS['standing_auditor']).
   # Every one bounds a COST — heads read, core-plane calls, external searches —
   # so an operator can widen or narrow the daily audit with a descriptor PUT and
   # no code edit. Values below are the in-source defaults, stated explicitly so
@@ -254,11 +254,6 @@ method:
       factory_kind: stack_ref
       raw: llm.primary.openai_compat
       expected_family: llm_provider
-    # Output cap. The vLLM handler drops max_tokens from the wire by default (a
-    # self-hosted server serves its own budget), so this is the hosted-endpoint
-    # safety net rather than the live control; the handler's own per-call caps
-    # (EXTRACT_MAX_TOKENS / JUDGE_MAX_TOKENS) are what actually bound the reply.
-    max_tokens: 1200
     # THE GRADER — a THIRD model family, and the fence that keeps it one.
     #
     # The R2 record correction is why this is a separate key with its own
@@ -274,7 +269,7 @@ method:
     # tests. On refusal the analyst runs, writes a heartbeat naming the gap, and
     # grades NOTHING; it never silently substitutes a model.
     #
-    # Mistral Large 3 on OpenRouter (Cerebras Gemma was the first pick; unfunded 09-05): cross-family from the core-plane writer (gpt-oss-120b) and from
+    # Mistral Large 3 on OpenRouter (Cerebras Gemma was the first pick; unfunded 09-05): cross-family from the core-plane writer (the core model) and from
     # the judge (nemotron), already registered active, already priced
     # ($0.99/$1.49 per M ≈ $1.89/day at width), and already characterised on
     # this corpus — it WAS the verify judge 2026-07-30 → 08-15.
@@ -285,7 +280,7 @@ method:
     # marking its own homework.
     grader:
       factory_kind: stack_ref
-      raw: llm.grader.innoai_lightning.openai_compat   # cutover 2026-10-23: the third family on the box (OpenRouter Mistral retired); Cerebras Gemma was the first pick, its key unfunded (HTTP 402) 2026-09-05
+      raw: llm.grader.gateway_third_family.openai_compat   # cutover 2026-10-23: the third family on the box (OpenRouter Mistral retired); Cerebras Gemma was the first pick, its key unfunded (HTTP 402) 2026-09-05
       expected_family: llm_provider
     # THE FOURTH FAMILY — the audit rater, for instrument validity.
     #
@@ -303,7 +298,7 @@ method:
     # Unwired ⇒ the overlap reports UNMEASURED, which is NOT agreement.
     audit_rater:
       factory_kind: stack_ref
-      raw: llm.verify.innoai_gemma.openai_compat   # cutover 2026-10-23: the audit rater = Gemma 4 on the box (OpenRouter Llama retired)
+      raw: llm.verify.gateway_judge.openai_compat   # cutover 2026-10-23: the audit rater = Gemma 4 on the box (OpenRouter Llama retired)
       expected_family: llm_provider
   # Per-day CORE-plane token cap (24h bucket). Sized well above the worst case
   # (~10 bounded calls) so a legitimately long world read never truncates, and

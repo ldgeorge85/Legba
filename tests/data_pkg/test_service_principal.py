@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""X2-B1 (W11-F16) — the fleet runs on a SERVICE token, the operator on their own.
+"""X2-B1 — the fleet runs on a SERVICE token, the operator on their own.
 
 Pins, in order:
 
@@ -189,12 +189,23 @@ def test_every_human_only_entry_names_a_real_route(monkeypatch):
         (m, "/api/v1/registry" + r.path)
         for r in build_router(deps).routes for m in getattr(r, "methods", None) or ()
     }
-    # S-2: acknowledging / snoozing an alert (alert_ack_api, under /api/v1/v3).
+    # Acknowledging / snoozing an alert (alert_ack_api, under /api/v1/v3).
     from legba.data.registry.alert_ack_api import build_alert_ack_router
 
     real |= {
         (m, "/api/v1/v3" + r.path)
         for r in build_alert_ack_router(deps).routes
+        for m in getattr(r, "methods", None) or ()
+    }
+    # Account management for admins (users_admin_api, under /api/v1).
+    from legba.data.registry.users_admin_api import build_users_admin_router
+
+    # The router only keeps the pool at build time; listing its routes needs none.
+    if not hasattr(deps.descriptor_registry, "pg"):
+        monkeypatch.setattr(deps.descriptor_registry, "pg", None, raising=False)
+    real |= {
+        (m, "/api/v1" + r.path)
+        for r in build_users_admin_router(deps).routes
         for m in getattr(r, "methods", None) or ()
     }
     for method, template, _why in HUMAN_ONLY_ROUTES:

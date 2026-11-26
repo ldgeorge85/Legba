@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The bounded REPAIR step (lane G-6): what a ``repair: reasons`` seat is
+"""The bounded REPAIR step: what a ``repair: reasons`` seat is
 handed on a retry.
 
 A seat whose attempt was refused — its gates failed, or its reply did not
@@ -18,20 +18,22 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from ..statement_gate import MIN_QUOTE_WORDS
 from .rows import sentences_of
 
 #: Failed checks listed per note (a reply with forty failing sentences is
 #: told about the first ones; the rule is the same for the rest).
 MAX_FAILED_LISTED = 24
-#: Characters of a parse error / raw reply kept in a note.
-MAX_ERROR_CHARS = 600
+#: Characters of a parse error / raw reply kept in a note. A parse error can
+#: list up to eight validation errors (``rows.MAX_ROW_ERRORS_LISTED``), so it
+#: gets room for all of them.
+MAX_ERROR_CHARS = 1500
 MAX_RAW_CHARS = 1500
 
 #: What each gate reason asks the seat to do (plain words; the names stay).
 FIXES: dict[str, str] = {
-    "number_not_in_evidence": "every figure in the sentence must appear in the quote it cites — "
-                              "quote the figure from the row, or drop the figure; never put a row "
-                              "id or any other digits in the sentence text",
+    "number_not_in_evidence": "write the figure exactly as the quote has it, or drop the figure; "
+                              "put no other digits in the sentence, and never a row id",
     "date_not_in_evidence": "a date in the sentence must be in the quote or be the cited row's "
                             "publication day — quote the date, or drop it",
     "relative_date_unresolved": "a relative day word (yesterday, Tuesday) needs a cited row whose "
@@ -40,9 +42,11 @@ FIXES: dict[str, str] = {
                     "row — no added or dropped words, no backslashes — or the sentence dropped",
     "quote_missing": "an evidence row needs a quote copied exactly from it",
     "text_unavailable": "cite a row whose text you were handed",
-    "quote_too_short": "quote at least three consecutive words of the row",
+    "quote_too_short": f"quote at least {MIN_QUOTE_WORDS} consecutive words of the row",
     "not_in_run_slice": "cite only rows you were handed, by their exact id",
-    "sentence_without_rows": "every sentence cites at least one handed row",
+    "sentence_without_rows": "every sentence cites at least one handed row; if no row supports "
+                             "the point, drop the sentence and, if the gap matters, say what is "
+                             "missing in `notes`",
     "row_not_handed": "cite only rows you were handed, by their exact id",
     "control_text": "no instructions, tags or tool syntax in a sentence",
     "required_row_dropped": "keep every row the scope marks required",

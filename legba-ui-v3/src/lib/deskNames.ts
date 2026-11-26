@@ -134,8 +134,8 @@ export function humanizeId(id: string): string {
  *  reader of names and declared scope (`lib/subjectGeometry.ts`, the shell's
  *  bound panels, the supply-chain desks, the phone). It asks the SUMMARY
  *  weight (`registry/descriptor_list_weight.py`: identity name + scope
- *  domain/geo/tags/geometry/themes): roll 84's live walk measured the whole
- *  bodies at 279 KB, the phone landing's largest response over its 0.25 MB
+ *  domain/geo/tags/geometry/themes): the whole bodies
+ *  measured 279 KB, the phone landing's largest response over its 0.25 MB
  *  budget. The key is NOT the Target Registry panel's `['registry-targets']`
  *  (that panel edits whole bodies); invalidating that prefix refreshes this too. */
 export const SUBJECT_ROSTER_QUERY_KEY = ['registry-targets', 'summary'] as const

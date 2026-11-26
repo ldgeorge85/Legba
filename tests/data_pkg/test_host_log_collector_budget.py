@@ -7,7 +7,7 @@ budget (32 MiB x 4 = 128 MiB) to every compose service. legba-runtime-dapr's
 by-design high-volume reminder-GC existence-check logging (src/legba/runtime/
 reminder_gc.py) outpaces that budget badly enough that retention measured
 ~9h live (2026-08-29), leaving 08-27..08-29T10:21Z unrecoverable for that one
-service — see planning/CAMPAIGN_2026-08-29/LOG_FORENSICS.md and the fix's own
+service — see the fix's own
 comment block above MAX_BYTES_OVERRIDE in the script for the live-measured
 arithmetic (~17.3 MiB/hour -> a 360 MiB/file x 4 = 1440 MiB budget for
 ~83h retention, ~15% margin over the 72h target).

@@ -70,8 +70,8 @@ from . import forecast_acute
 
 logger = logging.getLogger(__name__)
 
-#: P7/7g-1 — the origin-class leg on the ACTUALS count (SEAMS #57 sweep;
-#: `calibration` in the collection firewall). A forecast is graded against
+#: The origin-class leg on the ACTUALS count (`calibration` in the collection
+#: firewall). A forecast is graded against
 #: what actually arrived in its horizon; counting imported history there
 #: makes a calibration set out of numbers nobody predicted.
 _LIVE_SIGNALS = origin_class_clause("")
@@ -88,7 +88,7 @@ _DEFAULT_DRIFT_THRESHOLD = 2.0
 #: split rules below. Bump it when any of them moves, so a Brier diff across the
 #: change reads as an instrument revision, not a calibration regression.
 METHOD_VERSION = "calibration_tracking/2026-11.1"
-# 2026-11.1 (lane E): hypothesis claimed confidence is SIGNED (was |balance|);
+# 2026-11.1: hypothesis claimed confidence is SIGNED (was |balance|);
 # the collection-volume predictor (country_predictor) is excluded from every
 # calibration figure and reported under its own label; populations carry their
 # own n and newest-member date.
@@ -554,7 +554,7 @@ async def _pull_resolved_claims(
         for row in hyp_rows:
             if row["outcome"] is None:
                 continue
-            # Lane E (11-11): the SIGN is kept — strong evidence AGAINST a thesis
+            # The SIGN is kept — strong evidence AGAINST a thesis
             # is low confidence IN it (the old |balance| scored it as high).
             claimed = _honesty.hypothesis_claimed_confidence(row["evidence_balance"])
             pulled.append({
@@ -1019,7 +1019,7 @@ def _build_finding(
             # it is the only number the project may quote as "forecast" skill,
             # and only once `forecast_acute_ready` AND `brier_skill_score` > 0.
             **forecast_acute,
-            # Lane E — per-population Brier + OWN n + newest member date, the
+            # Per-population Brier + OWN n + newest member date, the
             # collection-volume predictor's separate count, and the stamp of the
             # signed hypothesis-confidence mapping.
             **(honesty or {}),
@@ -1086,7 +1086,7 @@ async def handle(
             logger.warning("calibration_tracking.acute_pull_failed err=%s", exc)
 
     validated, warnings = _validate_rows(rows)
-    # Lane E: the collection-volume predictor's "outcome" is whether OUR OWN
+    # The collection-volume predictor's "outcome" is whether OUR OWN
     # signal count fell in a predicted range — not a world event. It is excluded
     # from every calibration figure below and reported under its own label.
     volume_rows = [

@@ -1,4 +1,4 @@
-# Event Clustering analyst descriptor — DATA MODEL V3 / P1.
+# Event Clustering analyst descriptor.
 #
 # A `deterministic`-kind META analyst over the shared canonical signal pool and
 # the bounded tower candidate set. Per tick it clusters the new signal slice,
@@ -28,7 +28,7 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   state: draft
-  owner: data_model_v3_p1
+  owner: owner@local
 
 subscription:
   # No `targets` block -> META analyst: one global sweep per cadence tick. The
@@ -50,7 +50,7 @@ method:
   budget_tokens_per_day: 0
   options:
     lookback_hours: 24
-    # P1b (2026-09-23): the first live run held its actor turn ~60 min — the
+    # The first live run held its actor turn ~60 min — the
     # caps are lowered for the first ticks so a bounded pass drains the backlog
     # in slices the pass budget can finish; widen by PUT once the cadence
     # proves out. The pass budget itself is LEGBA_EVENT_CLUSTERING_PASS_BUDGET_
@@ -65,7 +65,6 @@ method:
     tower_floor: 0.5
     max_tower_candidates: 50
     max_lifecycle_events: 5000
-    # W6 SPLIT-1 fold, 2026-10-04: the live head carries this; the tree now does too:
     pair_block_window_hours: 1.0
     tower_budget_share: 0.5
 

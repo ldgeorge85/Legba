@@ -25,14 +25,14 @@ and side-writes append-only markers — NEVER content:
     byte-identical contract; armed by the same descriptor PUT that arms the
     gate), a matched question the walk finds NO consumer for writes ONE open
     SELF-flag: ``output_id = founded_on_id =`` the question's own hypothesis
-    id, reason :data:`FLAG_REASON_UNCONSUMED`. K-4 R4 measured why this leg
-    exists (§9 F5): ``output_consumption`` held 0 rows for ALL 112 watched
-    question ids, so the consumer walk found nobody to flag on any run of any
-    version, ``review_flags`` was 0 rows ALL-TIME, and ``bearing_edges`` was
-    the only artifact the watcher produced — "a detect-only watcher whose
-    detect surface has never contained a single row is not detecting anything
-    a human can see." The self-flag is the report's "wire the flag path to
-    something that exists": the thing that exists is the question row itself,
+    id, reason :data:`FLAG_REASON_UNCONSUMED`. Why this leg exists:
+    ``output_consumption`` held 0 rows for ALL 112 watched question ids, so
+    the consumer walk found nobody to flag on any run of any version,
+    ``review_flags`` was 0 rows ALL-TIME, and ``bearing_edges`` was the only
+    artifact the watcher produced — a detect-only watcher whose detect
+    surface has never contained a single row is not detecting anything a
+    human can see. The self-flag wires the flag path to something that
+    exists: the question row itself,
     the partial unique index bounds it to one OPEN flag per question, and the
     existing staleness-debt gauge + ``/system/staleness-debt`` reason
     breakdown surface it with no new read machinery.
@@ -61,7 +61,7 @@ is read in :func:`handle` so the X-1 catalog stays the honest contract.
 Why a model at all, in a handler whose whole point was determinism: two
 rounds of deterministic levers (3.1 the measured vector floor; 3.2 the meta
 exclusion, the global hub discount, the omnibus/duplicate dampers) hit their
-ceiling at ~0.21 write precision on the K-4 gold population, and the residual
+ceiling at ~0.21 write precision on the labeled gold population, and the residual
 failures are pairs where every plane is honestly positive and the signal
 still does not bear on the thesis. That distinction lives in neither the
 entity set nor the embedding neighbourhood, so no re-weighting of those
@@ -88,8 +88,8 @@ Three properties that keep this from being a new failure mode:
 A second, BATCHED judgment over the gate-YES edges only — the $0 core plane,
 echo-bound by pair id — records ``data.bearing_confirm`` +
 ``bearing_confirm_reason`` on the edge. As of 4.0.0 (CW-1) it also DECIDES:
-a confirm-NO drops the candidate. K-4 round 3 measured that leg's verdicts on
-120 labeled rows off the live gated stream and found the confirm-YES band at
+a confirm-NO drops the candidate. That leg's verdicts, measured on
+120 labeled rows off the live gated stream, put the confirm-YES band at
 0.667 precision against the confirm-NO band's 0.085 — a 7.8x discriminator the
 3.3.0 pipeline computed, stamped and then ignored while the stream it wrote
 measured 0.267 population-weighted. An UNRESOLVED confirm (leg unwired, over
@@ -192,7 +192,7 @@ Deliberate properties of that rule:
     evidence, not anti-evidence.
 
 ...and that desk-relative rule is only HALF the ubiquity problem, which the
-K-4 gold set measured exactly (123 labeled edges): entity-only pairs scored
+labeled gold set measured exactly (123 labeled edges): entity-only pairs scored
 **0/54**. The df above is QUESTION-SIDE and DESK-LOCAL, so an entity that is
 ubiquitous across the whole STREAM but carried by only a few of any one
 desk's questions rides straight through it — "Trump", "United States",
@@ -274,7 +274,7 @@ Guards
   ``refuting_signals``) never matches: new-evidence edges must point
   OUTSIDE the question's own foundations.
 * **Meta questions** — a question about the SYSTEM'S OWN analysis products
-  is not answerable by a news signal, and the K-4 gold set measured the
+  is not answerable by a news signal, and the labeled gold set measured the
   consequence: the harvested meta classes scored **2/58 = 0.034** while
   substantive world-state theses scored 32/65 = 0.492. So questions whose
   harvest class is in :data:`META_QUESTION_CLASSES` are SKIPPED AT MATCH
@@ -294,7 +294,7 @@ Guards
   never carries ("Is the framing of THE INCIDENT being driven by an
   orchestrated campaign?") is skipped for the meta classes' exact reason: no
   plane can read what it is about, because the string does not contain the
-  proposition. K-4 R3 measured 0.133 for the class and 0.071 for
+  proposition. Measured at 0.133 for the class and 0.071 for
   ``narrative_coordination``, the unit that writes most of them. Counted as
   ``skipped_deictic_questions``; the questions stay open everywhere else.
   The real fix is upstream — the ``open_question`` write tool now folds the
@@ -494,7 +494,7 @@ CURSOR_KEY = "_cursor"
 #: (which measured 150 of 185 rows at exactly the 3-entity cap 0.560, i.e.
 #: still co-membership, just three names of it); 3.0.0 = the same grading
 #: weighted by desk-relative entity SPECIFICITY; 3.1.0 = the measured vector
-#: floor (0.60 → 0.45); 3.2.0 = the three K-4 levers — meta-question
+#: floor (0.60 → 0.45); 3.2.0 = the three precision levers — meta-question
 #: exclusion, the GLOBAL (signal-side) ubiquity discount composed onto the
 #: desk-relative one, and the omnibus/duplicate signal dampers; 3.3.0 = the
 #: BEARING PIPELINE seam — the fusion model is byte-for-byte 3.2.0, but a
@@ -503,22 +503,22 @@ CURSOR_KEY = "_cursor"
 #: filter a 3.2.0 row never faced. That is a difference in what the population
 #: MEANS, which is exactly what this stamp exists to record — even though the
 #: gate ships OFF and an off run writes the same rows 3.2.0 wrote.
-#: 4.0.0 = THE CW PRECISION TRAIN, the bundled response to K-4 round 3 (which
-#: measured the 3.3.0 gated stream at 0.267 population-weighted against a 0.85
-#: bar): the confirm leg promoted to BLOCKING with a ``bearing_watch`` band on
+#: 4.0.0 = THE CW PRECISION TRAIN, the bundled response to a measurement of
+#: the 3.3.0 gated stream at 0.267 population-weighted against a 0.85 bar:
+#: the confirm leg promoted to BLOCKING with a ``bearing_watch`` band on
 #: every row (CW-1), desk identity in both LLM prompts (CW-2), deictic theses
 #: resolved at harvest and refused at match time (CW-3), and the contention
 #: plane given a liveness filter plus a SUBJECT anchor (CW-4/CW-5). The train
 #: ships as ONE deploy — a 4.0.0 row is a row that faced all five.
-#: 4.1.0 = the K-4 R4 FOLLOW-UPS (R4 measured the live 4.0.0 stream at 0.908):
+#: 4.1.0 = the follow-ups after the live 4.0.0 stream measured 0.908:
 #: CW-2b — one consequence-specificity clause in BOTH bearing prompts,
-#: targeting R4's F1 class (3 of its 6 residual failures were "the thesis
+#: targeting the residual class (3 of its 6 failures were "the thesis
 #: names a specific country's imports and the signal never mentions that
-#: country's imports"; report §11.3) — plus the F5 question self-flag surface
+#: country's imports") — plus the F5 question self-flag surface
 #: and the F3 article-id URL dedupe. The FUSION MODEL is byte-for-byte 4.0.0;
 #: the bump records that a 4.1.0 row survived prompts a 4.0.0 row never faced
-#: (the same population-meaning argument that bumped 3.3.0), so K-4 R6 can cut
-#: on the stamp instead of on ``data.bearing_*_prompt`` archaeology.
+#: (the same population-meaning argument that bumped 3.3.0), so a later
+#: measurement can cut on the stamp instead of on ``data.bearing_*_prompt`` archaeology.
 #: Rows written under each model stay readable and stay attributable to the
 #: model that made them.
 MATCHER_VERSION = "claim_watch/4.1.0"
@@ -592,7 +592,7 @@ MIN_DESK_QUESTIONS_FOR_SPECIFICITY = 5
 #
 # The desk-relative df above is QUESTION-SIDE: it asks "do this desk's own
 # questions all carry this name". It cannot see the other half of the ubiquity
-# problem, which the K-4 gold set measured at 0/54 on entity-only pairs — a
+# problem, which the labeled gold set measured at 0/54 on entity-only pairs — a
 # name that is everywhere IN THE STREAM bridges unrelated desks even when only
 # a couple of questions on any one desk carry it. So each entity carries a
 # second, signal-side discount computed from its document frequency over the
@@ -622,7 +622,7 @@ MIN_SIGNALS_FOR_GLOBAL_SPECIFICITY = 200
 GLOBAL_DF_UBIQUITY_KNEE = 0.02
 
 #: Stream df at/above which an entity is worth only
-#: :data:`ENTITY_SPECIFICITY_FLOOR`. MEASURED: the structural hubs the K-4
+#: :data:`ENTITY_SPECIFICITY_FLOOR`. MEASURED: the structural hubs the labeled gold
 #: failure classes name cluster at the top of the distribution — United
 #: States 0.146 sits PAST 0.10; Russia 0.095 and Iran 0.093 sit just under it
 #: and land within 0.05 of the floor; Ukraine 0.065 and Trump 0.054 ramp
@@ -631,7 +631,7 @@ GLOBAL_DF_UBIQUITY_KNEE = 0.02
 #: knee and saturation: continuous, monotone, and floored — a hub is weak
 #: evidence, not anti-evidence.
 #:
-#: NOT tuned to make any individual measured row fall. The one K-4 hub row
+#: NOT tuned to make any individual measured row fall. The one hub row
 #: that still clears — United States + Trump + Donald Trump — clears because
 #: ``Trump`` and ``Donald Trump`` are two UNMERGED ``entity_profiles`` rows,
 #: so one person is counted twice at two different document frequencies. That
@@ -643,7 +643,7 @@ GLOBAL_DF_SATURATION = 0.10
 #
 # The harvest (scripts/harvest_open_questions.py) seeds open questions from
 # five classes, and three of them are questions about the system's OWN
-# analysis products rather than about the world. The K-4 gold set measured
+# analysis products rather than about the world. The labeled gold set measured
 # them at 2/58 = 0.034 pairwise precision against 32/65 = 0.492 for
 # substantive theses. They are skipped AT MATCH TIME and stay open questions.
 
@@ -658,7 +658,7 @@ HARVEST_MARKER_KEY = "open_question_origin"
 #: ``freshness_advisory`` ("does this composition still hold given a
 #: superseded input") and ``scorecard_disagreement`` ("is this assessment
 #: adequately evidenced given the scorecard excluded it"). Measured per class
-#: on the K-4 gold set: collection_gap 1/40, below_floor 0/10,
+#: on the labeled gold set: collection_gap 1/40, below_floor 0/10,
 #: freshness_advisory 0/5, scorecard_disagreement 1/3.
 #:
 #: ``fact_contention`` is deliberately ABSENT: "which value of 'border with'
@@ -685,8 +685,8 @@ META_QUESTION_CLASSES: frozenset[str] = frozenset(
 #: CW-3 — the DEICTIC guard's default. A thesis that leans on a referent it
 #: does not carry ("Is the framing of THE INCIDENT being driven by an
 #: orchestrated campaign?") cannot be matched, only guessed at: the string the
-#: vector plane embeds and the 8B reads does not contain the proposition. K-4
-#: R3 measured the class at 0.133 and the unit that writes most of them
+#: vector plane embeds and the 8B reads does not contain the proposition.
+#: Measured: the class at 0.133 and the unit that writes most of them
 #: (``narrative_coordination``) at 0.071. The real fix is at harvest —
 #: ``open_question_tool`` now inlines the origin finding's title
 #: (:mod:`legba.data.analysts.question_text`) — so this is a BACKSTOP for the
@@ -1015,12 +1015,11 @@ def dedupe_by_canonical_url(rows: Sequence[Any]) -> tuple[list[Any], int]:
 
     The identity key is the CANONICALIZED url
     (:func:`legba.data._url_canon.canonical_url`), not the stored bytes —
-    K-4 R4 §9 F3 measured the raw-string comparison being defeated by
-    publisher slug rewrites (the same Dawn article id at two headlines
-    landed twice in one sampled population). Canonicalizing here makes this
+    a raw-string comparison is defeated by publisher slug rewrites (the same
+    Dawn article id at two headlines landed twice in one sampled population).
+    Canonicalizing here makes this
     surface agree with the ingest/target dedupe tiers on what "the same
-    document" means — the CW-7 discipline this batch filter had drifted
-    from — including the article-id rule that sees through the slug.
+    document" means, including the article-id rule that sees through the slug.
     """
     last_at: dict[str, int] = {}
     for i, r in enumerate(rows):
@@ -1493,7 +1492,7 @@ async def handle(
     bearing_confirm_mode = options.get(
         "bearing_confirm_mode", DEFAULT_BEARING_CONFIRM_MODE
     )
-    # W11-F108 — the decision-model SHADOW (:mod:`.bearing_shadow`): OFF in
+    # The decision-model SHADOW (:mod:`.bearing_shadow`): OFF in
     # code; it asks the gate's question again and moves no decision.
     bearing_shadow_ref = options.get("bearing_shadow_ref", DEFAULT_BEARING_SHADOW_REF)
     bearing_shadow_cap = max(0, int(options.get("bearing_shadow_cap", bearing_gate_cap)))
@@ -1699,7 +1698,7 @@ async def handle(
 
         # L1 — META-QUESTION EXCLUSION. A question about the system's own
         # analysis products (a collection gap, a floored claim, a composition's
-        # validity) cannot be answered by a wire story; the K-4 gold set
+        # validity) cannot be answered by a wire story; the labeled gold set
         # measured those classes at 2/58 while substantive theses scored
         # 32/65. They are dropped HERE, before the embed budget, the lineage
         # walk and the specificity build, so the exclusion buys work back
@@ -1754,7 +1753,7 @@ async def handle(
         # dormant relation — so the filter belongs here, with the other
         # structural exclusions. It is default-DISABLED
         # (contention_liveness_days = 0) because it was measured and it does
-        # not help: replayed over the K-4 R3 gold set it removed 7 correct
+        # not help: replayed over the gold set it removed 7 correct
         # matches for 8 false ones against a 60% base false rate, since a
         # group collapses precisely when good evidence settles the dispute.
         # See :mod:`.claim_watch_guards` for the full reading. The population
@@ -2054,7 +2053,7 @@ async def handle(
         # L2 — GLOBAL (signal-side) entity ubiquity. The desk-relative df
         # above is question-side and desk-local, so a name that is everywhere
         # in the STREAM rides straight through it and bridges unrelated desks
-        # (K-4: entity-only pairs 0/54, on Trump / United States / Iran /
+        # (gold set: entity-only pairs 0/54, on Trump / United States / Iran /
         # Russia / bare demonyms / NER datelines). One bounded aggregate over
         # the newest GLOBAL_DF_WINDOW_SIGNALS signals gives each candidate
         # entity its stream document frequency; the discount is computed, not
@@ -2202,7 +2201,7 @@ async def handle(
             # of 185 edges at exactly the 3-entity cap). The two discounts
             # answer two different questions — "do this DESK's questions all
             # carry this name" (desk-relative) and "does the STREAM carry it
-            # everywhere" (global, K-4's 0/54 entity-only class) — and
+            # everywhere" (global, the 0/54 entity-only class) — and
             # compose multiplicatively under one floor. An entity that is
             # neither desk furniture nor a stream hub weighs its full 1.0.
             # The id and NER-name surfaces are disjoint by construction
@@ -2407,9 +2406,9 @@ async def handle(
                 _MAX_CONSUMERS_PER_QUESTION,
             )
             if not consumers and question_flags_on:
-                # F5 — the walk found no consumer, which live is EVERY
-                # harvested question (K-4 R4 §9: 0 consumption rows for all
-                # 112 watched ids). The detect surface is the question row
+                # The walk found no consumer, which live is EVERY
+                # harvested question (0 consumption rows for all 112 watched
+                # ids). The detect surface is the question row
                 # itself; the partial unique index bounds this to one OPEN
                 # flag per question, so a stream of further evidence dedupes
                 # instead of flooding.
@@ -2462,7 +2461,7 @@ async def handle(
             )
         counters["staleness_debt"] = await _staleness_debt(conn)
 
-    # W11-F108 — the SHADOW runs after every write landed, over the pairs the
+    # The SHADOW runs after every write landed, over the pairs the
     # gate asked; it never raises (OFF: returns at once, receipt untouched).
     await run_bearing_shadow(
         bearing_asked or [], deps=deps, pool=pool, shadow_ref=bearing_shadow_ref,

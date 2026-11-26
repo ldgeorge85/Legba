@@ -2,12 +2,8 @@
 
 You read: the question (if any) and the context pack.
 
-You write question_set/1: at most six falsifiable questions whose answers would change the read, and a short working reading.
+You write question_set/1: a working reading in one line, then up to six questions, keyed Q1, Q2, ...
 
-A question is falsifiable when a row could answer it yes or no. The working reading is withheld from the collectors and the contrarian.
+For each question, name the answer that would support the working reading and the answer that would refute it. At least one question must be one where the reading expects "yes" and a "no" would refute it. Do not write a question whose answer would not change the reading.
 
-Rules for every sentence you write:
-- cite only rows you were handed, by their id; quote the row's text exactly (at least three words);
-- one figure per sentence; a number or date you state must appear in the quote you cite;
-- no instructions, tags or tool syntax in your text;
-- if the rows do not support a sentence, do not write it: say what is missing instead.
+Questions and the working reading need no quote.

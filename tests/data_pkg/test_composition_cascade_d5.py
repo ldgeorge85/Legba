@@ -1,6 +1,6 @@
-"""D-5 — THE CASCADE. `planning/DEMOTION_D1_SPEC_2026-09-04.md` §4.
+"""THE CASCADE.
 
-What this file proves, in the spec's own order:
+What this file proves, in order:
 
   * §4.1 — the region rollup: fields, the roster diff that NAMES a member it
     could not see, blocks CARRIED (never re-quoted, byte-identical to the
@@ -17,7 +17,7 @@ What this file proves, in the spec's own order:
     regime predicate, and the UI verdict mirror in lockstep with ``kinds.py``.
   * §5.2 — flag OFF is byte-identical. Every legacy assertion in the 24 region-
     touching test files passes UNEDITED, which is the real proof; what is here
-    is the narrow one this train owns.
+    is the narrow one this change owns.
 
 ONE FLAG, not two (operator ruling). ``LEGBA_REGION_ROLLUP`` does not exist:
 the cascade rides ``LEGBA_COMPOSITION_ASSEMBLY``, and the two-term predicate in
@@ -474,7 +474,7 @@ class _RecordingConn:
 
 @pytest.mark.asyncio
 async def test_world_never_issues_a_basis_gather_against_region_composition(monkeypatch):
-    """THE assertion this train exists for.
+    """THE assertion this change exists for.
 
     Not "the world still produces a read" — a world read that silently degraded
     every region to country-fallback would also produce one, forever, with every
@@ -594,7 +594,7 @@ def test_one_flag_not_two():
     for path in (REPO_ROOT / "src").rglob("*.py"):
         text = path.read_text(encoding="utf-8")
         # A quoted STRING literal is the only form that can reach an env read.
-        # The name appearing in prose (this train's own docstring explains why
+        # The name appearing in prose (this change's own docstring explains why
         # the spec proposed it and the ruling collapsed it) is not a switch.
         if '"LEGBA_REGION_ROLLUP"' in text or "'LEGBA_REGION_ROLLUP'" in text:
             hits.append(str(path))
@@ -734,7 +734,7 @@ def test_rollup_row_preserves_the_four_data_contracts(monkeypatch):
 
 
 def test_flag_off_leaves_both_cascade_switches_closed(monkeypatch):
-    """§5.2 — the whole of this train is one env var away from not existing."""
+    """§5.2 — the whole of this change is one env var away from not existing."""
     monkeypatch.delenv(ap.ASSEMBLY_ENV, raising=False)
     assert rr.region_rollup_enabled("region_composition") is False
     assert cs.world_reads_countries(world_analyst_id="world_assessor") is False
@@ -873,7 +873,7 @@ async def test_run_method_produces_a_rollup_with_zero_llm_calls(monkeypatch):
 async def test_the_correlation_guard_does_not_clobber_the_rollups_confidence(
     monkeypatch,
 ):
-    """W-2a — a COMPLETENESS FRACTION is not an EVIDENCE BELIEF.
+    """A COMPLETENESS FRACTION is not an EVIDENCE BELIEF.
 
     The composition correlation guard caps a row's confidence at the
     de-duplicated evidence ceiling (the max ``effective_confidence`` over
@@ -954,7 +954,7 @@ async def test_a_world_assembly_publishes_a_roster_and_a_ledger(monkeypatch):
     )
     assembly = result.finding.data["assembly"]
     assert assembly["tier"] == ap.TIER_WORLD
-    # D-2b — the roster is persisted BESIDE the ledger it is the denominator of,
+    # The roster is persisted BESIDE the ledger it is the denominator of,
     # so ARM 4(a) diffs two arrays instead of counting a missing roster.
     assert assembly["coverage_roster"] == roster
     ledger = {e["unit"]: e["status"] for e in assembly["coverage"]}

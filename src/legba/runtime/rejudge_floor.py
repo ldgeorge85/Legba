@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""W11-F102 — RE-JUDGE an outage's floor critiques (the apply half of SEAMS #69).
+"""RE-JUDGE an outage's floor critiques (the apply half of SEAMS #69).
 
 When every judge rung is down the faithfulness verify pass publishes the
 deterministic floor (``judge_status='deterministic'``, ``judge_unavailable_reason``
@@ -46,7 +46,7 @@ critique and not already superseded: a finding a later run has re-judged keeps
 that verdict (re-judging the stale floor would publish a newer row over it).
 Oldest first, bounded by the caller's limit.
 
-W11-F84 — THE MISSING MODE (``--missing``; the ``verify_backfill`` sweep). A
+THE MISSING MODE (``--missing``; the ``verify_backfill`` sweep). A
 rolling deploy recreates the runtime actor host; an analyst run in flight at
 that moment has already WRITTEN its finding, but the verify leg that writes the
 critique never runs, so the finding stands published with NO critique at all.
@@ -82,7 +82,7 @@ TITLE_PREFIX = "Faithfulness verify%"
 UNAVAILABLE_REASONS: tuple[str, ...] = ("judge_error", "judge_empty")
 #: ``verification.judge_trigger`` on every re-judged critique.
 JUDGE_TRIGGER_REJUDGE_FLOOR = "rejudge_floor"
-#: ``verification.judge_trigger`` on every backfilled critique (W11-F84).
+#: ``verification.judge_trigger`` on every backfilled critique.
 JUDGE_TRIGGER_VERIFY_BACKFILL = "verify_backfill"
 #: The missing mode never selects a finding younger than this: its verify leg
 #: may still be running (a judge call can take minutes).
@@ -549,7 +549,7 @@ async def rejudge_one(
 
 
 # ---------------------------------------------------------------------------
-# W11-F84 — the MISSING mode: findings whose verify leg never ran
+# The MISSING mode: findings whose verify leg never ran
 # ---------------------------------------------------------------------------
 
 #: The missing-mode predicate, shared by the selection, the per-day count and

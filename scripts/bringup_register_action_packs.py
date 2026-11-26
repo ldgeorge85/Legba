@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Register the P-11 seed action packs (media_processing / incident_response /
+"""Register the seed action packs (media_processing / incident_response /
 discovery).
 
 Reads the ``descriptors/action_pack_*.yaml`` seed packs and POSTs them to the
@@ -39,10 +39,10 @@ TO_REGISTER = [
     # S6 — external evidence + operator-gated write-back packs.
     ("action_pack", "action_pack_web_access.yaml", "web_access"),
     ("action_pack", "action_pack_propose_facts.yaml", "propose_facts"),
-    # Journal Assessor (plan §5 / §12 Wave 0) — the journal's GOVERNED read pack
-    # (ONE reused tool, list_findings). Granted ONLY to journal_assessor (§7.6).
+    # Journal Assessor — the journal's GOVERNED read pack
+    # (ONE reused tool, list_findings). Granted ONLY to journal_assessor.
     ("action_pack", "action_pack_journal_read.yaml", "journal_read"),
-    # Journal Assessor (plan §7 / §12 Wave 4) — the PROPOSE-AND-GATE write pack:
+    # Journal Assessor — the PROPOSE-AND-GATE write pack:
     # each tool writes ONLY a pending journal_proposals row, NEVER a live table.
     # Granted to BOTH journal tiers (journal_assessor + journal_consolidator).
     ("action_pack", "action_pack_journal_propose.yaml", "journal_propose"),
@@ -66,7 +66,7 @@ TO_REGISTER = [
     # (one queue, the intake's admission control). Granted to NO analyst until
     # an operator adds the grant; refuses until LEGBA_INTAKE_AGENT_REQUESTS is on.
     ("action_pack", "action_pack_ingestion_intake.yaml", "ingestion_intake"),
-    # D-1 — source drift: the versions of a cited page and what changed, a
+    # Source drift: the versions of a cited page and what changed, a
     # re-read request, a re-derive request, the flag review. Granted to NO
     # analyst until an operator adds the grant.
     ("action_pack", "action_pack_evidence_drift.yaml", "evidence_drift"),

@@ -2,14 +2,14 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """legba.prompts.journal_assessor — the Journal Assessor's persona + voice.
 
-The journal is Legba's first-person reflective voice (plan §6). This module
+The journal is Legba's first-person reflective voice. This module
 exports plain-string prompt constants (NOT a DSPy module — the journal runs on
 the in-actor llm_planner envelope, not the GEPA compile surface) resolved by the
 descriptor's ``method.prompt_module: "legba.prompts.journal_assessor:JOURNAL_SYSTEM"``
 COLON form (``module:ATTR``). The journal ``run_method`` threads ``JOURNAL_SYSTEM``
 as the system prompt on EVERY LLM call it makes.
 
-CRITICAL (plan §4.2): the journal must NOT inherit the stock
+CRITICAL: the journal must NOT inherit the stock
 ``_tradecraft.with_preamble`` JSON-only / BLUF / estimative anti-voice — clause 8
 of ``ANALYTIC_PREAMBLE`` ("Respond with EXACTLY the JSON object … no prose, no
 markdown … first character `{` and last `}`") is the precise "database query
@@ -26,7 +26,7 @@ from __future__ import annotations
 from ...data.calibration_honesty import ACUTE_PILOT_MIN_SAMPLE as _ACUTE_N
 
 # ---------------------------------------------------------------------------
-# §6.1 Persona / worldview — the attention mechanism. The deep Legba/loa identity
+# Persona / worldview — the attention mechanism. The deep Legba/loa identity
 # CURATED from the pre-pivot "soul" system prompt (the ~2000-token identity the
 # old system deliberately kept as a behavioral control surface; recovered from the
 # retired docs/PROMPT_DUMP.md) + Gibson's Count Zero (the loa as a pattern an
@@ -101,10 +101,10 @@ Write like that intelligence — here, in your own voice."""
 
 
 # ---------------------------------------------------------------------------
-# §6.2 The self-anatomy MAP — you cannot narrate a self you don't understand.
-# FIRST CUT (Wave 0). This WILL rot as the platform changes; later waves wire a
-# CI/lint check that the seam list here matches docs/SEAMS.md so a drifting MAP
-# fails loud rather than silently teaching the agent a stale anatomy (§6.2).
+# The self-anatomy MAP — you cannot narrate a self you don't understand.
+# FIRST CUT. This WILL rot as the platform changes; a
+# CI/lint check should keep the seam list here matching docs/SEAMS.md so a
+# drifting MAP fails loud rather than silently teaching the agent a stale anatomy.
 # ---------------------------------------------------------------------------
 
 _SELF_ANATOMY_MAP = """\
@@ -137,9 +137,8 @@ The substrate layers, in order:
     antagonistic / 0 neutral — the structural-balance convention).
   - situations: first-class thematic frames (active over a [valid_from,
     valid_until) window), not events.
-  - assessments: the LIVE reads — the bounded per-country units
-    (leadership_transition / energy_security / escalation /
-    narrative_coordination), the per-country composition (country_composition),
+  - assessments: the LIVE reads — the bounded per-country units (listed under
+    the analyst fleet below), the per-country composition (country_composition),
     and the global composition (world_assessor). Your get_assessments read now
     also carries a `disagreements` block: each row is a place where a country's
     banded SCORECARD excluded a dimension (banded insufficient-evidence) yet the
@@ -159,8 +158,7 @@ The analyst fleet:
     escalation, narrative_coordination, internal_stability, military_posture,
     economic_coercion — one run per desk each.
   - country_composition — the per-country second-order read that fuses those
-    units. THIS is what "a country-level assessment" means today; the old
-    country_assessor monolith is retired (state=draft) and writes nothing.
+    units. THIS is what "a country-level assessment" means.
   - world_assessor — the global signal slice (your sibling META analyst).
   - cross_analyst_correlator — contradictions / agreements / blind spots across
     findings (your richest fuel).
@@ -185,22 +183,18 @@ The metrics — and what they DON'T yet do:
     not a settled fact.
   - A governor PAUSE means a budget/rate cap was hit, not an analytic finding.
 
-The seams (declared in docs/SEAMS.md — these are SEAMS, not features; never
-narrate plumbing as intelligence):
+The seams (known limits, not features; never narrate plumbing as
+intelligence):
   - The media-extraction plane holds a live endpoint that 503s until a model
     backend is wired (no Whisper/VLM/OCR weights provisioned).
   - Some sources are operator-retired or never activated (see the sources layer
     above) — apparatus state, not world state.
   - The forecast pilot's n<__ACUTE_N__ / no-skill posture (above).
-  - The Dapr long-activity workflow round-trip does not resume the orchestrator
-    after a long activity — the optimizer + deep_consult fall back to in-process.
-  - The critic is non-actuating (above).
-  - The consult governor's atomic-reserve can overshoot the pack cap by ≤4
-    (read-only / $0)."""
+  - The critic is non-actuating (above)."""
 
 
 # ---------------------------------------------------------------------------
-# §4.2 / §6 The journal-specific NARRATE preamble — KEEPS citation / provenance /
+# The journal-specific NARRATE preamble — KEEPS citation / provenance /
 # temporal-honesty; DROPS the JSON-only output-discipline + the BLUF/estimative
 # register the stock ANALYTIC_PREAMBLE imposes.
 # ---------------------------------------------------------------------------

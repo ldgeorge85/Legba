@@ -137,7 +137,7 @@ def test_journal_payload_validates_and_claims():
 @pytest.mark.asyncio
 async def test_write_journal_routes_to_table_and_derived_from_empty(pg_conn):
     """write_journal lands a journal_entries row with derived_from EMPTY even
-    when a derived_from is passed in — the off-chain invariant (§3.5)."""
+    when a derived_from is passed in — the off-chain invariant."""
     ctx = _analyst_ctx()
     payload = _entry_payload()
     out, dlq = await write_journal(
@@ -155,7 +155,7 @@ async def test_write_journal_routes_to_table_and_derived_from_empty(pg_conn):
     )
     assert row is not None
     assert row["entry_kind"] == "entry"
-    assert list(row["derived_from"]) == [], "journal derived_from MUST be empty (§3.5)"
+    assert list(row["derived_from"]) == [], "journal derived_from MUST be empty"
     assert row["analyst_id"] == "journal_assessor"
     # an entry is open + never superseded
     assert row["valid_until"] is None

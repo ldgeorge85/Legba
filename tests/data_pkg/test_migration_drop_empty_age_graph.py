@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """20261115T1829_drop_empty_age_graph - drop the AGE graph only if it is empty.
 
-Owner decision 2026-11-15. The migration's whole value is its GUARD: it drops
+The migration's whole value is its GUARD: it drops
 the graph when every label table holds zero rows, and REFUSES (loudly, with
 nothing dropped and no ledger row) when any row exists. These run the SHIPPED
 SQL against a scratch database migrated to everything except this file.
